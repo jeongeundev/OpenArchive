@@ -117,6 +117,7 @@ docker compose up -d
 
 # 2. 백엔드 — 마이그레이션이 여기서 실행되므로 가장 먼저 띄운다
 cd backend
+python3 -m venv .venv && source .venv/bin/activate   # scripts/check.sh가 backend/.venv를 찾는다
 pip install -e ".[dev]"
 uvicorn app.main:app --reload
 

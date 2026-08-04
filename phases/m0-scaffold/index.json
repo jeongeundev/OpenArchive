@@ -1,0 +1,41 @@
+{
+  "project": "OpenArchive",
+  "phase": "m0-scaffold",
+  "steps": [
+    {
+      "step": 0,
+      "name": "local-db",
+      "type": "chore",
+      "scope": "db",
+      "desc": "로컬 개발용 pgvector 컨테이너와 환경변수 예시",
+      "status": "completed",
+      "started_at": "2026-08-04T22:18:35+0900",
+      "summary": "docker-compose.yml(db 서비스 단일, pgvector/pgvector:pg17, 5432, named volume pgdata, pg_isready healthcheck)과 .env.example(DATABASE_URL·EMBEDDING_PROVIDER) 추가. 실측: server_version 17.10, pg_available_extensions의 vector 0.8.6(설치는 하지 않음), 기동 후 약 5초에 healthy. README 수정 없음.",
+      "completed_at": "2026-08-04T22:20:31+0900"
+    },
+    {
+      "step": 1,
+      "name": "backend-skeleton",
+      "type": "chore",
+      "scope": "api",
+      "desc": "백엔드 패키지 구조와 설정·커넥션 풀 뼈대",
+      "status": "completed",
+      "started_at": "2026-08-04T22:20:31+0900",
+      "summary": "backend/ 스캐폴드: pyproject.toml(fastapi·uvicorn·psycopg[binary,pool]·pydantic-settings·pypdf·python-docx / dev: pytest·pytest-asyncio·httpx·ruff, ruff py312 line-length 100, pytest asyncio_mode=auto), app/main.py에 GET /api/health → {\"status\":\"ok\"} (프론트엔드 rewrites 대상, lifespan 없음 · DB 미접속), app/config.py(Settings.database_url 기본값은 compose DSN, embedding_provider Literal[local|fake] 기본 fake, lru_cache get_settings), app/db.py(get_pool()/close_pool(), 모듈 최상위 인스턴스화 없음 · open=False), 빈 패키지 app/api·services·embeddings, migrations/.gitkeep. 테스트 14개 통과(ruff 통과, check.sh 종료 코드 0). db.py를 open=True와 최상위 풀 생성으로 각각 변이시켜 테스트가 실패함을 확인했다. uvicorn 실기동으로 DATABASE_URL 없이 200 응답 확인. app/migrations.py·worker.py·mcp_server/는 후속 phase.",
+      "completed_at": "2026-08-04T22:26:11+0900"
+    },
+    {
+      "step": 2,
+      "name": "frontend-skeleton",
+      "type": "chore",
+      "scope": "frontend",
+      "desc": "Next.js App Router 스캐폴드와 Vitest 구성",
+      "status": "completed",
+      "started_at": "2026-08-04T22:26:11+0900",
+      "summary": "frontend/ 스캐폴드: create-next-app(Next 16.3.0 · React 19.2.8 · TS strict · Tailwind v4 CSS-first · ESLint flat · App Router · src-dir · @/* · --disable-git --no-agents-md), Vitest 4(vitest.config.ts: jsdom·@vitejs/plugin-react·vite-tsconfig-paths, setupFiles=src/test/setup.ts에서 jest-dom matcher 등록 + RTL cleanup), scripts.test=\"vitest run\"(워치 금지), next.config.ts rewrites /api/:path* → process.env.BACKEND_URL ?? http://localhost:8000, src/app/page.tsx는 OpenArchive placeholder로 교체(기본 랜딩 삭제 · 고아가 된 public/*.svg 5개 제거), layout metadata·lang=ko, globals.css는 prefers-color-scheme 분기를 제거하고 다크 고정(#0a0a0a). TDD: page.test.tsx를 먼저 작성해 red 확인 후 page.tsx 구현. 검증: lint(8파일 0 error)·test 1 passed·build 성공, uvicorn+next dev 실기동으로 localhost:3000/api/health가 {\"status\":\"ok\"} 프록시됨을 확인, check.sh 종료 코드 0(backend 14 passed 유지), frontend/.git 없음. 폰트 대체는 불필요(next/font/google 빌드 성공). next dev가 frontend/AGENTS.md·CLAUDE.md를 자동 생성해 그대로 커밋한다(삭제해도 dev 실행마다 재생성).",
+      "completed_at": "2026-08-04T22:32:49+0900"
+    }
+  ],
+  "created_at": "2026-08-04T22:18:35+0900",
+  "completed_at": "2026-08-04T22:32:49+0900"
+}
