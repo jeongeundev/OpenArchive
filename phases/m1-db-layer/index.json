@@ -1,0 +1,66 @@
+{
+  "project": "OpenArchive",
+  "phase": "m1-db-layer",
+  "steps": [
+    {
+      "step": 0,
+      "name": "migration-runner",
+      "type": "feat",
+      "scope": "db",
+      "desc": "마이그레이션 러너와 테스트 DB 하네스",
+      "status": "completed",
+      "started_at": "2026-08-05T01:03:18+0900",
+      "summary": "app/migrations.py 신규 — `async def run_migrations(dsn: str, migrations_dir: Path = MIGRATIONS_DIR) -> list[str]` (파일명 사전순 적용, 파일 1개=트랜잭션 1개로 SQL과 schema_migrations INSERT를 함께 커밋, 이미 적용된 파일은 건너뛰고 실패는 그대로 예외로 올림, 이력 테이블 schema_migrations(filename PK, applied_at)는 러너가 부트스트랩). MIGRATIONS_DIR = backend/migrations. tests/conftest.py에 픽스처 2개 추가 — `test_dsn`(session scope, 개발 DSN에서 dbname만 openarchive_test로 바꿔 DB 생성 후 DSN 반환, 접속 실패 시 skip 아닌 pytest.fail)과 `clean_db`(function scope, 매 테스트 전 DROP/CREATE SCHEMA public으로 초기화한 test_dsn 반환) + 헬퍼 `swap_dbname(dsn, dbname)`. 이후 DB 테스트는 `clean_db` 픽스처를 받아 쓰면 된다. main.py에 lifespan을 붙여 startup에서 run_migrations 호출(ADR-012). M0의 test_app_starts_without_a_reachable_database는 전제가 뒤집혀 test_startup_runs_migrations·test_startup_fails_loudly_when_migrations_cannot_run로 교체. 로컬 컨테이너 호스트 포트가 5432→5433으로 바뀌었다(호스트의 기존 PostgreSQL과 충돌) — docker-compose.yml·.env.example·config.py 기본값 동반 수정. 검증: ruff 통과, pytest 25 passed(config 5·db 7·main 3·migrations 10), scripts/check.sh 종료 코드 0.",
+      "completed_at": "2026-08-05T07:38:15+0900"
+    },
+    {
+      "step": 1,
+      "name": "schema",
+      "type": "feat",
+      "scope": "db",
+      "desc": "문서·버전·청크·잡 테이블과 코얼레싱 제약",
+      "status": "pending"
+    },
+    {
+      "step": 2,
+      "name": "triggers",
+      "type": "feat",
+      "scope": "db",
+      "desc": "문서 변경 트리거 — 버전 이력·잡 생성·코얼레싱",
+      "status": "pending"
+    },
+    {
+      "step": 3,
+      "name": "indexes",
+      "type": "feat",
+      "scope": "db",
+      "desc": "청크 임베딩 HNSW 인덱스",
+      "status": "pending"
+    },
+    {
+      "step": 4,
+      "name": "chunking",
+      "type": "feat",
+      "scope": "worker",
+      "desc": "문단 경계 우선 청킹 함수",
+      "status": "pending"
+    },
+    {
+      "step": 5,
+      "name": "embeddings",
+      "type": "feat",
+      "scope": "worker",
+      "desc": "임베딩 프로바이더 — Protocol·BGE-M3·Fake",
+      "status": "pending"
+    },
+    {
+      "step": 6,
+      "name": "worker",
+      "type": "feat",
+      "scope": "worker",
+      "desc": "임베딩 워커 루프와 좀비 잡 회수",
+      "status": "pending"
+    }
+  ],
+  "created_at": "2026-08-05T01:03:18+0900"
+}
