@@ -118,7 +118,7 @@ docker compose up -d
 # 2. 백엔드 — 마이그레이션이 여기서 실행되므로 가장 먼저 띄운다
 cd backend
 python3 -m venv .venv && source .venv/bin/activate   # scripts/check.sh가 backend/.venv를 찾는다
-pip install -e ".[dev]"
+pip install -e ".[dev]"          # 실제 임베딩(BGE-M3)까지 쓸 때는 ".[dev,local]"
 uvicorn app.main:app --reload
 
 # 3. 임베딩 워커 (별도 터미널)

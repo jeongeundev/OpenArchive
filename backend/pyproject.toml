@@ -17,7 +17,6 @@ dependencies = [
     "python-docx",
 ]
 
-# 임베딩 모델(sentence-transformers, BGE-M3 약 2GB)은 임베딩 phase에서 추가한다.
 # 상용 임베딩 API 클라이언트는 넣지 않는다 — 대회 규정상 사용할 수 없다 (ADR-003).
 
 [project.optional-dependencies]
@@ -27,6 +26,10 @@ dev = [
     "httpx", # fastapi.testclient.TestClient가 요구한다
     "ruff",
 ]
+# 실제 임베딩(BAAI/bge-m3)을 돌릴 때만 필요하다. 기본 dependencies에 두지 않는 이유는
+# sentence-transformers가 torch를 끌고 와 설치 용량이 수 GB 늘어나는 데 반해,
+# 테스트·CI는 전부 FakeProvider로 돌기 때문이다 (ADR-003).
+local = ["sentence-transformers"]
 
 [tool.setuptools.packages.find]
 # tests는 설치 대상이 아니다. 배포되는 것은 app 패키지뿐이다.
