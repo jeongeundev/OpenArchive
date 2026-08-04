@@ -77,7 +77,18 @@ UTM → Create a New Virtual Machine
 | Memory | 8192 MB | |
 | CPU Cores | 4 | 라이선스 `limit_cpu=4` 이내 |
 | Storage | 64 GB 이상 | OpenSQL + PG 데이터 + 문서/벡터 |
-| Network | Shared Network (NAT) | 포트 포워딩은 3절 |
+| Network | Shared Network (NAT) | 포트 포워딩은 4절 |
+| **공유 디렉토리** | **설정하지 않는다** | 아래 참조 |
+
+### 공유 디렉토리는 건너뛴다
+
+생성 마법사의 "공유 디렉토리" 단계는 비워두고 넘어간다. 파일 전송은 `scp`로 한다 (5절).
+
+1. UTM 안내대로 **게스트 드라이버가 별도로 필요**하다. Rocky Linux Minimal에는 9p/SPICE WebDAV 클라이언트가 없어 설치 작업이 하나 늘어난다
+2. **SSH는 어차피 켜야 한다.** 에뮬레이션 VM의 그래픽 콘솔은 느리고 복사·붙여넣기가 불편해 SSH 접속이 사실상 필수다. 같은 통로로 `scp`를 쓰면 된다
+3. 전송은 **일회성**이다 — 설치 파일과 라이선스뿐이며, 상시 공유가 필요한 작업이 없다
+
+나중에 파일을 자주 주고받아야 하면 그때 추가한다. VM 설정은 언제든 바꿀 수 있다.
 
 ### CPU 토폴로지 (선택)
 
