@@ -69,9 +69,9 @@ OpenArchive/
 CREATE TABLE documents (
   id               uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   title            text NOT NULL,
-  filename         text,
+  filename         text,                   -- 업로드된 원본 파일명 (출처 표시용). 파일 자체는 보관하지 않는다
   content_type     text NOT NULL,          -- pdf | docx | txt | md
-  content          text NOT NULL,          -- 파싱된 현재 버전 원문
+  content          text NOT NULL,          -- 추출 텍스트 (현재 버전). 편집·버전 관리·임베딩의 대상
   content_hash     text NOT NULL,          -- sha256, 트리거의 변경 감지 기준
   version          int  NOT NULL DEFAULT 1,
   owner_id         text NOT NULL,
@@ -86,7 +86,8 @@ CREATE TABLE documents (
   CONSTRAINT documents_content_not_blank CHECK (length(btrim(content)) > 0)
 );
 
--- document_versions: 버전 이력 (append-only)
+-- document_versions: 추출 텍스트의 버전 이력 (append-only)
+-- 파일 버전 이력이 아니다. v1으로 되돌려도 원본 파일이 아니라 v1 시점의 추출 텍스트가 나온다.
 CREATE TABLE document_versions (
   document_id  uuid NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
   version      int  NOT NULL,
@@ -125,7 +126,7 @@ CREATE UNIQUE INDEX uq_pending_job_per_doc
   ON embedding_jobs(document_id) WHERE status = 'pending';
 ```
 
-설계 근거: 잡은 콘텐츠 페이로드 없이 "이 문서는 재임베딩이 필요하다"는 신호만 담는다. 워커가 처리 시점에 `documents`의 최신 content를 읽으므로 (a) 연속 수정이 자연스럽게 코얼레싱되고 (b) 재처리가 항상 최신 상태로 수렴하는 멱등 구조가 된다.
+설계 근거: 잡은 콘텐츠 페이로드 없이 "이 문서는 재임베딩이 필요하다"는 신호만 담는다. 워커가 처리 시점에 `documents`의 최신 content를 읽으므로 (a) 연속 수정이 자연스럽게 코얼레싱되고 (b) 재처리가 최신 상태로 수렴하는 멱등 구조가 된다.
 
 ### `document_chunks.version`의 용도
 
@@ -217,21 +218,32 @@ UPDATE documents SET embedding_status='processing'
 
 2. 문서의 최신 `content`와 **`content_hash`를 함께 읽기** → 청킹 → 임베딩
    *DB 밖 연산은 이 단계뿐이며, 시간이 오래 걸린다.*
+   `version`은 여기서 읽지 않는다 — 3번에서 잠금을 잡은 뒤 읽는다 (아래 설명).
 
 3. **단일 트랜잭션**으로 결과 반영 — 단, **읽었던 `content_hash`를 재확인**한다:
 ```sql
 BEGIN;
   -- 처리 중 문서가 또 수정됐는지 확인. 다르면 이 결과는 낡았으므로 폐기.
-  SELECT content_hash FROM documents WHERE id = %(doc_id)s FOR UPDATE;
+  -- 청크에 기록할 version도 이 잠금 아래에서 함께 읽는다.
+  SELECT content_hash, version FROM documents WHERE id = %(doc_id)s FOR UPDATE;
   -- content_hash <> 읽었던 값이면 → ROLLBACK, job은 done 처리
   --   (새 pending 잡이 이미 생성돼 있으므로 최신 내용으로 다시 처리된다)
 
   DELETE FROM document_chunks WHERE document_id = %(doc_id)s;
-  INSERT INTO document_chunks (...) VALUES (...);
+
+  -- version을 명시적으로 채운다. 위에서 읽은 값을 그대로 쓴다.
+  INSERT INTO document_chunks (document_id, version, chunk_index, content, embedding)
+  VALUES (%(doc_id)s, %(locked_version)s, %(idx)s, %(chunk_text)s, %(vec)s);
+
   UPDATE documents SET embedding_status='ready' WHERE id = %(doc_id)s;
   UPDATE embedding_jobs SET status='done', finished_at=now() WHERE id = %(job_id)s;
 COMMIT;
 ```
+
+> **`document_chunks.version`은 반드시 3번의 `FOR UPDATE` 아래에서 읽은 값으로 채운다.**
+> 이 컬럼은 정합성 검증 쿼리(`c.version <> d.version`)와 `/admin/status` 카운터의 근거다. **잘못 채우면 카운터가 영원히 0이거나 영원히 0이 아니게 되어 지표 자체가 무의미해진다.**
+>
+> 2번에서 미리 읽지 않는 이유: 본문이 `A → B → A`로 되돌아온 경우 `content_hash`는 원래대로 돌아오지만 `version`은 2 올라가 있다. 해시 재확인은 통과하는데 2번에서 읽은 `version`은 낡은 값이 된다. 잠금 아래에서 읽으면 이 경우에도 잠금 시점의 `version`이 정확히 기록된다.
 
 4. 실패 시: `attempts` 기반 지수 백오프로 `next_attempt_at` 갱신 후 `pending` 복귀. 3회 초과 시 job `error` + `documents.embedding_status='error'`.
 
@@ -239,7 +251,7 @@ COMMIT;
 
 > **3번의 `content_hash` 재확인이 멀티 워커 정합성의 핵심이다.**
 > 워커A가 job1을 처리하는 도중 문서가 수정되면 새 pending job2가 생기고, 워커B가 이를 즉시 claim할 수 있다. 두 워커가 같은 `document_id`의 청크를 동시에 교체하면 **완료 순서에 따라 낡은 버전이 최종 상태로 남을 수 있다.**
-> `FOR UPDATE` + 해시 비교로 "내가 읽은 내용이 아직 최신인가"를 커밋 직전에 확인하면, 낡은 결과는 스스로 폐기되고 항상 최신 내용으로 수렴한다.
+> `FOR UPDATE` + 해시 비교로 "내가 읽은 내용이 아직 최신인가"를 커밋 직전에 확인하면, 낡은 결과는 스스로 폐기되고 최신 내용으로 수렴한다.
 
 ### 정합성 보장
 
@@ -250,9 +262,12 @@ COMMIT;
 | 코얼레싱 | 파셜 유니크 인덱스로 문서당 pending 1개. 처리 중(`processing`) 재수정되면 새 pending이 생긴다 |
 | **최신 수렴** | 워커가 커밋 직전 `content_hash`를 `FOR UPDATE`로 재확인한다. 처리 중 문서가 바뀌었으면 그 결과를 폐기하므로, **멀티 워커가 경쟁해도 낡은 청크가 최종 상태로 남지 않는다** |
 | 삭제 정합성 | `ON DELETE CASCADE`로 청크·잡이 문서와 원자적으로 삭제. 워커 개입 불필요. 처리 도중 문서가 삭제되면 워커의 최종 트랜잭션이 0건 갱신으로 끝남 — 무해 |
-| 검색 공백 없음 | 청크 교체가 단일 트랜잭션이므로 중간 상태가 보이지 않는다. 재임베딩 중에는 **이전 버전 청크가 그대로 검색된다** (검색 쿼리가 `embedding_status`로 거르지 않기 때문 — 검색 데이터 흐름 절 참조) |
+| **버전 일관성** | 활성 청크는 **어느 시점에 조회해도 하나의 버전**이며 여러 버전이 섞이지 않는다. 청크 교체가 단일 트랜잭션(`DELETE`+`INSERT`)이라 다른 세션은 커밋 전후만 보고, 검색·관련 문서 쿼리가 모두 **단일 문**이라 READ COMMITTED의 문 단위 스냅샷 안에서 일관된다. `document_chunks.version`이 "지금 검색되는 것이 몇 번 버전인가"를 항상 답할 수 있게 한다 |
+| 검색 공백 없음 | 재임베딩 중에도 결과가 비지 않는다 — **이전 버전 청크가 그대로 검색된다** (검색 쿼리가 `embedding_status`로 거르지 않기 때문 — 검색 데이터 흐름 절 참조). 위 버전 일관성과 짝을 이룬다: 공백이 없고, 그때 나오는 것은 낡았을지언정 **일관된 한 버전**이다 |
 | 읽기 정합성 | 검색을 plain `BEGIN`으로 감싸 OpenProxy가 Primary로 라우팅하게 강제한다. 복제 지연으로 방금 임베딩된 청크가 누락되지 않는다 (ADR-010) |
 | 멱등성 | 청크 교체가 delete+insert라 잡 재실행의 종착 상태가 항상 동일 |
+
+> **이 표가 보장하지 않는 것: "항상 최신".** 재임베딩 중에는 이전 버전이 검색되고, 폴링 주기(5초)와 임베딩 소요만큼 반영이 늦으며, Failover 구간에는 요청이 실패한다. 우리가 보장하는 것은 **버전 일관성**과 **최신으로의 수렴**이며, 그 사이의 어긋난 구간은 정합성 검증 쿼리로 **관측할 수 있다**. 문서·데모에서 "항상 최신"이나 "실시간 동기화"로 표현하지 않는다 (ADR-015).
 
 ## 고가용성(HA) 전략
 
@@ -335,12 +350,14 @@ OpenSQL `patroni.yml`의 PostgreSQL 파라미터는 `max_connections: 100`이다
 
 | 엔드포인트 | 내용 |
 |---|---|
-| `POST /api/documents` | multipart 업로드. pypdf/python-docx/plain 파싱 → INSERT. 여기서 트리거가 파이프라인을 자동 기동 — 임베딩 관련 코드 없음. **텍스트 추출 결과가 비면 400** (아래) |
+| `POST /api/documents` | multipart 업로드. pypdf/python-docx/plain 파싱 → INSERT. 여기서 트리거가 파이프라인을 자동 기동 — 임베딩 관련 코드 없음. **텍스트 추출 결과가 비면 400** (아래). **원본 파일은 보관하지 않는다** — 추출 텍스트만 저장하고 파일은 버린다 |
 | `GET /api/documents` | 목록 + `status`/`tag` 필터, embedding_status 포함 |
-| `GET /api/documents/{id}` | 상세 + 버전 목록 + 청크 수 + 청크 기준 버전 |
-| `PUT /api/documents/{id}` | 새 파일/텍스트 → `version`+1, `content`, `content_hash` UPDATE. **버전 이력 기록과 재임베딩 잡 생성은 트리거가 수행** |
+| `GET /api/documents/{id}` | 상세 + 텍스트 버전 목록 + 청크 수 + 청크 기준 버전 |
+| `PUT /api/documents/{id}` | 새 파일 또는 편집된 추출 텍스트 → `version`+1, `content`, `content_hash` UPDATE. **버전 이력 기록과 재임베딩 잡 생성은 트리거가 수행.** 요청의 `version`이 현재 버전과 다르면 **409** (아래) |
 | `DELETE /api/documents/{id}` | CASCADE로 벡터까지 원자 삭제 |
 | `POST /api/documents/{id}/reembed` | **임베딩 실패 복구.** 아래 참조 |
+| `GET /api/documents/{id}/related` | **관련 문서.** 청크 평균 벡터로 유사 문서 조회 (ADR-018). 청크가 없으면 `not_indexed` |
+| `GET /api/documents/{id}/tag-suggestions` | **태그 추천.** 유사 문서의 태그 빈도 (ADR-019). 청크가 없으면 `not_indexed` |
 | `POST /api/search` | 하이브리드 검색 (아래) |
 | `GET /api/system/status` | **운영/데모 전용**: `inet_server_addr()`(현재 접속 노드), pending/processing/error 잡 수, 임베딩 프로바이더명, 최근 재연결 이벤트, **정합성 검증 쿼리 결과**(`c.version <> d.version` 건수). `/admin/status`가 소비하며 사용자 화면은 호출하지 않는다 |
 
@@ -370,6 +387,30 @@ UPDATE documents SET content_hash = content_hash WHERE id = %(doc_id)s;
 트리거가 상태를 `pending`으로 되돌리고 새 잡을 만든다. **잡 생성 책임이 DB 계층에 남는다** — `CLAUDE.md`의 "애플리케이션 코드에서 `embedding_jobs`에 직접 INSERT 하지 마라" 규칙을 우회하지 않는 유일한 방법이다.
 
 버전은 올라가지 않으므로 이력이 오염되지 않고, 트리거의 `ON CONFLICT (document_id, version) DO NOTHING`이 중복 이력을 막는다.
+
+### 인라인 편집과 낙관적 동시성 (`PUT /api/documents/{id}`)
+
+플랫폼 안에서 문서를 고칠 수 있다. **편집 대상은 추출 텍스트이며 원본 파일이 아니다** (ADR-017).
+
+```
+PUT /api/documents/{id}
+  body: { "content": "...", "version": 2 }
+
+  version 불일치 → 409 Conflict
+    { "detail": "다른 곳에서 문서가 수정되었습니다. 새로고침 후 다시 시도하세요.",
+      "current_version": 3 }
+
+  version 일치  → 200
+    UPDATE documents SET version = version + 1, content = ..., content_hash = ...
+     WHERE id = %(id)s AND version = %(client_version)s;
+    -- 0건 갱신이면 그 사이에 바뀐 것이므로 409로 되돌린다
+```
+
+- 버전 이력 기록과 재임베딩 잡 생성은 **트리거가 수행**한다. 이 핸들러는 `documents`만 UPDATE한다
+- `WHERE ... AND version = %(client_version)s`로 비교와 갱신을 한 문장에 두어, 확인과 쓰기 사이의 경쟁을 없앤다
+- 저장 직후 `embedding_status`가 `pending`으로 돌아가고, 정합성 카운터(`c.version <> d.version`)가 1 올랐다가 워커 처리 후 0으로 복귀한다. **이 흐름이 데모의 핵심 장면이다**
+
+**원본 파일과 추출 텍스트를 구분한다.** 현재 스키마에 바이너리 컬럼이 없으므로, 편집 후에는 `filename = report.pdf`인데 `content`가 그 PDF의 추출 결과와 다른 상태가 될 수 있다. **결함이 아니라 설계된 동작**이며, 스캔 품질이 나쁜 PDF의 오추출을 고치는 정당한 용도가 있다. UI는 편집 영역을 "본문"이 아니라 **"추출 텍스트"**로 표기한다 (`UI_GUIDE.md`).
 
 ## 검색 데이터 흐름
 
@@ -438,6 +479,188 @@ HNSW 인덱스는 `document_chunks`에 있는데 필터는 JOIN 상대인 `docum
 
 `embedding_status`는 **검색 필터가 아니라 UI 상태 표시용**으로만 쓴다.
 
+### 조건부 확장: 키워드 + 벡터 RRF (ADR-016)
+
+> **이 절은 선택 사항이다.** core 요건("정형 필터 + 벡터를 단일 SQL로 결합")은 위 쿼리로 충족된다. 아래는 core가 완성된 뒤 일정에 여유가 있을 때만 착수하며, 착수하지 않아도 나머지 설계는 그대로 성립한다.
+
+착수 시 스키마와 인덱스를 하나씩 추가한다. `content_tsv`는 **`GENERATED ALWAYS AS ... STORED`이므로 애플리케이션 코드 없이 DB가 유지한다** — 청크가 쓰이는 순간 키워드 색인이 함께 생긴다.
+
+```sql
+-- migrations/005_fts.sql
+ALTER TABLE document_chunks
+  ADD COLUMN content_tsv tsvector
+  GENERATED ALWAYS AS (to_tsvector('simple', content)) STORED;
+
+CREATE INDEX idx_chunks_tsv ON document_chunks USING gin (content_tsv);
+```
+
+검색 쿼리는 위 구조를 유지한 채 CTE 두 개를 추가하고, `DISTINCT ON`을 **RRF 융합 이후**로 옮긴다 (ADR-011 보강 2).
+
+```sql
+BEGIN;
+SET LOCAL hnsw.ef_search = 200;
+
+WITH vec AS (          -- 위 candidates 절과 동일한 필터·JOIN 구조
+  SELECT c.id, c.document_id, c.chunk_index, c.content,
+         row_number() OVER (ORDER BY c.embedding <=> %(qvec)s) AS rnk
+  FROM document_chunks c JOIN documents d ON d.id = c.document_id
+  WHERE (%(tags)s::text[] IS NULL OR d.tags && %(tags)s)
+    AND (%(ctype)s::text IS NULL OR d.content_type = %(ctype)s)
+    AND (d.visibility = 'public' OR d.owner_id = %(user)s)
+  ORDER BY c.embedding <=> %(qvec)s LIMIT %(k)s * 5
+),
+kw AS (                -- GIN 인덱스 경로. 필터는 vec과 완전히 동일해야 한다
+  SELECT c.id, c.document_id, c.chunk_index, c.content,
+         row_number() OVER (ORDER BY ts_rank(c.content_tsv, q) DESC) AS rnk
+  FROM document_chunks c JOIN documents d ON d.id = c.document_id,
+       websearch_to_tsquery('simple', %(query)s) q
+  WHERE c.content_tsv @@ q
+    AND (%(tags)s::text[] IS NULL OR d.tags && %(tags)s)
+    AND (%(ctype)s::text IS NULL OR d.content_type = %(ctype)s)
+    AND (d.visibility = 'public' OR d.owner_id = %(user)s)
+  ORDER BY ts_rank(c.content_tsv, q) DESC LIMIT %(k)s * 5
+),
+fused AS (             -- RRF: 1/(60 + rank)
+  SELECT COALESCE(v.id, w.id) AS id,
+         COALESCE(v.document_id, w.document_id) AS document_id,
+         COALESCE(v.chunk_index, w.chunk_index) AS chunk_index,
+         COALESCE(v.content, w.content) AS content,
+         COALESCE(1.0/(60 + v.rnk), 0) + COALESCE(1.0/(60 + w.rnk), 0) AS score
+  FROM vec v FULL OUTER JOIN kw w ON v.id = w.id
+),
+best_per_doc AS (      -- 문서당 1건 — RRF 이후에 적용한다
+  SELECT DISTINCT ON (document_id) * FROM fused
+  ORDER BY document_id, score DESC
+)
+SELECT d.id, d.title, d.tags, d.content_type, b.chunk_index, b.content, b.score
+FROM best_per_doc b JOIN documents d ON d.id = b.document_id
+ORDER BY b.score DESC LIMIT %(k)s;
+
+COMMIT;
+```
+
+> ⚠️ **한국어에서 기대 효과가 제한적이다.** 번들 확장에 한국어 형태소 분석기가 없어 `simple` 파서를 쓰는데, 이는 조사를 분리하지 못한다 — `"OpenSQL의"`는 `opensql의`로 색인되어 `opensql`로 검색되지 않는다. 효과는 **조사 없이 등장하는 토큰**(독립 표기된 제품명·영문 약어·숫자·에러 코드)에 한정되며, 실제 비중은 실측 전까지 알 수 없다. ADR-016을 조건부로 둔 이유다.
+
+## 관련 문서·태그 추천
+
+문서 상세에서 두 가지를 제공한다. 둘 다 대상 문서의 **청크 평균 벡터를 질의 시점에 계산**하며, 문서 대표 벡터를 컬럼으로 저장하지 않는다 (ADR-018).
+
+### 세 가지 공통 규칙
+
+**1. 권한 필터를 검색과 동일하게 적용한다**
+
+```sql
+(d.visibility = 'public' OR d.owner_id = %(user)s)
+```
+
+빠뜨리면 관련 문서가 private 문서를 노출하고, 태그 추천이 private 문서의 태그를 흘린다. 대상 문서 자체의 접근 권한은 API 레이어의 문서 조회에서 이미 걸린다.
+
+**2. `DISTINCT ON`은 후보 확보 이후에 (ADR-011 보강 1)**
+
+```
+1) 벡터 정렬 + LIMIT 으로 후보 확보   ← 여기서만 인덱스를 탄다
+2) DISTINCT ON (document_id) 로 문서당 1건
+3) 거리순 재정렬 + 최종 LIMIT
+```
+
+2)와 3)을 합쳐 `DISTINCT ON ... ORDER BY document_id, dist LIMIT k`로 쓰면 **유사도가 아니라 `document_id`(UUID) 순으로 잘린다.**
+
+**3. 청크가 없는 문서는 쿼리를 실행하지 않는다**
+
+`avg(embedding)`은 청크가 0행이면 **NULL을 반환**한다. 그러면 `embedding <=> NULL`이 NULL이 되어 정렬이 무의미해지고, **에러 없이 무작위 문서 목록이 반환된다.** 애플리케이션이 먼저 막는다.
+
+```
+GET /api/documents/{id}/related
+GET /api/documents/{id}/tag-suggestions
+
+  청크 0건 → 200 { "items": [], "reason": "not_indexed" }
+  청크 있음 → 200 { "items": [...], "based_on_version": 2 }
+```
+
+- **404·400이 아니라 200이다.** 문서는 존재하고 요청도 유효하다. "아직 색인 전"은 오류가 아니라 상태다
+- 분기 기준은 `embedding_status`가 **아니라 청크 존재 여부**다. 재임베딩 중(`processing`)에도 이전 청크가 남아 있으므로 정상 응답해야 하며, 이는 검색이 재임베딩 중 이전 벡터로 동작하는 정책과 일치한다
+- `based_on_version`은 `document_chunks.version`을 그대로 쓴다. UI에 "v2 기준"으로 표시되어 **버전 일관성 보장을 화면에서 뒷받침한다**
+- 발생 상황: 최초 업로드 직후(`pending`), 최초 임베딩 실패(`error`)
+
+### 관련 문서
+
+```sql
+WITH me AS (
+  SELECT avg(embedding) AS v FROM document_chunks WHERE document_id = %(id)s
+),
+cand AS (                      -- 1) 벡터 인덱스로 후보 확보
+  SELECT c.document_id, c.embedding <=> (SELECT v FROM me) AS dist
+  FROM document_chunks c
+  JOIN documents d ON d.id = c.document_id
+  WHERE c.document_id <> %(id)s
+    AND (d.visibility = 'public' OR d.owner_id = %(user)s)
+  ORDER BY c.embedding <=> (SELECT v FROM me)
+  LIMIT %(k)s * 10
+),
+best AS (                      -- 2) 문서당 최소 거리 1건
+  SELECT DISTINCT ON (document_id) document_id, dist
+  FROM cand ORDER BY document_id, dist
+)
+SELECT d.id, d.title, d.tags, 1 - b.dist AS score   -- 3) 거리순 재정렬 + LIMIT
+FROM best b JOIN documents d ON d.id = b.document_id
+ORDER BY b.dist LIMIT %(k)s;
+```
+
+**`score`가 무엇인지 정확히** — 문서 간 유사도가 아니다.
+
+```
+score = 1 − distance( 대상 문서의 청크 평균 벡터 ,  후보 문서에서 가장 가까운 단일 청크 )
+                     └── 문서 전체를 뭉친 값 ──┘   └──── 최댓값 하나만 ────┘
+```
+
+대상 쪽은 **평균**, 후보 쪽은 **최댓값**이라 **비대칭**이다. 의미는 *"이 문서 전반의 주제에 가장 잘 맞는 구절을 가진 문서"*이며 A→B와 B→A 점수가 다를 수 있다. 필드명을 `sim`이 아니라 `score`로 둔 이유다.
+
+### 유사 후보 표시 — 중복 "탐지"가 아니다
+
+위 `score`는 **중복 판정에 쓰지 않는다.** 비대칭이라 양방향으로 실패한다 — 완전히 같은 문서도 주제가 여럿이면 점수가 낮게 나올 수 있고(거짓 음성), 긴 문서가 짧은 문서를 포함하면 높게 나온다(포함이지 중복이 아님, 거짓 양성).
+
+| 신호 | 판정 | 방법 |
+|---|---|---|
+| `content_hash` 완전 일치 | **동일 텍스트** — 확정 | `SELECT id, title FROM documents WHERE content_hash = %(hash)s AND id <> %(id)s` |
+| `score` 상위 항목 | **내용이 유사한 문서** — 참고용 | 위 관련 문서 쿼리 |
+
+자동 차단·병합·업로드 거부를 붙이지 않고, 고정 임계값으로 "중복" 배지를 켜지도 않는다. UI 문구는 **"내용이 유사한 문서가 있습니다"**이며 판단은 사람이 한다.
+
+### 태그 추천
+
+태그를 임베딩하지 않는다. 유사 문서를 찾은 뒤 **그 문서들의 태그를 빈도순**으로 제시한다 (ADR-019).
+
+```sql
+WITH me AS (
+  SELECT avg(embedding) AS v FROM document_chunks WHERE document_id = %(id)s
+),
+cand AS (
+  SELECT c.document_id, c.embedding <=> (SELECT v FROM me) AS dist
+  FROM document_chunks c
+  JOIN documents d ON d.id = c.document_id
+  WHERE c.document_id <> %(id)s
+    AND (d.visibility = 'public' OR d.owner_id = %(user)s)
+  ORDER BY c.embedding <=> (SELECT v FROM me)
+  LIMIT 100
+),
+best AS (
+  SELECT DISTINCT ON (document_id) document_id, dist
+  FROM cand ORDER BY document_id, dist
+),
+neighbors AS (                 -- ★ 유사도 순으로 자른다 (document_id 순이 아니다)
+  SELECT document_id FROM best ORDER BY dist LIMIT 10
+)
+SELECT t.tag, count(*) AS freq
+FROM neighbors n
+JOIN documents d ON d.id = n.document_id
+CROSS JOIN LATERAL unnest(d.tags) AS t(tag)
+WHERE NOT (t.tag = ANY(%(current_tags)s::text[]))   -- 이미 달린 태그 제외
+GROUP BY t.tag ORDER BY freq DESC, t.tag LIMIT 5;
+```
+
+`documents.tags`(정형 배열)와 벡터 이웃이 한 쿼리에서 결합된다 — 하이브리드 활용 사례가 하나 더 늘어난다. 문서가 적을 때는 이웃이 없어 추천도 비는데, 이는 콜드스타트로 수용한다.
+
+> **`avg` 결과가 HNSW 인덱스를 타는지 미확인이다.** 플래너가 `(SELECT v FROM me)`를 상수로 접지 못하면 풀스캔이 된다. M0에서 `EXPLAIN (ANALYZE, BUFFERS)`로 확인하고, 인덱스를 못 타면 평균을 별도 쿼리로 조회해 벡터 리터럴 파라미터로 넘긴다(왕복 2회). `docs/OPENSQL_RESEARCH.md` §12.
 
 ## 임베딩 프로바이더
 
@@ -460,7 +683,8 @@ class EmbeddingProvider(Protocol):
 
 ## 프론트엔드 패턴
 
-- 사용자 3화면: `/`(목록 + 업로드 드롭존), `/documents/[id]`(메타데이터·버전 이력·청크·재업로드), `/search`(질의 + 태그/유형 필터 + 결과. "실행된 SQL 보기" 토글)
+- 사용자 3화면: `/`(목록 + 업로드 드롭존), `/documents/[id]`(메타데이터·텍스트 버전 이력·청크·**추출 텍스트 편집**·재업로드·관련 문서·태그 추천), `/search`(질의 + 태그/유형 필터 + 결과. "실행된 SQL 보기" 토글)
+- **편집은 Client Component**다. 보기 ↔ 편집 토글, 저장 시 `version`을 함께 전송하고 409를 처리한다. 저장 직후 상태 배지가 `pending → processing → ready`로 바뀌는 것을 2초 폴링으로 보여준다
 - **사용자 화면은 인프라 상태를 노출하지 않는다.** 페일오버가 나도 화면 구성이 달라지지 않으며, 사용자는 업로드·검색이 계속 성공하는 것만 본다 (UI_GUIDE 디자인 원칙 3).
 - 운영 1화면: `/admin/status` — `GET /api/system/status`를 폴링해 접속 노드·잡 수·프로바이더 표시. **페일오버 데모의 증거 채널**이며 사용자 내비게이션에 노출하지 않는다.
 - Server Components 기본, 폴링·업로드 등 인터랙션 구간만 Client Component

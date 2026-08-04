@@ -27,6 +27,11 @@
 - CRITICAL: DB 접속은 **OpenProxy VIP 단일 엔드포인트**로 한다. 애플리케이션에 멀티호스트 DSN이나 `target_session_attrs`를 두지 마라. DSN은 환경변수(`DATABASE_URL`)로만 주입한다. 이유: 새 프라이머리 발견·재연결은 OpenProxy가 수행한다. 앱에서 중복 구현하면 OpenSQL 공식 아키텍처를 우회하게 된다 (ADR-006).
 - CRITICAL: 검색 쿼리는 **plain `BEGIN` … `COMMIT`** 블록 안에서 실행한다. `BEGIN READ ONLY`를 쓰지 마라 — OpenProxy가 이를 Replica로 라우팅해 방금 임베딩된 청크가 누락된다. 이유: 트랜잭션 밖 단순 SELECT는 Replica로 가고, 복제 지연 보장이 없다 (ADR-010).
 - CRITICAL: 워커는 **폴링을 주 경로**로 잡을 드레인한다. `LISTEN`/`NOTIFY`는 최적화이며, 없어도 파이프라인이 동작해야 한다. 이유: OpenProxy 경유 시 LISTEN 동작이 문서로 보장되지 않는다 (ADR-009).
+- CRITICAL: **관련 문서·태그 추천 쿼리에도 검색과 동일한 `visibility`/`owner_id` 필터를 적용한다.** 빠뜨리면 private 문서가 관련 문서로 노출되고 그 태그가 추천으로 새어나간다 (ADR-018).
+- CRITICAL: **`avg(embedding)`을 쓰는 쿼리는 호출 전에 청크 존재를 확인한다.** 청크가 0행이면 `avg`가 NULL을 반환하고 `embedding <=> NULL`이 정렬을 무의미하게 만들어, **에러 없이 무작위 문서 목록이 반환된다.** 분기 기준은 `embedding_status`가 아니라 **청크 존재 여부**다 — 재임베딩 중에는 이전 청크로 정상 응답해야 한다.
+- CRITICAL: 문서당 1건으로 줄이는 벡터 쿼리는 **벡터 정렬 + LIMIT → `DISTINCT ON` → 거리순 재정렬 + 최종 LIMIT** 순서를 지킨다. `DISTINCT ON` 직후에 `LIMIT`을 붙이면 유사도가 아니라 `document_id`(UUID) 순으로 잘린다 (ADR-011).
+- 사용자 대상 문구에 **"항상 최신"·"실시간 동기화"를 쓰지 않는다.** 보장 범위는 **버전 일관성 + 최신 수렴**이다 (ADR-015). "무중단"을 "짧은 중단 후 자동 복구"로 쓰는 것과 같은 원칙이다.
+- 편집·버전 관리의 대상은 **추출 텍스트**이며 원본 파일이 아니다. 원본 파일은 보관하지 않는다. 문서·UI에서 **원본 파일 / 추출 텍스트 / 텍스트 버전**을 구분해 쓰고 "원문"으로 뭉뚱그리지 않는다 (ADR-017).
 - 벡터 컬럼은 `vector(1024)` 고정. 임베딩 프로바이더가 바뀌어도 차원은 바꾸지 않는다.
 - 스키마 변경은 `backend/migrations/`의 번호 붙은 raw SQL 파일로만 한다 (ORM 마이그레이션 도구 금지).
 - 백엔드 비즈니스 로직은 `backend/app/services/`에 두고, API 라우터와 MCP 서버는 이를 재사용만 한다.
