@@ -121,7 +121,10 @@ python3 -m venv .venv && source .venv/bin/activate   # scripts/check.sh가 backe
 pip install -e ".[dev]"          # 실제 임베딩(BGE-M3)까지 쓸 때는 ".[dev,local]"
 uvicorn app.main:app --reload
 
-# 3. 임베딩 워커 (별도 터미널)
+# 3. 임베딩 워커 (별도 터미널) — API 서버를 먼저 기동해야 한다.
+#    마이그레이션은 API startup에서만 실행되므로(ADR-012), 순서를 바꾸면
+#    워커가 "스키마 없음"으로 실패한다.
+cd backend && source .venv/bin/activate
 python -m app.worker
 
 # 4. 프론트엔드 (별도 터미널)
