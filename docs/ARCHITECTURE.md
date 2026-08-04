@@ -37,7 +37,7 @@
 ## 디렉토리 구조
 
 ```
-OpenSQL/
+OpenArchive/
 ├── docker-compose.yml            # 로컬 개발용 pgvector 컨테이너
 ├── scripts/check.sh              # 통합 검증 (backend lint+test, frontend lint+test+build)
 ├── backend/

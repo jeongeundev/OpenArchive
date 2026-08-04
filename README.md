@@ -128,7 +128,7 @@ DATABASE_URL="postgresql://app@<vip>:6432/<pool_name>"
 |---|---|
 | [PRD](docs/PRD.md) | 제품 요구사항, MVP 범위 |
 | [Architecture](docs/ARCHITECTURE.md) | 스키마·트리거·워커·검색·고가용성 상세 |
-| [ADR](docs/ADR.md) | 설계 결정 13건과 각각의 근거·트레이드오프 |
+| [ADR](docs/ADR.md) | 설계 결정과 각각의 근거·트레이드오프 |
 | [OpenSQL 조사](docs/OPENSQL_RESEARCH.md) | OpenSQL 공식 문서 조사 결과, 미확인 항목, 검증 계획 |
 | [UI Guide](docs/UI_GUIDE.md) | 디자인 원칙, 화면 구성 |
 | [Contributing](CONTRIBUTING.md) | 개발 규약, 브랜치·커밋 컨벤션 |

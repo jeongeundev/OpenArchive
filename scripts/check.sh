@@ -12,10 +12,19 @@ FAILED=0
 
 if [ -f "$ROOT/backend/pyproject.toml" ]; then
   cd "$ROOT/backend" || exit 1
-  echo "== backend: ruff =="
-  ruff check . || FAILED=1
-  echo "== backend: pytest =="
-  pytest || FAILED=1
+  # 셸의 기본 python(pyenv system)에는 pytest·ruff가 없다.
+  # 활성화 상태에 의존하지 않도록 .venv 안의 실행 파일을 직접 호출한다.
+  VENV="$ROOT/backend/.venv"
+  if [ ! -x "$VENV/bin/python" ]; then
+    echo "== backend: 검증 불가 — backend/.venv 없음 =="
+    echo "   생성: cd backend && python3 -m venv .venv && .venv/bin/pip install -e '.[dev]'"
+    FAILED=1
+  else
+    echo "== backend: ruff =="
+    "$VENV/bin/ruff" check . || FAILED=1
+    echo "== backend: pytest =="
+    "$VENV/bin/pytest" || FAILED=1
+  fi
 else
   echo "== backend: 건너뜀 (backend/pyproject.toml 없음) =="
 fi

@@ -8,7 +8,7 @@
 |---|---|---|
 | `docs/PROJECT_CONTEXT.md` | 기업 요구사항, 1차 평가 기준, 설계 원칙 | 범위·우선순위를 판단할 때 |
 | `docs/OPENSQL_RESEARCH.md` | **OpenSQL 공식 문서 조사 결과** + 미확인 항목 + M0 검증 목록 | **인프라·접속·인덱스 관련 결정 전 반드시** |
-| `docs/ADR.md` | ADR-001~012. 각 결정의 근거와 트레이드오프 | 설계 결정을 바꾸거나 추가할 때 |
+| `docs/ADR.md` | 설계 결정의 근거와 트레이드오프 | 설계 결정을 바꾸거나 추가할 때 |
 | `docs/ARCHITECTURE.md` | 스키마·트리거·워커·검색·HA 상세 | 구현할 때 |
 | `docs/PRD.md`, `docs/UI_GUIDE.md` | 기능 범위, UI 규칙 | 화면·기능 작업 시 |
 
@@ -46,6 +46,8 @@
 docker compose up -d                 # 로컬 DB (pgvector 컨테이너)
 
 # 백엔드 (backend/ 에서)
+python3 -m venv .venv                # 가상환경 생성 (최초 1회)
+source .venv/bin/activate            # 활성화 — 아래 명령은 활성화 상태 전제
 pip install -e ".[dev]"              # 의존성 설치
 uvicorn app.main:app --reload        # API 개발 서버
 python -m app.worker                 # 임베딩 워커 (별도 프로세스)
