@@ -42,9 +42,12 @@
 - CRITICAL: 마이그레이션 SQL도 TDD 대상이다. `*_triggers.sql`·`*_tables.sql`은 tdd-guard 훅이 대응 테스트(`backend/tests/test_triggers.py`, `test_tables.py`)를 요구한다. `*_extensions.sql`·`*_indexes.sql`은 훅에서 제외되지만, 인덱스가 검색 계획에 실제로 쓰이는지 확인이 필요하면 테스트를 직접 추가하라.
 - CRITICAL: DB 의존 테스트를 Mock·SQLite·인메모리 가짜 구현으로 대체하지 마라. 실제 `pgvector/pgvector:pg16` 컨테이너에 마이그레이션을 적용한 상태로 검증한다. 이유: 트리거·NOTIFY·`vector` 연산자 동작은 원리상 Mock으로 검증할 수 없고, 그것이 이 과제의 심사 핵심이다.
 - 검증 명령(`bash scripts/check.sh`)을 실행하지 못했다면 추측으로 통과 처리하지 말고, 실행하지 못한 이유와 영향 범위를 응답에 명시하라.
-- 커밋은 Conventional Commits `<type>(<scope>): <설명>` 형식. 타입: `feat` `fix` `docs` `test` `refactor` `chore` `ci` `perf` / 스코프: `db` `worker` `api` `search` `mcp` `frontend` `adr`
+- 커밋은 Conventional Commits `<type>(<scope>): <설명>` 형식. 타입: `feat` `fix` `docs` `test` `refactor` `chore` `ci` `perf` / 스코프: `db` `worker` `api` `search` `mcp` `frontend` `adr` `harness`(`scripts/execute.py`·`.claude/commands/harness.md`)
 - 브랜치는 `feat/` `fix/` `docs/` `test/` `chore/` 5개 접두사만 사용. `main` 단일 기본 브랜치에 Squash merge (ADR-013)
-- TDD 커밋 순서를 지킬 것 — 실패하는 `test:` 커밋을 먼저, 통과시키는 `feat:` 커밋을 나중에. 커밋 히스토리가 TDD의 증거가 된다
+- **TDD 강제는 커밋 순서가 아니라 `scripts/hooks/tdd-guard.sh`가 한다.** 이 훅은 `PreToolUse(Edit|Write)`로 걸려, 대응 테스트가 없는 구현 파일 쓰기를 `deny`로 차단한다. 커밋 순서는 사후 기록이지만 훅은 사전 차단이므로 더 강한 보장이다
+- 커밋 단위는 작업 방식에 따라 다르다
+  - **수동 작업**: 실패하는 `test:` 커밋을 먼저, 통과시키는 `feat:` 커밋을 나중에
+  - **하네스 실행**(`scripts/execute.py`): step당 커밋 1개. 테스트와 구현이 한 커밋에 들어간다. step을 test/feat으로 쪼개지 마라 — 훅이 이미 순서를 강제하고, squash merge하면 `main`에서 그 순서가 사라진다
 
 ## 명령어
 ```bash
