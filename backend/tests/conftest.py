@@ -5,6 +5,7 @@ from psycopg.conninfo import conninfo_to_dict, make_conninfo
 
 from app.config import get_settings
 from app.main import app
+from app.migrations import run_migrations
 
 # 개발 DB(openarchive)와 분리한다. 테스트는 매번 스키마를 통째로 비우므로
 # 같은 DB를 쓰면 개발 데이터가 사라진다.
@@ -79,3 +80,14 @@ def clean_db(test_dsn: str) -> str:
         conn.execute("CREATE SCHEMA public")
 
     return test_dsn
+
+
+@pytest.fixture
+async def migrated_db(clean_db: str) -> str:
+    """실제 backend/migrations/ 를 적용한 테스트 DB의 DSN.
+
+    테스트가 스키마를 자체 SQL로 만들면 검증 대상이 테스트 코드가 되어버린다.
+    러너를 그대로 태워, 심사 산출물인 마이그레이션 파일 자체를 검증 대상으로 삼는다.
+    """
+    await run_migrations(clean_db)
+    return clean_db

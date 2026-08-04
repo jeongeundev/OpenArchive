@@ -83,7 +83,9 @@ CREATE TABLE documents (
 
   -- 텍스트를 추출하지 못한 문서(스캔 이미지 PDF 등)가 저장되는 것을 DB에서 차단한다.
   -- 빈 본문은 임베딩할 것이 없어 검색에 영원히 잡히지 않는 유령 행이 된다.
-  CONSTRAINT documents_content_not_blank CHECK (length(btrim(content)) > 0)
+  -- 제거 문자를 명시한다: btrim의 1인자 형태는 공백만 제거해 탭·개행만 남은 본문이
+  -- 그대로 통과하는데, 스캔 이미지 PDF의 추출 결과가 정확히 그 형태다 (M1에서 실측).
+  CONSTRAINT documents_content_not_blank CHECK (length(btrim(content, E' \t\r\n\f')) > 0)
 );
 
 -- document_versions: 추출 텍스트의 버전 이력 (append-only)
@@ -371,7 +373,7 @@ OpenSQL `patroni.yml`의 PostgreSQL 파라미터는 `max_connections: 100`이다
 ```
 
 저장 후 `error` 상태로 두는 대안을 택하지 않은 이유: 빈 문서는 임베딩할 것이 없어 **영원히 검색에 잡히지 않는 유령 행**이 되고, 사용자는 목록에서 실패 배지만 볼 뿐 원인을 모른다. 업로드 시점에 즉시 알리는 편이 낫다.
-DB 계층에도 `CHECK (length(btrim(content)) > 0)`를 두어 이중으로 막는다 (스키마 절 참조).
+DB 계층에도 `CHECK (length(btrim(content, E' \t\r\n\f')) > 0)`를 두어 이중으로 막는다 (스키마 절 참조). 여기서 "공백 제거"는 **공백·탭·CR·LF·폼피드**를 뜻한다 — `btrim`의 1인자 형태는 공백만 제거하므로 개행뿐인 추출 결과를 걸러내지 못한다.
 
 ### 임베딩 실패 복구 (`POST /api/documents/{id}/reembed`)
 
