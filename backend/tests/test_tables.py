@@ -5,8 +5,9 @@
 확인할 수 없다. 실제 pgvector 컨테이너에 `backend/migrations/`를 적용한
 `migrated_db` 픽스처 위에서 돈다.
 
-트리거는 다음 step의 범위다. 이 시점의 테이블에는 트리거가 없으므로 문서를
-INSERT해도 잡·버전 이력이 생기지 않는 것이 정상이며, 자식 행은 테스트가 직접 넣는다.
+문서를 INSERT하면 003_triggers.sql의 트리거가 v1 이력과 pending 잡을 함께 만든다.
+여기서는 그것을 "이미 존재하는 행"으로만 다루고, 트리거의 동작 자체는 검증하지
+않는다 — 그쪽은 test_triggers.py의 몫이다.
 `embedding_jobs` 직접 INSERT 금지 규칙(CLAUDE.md)은 애플리케이션 코드를 대상으로
 하며, 제약 자체가 검증 대상인 여기서는 직접 INSERT가 유일한 수단이다.
 """
@@ -124,16 +125,18 @@ def test_chunk_index_is_unique_per_document(conn: psycopg.Connection):
 def test_version_history_rejects_a_duplicate_version(conn: psycopg.Connection):
     """(document_id, version)이 PK다 — 같은 버전 번호가 두 번 기록되지 않는다.
 
-    다음 step의 트리거가 `ON CONFLICT (document_id, version) DO NOTHING`으로
-    재실행 안전을 얻는데, 그 충돌 대상이 이 PK다.
+    트리거가 `ON CONFLICT (document_id, version) DO NOTHING`으로 재실행 안전을
+    얻는데, 그 충돌 대상이 이 PK다.
+
+    v1은 트리거가 이미 기록했으므로 v2로 확인한다 — 검증 대상은 PK이지 트리거가 아니다.
     """
     doc_id = insert_document(conn)
     insert_version = """
         INSERT INTO document_versions (document_id, version, content, content_hash)
-        VALUES (%s, 1, %s, 'sha256:v1')
+        VALUES (%s, 2, %s, 'sha256:v2')
     """
 
-    conn.execute(insert_version, (doc_id, "v1 추출 텍스트"))
+    conn.execute(insert_version, (doc_id, "v2 추출 텍스트"))
 
     with pytest.raises(psycopg.errors.UniqueViolation):
         conn.execute(insert_version, (doc_id, "같은 버전 번호로 다시"))
@@ -144,14 +147,7 @@ def test_deleting_a_document_cascades_to_versions_chunks_and_jobs(conn: psycopg.
 
     워커 개입 없이 DB가 보장하므로, 문서만 지워지고 벡터가 남는 상태가 구조적으로 없다.
     """
-    doc_id = insert_document(conn)
-    conn.execute(
-        """
-        INSERT INTO document_versions (document_id, version, content, content_hash)
-        VALUES (%s, 1, 'v1 추출 텍스트', 'sha256:v1')
-        """,
-        (doc_id,),
-    )
+    doc_id = insert_document(conn)  # 트리거가 v1 이력과 pending 잡을 함께 만든다
     conn.execute(
         """
         INSERT INTO document_chunks (document_id, version, chunk_index, content, embedding)
@@ -159,31 +155,25 @@ def test_deleting_a_document_cascades_to_versions_chunks_and_jobs(conn: psycopg.
         """,
         (doc_id, VECTOR_1024),
     )
-    conn.execute("INSERT INTO embedding_jobs (document_id) VALUES (%s)", (doc_id,))
-
-    conn.execute("DELETE FROM documents WHERE id = %s", (doc_id,))
-
-    counts = conn.execute(
-        """
+    count_children = """
         SELECT (SELECT count(*) FROM document_versions WHERE document_id = %(id)s),
                (SELECT count(*) FROM document_chunks   WHERE document_id = %(id)s),
                (SELECT count(*) FROM embedding_jobs    WHERE document_id = %(id)s)
-        """,
-        {"id": doc_id},
-    ).fetchone()
+    """
+    assert conn.execute(count_children, {"id": doc_id}).fetchone() == (1, 1, 1)
 
-    assert counts == (0, 0, 0)
+    conn.execute("DELETE FROM documents WHERE id = %s", (doc_id,))
+
+    assert conn.execute(count_children, {"id": doc_id}).fetchone() == (0, 0, 0)
 
 
 def test_a_document_can_have_only_one_pending_job(conn: psycopg.Connection):
     """DB 계층 코얼레싱 (ADR-001).
 
-    다음 step의 트리거가 `ON CONFLICT DO NOTHING`으로 잡을 생성하는데, 이 파셜
-    유니크 인덱스가 그 충돌 대상이다. 없으면 연속 수정마다 잡이 무한정 쌓인다.
+    트리거가 `ON CONFLICT DO NOTHING`으로 잡을 생성하는데, 이 파셜 유니크 인덱스가
+    그 충돌 대상이다. 없으면 연속 수정마다 잡이 무한정 쌓인다.
     """
-    doc_id = insert_document(conn)
-
-    conn.execute("INSERT INTO embedding_jobs (document_id) VALUES (%s)", (doc_id,))
+    doc_id = insert_document(conn)  # 트리거가 pending 잡 1건을 만든다
 
     with pytest.raises(psycopg.errors.UniqueViolation) as exc:
         conn.execute("INSERT INTO embedding_jobs (document_id) VALUES (%s)", (doc_id,))
@@ -197,8 +187,7 @@ def test_a_finished_job_frees_the_slot_for_a_new_pending_job(conn: psycopg.Conne
     파셜이 아닌 유니크 인덱스였다면 문서는 평생 잡을 한 번만 가질 수 있고,
     재임베딩이 영영 불가능해진다. 이 확인이 파셜이라는 것의 증거다.
     """
-    doc_id = insert_document(conn)
-    conn.execute("INSERT INTO embedding_jobs (document_id) VALUES (%s)", (doc_id,))
+    doc_id = insert_document(conn)  # 트리거가 pending 잡 1건을 만든다
 
     conn.execute("UPDATE embedding_jobs SET status = 'done' WHERE document_id = %s", (doc_id,))
     conn.execute("INSERT INTO embedding_jobs (document_id) VALUES (%s)", (doc_id,))
@@ -212,11 +201,8 @@ def test_a_finished_job_frees_the_slot_for_a_new_pending_job(conn: psycopg.Conne
 
 def test_pending_jobs_of_different_documents_do_not_collide(conn: psycopg.Connection):
     """코얼레싱 단위는 문서다 — 전역으로 pending 1건이 되면 큐가 성립하지 않는다."""
-    first = insert_document(conn, content_hash="sha256:doc-1")
-    second = insert_document(conn, content_hash="sha256:doc-2")
-
-    conn.execute("INSERT INTO embedding_jobs (document_id) VALUES (%s)", (first,))
-    conn.execute("INSERT INTO embedding_jobs (document_id) VALUES (%s)", (second,))
+    insert_document(conn, content_hash="sha256:doc-1")
+    insert_document(conn, content_hash="sha256:doc-2")
 
     (pending,) = conn.execute(
         "SELECT count(*) FROM embedding_jobs WHERE status = 'pending'"
@@ -228,11 +214,10 @@ def test_pending_jobs_of_different_documents_do_not_collide(conn: psycopg.Connec
 def test_job_defaults_are_filled_in(conn: psycopg.Connection):
     """워커의 claim 쿼리가 `status='pending' AND next_attempt_at <= now()`로 고른다.
 
-    두 기본값이 없으면 갓 생성된 잡이 집히지 않는다.
+    두 기본값이 없으면 갓 생성된 잡이 집히지 않는다. 트리거도 `document_id` 하나만
+    넣으므로(003_triggers.sql), 나머지 컬럼은 전부 이 기본값에 의존한다.
     """
     doc_id = insert_document(conn)
-
-    conn.execute("INSERT INTO embedding_jobs (document_id) VALUES (%s)", (doc_id,))
 
     status, attempts, claimable, last_error, started_at, finished_at = conn.execute(
         """
