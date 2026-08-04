@@ -54,8 +54,12 @@ class StepExecutor:
     """Phase 디렉토리 안의 step들을 순차 실행하는 하네스."""
 
     MAX_RETRIES = 3
-    FEAT_MSG = "feat({phase}): step {num} — {name}"
-    CHORE_MSG = "chore({phase}): step {num} output"
+    # 코드 커밋 메시지는 step의 type·scope·desc로 조립한다 (_build_commit_msg).
+    # 산출물·완료 커밋은 스코프를 붙이지 않는다 — CLAUDE.md 허용 스코프
+    # (db worker api search mcp frontend adr)에 하네스 메타데이터에 맞는 항목이 없다.
+    CHORE_MSG = "chore: {phase} step {num} 산출물"
+    DONE_MSG = "chore: {phase} 완료"
+    DEFAULT_TYPE = "feat"
     TZ = timezone(timedelta(hours=9))
 
     def __init__(self, phase_dir_name: str, *, auto_push: bool = False):
@@ -110,8 +114,15 @@ class StepExecutor:
         cmd = ["git"] + list(args)
         return subprocess.run(cmd, cwd=self._root, capture_output=True, text=True)
 
+    def _branch_name(self) -> str:
+        """ADR-013: 브랜치 접두사는 feat/ fix/ docs/ test/ chore/ 5종 (슬래시).
+
+        checkout과 push가 같은 값을 쓰도록 한 곳에서만 만든다.
+        """
+        return f"feat/{self._phase_name}"
+
     def _checkout_branch(self):
-        branch = f"feat-{self._phase_name}"
+        branch = self._branch_name()
 
         r = self._run_git("rev-parse", "--abbrev-ref", "HEAD")
         if r.returncode != 0:
@@ -133,7 +144,23 @@ class StepExecutor:
 
         print(f"  Branch: {branch}")
 
-    def _commit_step(self, step_num: int, step_name: str):
+    @classmethod
+    def _build_commit_msg(cls, step: dict) -> str:
+        """step 메타데이터로 Conventional Commits 메시지를 만든다.
+
+        형식은 CLAUDE.md 규칙을 따른다: <type>(<scope>): <설명>
+        - type  : feat fix docs test refactor chore ci perf  (기본값 feat)
+        - scope : db worker api search mcp frontend adr      (없으면 생략)
+        phase 이름을 스코프로 쓰지 않는다 — 허용 목록에 없기 때문이다.
+        """
+        ctype = step.get("type") or cls.DEFAULT_TYPE
+        scope = step.get("scope")
+        desc = step.get("desc") or f"step {step['step']} — {step['name']}"
+        prefix = f"{ctype}({scope})" if scope else ctype
+        return f"{prefix}: {desc}"
+
+    def _commit_step(self, step: dict):
+        step_num = step["step"]
         output_rel = f"phases/{self._phase_dir_name}/step{step_num}-output.json"
         index_rel = f"phases/{self._phase_dir_name}/index.json"
 
@@ -142,7 +169,7 @@ class StepExecutor:
         self._run_git("reset", "HEAD", "--", index_rel)
 
         if self._run_git("diff", "--cached", "--quiet").returncode != 0:
-            msg = self.FEAT_MSG.format(phase=self._phase_name, num=step_num, name=step_name)
+            msg = self._build_commit_msg(step)
             r = self._run_git("commit", "-m", msg)
             if r.returncode == 0:
                 print(f"  Commit: {msg}")
@@ -152,6 +179,7 @@ class StepExecutor:
         self._run_git("add", "-A")
         if self._run_git("diff", "--cached", "--quiet").returncode != 0:
             msg = self.CHORE_MSG.format(phase=self._phase_name, num=step_num)
+            # (스코프 없음 — 하네스 메타데이터는 허용 스코프 목록에 없다)
             r = self._run_git("commit", "-m", msg)
             if r.returncode != 0:
                 print(f"  WARN: housekeeping 커밋 실패: {r.stderr.strip()}")
@@ -198,9 +226,6 @@ class StepExecutor:
 
     def _build_preamble(self, guardrails: str, step_context: str,
                         prev_error: Optional[str] = None) -> str:
-        commit_example = self.FEAT_MSG.format(
-            phase=self._phase_name, num="N", name="<step-name>"
-        )
         retry_section = ""
         if prev_error:
             retry_section = (
@@ -220,8 +245,9 @@ class StepExecutor:
             f"   - AC 통과 → \"completed\" + \"summary\" 필드에 이 step의 산출물을 한 줄로 요약\n"
             f"   - {self.MAX_RETRIES}회 수정 시도 후에도 실패 → \"error\" + \"error_message\" 기록\n"
             f"   - 사용자 개입이 필요한 경우 (API 키, 인증, 수동 설정 등) → \"blocked\" + \"blocked_reason\" 기록 후 즉시 중단\n"
-            f"6. 모든 변경사항을 커밋하라:\n"
-            f"   {commit_example}\n\n---\n\n"
+            f"6. **직접 커밋하지 마라.** 커밋은 하네스가 step 메타데이터"
+            f"(type·scope·desc)로 메시지를 만들어 처리한다. 커밋 메시지 규칙을"
+            f" 한 곳에서만 관리하기 위함이다. 작업 파일 저장까지만 하라.\n\n---\n\n"
         )
 
     # --- Claude 호출 ---
@@ -318,7 +344,7 @@ class StepExecutor:
                     if s["step"] == step_num:
                         s["completed_at"] = ts
                 self._write_json(self._index_file, index)
-                self._commit_step(step_num, step_name)
+                self._commit_step(step)
                 print(f"  ✓ Step {step_num}: {step_name} [{elapsed}s]")
                 return True
 
@@ -353,7 +379,7 @@ class StepExecutor:
                         s["error_message"] = f"[{self.MAX_RETRIES}회 시도 후 실패] {err_msg}"
                         s["failed_at"] = ts
                 self._write_json(self._index_file, index)
-                self._commit_step(step_num, step_name)
+                self._commit_step(step)
                 print(f"  ✗ Step {step_num}: {step_name} failed after {self.MAX_RETRIES} attempts [{elapsed}s]")
                 print(f"    Error: {err_msg}")
                 self._update_top_index("error")
@@ -386,13 +412,13 @@ class StepExecutor:
 
         self._run_git("add", "-A")
         if self._run_git("diff", "--cached", "--quiet").returncode != 0:
-            msg = f"chore({self._phase_name}): mark phase completed"
+            msg = self.DONE_MSG.format(phase=self._phase_name)
             r = self._run_git("commit", "-m", msg)
             if r.returncode == 0:
                 print(f"  ✓ {msg}")
 
         if self._auto_push:
-            branch = f"feat-{self._phase_name}"
+            branch = self._branch_name()
             r = self._run_git("push", "-u", "origin", branch)
             if r.returncode != 0:
                 print(f"\n  ERROR: git push 실패: {r.stderr.strip()}")
