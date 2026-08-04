@@ -1,0 +1,30 @@
+# 로컬 개발용 DB 한 대. 애플리케이션(API·워커·프론트)은 컨테이너로 감싸지 않고
+# 맥 네이티브로 실행한다 — 임베딩 모델 추론 속도와 개발 루프 때문이다 (ADR-007).
+#
+# 실제 제품이 붙는 DB는 Tmax OpenSQL(PostgreSQL 17.8 + pgvector 0.8.1)이며,
+# 여기서는 메이저 버전을 맞춘 pgvector 이미지로 대체한다.
+# 스키마 적용은 하지 않는다 — 마이그레이션 실행 주체는 API 서버 하나다 (ADR-012).
+
+services:
+  db:
+    image: pgvector/pgvector:pg17
+    environment:
+      # .env는 .gitignore 대상이므로, clone 직후 .env 없이도 기동되도록 기본값을 여기에 둔다.
+      POSTGRES_USER: ${POSTGRES_USER:-openarchive}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-openarchive}
+      POSTGRES_DB: ${POSTGRES_DB:-openarchive}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U ${POSTGRES_USER:-openarchive} -d ${POSTGRES_DB:-openarchive}
+      interval: 2s
+      timeout: 2s
+      retries: 10
+      start_period: 2s
+
+volumes:
+  pgdata:
