@@ -1,16 +1,91 @@
 # OpenSQL 아키텍처 조사 결과
 
-> 조사일: 2026-08-04
-> 출처: Tmax OpenSQL 3.0 공식 매뉴얼 v1.5.0 (`docs.tibero.com/tmaxopensql`), Tmax OpenSQL GitHub 조직
+> 조사일: 2026-08-04 (같은 날 **실물 배포판 수령 후 개정**)
+> 출처: Tmax OpenSQL 3.0 공식 매뉴얼 v1.5.0 (`docs.tibero.com/tmaxopensql`), Tmax OpenSQL GitHub 조직,
+> **실제 배포 패키지 `Tmax_OpenSQL_3.17.8.7_rockylinux9.7_buildtime20260720`**
 > 목적: `PROJECT_CONTEXT.md` 설계 원칙("OpenSQL 공식 아키텍처를 우선한다", "OpenSQL 기능을 애플리케이션에서 중복 구현하지 않는다")에 따라 조사 결과로 ADR·Architecture를 확정하기 위함
 
 ## 신뢰도 표기
 
 | 표기 | 의미 |
 |---|---|
+| **[배포판]** | **실제 배포 패키지의 파일에서 직접 확인** (METADATA, 설정 템플릿, 바이너리). 가장 신뢰도가 높다 |
 | **[확정]** | 공식 문서 본문에서 직접 확인 (설정 예제, 표, 버전 출력 등) |
 | **[요약]** | 문서 사이트의 질의응답 기능을 통해 얻은 요약. 원문 그대로가 아닐 수 있음 |
-| **[미확인]** | 공식 문서에 언급 자체가 없음. 실 클러스터에서 검증 필요 |
+| **[미확인]** | 공식 문서에 언급 자체가 없음. 실 환경에서 검증 필요 |
+
+---
+
+## 0. 배포판 수령으로 확정된 사항 (2026-08-04)
+
+대회 사무국이 배포한 실제 패키지를 받아 **문서 조사만으로 알 수 없던 항목이 상당수 확정**되었다. 아래는 `METADATA` 원문이다.
+
+```
+[OPENSQL PACKAGE 3.0]
+release 3.7
+build 3.17.8.7
+[SUPPORTED OS VERSION]
+rockylinux 9.7
+[INSTALLABLE BINARIES]
+postgresql 17.8      etcd 3.6.5        patroni 4.0.5      openproxy v1.1.3
+barman 3.11.1        opensql_cloud 0.0.0                  barman_agent 0.0.0
+[PG EXTENSIONS]
+postgis 3.5.4        pg_hint_plan 1.7.0  pgaudit 17.1     credcheck 4.2
+system_stats 3.2     o2 1.4              opencrypto 1.0.0 pg_cron 1.6.7
+pgvector 0.8.1       pgvectorscale 0.9.0 pg_profile 4.11  tibero_fdw 0.6.4
+pg_repack 1.5.2
+```
+
+### 조사 결과가 틀렸던 항목
+
+| 항목 | 문서 조사 결과 | **실제 배포판** | 영향 |
+|---|---|---|---|
+| **PostgreSQL** | 16.8 또는 14.13 ⚠️ | **17.8** — 둘 다 아니었다 | 로컬 컨테이너를 `pg17`로 (ADR-007). 문서 전반의 "PostgreSQL 16" 표기 수정 |
+| **pgvector** | **[미확인]** — 문서 어디에도 없음 | **0.8.1** | HNSW·`iterative_scan`·`avg(vector)` 전부 사용 가능 (ADR-002, ADR-011, ADR-018) |
+| pgvectorscale | 번들됨(버전 미확인) | 0.9.0 | ADR-002 대안 유지 |
+| etcd | 3.5.6 / 3.5.21 | 3.6.5 | 영향 없음 |
+| 패키지 예시 | `Tmax_OpenSQL_3.18.1.3` | `3.17.8.7` | 문서 예시 정정 |
+| 확장 목록 | 12종 | **13종** — `pg_repack 1.5.2` 추가 | 영향 없음 |
+
+> **교훈**: `PROJECT_CONTEXT.md`의 "PostgreSQL 메이저 버전 확인"이 M0 최우선 항목 중 하나였는데, 문서에는 16.8과 14.13이 함께 언급되어 있어 둘 중 하나로 추정했다. **실제는 17.8로 후보에 없던 값이었다.** 문서 추정으로 설계를 고정하지 않고 미확인으로 표기해둔 것이 맞았다.
+
+### 대회용 구성 지시 **[배포판·메일 확정]**
+
+사무국 안내 메일에 명시된 제약이다.
+
+> "OpenSQL은 고가용성(HA) 구성이 아닌 **Single 구성**으로 설치해주시기 바랍니다.
+>  여러 대의 서버를 연결하지 않고 서버 1대에 OpenSQL을 설치하시면 됩니다."
+>
+> "지원 OS : **Rocky Linux 9.7 전용**. Windows 환경은 지원하지 않으며, 다른 Linux 버전에서도 동작하지 않습니다."
+
+**Single 모드도 4개 컴포넌트를 전부 설치한다** — 공식 가이드의 "클러스터 모드별 노드 역할" 표에 `single | PG + Patroni + etcd + OpenProxy`로 명시되어 있다. 따라서 OpenProxy 경유 경로(ADR-006·009·010)는 **그대로 검증 가능**하며, **실제 failover만 불가능**하다(승격 대상 replica 없음). 대응은 ADR-020.
+
+### 아키텍처 **[배포판 확정]**
+
+```
+$ file openproxy/openproxy
+  ELF 64-bit LSB pie executable, x86-64
+$ file postgresql/bin/postgres
+  ELF 64-bit LSB executable, x86-64
+$ grep OPENSQL_RUST_TOOLCHAIN scripts/install.sh
+  OPENSQL_RUST_TOOLCHAIN="1.85.0-x86_64-unknown-linux-gnu"
+```
+
+바이너리가 x86-64이고 설치 스크립트에도 x86_64가 하드코딩되어 있다. **Apple Silicon에서 aarch64 VM + Rosetta로 우회할 수 없다.** 환경 구축 절차는 `SETUP_OPENSQL.md`.
+
+### 라이선스 **[배포판 확정]**
+
+```xml
+<identified_by_host>opensql-dev</identified_by_host>   <!-- 검증 기준: hostname -->
+<limit_cpu>4</limit_cpu>                                <!-- CPU 상한 -->
+<end_date>2026/09/10</end_date>                         <!-- 만료 -->
+<edition>Enterprise</edition>  <type>trial</type>
+```
+
+- 검증은 **hostname과 CPU 상한**으로 이루어진다. 아키텍처·OS 필드는 없다
+- `patroni.yml`의 `shared_preload_libraries`에 **`opensql_license`가 포함**되어, 라이선스가 맞지 않으면 PostgreSQL이 기동하지 않는다
+- 배치 위치: `opensql-installer/licenses/`, 파일명은 `config/common.env`의 `LICENSE_NAME`으로 지정
+- **만료일(2026/09/10)이 대회 일정과 겹치는지 확인이 필요하다.** 이후에는 DB를 띄울 수 없다
 
 ---
 
@@ -18,33 +93,49 @@
 
 **[확정]** OpenSQL v3.0은 단일 DBMS가 아니라 **4개 컴포넌트로 구성된 클러스터 제품**이다.
 
-| 컴포넌트 | 기반 기술 | 버전 | 역할 |
+| 컴포넌트 | 기반 기술 | 버전 **[배포판]** | 역할 |
 |---|---|---|---|
-| **OpenSQL Database** | PostgreSQL | **16.8 또는 14.13** ⚠️ | 데이터 노드 |
-| **OpenHA Cluster Manager** | Patroni | patronictl **4.0.5** | 노드 상태 감시, 자동 Failover, Primary 선출 |
-| **OpenHA DCS** | etcd | **3.5.6 / 3.5.21** | 클러스터 멤버십·구성 정보 분산 저장 |
-| **OpenProxy** | Rust 자체 구현 | **1.1.0 ~ 1.1.3** | 커넥션 풀링, 로드밸런싱, 읽기/쓰기 분리, VRRP VIP Failover |
-| Barman | Python | — | 백업/복구 (전체·증분·차등) |
+| **OpenSQL Database** | PostgreSQL | **17.8** | 데이터 노드 |
+| **OpenHA Cluster Manager** | Patroni | **4.0.5** | 노드 상태 감시, 자동 Failover, Primary 선출 |
+| **OpenHA DCS** | etcd | **3.6.5** | 클러스터 멤버십·구성 정보 분산 저장 |
+| **OpenProxy** | Rust 자체 구현 | **1.1.3** | 커넥션 풀링, 로드밸런싱, 읽기/쓰기 분리, VRRP VIP Failover |
+| Barman | Python | 3.11.1 | 백업/복구 (전체·증분·차등) |
 
-> ⚠️ **PostgreSQL 메이저 버전이 하나로 고정되어 있지 않다.** 문서에 **16.8과 14.13이 함께** 언급된다. PG14와 PG16은 사용 가능한 pgvector 버전과 일부 SQL 기능이 다르므로, **제공받는 클러스터의 실제 메이저 버전 확인이 M0 필수 항목**이다.
+> ✅ **PostgreSQL 메이저 버전은 17이다.** 문서에는 16.8과 14.13이 함께 언급되어 둘 중 하나로 추정했으나, 실제 배포판은 **후보에 없던 17.8**이었다 (§0). 로컬 개발 컨테이너도 `pg17`로 맞춘다.
 
-### 번들 익스텐션 목록 **[확정]**
+### 번들 익스텐션 목록 **[배포판]**
 
-통합 설치 시 함께 설치되는 구성요소 (라이선스 에디션에 따라 결정):
+통합 설치 시 함께 설치되는 구성요소:
 
-**Core**: `postgresql`, `etcd`, `patroni`, `openproxy`
+**Core**: `postgresql 17.8`, `etcd 3.6.5`, `patroni 4.0.5`, `openproxy 1.1.3`
 
-**Extensions**:
-`postgis`, `pg_hint_plan`, `pg_cron`, **`pgvector`**, **`pgvectorscale`**, `credcheck`, `system_stats`, `pgaudit`, `opencrypto`, `o2`, `pg_profile`, `tibero_fdw`
+| 확장 | 버전 | | 확장 | 버전 |
+|---|---|---|---|---|
+| **pgvector** | **0.8.1** | | pg_cron | 1.6.7 |
+| **pgvectorscale** | **0.9.0** | | pg_hint_plan | 1.7.0 |
+| postgis | 3.5.4 | | pg_profile | 4.11 |
+| pgaudit | 17.1 | | pg_repack | 1.5.2 |
+| credcheck | 4.2 | | tibero_fdw | 0.6.4 |
+| system_stats | 3.2 | | o2 | 1.4 |
+| opencrypto | 1.0.0 | | | |
 
 > **설계 영향 (중요)**
-> - `pgvector`뿐 아니라 **`pgvectorscale`도 번들**이다. pgvectorscale은 StreamingDiskANN 인덱스를 제공하며 HNSW와 다른 특성을 가진다. `ADR-002`(HNSW 선택)는 이 선택지를 모르고 내린 결정이므로 재검토 대상.
-> - **`pg_cron`이 번들**이다. `ADR-001`은 "pg_cron 폴링은 쓰지 않는다"고 했는데, 이는 여전히 유효한 결정일 수 있으나 "쓸 수 없어서"가 아니라 "쓸 수 있지만 안 쓴다"로 근거를 다시 써야 한다.
+> - **`pgvector 0.8.1`이 확정되어 미확인 리스크가 해소됐다.** HNSW(0.5.0+), `hnsw.iterative_scan`(0.8+), `avg(vector)`(0.5.0+)이 모두 사용 가능하다. `ADR-002`의 HNSW 리스크, `ADR-011`의 조건부 적용, `ADR-018`의 `avg` 가용성이 전부 확정으로 바뀐다.
+> - **`pgvectorscale 0.9.0`도 번들**이다. StreamingDiskANN 인덱스를 제공하며 HNSW와 다른 특성을 가진다. `ADR-002`에서 대안으로 검토했고 데모 규모에서는 HNSW를 유지한다.
+> - **`pg_cron`이 번들**이다. `ADR-001`은 "pg_cron 폴링은 쓰지 않는다"고 했는데, "쓸 수 없어서"가 아니라 "쓸 수 있지만 안 쓴다"이다.
+> - `pg_repack`은 기존 문서 조사에서 누락됐던 항목이다. 이 프로젝트에서 쓰지 않는다.
 
-### 설치 방식 **[확정]**
-- Python 기반 설치기: `opensql_local_installer.py`(노드별) / `opensql_remote_installer.py`(SSH 중앙 배포)
-- 바이너리 개별 설치도 가능: `create_user.sh` → 환경변수(`OPENSQL_HOME`, `PG_HOME`, `PG_DATA_DIR`) → `setenv.sh` → `install.sh postgresql`
-- 패키지 예시: `Tmax_OpenSQL_3.18.1.3`
+### 설치 방식 **[배포판]**
+- Python 기반 설치기: `opensql_local_installer.py`(현재 노드) / `opensql_remote_installer.py`(SSH 중앙 배포)
+  ```bash
+  cd opensql-installer
+  python3 opensql_local_installer.py --mode single    # single | 2node-witness | 3node
+  ```
+- 스크립트 개별 설치도 가능: 환경변수(`OPENSQL_HOME`, `PG_HOME`, `PG_DATA_DIR`) → `setenv.sh` → `install.sh rpm postgresql` → `install.sh extension pgvector`
+- 설정 파일: `config/common.env`(공통), `config/remote.env`(원격 전용), `config/patroni.config.env`, `config/openproxy.config.env`, `config/etcd.config.env`
+- 필요 포트: **5432**(PG), **6432**(OpenProxy), 6433(OpenProxy 관리), 2379·2380(etcd), 8008(Patroni REST)
+- 설치 중 `sudo` 권한 필요. `ENABLE_SERVICE`·`GRANT_OPENSQL_SUDO`로 조정 가능
+- 실제 수령 패키지: `Tmax_OpenSQL_3.17.8.7_rockylinux9.7_buildtime20260720`
 
 ---
 
@@ -289,13 +380,41 @@ bash $OPENSQL_HOME/scripts/reload_openproxy.sh   # SIGHUP, 무중단 설정 반�
 >
 > 어느 쪽이든 **의식적 결정과 ADR 기록이 필요**하다. "기본값이 off라서 괜찮다"고 넘기면, 운영 환경 설정이 다를 때 조용히 깨진다.
 
+### 배포판 확인 결과 — Single 템플릿에는 읽기/쓰기 분리가 없다 **[배포판]**
+
+`openproxy/openproxy.standalone.template.toml`(single 모드 전용)의 전체 pool 설정이다.
+
+```toml
+[pools.FILL_ME]
+pool_mode = "transaction"
+auth_type = "scram-sha-256"
+
+[pools.FILL_ME.shards.0]
+servers = [
+    ["FILL_ME", 5432, "primary"],    # primary 1개
+    # ["FILL_ME", 5432, "replica"],  # replica는 주석 처리
+]
+```
+
+**`query_parser_enabled`·`query_parser_read_write_splitting`·`primary_reads_enabled`가 아예 없다.** 기본값이 `false`이므로 읽기/쓰기 분리가 일어나지 않고, 애초에 라우팅 대상 replica도 없다.
+
+> **설계 영향 (ADR-010 근거 교체)**
+>
+> ADR-010의 원래 근거 — *"트랜잭션 밖 단순 SELECT가 Replica로 라우팅되어 복제 지연으로 방금 임베딩된 청크가 누락된다"* — 는 **Single 구성에서 성립하지 않는다.** Replica가 없다.
+>
+> **그러나 결론(명시적 트랜잭션)은 유지한다.** 근거가 둘로 바뀐다.
+> 1. **`pool_mode = "transaction"`이 템플릿에 명시되어 있다.** 이 모드에서 트랜잭션 밖의 `SET`은 의도대로 동작하지 않는다(§5). `SET LOCAL hnsw.ef_search`(ADR-011)를 안전하게 쓰려면 명시적 트랜잭션이 **필요조건**이다.
+> 2. `scripts/finalize_single_to_ha.sh`가 존재한다. 나중에 HA로 전환하면 원래 근거가 그대로 되살아난다. 지금 트랜잭션으로 감싸두면 전환 시 코드를 고칠 필요가 없다.
+>
+> 즉 "Replica 라우팅 방지"에서 **"세션 상태(`SET LOCAL`) 보장 + HA 전환 대비"**로 근거가 바뀐다.
+
 ---
 
 ## 7. LISTEN / NOTIFY **[미확인]** ⚠️ 최대 리스크
 
 **공식 문서 전체에 `LISTEN`/`NOTIFY`에 대한 언급이 단 한 줄도 없다.** 지원한다고도, 안 한다고도 쓰여 있지 않다.
 
-- DB 계층(PostgreSQL 16)에서는 당연히 표준 동작한다
+- DB 계층(PostgreSQL 17)에서는 당연히 표준 동작한다
 - 문제는 **OpenProxy를 경유할 때**다
 - `LISTEN`은 세션 상태이므로, 이론적으로 `transaction` 모드에서는 동작하지 않을 가능성이 매우 높다 (PgBouncer 계열의 알려진 제약과 동일 구조)
 - `session` 모드에서는 동작할 가능성이 있으나 **문서로 확인되지 않음**
@@ -311,30 +430,27 @@ bash $OPENSQL_HOME/scripts/reload_openproxy.sh   # SIGHUP, 무중단 설정 반�
 
 ## 8. pgvector / HNSW **[일부 확정, 일부 미확인]**
 
+**[배포판]으로 전부 해소됨.** 문서 조사 단계에서는 버전이 어디에도 없어 최대 리스크였으나, METADATA에서 확정되었다.
+
 | 항목 | 상태 |
 |---|---|
-| pgvector 번들 여부 | **[확정]** 번들됨 |
-| pgvectorscale 번들 여부 | **[확정]** 번들됨 (StreamingDiskANN 제공) |
-| pgvector **버전** | **[미확인 — 확정적]** 개요·설치·릴리즈 노트 전부 확인했으나 **어디에도 명시 없음** |
-| **HNSW 인덱스 지원 여부** | **[미확인]** 문서에 언급 없음 |
-| `hnsw.iterative_scan` (pgvector 0.8+) | **[미확인]** 버전 미확인이므로 판단 불가 |
-
-> **문서로는 더 얻을 수 없다.** 개요, 통합 설치 페이지, 릴리즈 노트 1.0.0~1.4.0을 모두 확인했으나 pgvector·pgvectorscale의 버전 번호가 문서 어디에도 없다. **실 클러스터 접속 후 쿼리로 확인하는 것이 유일한 방법이다.**
-> ```sql
-> SELECT extname, extversion FROM pg_extension;
-> SELECT * FROM pg_available_extensions WHERE name LIKE '%vector%';
-> ```
+| pgvector **버전** | **[배포판] 0.8.1** |
+| pgvectorscale 버전 | **[배포판] 0.9.0** (StreamingDiskANN 제공) |
+| **HNSW 인덱스 지원** | ✅ 사용 가능 — 0.5.0+ 요구, 0.8.1이므로 충족 |
+| `hnsw.iterative_scan` | ✅ 사용 가능 — **0.8+ 요구, 0.8.1이므로 충족** |
+| `avg(vector)` 집계 | ✅ 사용 가능 — 0.5.0+ 요구 |
 
 > **설계 영향**
-> - `ARCHITECTURE.md:125`의 "pgvector 0.8+ 환경이면 `SET hnsw.iterative_scan = relaxed_order`" 조건부 적용은 **버전 확인 전까지 가정에 불과**하다.
-> - `vector(1024)` 컬럼과 HNSW 인덱스는 pgvector 0.5.0 이상이면 사용 가능하나, **실제 버전을 M0에서 `SELECT extversion FROM pg_extension WHERE extname='vector'`로 확인해야 한다.**
-> - `pgvectorscale`이 있다는 사실은 `ADR-002`(HNSW vs IVFFlat)의 선택지가 실은 3개였다는 뜻이다. HNSW를 유지하더라도 "pgvectorscale을 검토했고 이런 이유로 HNSW를 택했다"는 근거가 있어야 조사 깊이가 드러난다.
+> - `ADR-002`의 "HNSW 인덱스 사용 가능 여부 미확인" 리스크가 **해제**된다. `ARCHITECTURE.md`의 ⚠️ 경고도 제거한다.
+> - `ADR-011`의 "`hnsw.iterative_scan`은 0.8+ 전용인데 버전 미확인이므로 의존할 수 없다"는 **더 이상 유효하지 않다.** 필터 결합 검색의 recall 부족에 대해 `ef_search` 확대 외에 `iterative_scan = relaxed_order`라는 정공법을 쓸 수 있다.
+> - `ADR-018`(관련 문서를 질의 시점 `avg(embedding)`으로)의 기능 가용성이 확정된다. 다만 **`avg` 결과가 HNSW 인덱스를 타는지는 플래너 문제라 여전히 실측 대상**이다 (§12-12).
+> - 인덱스 생성 자체는 실제로 실행해 확인한다 — 버전이 맞아도 빌드 옵션 등으로 막힐 가능성은 남는다.
 
 ---
 
 ## 9. Trigger / Extension 일반 **[확정]**
 
-- OpenSQL Database는 **PostgreSQL 16.8 그대로**이므로, 트리거·트리거 함수·파셜 유니크 인덱스·`FOR UPDATE SKIP LOCKED`·`ON DELETE CASCADE`·트랜잭셔널 아웃박스 패턴은 **전부 표준대로 동작**한다.
+- OpenSQL Database는 **PostgreSQL 17.8 그대로**이므로, 트리거·트리거 함수·파셜 유니크 인덱스·`FOR UPDATE SKIP LOCKED`·`ON DELETE CASCADE`·트랜잭셔널 아웃박스 패턴은 **전부 표준대로 동작**한다. 우리가 쓰는 기능 중 PG16→17에서 동작이 바뀐 것은 없다.
 - 제약은 DB 계층이 아니라 **OpenProxy 경유 경로에서만** 발생한다 (§5, §6, §7).
 - 즉 현재 설계의 **DB 계층 자동화 부분은 그대로 유효**하다. 문제는 애플리케이션이 DB에 어떻게 접속하느냐에 국한된다.
 
@@ -358,27 +474,61 @@ bash $OPENSQL_HOME/scripts/reload_openproxy.sh   # SIGHUP, 무중단 설정 반�
 > **설계 영향**
 > `ADR-007`(로컬은 pgvector 단일 컨테이너)은 결론 자체는 유지 가능하나, 근거가 바뀐다. "표준 PostgreSQL 기능만 쓰므로 단일 컨테이너로 95% 커버"가 아니라, **"OpenProxy 경유 경로(§5·§6·§7)는 로컬에서 검증 불가능하며, 이 갭이 M0의 검증 대상"**임을 명시해야 한다.
 
+### 배포판 수령 후 (2026-08-04) **[배포판]**
+
+**Docker 이미지는 여전히 없지만, 설치 바이너리를 받아 가상머신에 직접 설치할 수 있게 되었다.** 즉 "OpenSQL을 로컬에서 돌릴 수단이 없다"는 상태는 해소됐다.
+
+| | 상태 |
+|---|---|
+| 공식 Docker 이미지 | ❌ 여전히 없음 (`opensql3-docker`는 빈 껍데기) |
+| 설치 바이너리 | ✅ 수령 (`Tmax_OpenSQL_3.17.8.7_rockylinux9.7`) |
+| 실행 환경 | **Rocky Linux 9.7 x86-64 전용.** Apple Silicon에서는 QEMU 전체 에뮬레이션 VM 필요 (§0) |
+
+**개발 환경은 두 갈래로 유지한다.**
+
+- **일상 개발·테스트**: `pgvector/pgvector:pg17` 단일 컨테이너. 트리거·아웃박스·`SKIP LOCKED`·검색 SQL은 전부 여기서 검증된다
+- **OpenSQL 고유 동작 확인**: VM. OpenProxy 경유 경로(§5·§6·§7), 라이선스, 번들 확장 실동작
+
+x86-64 에뮬레이션은 네이티브의 1/10~1/20 속도라 임베딩 워커까지 VM에 넣으면 실습이 불가능하다. **DB만 VM에 두고 애플리케이션은 맥 네이티브로 두는 구성**을 쓴다. 절차는 `SETUP_OPENSQL.md`.
+
+> 로컬 컨테이너 태그를 `pg16` → **`pg17`**로 바꾼다. 실제 OpenSQL이 PostgreSQL 17.8이므로 메이저 버전을 맞춰야 한다 (ADR-007).
+
 ---
 
-## 12. 미확인 항목 — 클러스터 확보 시 M0 검증 목록
+## 12. M0 검증 목록
 
-우선순위 순:
+배포판 수령(§0)으로 여러 항목이 해소되었다. 남은 것은 **실제 기동 후에만 알 수 있는 동작**이다.
+
+### ✅ 배포판으로 해소된 항목
+
+| # | 항목 | 결과 |
+|---|---|---|
+| 2 | PostgreSQL 메이저 버전 | **17.8** — 추정했던 16·14 둘 다 아니었다 |
+| 3 | pgvector 버전 | **0.8.1** |
+| 4 | HNSW 지원 | 0.5.0+ 요구 → 충족 (생성 실행은 아래 재확인) |
+| 9 | pgvectorscale | **0.9.0** 번들 확인 |
+| 11 | `avg(vector)` 지원 | 0.5.0+ 요구 → 충족 |
+| 5 | OpenProxy 설정 | **성격 변경** — "제공받는 클러스터 설정 확인"이 아니라 **우리가 직접 작성**한다. `openproxy.standalone.template.toml`에는 `query_parser_read_write_splitting`이 아예 없고 `servers`도 primary 1개뿐이다 (§6 참조) |
+
+### 🔴 실측이 필요한 항목 (우선순위 순)
 
 | # | 검증 항목 | 방법 | 실패 시 영향 |
 |---|---|---|---|
-| 1 | **OpenProxy 경유 `LISTEN`/`NOTIFY` 동작 여부** (session/transaction 각각) | 워커 연결로 `LISTEN` 후 다른 세션에서 `NOTIFY` 발행 | 파이프라인 기동 방식 전면 재설계 |
-| 2 | **PostgreSQL 메이저 버전** (16인가 14인가) | `SELECT version()` | pgvector 가용 버전, SQL 기능 범위 |
-| 3 | **pgvector 버전** | `SELECT extversion FROM pg_extension WHERE extname='vector'` | HNSW·iterative_scan 가용성 결정 |
-| 4 | HNSW 인덱스 생성 가능 여부 | `CREATE INDEX ... USING hnsw` 실행 | 인덱스 전략 변경 (IVFFlat 또는 pgvectorscale) |
-| 5 | **제공 클러스터의 OpenProxy 실제 설정** | `SHOW CONFIG` | 읽기/쓰기 분리 활성 여부 → 검색 정합성 |
+| 1 | **OpenProxy 경유 `LISTEN`/`NOTIFY` 동작 여부** | 한 세션에서 `LISTEN ch`, 다른 세션에서 `NOTIFY ch` | 없음 — 이미 폴링이 주 경로다 (ADR-009). 동작하면 폴링 주기를 늘려 부하를 낮춘다 |
+| 4' | HNSW 인덱스 **생성 실행** | `CREATE INDEX ... USING hnsw` | 버전은 맞으므로 실패 가능성은 낮으나, 빌드 옵션 문제는 실행해야 안다 |
+| 12 | **`avg` 결과가 HNSW 인덱스를 타는지** | 관련 문서 쿼리에 `EXPLAIN (ANALYZE, BUFFERS)` | 인덱스를 못 타면 평균을 별도 쿼리로 조회해 벡터 리터럴로 넘긴다 (왕복 2회) — ADR-018 |
 | 6 | LISTEN 연결의 `server_lifetime`/`idle_timeout` 실동작 | 장시간 유휴 LISTEN 유지 관측 | 워커 재연결 정책 |
-| 7 | Failover 실측 소요 시간 | `patronictl switchover` + `failover` 각각 계측 | "무중단" 표현의 정확도 |
-| 8 | Failover 중 in-flight 커넥션 처리 | 부하 중 전환하며 에러 관측 | 애플리케이션 재시도 정책 |
-| 9 | pgvectorscale 사용 가능 여부 | `CREATE EXTENSION vectorscale` | 인덱스 대안 확보 |
-| 10 | `max_connections` 여유 및 OpenProxy `pool_size` | `SHOW max_connections` + `SHOW CONFIG` | 풀 크기 산정 |
-| 11 | **`avg(vector)` 집계 지원** (pgvector 0.5.0+) | `SELECT avg(embedding) FROM document_chunks` | ADR-018 폐기 → 앱에서 평균을 계산해 파라미터로 전달 |
-| 12 | **`avg` 결과가 HNSW 인덱스를 타는지** | 관련 문서 쿼리에 `EXPLAIN (ANALYZE, BUFFERS)` | 인덱스를 못 타면 평균을 별도 쿼리로 조회해 벡터 리터럴로 넘긴다 (왕복 2회) |
-| 13 | `pg_trgm` 설치 가능 여부 | `CREATE EXTENSION pg_trgm` | 없어도 무방 — ADR-016은 의존하지 않는다. 한국어 부분 일치가 필요해지면 그때 검토 |
+| 10 | `max_connections` 여유 및 OpenProxy `pool_size` | `SHOW max_connections` + `SHOW CONFIG` | 풀 크기 산정. `patroni.yml` 기준 **100** |
+| 13 | `pg_trgm` 설치 가능 여부 | `CREATE EXTENSION pg_trgm` | 없어도 무방 — ADR-016은 의존하지 않는다 |
+
+### ⛔ Single 구성에서 검증 불가능한 항목
+
+| # | 항목 | 사유 |
+|---|---|---|
+| 7 | Failover 실측 소요 시간 | 노드가 1대라 승격할 replica가 없다 |
+| 8 | Failover 중 in-flight 커넥션 처리 | 위와 동일 |
+
+사무국이 Single 구성을 지시했으므로(§0) 이 둘은 **원리적으로 수행할 수 없다.** 고가용성 요건을 어떻게 다룰지는 **ADR-020**에 기록한다. `patroni.yml`의 파라미터(`ttl` 등)와 `finalize_single_to_ha.sh`의 존재로 HA 전환 경로가 설계에 남아 있음은 문서로 제시할 수 있다.
 
 > **11·12번 배경**: 관련 문서·태그 추천(ADR-018·019)이 문서 대표 벡터를 저장하지 않고 **질의 시점 `avg(embedding)`**으로 구한다. 저장 컬럼을 만들지 않아 동기화 대상이 늘지 않는 대신, 플래너가 `(SELECT avg(...) FROM ...)`을 상수로 접지 못하면 HNSW 인덱스 정렬을 활용하지 못하고 풀스캔이 된다. 기능 가부(11)와 성능(12)을 나눠 확인한다.
 >
