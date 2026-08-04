@@ -376,6 +376,13 @@ bash $OPENSQL_HOME/scripts/reload_openproxy.sh   # SIGHUP, 무중단 설정 반�
 | 8 | Failover 중 in-flight 커넥션 처리 | 부하 중 전환하며 에러 관측 | 애플리케이션 재시도 정책 |
 | 9 | pgvectorscale 사용 가능 여부 | `CREATE EXTENSION vectorscale` | 인덱스 대안 확보 |
 | 10 | `max_connections` 여유 및 OpenProxy `pool_size` | `SHOW max_connections` + `SHOW CONFIG` | 풀 크기 산정 |
+| 11 | **`avg(vector)` 집계 지원** (pgvector 0.5.0+) | `SELECT avg(embedding) FROM document_chunks` | ADR-018 폐기 → 앱에서 평균을 계산해 파라미터로 전달 |
+| 12 | **`avg` 결과가 HNSW 인덱스를 타는지** | 관련 문서 쿼리에 `EXPLAIN (ANALYZE, BUFFERS)` | 인덱스를 못 타면 평균을 별도 쿼리로 조회해 벡터 리터럴로 넘긴다 (왕복 2회) |
+| 13 | `pg_trgm` 설치 가능 여부 | `CREATE EXTENSION pg_trgm` | 없어도 무방 — ADR-016은 의존하지 않는다. 한국어 부분 일치가 필요해지면 그때 검토 |
+
+> **11·12번 배경**: 관련 문서·태그 추천(ADR-018·019)이 문서 대표 벡터를 저장하지 않고 **질의 시점 `avg(embedding)`**으로 구한다. 저장 컬럼을 만들지 않아 동기화 대상이 늘지 않는 대신, 플래너가 `(SELECT avg(...) FROM ...)`을 상수로 접지 못하면 HNSW 인덱스 정렬을 활용하지 못하고 풀스캔이 된다. 기능 가부(11)와 성능(12)을 나눠 확인한다.
+>
+> **13번 배경**: `pg_trgm`은 §1의 번들 확장 목록에 **없다.** PostgreSQL contrib 모듈이라 설치본에 포함될 가능성이 높지만, 확인 전까지 설계에 넣지 않는다.
 
 ---
 
