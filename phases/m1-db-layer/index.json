@@ -30,7 +30,10 @@
       "type": "feat",
       "scope": "db",
       "desc": "문서 변경 트리거 — 버전 이력·잡 생성·코얼레싱",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-08-05T07:44:28+0900",
+      "summary": "migrations/003_triggers.sql 신규 — 함수 `on_document_content_changed()` + 트리거 `trg_documents_content_changed` (`AFTER INSERT OR UPDATE OF content_hash ON documents FOR EACH ROW WHEN (pg_trigger_depth() = 0)`). 함수는 ARCHITECTURE.md 그대로 4단계: ①document_versions INSERT `ON CONFLICT (document_id, version) DO NOTHING` ②`UPDATE documents SET embedding_status='pending' WHERE id=NEW.id AND embedding_status<>'pending'` ③`INSERT INTO embedding_jobs (document_id) VALUES (NEW.id) ON CONFLICT DO NOTHING`(충돌 대상 미지정 — uq_pending_job_per_doc가 코얼레싱) ④`pg_notify('embedding_jobs', NEW.id::text)`. **후속 step(워커)이 전제할 수 있는 확인된 동작**: INSERT 1회 → pending 잡 1건 + v1 이력 1행 + 알림 1건(중복 없음) · 연속 본문 수정 2회 → 이력 v1·v2·v3이지만 pending 잡은 여전히 1건(코얼레싱) · title/tags만 바꾼 UPDATE는 잡·이력 모두 생성 안 함 · 본문 수정 시 embedding_status가 ready→pending으로 복귀 · `UPDATE documents SET content_hash = content_hash`(reembed 경로)는 값이 같아도 발화해 새 pending 잡을 만들되 version은 안 오르고 이력도 중복 안 됨 · 잡이 `processing`인 상태에서 수정하면 새 `pending`이 추가되어 잡 2건(`['processing','pending']`)이 됨 · 커밋 시에만 NOTIFY 발행(payload=문서 UUID), 롤백된 변경은 알림 없음. tests/test_triggers.py 10개 신규(위 동작 + `pg_get_triggerdef()`로 AFTER·UPDATE OF content_hash·pg_trigger_depth()=0 정의 고정). **기존 테스트 수정 1건**: test_tables.py 6개가 \"트리거가 없다\"는 전제로 document_versions·embedding_jobs에 직접 INSERT하고 있어 깨졌다 — 검증 대상(PK·파셜 유니크·CASCADE·기본값)은 그대로 두고 트리거가 만든 행을 쓰도록 전제만 교정(중복 버전 확인은 v1→v2로, CASCADE는 삭제 전 (1,1,1) 사전 확인 추가). app/·frontend/에 embedding_jobs·document_versions 쓰기 없음(grep 확인). 검증: ruff 통과, pytest 48 passed(기존 38 + triggers 10), scripts/check.sh 종료 코드 0.",
+      "completed_at": "2026-08-05T07:50:16+0900"
     },
     {
       "step": 3,
