@@ -1,0 +1,472 @@
+# 아키텍처
+
+## 시스템 개요
+
+```
+┌─────────────┐   ┌──────────────────────────────────────────────┐
+│  Next.js UI  │──▶│  FastAPI (backend/app)                       │
+└─────────────┘   │  문서 CRUD/버전 · 하이브리드 검색 · 시스템 상태 │
+┌─────────────┐   └───────────────┬──────────────────────────────┘
+│  MCP Server  │──(services 직접 재사용)──┐
+└─────────────┘                   ▼      ▼
+                  ┌──────────────────────────────────────────────┐
+                  │  OpenProxy  (VRRP VIP : 6432)                 │
+                  │  커넥션 풀링 · Primary 추적 · 재연결            │
+                  └───────────────┬──────────────────────────────┘
+                                  ▼
+                  ┌──────────────────────────────────────────────┐
+                  │  openSQL 클러스터 (PostgreSQL 16 + pgvector)  │
+                  │  documents ──AFTER trigger──▶ embedding_jobs  │
+                  │  (같은 트랜잭션에 잡 기록 = 트랜잭셔널 아웃박스) │
+                  │  document_chunks (vector(1024), HNSW)         │
+                  │  pg_notify('embedding_jobs') — 커밋 시 발행    │
+                  └───────────────┬──────────────────────────────┘
+                                  │ 5초 폴링 (주 경로)
+                                  │ + LISTEN/NOTIFY (최적화, 선택)
+                  ┌───────────────▼──────────────────────────────┐
+                  │  Embedding Worker (python -m app.worker)      │
+                  │  SKIP LOCKED claim → 청킹 → 임베딩 →           │
+                  │  해시 재확인 + 청크 교체 + job done (단일 트랜잭션)│
+                  └──────────────────────────────────────────────┘
+```
+
+핵심 프레이밍: **잡 생성·코얼레싱·삭제 정합성은 전부 DB 안**(트리거 함수, 파셜 유니크 인덱스, FK CASCADE)에서 보장된다. 워커는 "DB가 만들어 둔 잡을 집어가는 무상태 실행기"이며, DB 밖 연산은 임베딩 모델 추론뿐이다.
+
+> **기동(전달) 방식은 정합성의 일부가 아니다.** 워커가 잡을 언제 집어가든 — NOTIFY로 즉시든 폴링으로 5초 뒤든 — 잡이 유실되거나 중복 처리되지 않는 것은 아웃박스 테이블과 `SKIP LOCKED`가 보장한다. 그래서 `LISTEN`/`NOTIFY`가 OpenProxy를 통과하지 못해도 이 설계의 핵심 주장은 무너지지 않는다 (ADR-009).
+
+## 디렉토리 구조
+
+```
+OpenSQL/
+├── docker-compose.yml            # 로컬 개발용 pgvector 컨테이너
+├── scripts/check.sh              # 통합 검증 (backend lint+test, frontend lint+test+build)
+├── backend/
+│   ├── pyproject.toml            # fastapi, psycopg[binary,pool], pydantic-settings, pypdf, python-docx, pytest
+│   ├── migrations/               # 001_extensions.sql, 002_tables.sql, 003_triggers.sql, 004_indexes.sql
+│   ├── app/
+│   │   ├── main.py               # FastAPI 앱 조립
+│   │   ├── config.py             # pydantic-settings (DATABASE_URL, EMBEDDING_PROVIDER 등)
+│   │   ├── db.py                 # AsyncConnectionPool만 — import 시 부작용 없음
+│   │   ├── migrations.py         # 마이그레이션 러너 — API 서버 startup에서만 호출
+│   │   ├── api/                  # 라우터: documents.py, search.py, system.py
+│   │   ├── services/             # parsing.py, chunking.py, documents.py, search.py
+│   │   ├── embeddings/           # base.py(Protocol), local.py(bge-m3), fake.py
+│   │   └── worker.py             # 임베딩 워커 진입점
+│   ├── mcp_server/server.py      # FastMCP stdio 서버 — app.services를 직접 import
+│   └── tests/                    # test_chunking.py, test_triggers.py, test_worker.py, test_search_api.py ...
+└── frontend/
+    └── src/
+        ├── app/                  # /(목록+업로드), /documents/[id], /search, /admin/status
+        ├── components/
+        ├── types/
+        └── lib/                  # API 클라이언트 (fetch 래퍼)
+```
+
+## DB 스키마
+
+```sql
+-- documents: 정형 메타데이터 + 버전 + 권한 (하이브리드 활용의 절반)
+CREATE TABLE documents (
+  id               uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  title            text NOT NULL,
+  filename         text,
+  content_type     text NOT NULL,          -- pdf | docx | txt | md
+  content          text NOT NULL,          -- 파싱된 현재 버전 원문
+  content_hash     text NOT NULL,          -- sha256, 트리거의 변경 감지 기준
+  version          int  NOT NULL DEFAULT 1,
+  owner_id         text NOT NULL,
+  visibility       text NOT NULL DEFAULT 'public',  -- public | private
+  tags             text[] NOT NULL DEFAULT '{}',
+  embedding_status text NOT NULL DEFAULT 'pending', -- pending|processing|ready|error
+  created_at       timestamptz NOT NULL DEFAULT now(),
+  updated_at       timestamptz NOT NULL DEFAULT now(),
+
+  -- 텍스트를 추출하지 못한 문서(스캔 이미지 PDF 등)가 저장되는 것을 DB에서 차단한다.
+  -- 빈 본문은 임베딩할 것이 없어 검색에 영원히 잡히지 않는 유령 행이 된다.
+  CONSTRAINT documents_content_not_blank CHECK (length(btrim(content)) > 0)
+);
+
+-- document_versions: 버전 이력 (append-only)
+CREATE TABLE document_versions (
+  document_id  uuid NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+  version      int  NOT NULL,
+  content      text NOT NULL,
+  content_hash text NOT NULL,
+  created_at   timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (document_id, version)
+);
+
+-- document_chunks: 현재 버전의 청크만 유지 (인덱스 소형화 + 정합성 단순화)
+CREATE TABLE document_chunks (
+  id          bigserial PRIMARY KEY,
+  document_id uuid NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+  version     int  NOT NULL,   -- 이 청크가 만들어진 기준 문서 버전 (아래 설명)
+  chunk_index int  NOT NULL,
+  content     text NOT NULL,
+  embedding   vector(1024) NOT NULL,
+  UNIQUE (document_id, chunk_index)
+);
+
+-- embedding_jobs: 트랜잭셔널 아웃박스 겸 작업 큐
+CREATE TABLE embedding_jobs (
+  id              bigserial PRIMARY KEY,
+  document_id     uuid NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+  status          text NOT NULL DEFAULT 'pending', -- pending|processing|done|error
+  attempts        int  NOT NULL DEFAULT 0,
+  next_attempt_at timestamptz NOT NULL DEFAULT now(),
+  last_error      text,
+  created_at      timestamptz NOT NULL DEFAULT now(),
+  started_at      timestamptz,
+  finished_at     timestamptz
+);
+
+-- 핵심: 문서당 pending 잡은 1개만 — DB 계층 코얼레싱
+CREATE UNIQUE INDEX uq_pending_job_per_doc
+  ON embedding_jobs(document_id) WHERE status = 'pending';
+```
+
+설계 근거: 잡은 콘텐츠 페이로드 없이 "이 문서는 재임베딩이 필요하다"는 신호만 담는다. 워커가 처리 시점에 `documents`의 최신 content를 읽으므로 (a) 연속 수정이 자연스럽게 코얼레싱되고 (b) 재처리가 항상 최신 상태로 수렴하는 멱등 구조가 된다.
+
+### `document_chunks.version`의 용도
+
+워커는 청크를 쓸 때 **처리 기준이 된 문서 버전**을 함께 기록한다. 이 컬럼은 세 곳에서 쓰인다:
+
+1. **정합성 검증 쿼리** — 이 과제의 핵심 주장을 직접 증명하는 쿼리다:
+   ```sql
+   -- 원본과 벡터가 어긋난 문서를 찾는다. 파이프라인이 정상이면 항상 0건으로 수렴한다.
+   SELECT d.id, d.title, d.version AS doc_version,
+          c.version AS chunk_version, d.embedding_status
+   FROM documents d
+   JOIN document_chunks c ON c.document_id = d.id
+   WHERE c.version <> d.version
+   GROUP BY d.id, d.title, d.version, c.version, d.embedding_status;
+   ```
+   재임베딩이 진행 중일 때만 행이 나타나고, 완료되면 사라진다. **"원본-벡터 정합성이 유지된다"를 말이 아니라 쿼리로 보여줄 수 있다** — `/admin/status`와 데모에서 사용한다.
+
+2. **문서 상세 화면** — "현재 검색 인덱스는 v3 기준" 표시
+3. **디버깅** — 청크가 어느 버전에서 왔는지 추적
+
+## 벡터 인덱스
+
+```sql
+CREATE INDEX idx_chunks_embedding ON document_chunks
+  USING hnsw (embedding vector_cosine_ops);  -- m=16, ef_construction=64 기본값
+```
+
+- HNSW 선택 근거는 ADR-002. 코사인 거리(`<=>`)는 BGE-M3의 정규화 임베딩과 맞음.
+- 필터 결합 검색의 "결과 부족" 문제는 검색 트랜잭션에서 `SET LOCAL hnsw.ef_search = 200`으로 완화한다 (ADR-011). pgvector 버전에 무관하게 동작한다.
+- pgvector 0.8+로 확인되면 `SET LOCAL hnsw.iterative_scan = relaxed_order`를 추가로 적용할 수 있다. **버전 미확인이므로 조건부다** — `docs/OPENSQL_RESEARCH.md` §8.
+
+> ⚠️ **HNSW 인덱스 자체의 사용 가능 여부가 미확인이다.** OpenSQL 문서에 pgvector 버전과 HNSW 지원 여부가 명시되어 있지 않다. M0에서 `CREATE INDEX ... USING hnsw`를 실제로 실행해 확인하고, 불가하면 pgvectorscale 또는 IVFFlat으로 전환한다 (ADR-002).
+
+## 자동 임베딩 파이프라인 (DB 계층)
+
+### 트리거
+
+```sql
+CREATE FUNCTION on_document_content_changed() RETURNS trigger AS $$
+BEGIN
+  -- (1) 버전 이력 기록 — INSERT의 v1도 포함해 append-only 이력을 완성한다
+  INSERT INTO document_versions (document_id, version, content, content_hash)
+  VALUES (NEW.id, NEW.version, NEW.content, NEW.content_hash)
+  ON CONFLICT (document_id, version) DO NOTHING;
+
+  -- (2) 임베딩 대기 상태로 전환
+  UPDATE documents SET embedding_status = 'pending'
+   WHERE id = NEW.id AND embedding_status <> 'pending';
+
+  -- (3) 잡 생성 — 파셜 유니크 인덱스가 코얼레싱 수행
+  INSERT INTO embedding_jobs (document_id) VALUES (NEW.id)
+    ON CONFLICT DO NOTHING;
+
+  -- (4) 워커 깨우기 — 최적화이며 유실돼도 폴링이 처리한다 (ADR-009)
+  PERFORM pg_notify('embedding_jobs', NEW.id::text);
+  RETURN NEW;
+END; $$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_documents_content_changed
+  AFTER INSERT OR UPDATE OF content_hash ON documents
+  FOR EACH ROW
+  WHEN (pg_trigger_depth() = 0)          -- 트리거 내부 UPDATE로 인한 재귀 방지
+  EXECUTE FUNCTION on_document_content_changed();
+```
+
+**버전 이력도 DB 계층이 책임진다.** 애플리케이션은 `document_versions`에 직접 INSERT하지 않는다 — `embedding_jobs`와 같은 원칙이다.
+
+- **INSERT 시**: `version=1` 행이 이력에 기록된다. 문서 생성 직후부터 v1 조회가 가능하다.
+- **PUT 시**: API는 `documents`의 `version`(+1), `content`, `content_hash`만 UPDATE한다. 이력 기록은 트리거가 **같은 트랜잭션에서** 수행하므로, 본문만 바뀌고 이력이 누락되는 상태가 구조적으로 불가능하다.
+- `ON CONFLICT (document_id, version) DO NOTHING`은 재실행 안전장치다. 같은 버전 번호로 트리거가 두 번 발화해도 이력이 중복되지 않는다.
+
+### 워커 처리 루프
+
+**기동**: 5초 주기 폴링이 **주 경로**. `LISTEN embedding_jobs` 수신은 폴링을 앞당기는 **최적화**이며, 동작하지 않아도 파이프라인은 정상 작동한다 (ADR-009).
+
+1. 폴링 틱 또는 NOTIFY 수신 시 — 잡을 claim하고 **즉시 커밋**:
+```sql
+UPDATE embedding_jobs j
+   SET status='processing', attempts=attempts+1, started_at=now()
+ WHERE j.id = (SELECT id FROM embedding_jobs
+                WHERE status='pending' AND next_attempt_at <= now()
+                ORDER BY id LIMIT 1 FOR UPDATE SKIP LOCKED)
+RETURNING j.id, j.document_id;
+
+-- 같은 트랜잭션에서 문서 상태도 processing으로 (UI 표시용)
+UPDATE documents SET embedding_status='processing'
+ WHERE id = %(document_id)s AND embedding_status <> 'processing';
+```
+
+2. 문서의 최신 `content`와 **`content_hash`를 함께 읽기** → 청킹 → 임베딩
+   *DB 밖 연산은 이 단계뿐이며, 시간이 오래 걸린다.*
+
+3. **단일 트랜잭션**으로 결과 반영 — 단, **읽었던 `content_hash`를 재확인**한다:
+```sql
+BEGIN;
+  -- 처리 중 문서가 또 수정됐는지 확인. 다르면 이 결과는 낡았으므로 폐기.
+  SELECT content_hash FROM documents WHERE id = %(doc_id)s FOR UPDATE;
+  -- content_hash <> 읽었던 값이면 → ROLLBACK, job은 done 처리
+  --   (새 pending 잡이 이미 생성돼 있으므로 최신 내용으로 다시 처리된다)
+
+  DELETE FROM document_chunks WHERE document_id = %(doc_id)s;
+  INSERT INTO document_chunks (...) VALUES (...);
+  UPDATE documents SET embedding_status='ready' WHERE id = %(doc_id)s;
+  UPDATE embedding_jobs SET status='done', finished_at=now() WHERE id = %(job_id)s;
+COMMIT;
+```
+
+4. 실패 시: `attempts` 기반 지수 백오프로 `next_attempt_at` 갱신 후 `pending` 복귀. 3회 초과 시 job `error` + `documents.embedding_status='error'`.
+
+5. 좀비 회수: `processing` 상태로 5분 초과된 잡을 워커 기동 시 + 주기 스윕에서 `pending`으로 리셋.
+
+> **3번의 `content_hash` 재확인이 멀티 워커 정합성의 핵심이다.**
+> 워커A가 job1을 처리하는 도중 문서가 수정되면 새 pending job2가 생기고, 워커B가 이를 즉시 claim할 수 있다. 두 워커가 같은 `document_id`의 청크를 동시에 교체하면 **완료 순서에 따라 낡은 버전이 최종 상태로 남을 수 있다.**
+> `FOR UPDATE` + 해시 비교로 "내가 읽은 내용이 아직 최신인가"를 커밋 직전에 확인하면, 낡은 결과는 스스로 폐기되고 항상 최신 내용으로 수렴한다.
+
+### 정합성 보장
+
+| 보장 | 방식 |
+|---|---|
+| 원자성 | 문서 변경과 잡 기록이 같은 트랜잭션 (트랜잭셔널 아웃박스). 문서만 커밋되고 잡이 유실되는 경우가 구조적으로 불가능 |
+| 전달 보장 | **주기 폴링이 주 경로**이므로 전달은 구조적으로 보장된다. `pg_notify`(커밋 시에만 발행)는 지연을 줄이는 최적화일 뿐, 유실돼도 다음 폴링 틱이 처리한다 |
+| 코얼레싱 | 파셜 유니크 인덱스로 문서당 pending 1개. 처리 중(`processing`) 재수정되면 새 pending이 생긴다 |
+| **최신 수렴** | 워커가 커밋 직전 `content_hash`를 `FOR UPDATE`로 재확인한다. 처리 중 문서가 바뀌었으면 그 결과를 폐기하므로, **멀티 워커가 경쟁해도 낡은 청크가 최종 상태로 남지 않는다** |
+| 삭제 정합성 | `ON DELETE CASCADE`로 청크·잡이 문서와 원자적으로 삭제. 워커 개입 불필요. 처리 도중 문서가 삭제되면 워커의 최종 트랜잭션이 0건 갱신으로 끝남 — 무해 |
+| 검색 공백 없음 | 청크 교체가 단일 트랜잭션이므로 중간 상태가 보이지 않는다. 재임베딩 중에는 **이전 버전 청크가 그대로 검색된다** (검색 쿼리가 `embedding_status`로 거르지 않기 때문 — 검색 데이터 흐름 절 참조) |
+| 읽기 정합성 | 검색을 plain `BEGIN`으로 감싸 OpenProxy가 Primary로 라우팅하게 강제한다. 복제 지연으로 방금 임베딩된 청크가 누락되지 않는다 (ADR-010) |
+| 멱등성 | 청크 교체가 delete+insert라 잡 재실행의 종착 상태가 항상 동일 |
+
+## 고가용성(HA) 전략
+
+### OpenSQL 클러스터 구성 (공식 권장 3노드)
+
+```
+                    ┌──────────────────────────────┐
+   애플리케이션 ───▶│  VRRP VIP  (OpenProxy)       │  ← 단일 엔드포인트
+   (API · 워커)     └──────────┬───────────────────┘
+                               │ openproxy.toml의 shards에 노드 선언
+                               │ use_patroni=true → 역할은 Patroni가 관리
+              ┌────────────────┼────────────────┐
+              ▼                ▼                ▼
+        ┌──────────┐    ┌──────────┐    ┌──────────┐
+        │ Node 1   │    │ Node 2   │    │ Node 3   │
+        │ PG16     │    │ PG16     │    │ PG16     │
+        │ OpenHA   │    │ OpenHA   │    │ OpenHA   │
+        │          │    │ OpenProxy│    │ OpenProxy│
+        └────┬─────┘    └────┬─────┘    └────┬─────┘
+             └───────────────┼───────────────┘
+                             ▼
+                    ┌─────────────────┐
+                    │ OpenHA DCS      │  etcd v3
+                    │ 멤버십·역할 저장 │
+                    └─────────────────┘
+```
+
+### 책임 분리 — 무엇을 OpenSQL이 하고, 무엇을 우리가 하는가
+
+| 책임 | 주체 |
+|---|---|
+| 노드 장애 감지, 새 Primary 선출·승격 | **OpenHA Cluster Manager (Patroni)** |
+| 클러스터 상태 공유 | **OpenHA DCS (etcd)** |
+| Primary 변경 감지 후 재연결, 커넥션 풀링, VIP 이중화 | **OpenProxy** |
+| 미처리 잡의 무손실 보존 | **DB 계층** (`embedding_jobs`는 WAL 로깅 테이블 → 스탠바이 복제) |
+| 연결 끊김 시 재시도, 잡 재개, 좀비 회수 | **애플리케이션 (우리)** |
+
+> **`PROJECT_CONTEXT.md` 설계 원칙 준수**: 위 표의 상위 3줄은 OpenSQL이 제공하는 기능이므로 애플리케이션에서 중복 구현하지 않는다 (ADR-006).
+
+### 애플리케이션 접속
+
+```bash
+# 단일 엔드포인트. 멀티호스트 DSN·target_session_attrs 사용 안 함.
+DATABASE_URL="postgresql://app@<vip>:6432/<pool_name>"
+```
+
+- `<pool_name>`은 `openproxy.toml`의 `[pools.<name>]` 이름이다 (DB 이름 자리에 pool 이름을 넣는 것이 OpenProxy 규약).
+- 로컬 개발 시에는 같은 환경변수에 단일 컨테이너 주소를 넣는다. **코드는 로컬/클러스터를 구분하지 않는다.**
+
+### 애플리케이션이 담당하는 복구 로직
+
+- **API**: `psycopg_pool.AsyncConnectionPool(check=AsyncConnectionPool.check_connection)` — 죽은 연결을 대여 시점에 감지·폐기·재수립. 요청 핸들러는 `OperationalError` 1회 재시도.
+- **워커 (잡 처리)**: 동일한 풀 정책. 처리 중 연결이 끊기면 트랜잭션이 롤백되고, 잡은 `processing` 상태로 남았다가 좀비 회수 스윕이 `pending`으로 되돌린다.
+- **워커 (기동)**: **주기 폴링(5초)이 주 경로**다. `LISTEN`은 최적화이며, 연결이 끊기면 백오프 재연결 후 `LISTEN`을 재등록한다. **LISTEN이 아예 동작하지 않아도 파이프라인은 정상 작동한다** (ADR-009).
+- **잡 큐 내구성**: `embedding_jobs`는 일반 WAL 로깅 테이블이므로 스탠바이에 복제된다. Failover 후 미처리 잡이 새 Primary에 그대로 존재하고, 워커 재연결 즉시 재개된다.
+
+### Failover 시간 특성
+
+OpenSQL이 배포하는 `patroni.yml` 기준값:
+
+| 파라미터 | 값 |
+|---|---|
+| `ttl` | 30초 |
+| `loop_wait` | 10초 |
+| `retry_timeout` | 10초 |
+| `maximum_lag_on_failover` | 1MB |
+| `failsafe_mode` | `true` |
+
+> **"무중단"이 아니라 "짧은 중단 후 자동 복구"다.** 장애 감지부터 승격까지 수십 초가 걸린다. 사용자 관점에서는 그 구간의 요청이 실패하고 이후 정상 복구된다. 문서·데모에서 이 표현을 정확히 쓴다.
+
+### 제약: `max_connections = 100`
+
+OpenSQL `patroni.yml`의 PostgreSQL 파라미터는 `max_connections: 100`이다. API 풀 + 워커 잡 처리 풀 + 워커 LISTEN 연결이 모두 이 안에 들어가야 하며, OpenProxy의 `pool_size`와 함께 산정한다.
+
+### 로컬 개발 갭
+
+로컬은 pgvector 단일 컨테이너다 (ADR-007). **OpenProxy 경유 경로는 로컬에서 검증할 수 없다** — 공식 Docker 배포판이 없기 때문이다. M0 검증 목록은 `docs/OPENSQL_RESEARCH.md` §12를 따른다.
+
+## API 설계
+
+| 엔드포인트 | 내용 |
+|---|---|
+| `POST /api/documents` | multipart 업로드. pypdf/python-docx/plain 파싱 → INSERT. 여기서 트리거가 파이프라인을 자동 기동 — 임베딩 관련 코드 없음. **텍스트 추출 결과가 비면 400** (아래) |
+| `GET /api/documents` | 목록 + `status`/`tag` 필터, embedding_status 포함 |
+| `GET /api/documents/{id}` | 상세 + 버전 목록 + 청크 수 + 청크 기준 버전 |
+| `PUT /api/documents/{id}` | 새 파일/텍스트 → `version`+1, `content`, `content_hash` UPDATE. **버전 이력 기록과 재임베딩 잡 생성은 트리거가 수행** |
+| `DELETE /api/documents/{id}` | CASCADE로 벡터까지 원자 삭제 |
+| `POST /api/documents/{id}/reembed` | **임베딩 실패 복구.** 아래 참조 |
+| `POST /api/search` | 하이브리드 검색 (아래) |
+| `GET /api/system/status` | **운영/데모 전용**: `inet_server_addr()`(현재 접속 노드), pending/processing/error 잡 수, 임베딩 프로바이더명, 최근 재연결 이벤트, **정합성 검증 쿼리 결과**(`c.version <> d.version` 건수). `/admin/status`가 소비하며 사용자 화면은 호출하지 않는다 |
+
+### 빈 파싱 결과 처리 (`POST /api/documents`)
+
+파싱 결과가 공백 제거 후 빈 문자열이면 **400을 반환하고 저장하지 않는다.**
+
+```
+400 Bad Request
+{ "detail": "문서에서 텍스트를 추출하지 못했습니다. 스캔 이미지 PDF는 지원하지 않습니다." }
+```
+
+저장 후 `error` 상태로 두는 대안을 택하지 않은 이유: 빈 문서는 임베딩할 것이 없어 **영원히 검색에 잡히지 않는 유령 행**이 되고, 사용자는 목록에서 실패 배지만 볼 뿐 원인을 모른다. 업로드 시점에 즉시 알리는 편이 낫다.
+DB 계층에도 `CHECK (length(btrim(content)) > 0)`를 두어 이중으로 막는다 (스키마 절 참조).
+
+### 임베딩 실패 복구 (`POST /api/documents/{id}/reembed`)
+
+3회 재시도 후 `error`가 된 문서를 다시 처리 대기로 되돌린다.
+
+```sql
+-- 애플리케이션은 embedding_jobs를 직접 건드리지 않는다.
+-- content_hash를 SET 절에 언급하기만 하면 UPDATE OF 트리거가 발화한다
+-- (값이 같아도 컬럼이 SET 절에 있으면 발화하는 것이 PostgreSQL 동작).
+UPDATE documents SET content_hash = content_hash WHERE id = %(doc_id)s;
+```
+
+트리거가 상태를 `pending`으로 되돌리고 새 잡을 만든다. **잡 생성 책임이 DB 계층에 남는다** — `CLAUDE.md`의 "애플리케이션 코드에서 `embedding_jobs`에 직접 INSERT 하지 마라" 규칙을 우회하지 않는 유일한 방법이다.
+
+버전은 올라가지 않으므로 이력이 오염되지 않고, 트리거의 `ON CONFLICT (document_id, version) DO NOTHING`이 중복 이력을 막는다.
+
+## 검색 데이터 흐름
+
+질의 텍스트 → 동일 프로바이더로 질의 임베딩 → 단일 하이브리드 SQL:
+
+```sql
+BEGIN;  -- ★ plain BEGIN. READ ONLY 금지 (아래 설명)
+
+SET LOCAL hnsw.ef_search = 200;   -- 필터 통과 후보를 충분히 확보 (기본 40)
+
+WITH candidates AS (
+    -- 1단계: HNSW 인덱스로 후보를 넉넉히 뽑는다 (k의 5배)
+    SELECT c.document_id, c.chunk_index, c.content,
+           c.embedding <=> %(qvec)s AS dist
+    FROM document_chunks c
+    JOIN documents d ON d.id = c.document_id
+    WHERE (%(tags)s::text[] IS NULL OR d.tags && %(tags)s)
+      AND (%(ctype)s::text IS NULL OR d.content_type = %(ctype)s)
+      AND (d.visibility = 'public' OR d.owner_id = %(user)s)
+    ORDER BY c.embedding <=> %(qvec)s
+    LIMIT %(k)s * 5
+),
+best_per_doc AS (
+    -- 2단계: 문서당 최고 점수 청크 1개만 남긴다
+    SELECT DISTINCT ON (document_id) *
+    FROM candidates
+    ORDER BY document_id, dist
+)
+SELECT d.id, d.title, d.tags, d.content_type,
+       b.chunk_index, b.content, 1 - b.dist AS score
+FROM best_per_doc b
+JOIN documents d ON d.id = b.document_id
+ORDER BY b.dist
+LIMIT %(k)s;
+
+COMMIT;
+```
+
+정형 필터·권한 술어·벡터 정렬이 한 쿼리에 결합된다(가산점 포인트). 이 쿼리는 `services/search.py` 한 곳에만 존재하며 REST API와 MCP 서버가 공유한다.
+
+### 네 가지 설계 결정이 이 쿼리에 반영되어 있다
+
+**1. `BEGIN … COMMIT`으로 감싼다 (ADR-010)**
+
+OpenProxy는 `query_parser_read_write_splitting` 활성 시 **트랜잭션 밖의 단순 `SELECT`를 Replica로 라우팅**하며, 복제 지연 보장이 없다. 워커가 Primary에 청크를 커밋한 직후 검색하면 방금 임베딩된 청크가 누락될 수 있다.
+
+> ⚠️ **`BEGIN READ ONLY`를 쓰면 안 된다.** OpenProxy 1.1.3부터 `BEGIN READ ONLY`와 `START TRANSACTION READ ONLY`는 **의도적으로 Replica로 라우팅**된다. "읽기 전용이니 READ ONLY로 선언하는 게 맞다"는 직관을 따르면 정확히 반대 결과가 나온다.
+
+**2. `SET LOCAL hnsw.ef_search = 200` (ADR-011)**
+
+HNSW 인덱스는 `document_chunks`에 있는데 필터는 JOIN 상대인 `documents`에 있다. 즉 **벡터 인덱스가 후보를 뽑은 뒤에 필터가 적용**되는 post-filter 구조다. 기본 `ef_search = 40`으로는 태그 필터가 조금만 좁아도 `LIMIT k`를 채우지 못한다. 후보 풀을 키워 이를 완화한다. `SET LOCAL`이므로 트랜잭션이 끝나면 자동 복원된다 — ①의 명시적 트랜잭션이 여기서 한 번 더 쓸모가 있다.
+
+**3. 문서당 1건으로 중복 제거 (ADR-011)**
+
+긴 문서 하나가 상위 k를 청크로 도배하는 것을 막는다. 후보를 `k*5`로 넉넉히 뽑은 뒤 `DISTINCT ON (document_id)`으로 문서당 최고 점수 청크만 남기고, 최종적으로 거리순 `LIMIT k`를 적용한다. 사용자는 **문서 목록**을 받고, 각 문서에는 가장 잘 맞는 발췌가 붙는다.
+
+**4. `embedding_status = 'ready'` 필터를 제거했다**
+
+이전 설계는 `WHERE d.embedding_status = 'ready'`를 두었으나, 이는 PRD의 **"재임베딩 완료 전까지는 이전 벡터로 검색이 계속된다(검색 공백 없음)"**와 정면으로 모순됐다. 문서를 수정하면 트리거가 상태를 `pending`으로 되돌리므로, 재임베딩이 끝날 때까지 그 문서가 **검색에서 통째로 사라졌다.**
+
+필터를 제거해도 안전한 이유:
+- 신규 문서는 아직 청크가 없으므로 JOIN에서 자연히 제외된다 (상태 필터 불필요)
+- 워커가 청크를 **단일 트랜잭션으로 교체**하므로, 어느 시점에 조회해도 청크 집합은 항상 일관된 한 버전이다
+- 재임베딩 중에는 **이전 버전 청크**가 조회된다 — 이것이 PRD가 의도한 "검색 공백 없음"이다
+- 임베딩 실패(`error`) 문서도 이전 청크로 계속 검색된다 — 사용자 관점에서 올바른 동작이다
+
+`embedding_status`는 **검색 필터가 아니라 UI 상태 표시용**으로만 쓴다.
+
+
+## 임베딩 프로바이더
+
+```python
+class EmbeddingProvider(Protocol):
+    name: str
+    dimension: int  # 항상 1024
+    def embed(self, texts: list[str]) -> list[list[float]]: ...
+```
+
+- **`LocalProvider`**: sentence-transformers `BAAI/bge-m3` (MIT, 1024차원, 8192 토큰, 한국어 강점). 워커에서 lazy-load. **운영 경로는 이것 하나뿐이다.**
+- **`FakeProvider`**: 결정론적 해시 기반 벡터 — 테스트 전용. 모델 로딩 없이 파이프라인 전체를 CI 속도로 테스트하는 TDD의 핵심 장치.
+- 선택은 `EMBEDDING_PROVIDER` 환경변수 (`local` | `fake`). 질의 임베딩도 동일 프로바이더를 쓴다 — 질의-문서 벡터 공간이 일치해야 한다.
+- **상용 API 기반 프로바이더는 구현하지 않는다** (ADR-003). 대회 규정 [별표2]가 "외부 API 호출을 통해서만 작동하는 API 전용 모델 사용 불가"를 명시한다.
+- 배칭·캐싱·폴백 체인은 만들지 않는다.
+
+### 청킹 (services/chunking.py)
+
+순수 함수. 문단 경계 우선 분할, 청크 최대 1,000자, 인접 청크 150자 오버랩. 외부 의존성 없이 단위 테스트 가능해야 한다.
+
+## 프론트엔드 패턴
+
+- 사용자 3화면: `/`(목록 + 업로드 드롭존), `/documents/[id]`(메타데이터·버전 이력·청크·재업로드), `/search`(질의 + 태그/유형 필터 + 결과. "실행된 SQL 보기" 토글)
+- **사용자 화면은 인프라 상태를 노출하지 않는다.** 페일오버가 나도 화면 구성이 달라지지 않으며, 사용자는 업로드·검색이 계속 성공하는 것만 본다 (UI_GUIDE 디자인 원칙 3).
+- 운영 1화면: `/admin/status` — `GET /api/system/status`를 폴링해 접속 노드·잡 수·프로바이더 표시. **페일오버 데모의 증거 채널**이며 사용자 내비게이션에 노출하지 않는다.
+- Server Components 기본, 폴링·업로드 등 인터랙션 구간만 Client Component
+- API 연동은 `next.config.js` rewrites로 FastAPI 프록시
+
+## 상태 관리
+
+- 서버 상태: fetch + 2초 폴링 (임베딩 상태 배지, 시스템 상태바). SSE/웹소켓 사용 안 함
+- 클라이언트 상태: useState/useReducer만. 전역 상태 라이브러리 없음
