@@ -1,0 +1,40 @@
+# --- Node / Next.js ---
+node_modules/
+.next/
+out/
+next-env.d.ts
+tsconfig.tsbuildinfo
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# --- 환경변수 / 비밀 ---
+.env
+.env.*
+!.env.example
+
+# --- 임베딩 모델 캐시 (BGE-M3 ~2GB) ---
+.cache/
+models/
+
+# --- 대회 문서 ---
+# 운영규정 PDF는 한국오픈소스협회에 저작권이 있어 저장소에 포함하지 않는다
+*.pdf
+
+# --- OS / 에디터 ---
+.DS_Store
+.idea/
+*.swp
+
+# --- phase 실행 산출물 ---
+phases/**/phase*-output.json
+phases/**/step*-output.json
