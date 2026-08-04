@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "openarchive-backend"
+version = "0.1.0"
+description = "OpenArchive 백엔드 — 문서 API·임베딩 워커·MCP 서버가 공유하는 패키지"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi",
+    "uvicorn[standard]",
+    "psycopg[binary,pool]",
+    "pydantic-settings",
+    # 문서 파싱 — 업로드 phase에서 services/parsing.py가 사용한다.
+    "pypdf",
+    "python-docx",
+]
+
+# 임베딩 모델(sentence-transformers, BGE-M3 약 2GB)은 임베딩 phase에서 추가한다.
+# 상용 임베딩 API 클라이언트는 넣지 않는다 — 대회 규정상 사용할 수 없다 (ADR-003).
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-asyncio",
+    "httpx", # fastapi.testclient.TestClient가 요구한다
+    "ruff",
+]
+
+[tool.setuptools.packages.find]
+# tests는 설치 대상이 아니다. 배포되는 것은 app 패키지뿐이다.
+include = ["app*"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+# 기본 룰(E4·E7·E9·F)에 import 정렬만 더한다.
+extend-select = ["I"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
