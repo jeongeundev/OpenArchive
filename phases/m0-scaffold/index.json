@@ -19,7 +19,10 @@
       "type": "chore",
       "scope": "api",
       "desc": "백엔드 패키지 구조와 설정·커넥션 풀 뼈대",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-08-04T22:20:31+0900",
+      "summary": "backend/ 스캐폴드: pyproject.toml(fastapi·uvicorn·psycopg[binary,pool]·pydantic-settings·pypdf·python-docx / dev: pytest·pytest-asyncio·httpx·ruff, ruff py312 line-length 100, pytest asyncio_mode=auto), app/main.py에 GET /api/health → {\"status\":\"ok\"} (프론트엔드 rewrites 대상, lifespan 없음 · DB 미접속), app/config.py(Settings.database_url 기본값은 compose DSN, embedding_provider Literal[local|fake] 기본 fake, lru_cache get_settings), app/db.py(get_pool()/close_pool(), 모듈 최상위 인스턴스화 없음 · open=False), 빈 패키지 app/api·services·embeddings, migrations/.gitkeep. 테스트 14개 통과(ruff 통과, check.sh 종료 코드 0). db.py를 open=True와 최상위 풀 생성으로 각각 변이시켜 테스트가 실패함을 확인했다. uvicorn 실기동으로 DATABASE_URL 없이 200 응답 확인. app/migrations.py·worker.py·mcp_server/는 후속 phase.",
+      "completed_at": "2026-08-04T22:26:11+0900"
     },
     {
       "step": 2,
