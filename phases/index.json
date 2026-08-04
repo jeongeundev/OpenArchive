@@ -4,6 +4,10 @@
       "dir": "m0-scaffold",
       "status": "completed",
       "completed_at": "2026-08-04T22:32:49+0900"
+    },
+    {
+      "dir": "m1-db-layer",
+      "status": "pending"
     }
   ]
 }
