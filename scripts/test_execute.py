@@ -49,9 +49,14 @@ def phase_dir(tmp_project):
         "project": "TestProject",
         "phase": "mvp",
         "steps": [
-            {"step": 0, "name": "setup", "status": "completed", "summary": "프로젝트 초기화 완료"},
-            {"step": 1, "name": "core", "status": "completed", "summary": "핵심 로직 구현"},
-            {"step": 2, "name": "ui", "status": "pending"},
+            {"step": 0, "name": "setup", "type": "chore", "scope": "db",
+             "desc": "로컬 컨테이너와 마이그레이션 러너",
+             "status": "completed", "summary": "프로젝트 초기화 완료"},
+            {"step": 1, "name": "core", "type": "feat", "scope": "db",
+             "desc": "문서 변경 트리거와 임베딩 잡 생성",
+             "status": "completed", "summary": "핵심 로직 구현"},
+            {"step": 2, "name": "ui", "type": "feat", "scope": "frontend",
+             "desc": "문서 목록 화면", "status": "pending"},
         ],
     }
     (d / "index.json").write_text(json.dumps(index, indent=2, ensure_ascii=False))
@@ -245,9 +250,12 @@ class TestBuildPreamble:
         result = executor._build_preamble("", ctx)
         assert "이전 Step 산출물" in result
 
-    def test_includes_commit_example(self, executor):
+    def test_instructs_not_to_commit(self, executor):
+        """커밋은 하네스가 한다 — 메시지 규칙을 한 곳에서만 관리하기 위함."""
         result = executor._build_preamble("", "")
-        assert "feat(mvp):" in result
+        assert "커밋하지" in result
+        # phase 이름을 스코프로 쓰는 예시를 세션에 주지 않는다
+        assert "feat(mvp)" not in result
 
     def test_includes_rules(self, executor):
         result = executor._build_preamble("", "")
@@ -339,9 +347,46 @@ class TestCheckoutBranch:
 
     def test_already_on_branch(self, executor):
         self._mock_git(executor, [
-            MagicMock(returncode=0, stdout="feat-mvp\n", stderr=""),
+            MagicMock(returncode=0, stdout="feat/mvp\n", stderr=""),
         ])
         executor._checkout_branch()  # should return without checkout
+
+    def test_branch_name_is_single_source(self, executor):
+        """브랜치명이 checkout과 push 두 곳에 하드코딩되면 한쪽만 고쳐져 어긋난다."""
+        assert executor._branch_name() == "feat/mvp"
+
+    def test_push_uses_same_branch_as_checkout(self, executor):
+        """--push가 checkout한 것과 다른 브랜치를 밀면 실패한다."""
+        calls = []
+        def fake_git(*args):
+            calls.append(args)
+            return MagicMock(returncode=0, stdout="", stderr="")
+        executor._run_git = fake_git
+        executor._auto_push = True
+
+        executor._finalize()
+
+        push = next(c for c in calls if c[0] == "push")
+        assert push[-1] == executor._branch_name()
+        assert "feat-mvp" not in push
+
+    def test_branch_name_uses_slash_prefix(self, executor):
+        """CLAUDE.md 브랜치 규칙은 feat/ 슬래시 접두사다 (ADR-013)."""
+        calls = []
+        def fake_git(*args):
+            calls.append(args)
+            if args[:2] == ("rev-parse", "--abbrev-ref"):
+                return MagicMock(returncode=0, stdout="main\n", stderr="")
+            if args[:2] == ("rev-parse", "--verify"):
+                return MagicMock(returncode=1, stdout="", stderr="not found")
+            return MagicMock(returncode=0, stdout="", stderr="")
+        executor._run_git = fake_git
+
+        executor._checkout_branch()
+
+        checkout = next(c for c in calls if c[0] == "checkout")
+        assert "feat/mvp" in checkout
+        assert not any("feat-mvp" in str(c) for c in calls)
 
     def test_branch_exists_checkout(self, executor):
         self._mock_git(executor, [
@@ -382,6 +427,42 @@ class TestCheckoutBranch:
 # _commit_step (mocked)
 # ---------------------------------------------------------------------------
 
+class TestBuildCommitMsg:
+    """커밋 메시지는 step의 type·scope·desc로 조립한다 (CLAUDE.md 커밋 규칙)."""
+
+    def test_uses_type_scope_desc(self):
+        step = {"step": 1, "name": "core", "type": "feat", "scope": "db",
+                "desc": "문서 변경 트리거와 임베딩 잡 생성"}
+        assert ex.StepExecutor._build_commit_msg(step) == \
+            "feat(db): 문서 변경 트리거와 임베딩 잡 생성"
+
+    def test_type_is_not_always_feat(self):
+        """설정·구조 작업은 chore·refactor여야 한다."""
+        step = {"step": 0, "name": "setup", "type": "chore", "scope": "db",
+                "desc": "로컬 컨테이너 구성"}
+        assert ex.StepExecutor._build_commit_msg(step).startswith("chore(db):")
+
+    def test_type_defaults_to_feat(self):
+        step = {"step": 1, "name": "core", "scope": "api", "desc": "문서 CRUD"}
+        assert ex.StepExecutor._build_commit_msg(step) == "feat(api): 문서 CRUD"
+
+    def test_scope_omitted_when_absent(self):
+        """스코프는 Conventional Commits에서 선택이다."""
+        step = {"step": 1, "name": "core", "type": "feat", "desc": "무언가"}
+        assert ex.StepExecutor._build_commit_msg(step) == "feat: 무언가"
+
+    def test_falls_back_to_step_name_without_desc(self):
+        step = {"step": 3, "name": "worker", "type": "feat", "scope": "worker"}
+        assert ex.StepExecutor._build_commit_msg(step) == "feat(worker): step 3 — worker"
+
+    def test_never_uses_phase_name_as_scope(self):
+        """feat(m1-db-layer)는 CLAUDE.md 허용 스코프 7종이 아니다."""
+        step = {"step": 2, "name": "ui", "type": "feat", "scope": "frontend",
+                "desc": "문서 목록 화면"}
+        msg = ex.StepExecutor._build_commit_msg(step)
+        assert "mvp" not in msg and "m1-" not in msg
+
+
 class TestCommitStep:
     def test_two_phase_commit(self, executor):
         calls = []
@@ -392,14 +473,18 @@ class TestCommitStep:
             return MagicMock(returncode=0, stdout="", stderr="")
         executor._run_git = fake_git
 
-        executor._commit_step(2, "ui")
+        step = {"step": 2, "name": "ui", "type": "feat", "scope": "frontend",
+                "desc": "문서 목록 화면"}
+        executor._commit_step(step)
 
         commit_calls = [c for c in calls if c[0] == "commit"]
         assert len(commit_calls) == 2
-        assert "feat(mvp):" in commit_calls[0][2]
-        assert "chore(mvp):" in commit_calls[1][2]
+        assert commit_calls[0][2] == "feat(frontend): 문서 목록 화면"
+        # 산출물 커밋에는 스코프를 붙이지 않는다 — 허용 스코프 목록에 해당 항목이 없다
+        assert commit_calls[1][2].startswith("chore:")
+        assert "chore(mvp)" not in commit_calls[1][2]
 
-    def test_no_code_changes_skips_feat_commit(self, executor):
+    def test_no_code_changes_skips_code_commit(self, executor):
         call_count = {"diff": 0}
         calls = []
         def fake_git(*args):
@@ -412,11 +497,13 @@ class TestCommitStep:
             return MagicMock(returncode=0, stdout="", stderr="")
         executor._run_git = fake_git
 
-        executor._commit_step(2, "ui")
+        step = {"step": 2, "name": "ui", "type": "feat", "scope": "frontend",
+                "desc": "문서 목록 화면"}
+        executor._commit_step(step)
 
         commit_msgs = [c[2] for c in calls if c[0] == "commit"]
         assert len(commit_msgs) == 1
-        assert "chore" in commit_msgs[0]
+        assert commit_msgs[0].startswith("chore:")
 
 
 # ---------------------------------------------------------------------------

@@ -56,9 +56,12 @@
   "project": "<프로젝트명>",
   "phase": "<task-name>",
   "steps": [
-    { "step": 0, "name": "project-setup", "status": "pending" },
-    { "step": 1, "name": "core-types", "status": "pending" },
-    { "step": 2, "name": "api-layer", "status": "pending" }
+    { "step": 0, "name": "project-setup", "type": "chore", "scope": "db",
+      "desc": "로컬 컨테이너와 마이그레이션 러너", "status": "pending" },
+    { "step": 1, "name": "core-types", "type": "feat", "scope": "db",
+      "desc": "문서 변경 트리거와 임베딩 잡 생성", "status": "pending" },
+    { "step": 2, "name": "api-layer", "type": "feat", "scope": "api",
+      "desc": "문서 CRUD 라우터", "status": "pending" }
   ]
 }
 ```
@@ -68,8 +71,20 @@
 - `project`: 프로젝트명 (CLAUDE.md 참조).
 - `phase`: task 이름. 디렉토리명과 일치시킨다.
 - `steps[].step`: 0부터 시작하는 순번.
-- `steps[].name`: kebab-case slug.
+- `steps[].name`: kebab-case slug. 파일명(`step{N}.md`)과 대응한다.
 - `steps[].status`: 초기값은 모두 `"pending"`.
+
+**커밋 메시지를 만드는 세 필드** — execute.py가 `<type>(<scope>): <desc>`로 조립한다.
+
+| 필드 | 값 | 없으면 |
+|---|---|---|
+| `type` | `feat` `fix` `docs` `test` `refactor` `chore` `ci` `perf` | `feat` |
+| `scope` | `db` `worker` `api` `search` `mcp` `frontend` `adr` | 스코프 생략 |
+| `desc` | 한국어 한 줄. 무엇을 만들었는지 | `step {N} — {name}` |
+
+- **모든 step이 `feat`은 아니다.** 환경 구성·설정은 `chore`, 구조 정리는 `refactor`로 적는다.
+- **phase 이름을 `scope`에 쓰지 마라.** `feat(m1-db-layer)`는 CLAUDE.md 허용 목록에 없다.
+- step 하나가 여러 스코프에 걸치면 **step을 쪼개라** (설계 원칙 1).
 
 상태 전이와 자동 기록 필드:
 
@@ -138,12 +153,23 @@ python3 scripts/execute.py {task-name} --push  # 실행 후 push
 
 execute.py가 자동으로 처리하는 것:
 
-- `feat-{task-name}` 브랜치 생성/checkout
+- `feat/{task-name}` 브랜치 생성/checkout (ADR-013 접두사 규칙)
 - 가드레일 주입 — CLAUDE.md + docs/*.md 내용을 매 step 프롬프트에 포함
 - 컨텍스트 누적 — 완료된 step의 summary를 다음 step 프롬프트에 전달
 - 자가 교정 — 실패 시 최대 3회 재시도하며, 이전 에러 메시지를 프롬프트에 피드백
-- 2단계 커밋 — 코드 변경(`feat`)과 메타데이터(`chore`)를 분리 커밋
+- **커밋** — step당 코드 커밋 1개(`<type>(<scope>): <desc>`) + 산출물 커밋 1개(`chore: ...`), phase 종료 시 완료 커밋 1개
 - 타임스탬프 — started_at, completed_at, failed_at, blocked_at 자동 기록
+
+> **step 세션은 직접 커밋하지 않는다.** 커밋 메시지 규칙을 한 곳(execute.py)에서만 관리하기 위해서다. step 세션은 파일 저장과 `index.json` status 갱신까지만 한다.
+
+### 머지
+
+phase가 끝나면 PR을 열고 **squash merge**한다 (ADR-013).
+
+- step별 커밋·산출물·검증 이력은 **PR에 보존**된다
+- `main`에는 **검토가 끝난 phase 단위 결과**만 남는다
+
+PR에는 self-review 체크리스트(ADR 준수 / AC 통과 / CLAUDE.md CRITICAL 위반 없음)를 코멘트로 남긴다.
 
 에러 복구:
 
