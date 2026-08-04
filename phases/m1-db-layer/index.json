@@ -19,7 +19,10 @@
       "type": "feat",
       "scope": "db",
       "desc": "문서·버전·청크·잡 테이블과 코얼레싱 제약",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-08-05T07:38:15+0900",
+      "summary": "migrations/001_extensions.sql(CREATE EXTENSION vector 하나만 — pgcrypto·pgvectorscale·pg_trgm 없음)과 002_tables.sql 신규. 테이블 4개: documents(id uuid PK gen_random_uuid, title, filename NULL 허용, content_type, content, content_hash, version int DEFAULT 1, owner_id, visibility DEFAULT 'public', tags text[] DEFAULT '{}', embedding_status DEFAULT 'pending', created_at/updated_at DEFAULT now()) · document_versions(PK (document_id, version), FK CASCADE) · document_chunks(id bigserial PK, document_id FK CASCADE, version, chunk_index, content, embedding vector(1024) NOT NULL, UNIQUE (document_id, chunk_index) = document_chunks_document_id_chunk_index_key) · embedding_jobs(id bigserial PK, document_id FK CASCADE, status DEFAULT 'pending', attempts DEFAULT 0, next_attempt_at DEFAULT now(), last_error, created_at, started_at, finished_at). 제약 이름: documents_content_not_blank(CHECK), 파셜 유니크 인덱스 uq_pending_job_per_doc ON embedding_jobs(document_id) WHERE status='pending' — 002_tables.sql에 둠(트리거 ON CONFLICT DO NOTHING의 충돌 대상). 상태 컬럼에 CHECK·enum 없음, 트리거 0개, HNSW 없음. **설계 수정 1건**: ARCHITECTURE.md의 CHECK (length(btrim(content)) > 0)은 btrim 1인자 형태가 공백만 제거해 탭·개행만 남은 본문을 통과시킨다(실측 확인) — 제약이 막으려던 스캔 이미지 PDF가 정확히 그 형태라 btrim(content, E' \\t\\r\\n\\f')로 고치고 ARCHITECTURE.md 2곳(스키마 절·빈 파싱 결과 처리 절)을 함께 갱신. conftest.py에 `migrated_db`(function scope, clean_db에 run_migrations 적용 후 DSN 반환) 픽스처 추가 — 이후 트리거·인덱스·워커 테스트는 이 픽스처를 쓴다. tests/test_tables.py 13개(확장·테이블 존재, 빈 본문 3종 CheckViolation, documents 기본값, 벡터 차원 1024 DataException, 청크 UNIQUE, 버전 PK 중복, CASCADE 3테이블 동시 확인, pending 1건 제한 UniqueViolation, done 전환 후 재삽입 가능, 문서별 독립성, 잡 기본값). 검증: ruff 통과, pytest 38 passed(config 5·db 7·main 3·migrations 10·tables 13), scripts/check.sh 종료 코드 0.",
+      "completed_at": "2026-08-05T07:44:28+0900"
     },
     {
       "step": 2,
