@@ -1,0 +1,34 @@
+{
+  "project": "OpenArchive",
+  "phase": "m0-scaffold",
+  "steps": [
+    {
+      "step": 0,
+      "name": "local-db",
+      "type": "chore",
+      "scope": "db",
+      "desc": "로컬 개발용 pgvector 컨테이너와 환경변수 예시",
+      "status": "completed",
+      "started_at": "2026-08-04T22:18:35+0900",
+      "summary": "docker-compose.yml(db 서비스 단일, pgvector/pgvector:pg17, 5432, named volume pgdata, pg_isready healthcheck)과 .env.example(DATABASE_URL·EMBEDDING_PROVIDER) 추가. 실측: server_version 17.10, pg_available_extensions의 vector 0.8.6(설치는 하지 않음), 기동 후 약 5초에 healthy. README 수정 없음.",
+      "completed_at": "2026-08-04T22:20:31+0900"
+    },
+    {
+      "step": 1,
+      "name": "backend-skeleton",
+      "type": "chore",
+      "scope": "api",
+      "desc": "백엔드 패키지 구조와 설정·커넥션 풀 뼈대",
+      "status": "pending"
+    },
+    {
+      "step": 2,
+      "name": "frontend-skeleton",
+      "type": "chore",
+      "scope": "frontend",
+      "desc": "Next.js App Router 스캐폴드와 Vitest 구성",
+      "status": "pending"
+    }
+  ],
+  "created_at": "2026-08-04T22:18:35+0900"
+}
