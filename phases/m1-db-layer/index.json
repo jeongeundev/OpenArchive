@@ -52,7 +52,10 @@
       "type": "feat",
       "scope": "worker",
       "desc": "문단 경계 우선 청킹 함수",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-08-05T07:56:11+0900",
+      "summary": "app/services/chunking.py 신규 — `def chunk_text(text: str, *, max_chars: int = 1000, overlap: int = 150) -> list[str]` 공개 함수 하나(+ 사설 헬퍼 `_paragraph_cut`, 모듈 상수 `_PARAGRAPH_BREAK = re.compile(r\"\\n[^\\S\\n]*\\n\")`). 워커 step은 `from app.services.chunking import chunk_text`로 기본값 그대로 부르면 된다. **알고리즘**: 본문을 strip한 뒤 `max_chars` 폭의 창을 밀며 자른다 — 창 안에 문단 경계(빈 줄, 줄 끝 공백 허용)가 있으면 **마지막** 경계에서 끊어 창을 최대한 채우고(짧은 문단 여러 개는 한 청크로 묶임), 없으면 창 끝에서 강제 분할. 다음 창은 `end - overlap`에서 시작하므로 오버랩이 창 **안에** 포함되고, 따라서 덧붙인 부분까지 합쳐 `max_chars`를 넘지 않는다. 단어·문장 경계는 보지 않는다(형태소 분석기·문장 분리기 없음). 표준 라이브러리 `re`만 쓰며 pyproject 의존성 변경 없음. **전진 보장**: `start + overlap` 이하의 문단 경계는 버린다 — 그보다 앞에서 끊으면 다음 창이 제자리이거나 뒤로 물러나 루프가 끝나지 않는다(버려진 경계는 다음 청크 안쪽에 남아 내용 손실은 없음). `overlap >= max_chars`·`overlap < 0`·`max_chars < 1`은 조용히 보정하지 않고 **ValueError**로 막는다. **후속 step(워커)이 전제할 수 있는 확인된 동작**: 빈 문자열·공백/탭/개행뿐인 입력은 `[]`(예외 아님) · 각 청크는 앞뒤 공백이 정리된 비어 있지 않은 문자열 · 같은 입력에 항상 같은 출력(재임베딩 멱등성의 전제) · 오버랩이 0이면 청크가 온전한 문단들의 묶음이 되고 이어붙이면 원문이 공백 차이만 빼고 그대로 복원됨. tests/test_chunking.py 19개 신규(불변식 위주 — 길이 상한, 누락 없음은 `is_subsequence`로 공백 제외 전 문자 순서 포함 확인(오버랩 때문에 부분 문자열이 아니라 부분 수열로 본다), 겹치는 구간을 `chunks[i][-150:] == chunks[i+1][:150]`로 문자 단위 비교, 문단 끝 표식으로 '문단 중간에서 끊기지 않음' 판정, 결정론, 커스텀 파라미터·overlap=0, 무한 루프 파라미터 4종 ValueError, 한국어 본문 일괄 확인). DB·모델·파일시스템·시간 의존 없음. 문서·기존 코드 수정 없음. 검증: ruff 통과, pytest 73 passed(기존 54 + chunking 19), scripts/check.sh 종료 코드 0.",
+      "completed_at": "2026-08-05T08:03:40+0900"
     },
     {
       "step": 5,
