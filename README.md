@@ -5,7 +5,7 @@
 > AI에게 주는 근거가 어느 시점에도 **하나의 일관된 버전**이고, **최신 버전으로 수렴**함을 데이터베이스가 보장합니다.
 
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![PostgreSQL](https://img.shields.io/badge/OpenSQL-PostgreSQL%2016-336791.svg)](https://docs.tibero.com/tmaxopensql/overview)
+[![PostgreSQL](https://img.shields.io/badge/OpenSQL-PostgreSQL%2017-336791.svg)](https://docs.tibero.com/tmaxopensql/overview)
 [![Embedding](https://img.shields.io/badge/embedding-BGE--M3%20(MIT)-orange.svg)](https://huggingface.co/BAAI/bge-m3)
 
 > 2026년 오픈소스 개발자대회 기업 지정과제 출품작
@@ -92,7 +92,7 @@ document_chunks 교체 (단일 트랜잭션)
 
 | 영역 | 사용 기술 |
 |---|---|
-| DB | [Tmax OpenSQL v3](https://docs.tibero.com/tmaxopensql/overview) (PostgreSQL 16 + pgvector) · OpenHA(Patroni) · OpenHA DCS(etcd) · OpenProxy |
+| DB | [Tmax OpenSQL v3](https://docs.tibero.com/tmaxopensql/overview) (PostgreSQL 17 + pgvector) · OpenHA(Patroni) · OpenHA DCS(etcd) · OpenProxy |
 | 백엔드 | Python 3.12+ · FastAPI · psycopg3 |
 | 임베딩 | [`BAAI/bge-m3`](https://huggingface.co/BAAI/bge-m3) (MIT, 1024차원) — 로컬 구동 |
 | 프론트엔드 | Next.js (App Router) · TypeScript · Tailwind CSS |
@@ -153,7 +153,8 @@ DATABASE_URL="postgresql://app@<vip>:6432/<pool_name>"
 | [PRD](docs/PRD.md) | 제품 요구사항, MVP 범위 |
 | [Architecture](docs/ARCHITECTURE.md) | 스키마·트리거·워커·검색·고가용성 상세 |
 | [ADR](docs/ADR.md) | 설계 결정과 각각의 근거·트레이드오프 |
-| [OpenSQL 조사](docs/OPENSQL_RESEARCH.md) | OpenSQL 공식 문서 조사 결과, 미확인 항목, 검증 계획 |
+| [OpenSQL 조사](docs/OPENSQL_RESEARCH.md) | 배포판 확정 사항, 공식 문서 조사 결과, 검증 계획 |
+| [OpenSQL 환경 구축](docs/SETUP_OPENSQL.md) | Rocky Linux 9.7 VM 준비부터 single 모드 설치·검증까지 |
 | [UI Guide](docs/UI_GUIDE.md) | 디자인 원칙, 화면 구성 |
 | [Contributing](CONTRIBUTING.md) | 개발 규약, 브랜치·커밋 컨벤션 |
 

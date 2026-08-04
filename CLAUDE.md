@@ -7,17 +7,21 @@
 | 파일 | 내용 | 언제 읽나 |
 |---|---|---|
 | `docs/PROJECT_CONTEXT.md` | 기업 요구사항, 1차 평가 기준, 설계 원칙 | 범위·우선순위를 판단할 때 |
-| `docs/OPENSQL_RESEARCH.md` | **OpenSQL 공식 문서 조사 결과** + 미확인 항목 + M0 검증 목록 | **인프라·접속·인덱스 관련 결정 전 반드시** |
+| `docs/OPENSQL_RESEARCH.md` | **§0 배포판 확정 사항** + 문서 조사 결과 + M0 검증 목록 | **인프라·접속·인덱스 관련 결정 전 반드시** |
 | `docs/ADR.md` | 설계 결정의 근거와 트레이드오프 | 설계 결정을 바꾸거나 추가할 때 |
 | `docs/ARCHITECTURE.md` | 스키마·트리거·워커·검색·HA 상세 | 구현할 때 |
+| `docs/SETUP_OPENSQL.md` | OpenSQL VM 구축 절차, 설치 후 검증 | 실 DB 환경을 만들거나 고칠 때 |
 | `docs/PRD.md`, `docs/UI_GUIDE.md` | 기능 범위, UI 규칙 | 화면·기능 작업 시 |
 
-> ⚠️ **OpenSQL은 단일 DBMS가 아니라 4컴포넌트 제품이다** — PostgreSQL 16(또는 14) + OpenHA Cluster Manager(Patroni) + OpenHA DCS(etcd) + **OpenProxy**(Rust 커넥션 풀러, VRRP VIP). 일반 PostgreSQL 관례로 추론하지 말고 `docs/OPENSQL_RESEARCH.md`를 먼저 확인할 것. 이 문서를 읽지 않아 ADR-006을 한 번 틀리게 썼다.
+> ⚠️ **OpenSQL은 단일 DBMS가 아니라 4컴포넌트 제품이다** — PostgreSQL **17.8** + OpenHA Cluster Manager(Patroni 4.0.5) + OpenHA DCS(etcd 3.6.5) + **OpenProxy**(Rust 커넥션 풀러, VRRP VIP, 1.1.3). 일반 PostgreSQL 관례로 추론하지 말고 `docs/OPENSQL_RESEARCH.md`를 먼저 확인할 것.
+>
+> **추론으로 두 번 틀렸다.** ① 이 4컴포넌트 구조를 모르고 ADR-006을 썼다. ② 공식 문서에 "16.8 또는 14.13"으로 적혀 있어 둘 중 하나로 추정했으나 **실제 배포판은 17.8**이었다 — 후보 둘 다 틀렸다. 버전·구성은 반드시 `OPENSQL_RESEARCH.md` §0(배포판 확정 사항)을 근거로 삼을 것.
 
 ## 기술 스택
 - 백엔드: Python 3.12+, FastAPI, psycopg3 (+psycopg_pool), pytest
 - 프론트엔드: Next.js (App Router), TypeScript strict mode, Tailwind CSS
-- DB: Tmax OpenSQL v3 (PostgreSQL 16 + pgvector·pgvectorscale 번들). 애플리케이션은 **OpenProxy VIP:6432** 경유. 로컬 개발은 `pgvector/pgvector:pg16` 단일 컨테이너 (OpenSQL 공식 Docker 배포판 없음)
+- DB: Tmax OpenSQL v3 (PostgreSQL **17.8** + **pgvector 0.8.1** · pgvectorscale 0.9.0 번들). 애플리케이션은 **OpenProxy:6432** 경유. 대회 지시에 따라 **single 구성**이며 VIP failover는 비활성이다 (ADR-020)
+- 개발 환경 2단: 일상 개발은 `pgvector/pgvector:pg17` 컨테이너, OpenSQL 고유 동작 확인은 Rocky Linux 9.7 **x86-64 VM** (`docs/SETUP_OPENSQL.md`). OpenSQL은 x86-64 전용이라 Apple Silicon에서는 에뮬레이션이 필요하므로 **DB만 VM에 두고 API·워커·프론트는 맥 네이티브로** 돌린다
 - 임베딩: sentence-transformers **`BAAI/bge-m3`** (MIT, 1024차원) 단일. 테스트용 `FakeProvider`만 예외. **상용 API 모델 금지** — 대회 규정 (ADR-003)
 - MCP 서버: Python `mcp` SDK (FastMCP, stdio transport)
 
@@ -40,7 +44,7 @@
 - CRITICAL: 새 기능 구현 시 반드시 테스트를 먼저 작성하고, 테스트가 통과하는 구현을 작성할 것 (TDD). Python도 동일 적용 (`backend/tests/test_*.py`).
 - CRITICAL: 테스트를 통과시키려고 검증 로직을 약화하거나, 실패하는 테스트를 skip·주석 처리·삭제하지 마라. `assert True` 같은 무의미한 assertion, 예외만 잡고 아무것도 검증하지 않는 패턴도 금지. 이유: tdd-guard 훅은 테스트 파일의 "존재"만 확인하므로 빈 껍데기 테스트로 우회된다.
 - CRITICAL: 마이그레이션 SQL도 TDD 대상이다. `*_triggers.sql`·`*_tables.sql`은 tdd-guard 훅이 대응 테스트(`backend/tests/test_triggers.py`, `test_tables.py`)를 요구한다. `*_extensions.sql`·`*_indexes.sql`은 훅에서 제외되지만, 인덱스가 검색 계획에 실제로 쓰이는지 확인이 필요하면 테스트를 직접 추가하라.
-- CRITICAL: DB 의존 테스트를 Mock·SQLite·인메모리 가짜 구현으로 대체하지 마라. 실제 `pgvector/pgvector:pg16` 컨테이너에 마이그레이션을 적용한 상태로 검증한다. 이유: 트리거·NOTIFY·`vector` 연산자 동작은 원리상 Mock으로 검증할 수 없고, 그것이 이 과제의 심사 핵심이다.
+- CRITICAL: DB 의존 테스트를 Mock·SQLite·인메모리 가짜 구현으로 대체하지 마라. 실제 `pgvector/pgvector:pg17` 컨테이너에 마이그레이션을 적용한 상태로 검증한다. 이유: 트리거·NOTIFY·`vector` 연산자 동작은 원리상 Mock으로 검증할 수 없고, 그것이 이 과제의 심사 핵심이다.
 - 검증 명령(`bash scripts/check.sh`)을 실행하지 못했다면 추측으로 통과 처리하지 말고, 실행하지 못한 이유와 영향 범위를 응답에 명시하라.
 - 커밋은 Conventional Commits `<type>(<scope>): <설명>` 형식. 타입: `feat` `fix` `docs` `test` `refactor` `chore` `ci` `perf` / 스코프: `db` `worker` `api` `search` `mcp` `frontend` `adr` `harness`(`scripts/execute.py`·`.claude/commands/harness.md`)
 - 브랜치는 `feat/` `fix/` `docs/` `test/` `chore/` 5개 접두사만 사용. `main` 단일 기본 브랜치에 Squash merge (ADR-013)

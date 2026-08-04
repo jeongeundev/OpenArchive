@@ -15,7 +15,7 @@
                   └───────────────┬──────────────────────────────┘
                                   ▼
                   ┌──────────────────────────────────────────────┐
-                  │  openSQL 클러스터 (PostgreSQL 16 + pgvector)  │
+                  │  openSQL 클러스터 (PostgreSQL 17 + pgvector)  │
                   │  documents ──AFTER trigger──▶ embedding_jobs  │
                   │  (같은 트랜잭션에 잡 기록 = 트랜잭셔널 아웃박스) │
                   │  document_chunks (vector(1024), HNSW)         │
@@ -283,7 +283,7 @@ COMMIT;
               ▼                ▼                ▼
         ┌──────────┐    ┌──────────┐    ┌──────────┐
         │ Node 1   │    │ Node 2   │    │ Node 3   │
-        │ PG16     │    │ PG16     │    │ PG16     │
+        │ PG17     │    │ PG17     │    │ PG17     │
         │ OpenHA   │    │ OpenHA   │    │ OpenHA   │
         │          │    │ OpenProxy│    │ OpenProxy│
         └────┬─────┘    └────┬─────┘    └────┬─────┘
