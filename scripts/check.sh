@@ -11,8 +11,11 @@ ROOT="${CLAUDE_PROJECT_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
 FAILED=0
 
 if [ -f "$ROOT/backend/pyproject.toml" ]; then
+  cd "$ROOT/backend" || exit 1
+  echo "== backend: ruff =="
+  ruff check . || FAILED=1
   echo "== backend: pytest =="
-  cd "$ROOT/backend" && pytest || FAILED=1
+  pytest || FAILED=1
 else
   echo "== backend: 건너뜀 (backend/pyproject.toml 없음) =="
 fi

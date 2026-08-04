@@ -49,6 +49,7 @@ docker compose up -d                 # 로컬 DB (pgvector 컨테이너)
 pip install -e ".[dev]"              # 의존성 설치
 uvicorn app.main:app --reload        # API 개발 서버
 python -m app.worker                 # 임베딩 워커 (별도 프로세스)
+ruff check .                         # 린트
 pytest                               # 테스트
 
 # 프론트엔드 (frontend/ 에서)

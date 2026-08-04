@@ -41,7 +41,7 @@ OpenSQL/
 ├── docker-compose.yml            # 로컬 개발용 pgvector 컨테이너
 ├── scripts/check.sh              # 통합 검증 (backend lint+test, frontend lint+test+build)
 ├── backend/
-│   ├── pyproject.toml            # fastapi, psycopg[binary,pool], pydantic-settings, pypdf, python-docx, pytest
+│   ├── pyproject.toml            # fastapi, psycopg[binary,pool], pydantic-settings, pypdf, python-docx / [dev]: pytest, ruff
 │   ├── migrations/               # 001_extensions.sql, 002_tables.sql, 003_triggers.sql, 004_indexes.sql
 │   ├── app/
 │   │   ├── main.py               # FastAPI 앱 조립
