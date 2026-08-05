@@ -48,10 +48,10 @@ describe("DocumentMeta", () => {
     );
   });
 
-  it("모든 태그를 표시한다", () => {
+  it("편집기와 중복되지 않도록 태그를 표시하지 않는다", () => {
     render(<DocumentMeta document={document} />);
 
-    expect(screen.getByText("OpenSQL")).toBeInTheDocument();
-    expect(screen.getByText("운영")).toBeInTheDocument();
+    expect(screen.queryByText("OpenSQL")).not.toBeInTheDocument();
+    expect(screen.queryByText("운영")).not.toBeInTheDocument();
   });
 });

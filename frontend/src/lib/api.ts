@@ -132,6 +132,14 @@ export function editDocument(
   );
 }
 
+export function updateTags(id: string, tags: string[]): Promise<DocumentSummary> {
+  return request<DocumentSummary>(`/api/documents/${encodeURIComponent(id)}/tags`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ tags }),
+  });
+}
+
 export function deleteDocument(id: string): Promise<void> {
   return request<void>(
     `/api/documents/${encodeURIComponent(id)}`,

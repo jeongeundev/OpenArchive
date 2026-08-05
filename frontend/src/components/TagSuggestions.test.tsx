@@ -1,9 +1,16 @@
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { updateTags } from "@/lib/api";
 import { TagSuggestions } from "./TagSuggestions";
 
+vi.mock("@/lib/api", () => ({ updateTags: vi.fn() }));
+
 describe("TagSuggestions", () => {
+  beforeEach(() => {
+    vi.mocked(updateTags).mockReset();
+  });
+
   it("추천 태그를 읽기 전용 칩과 빈도로 표시한다", () => {
     render(
       <TagSuggestions
@@ -37,5 +44,34 @@ describe("TagSuggestions", () => {
     );
 
     expect(screen.getByText("추천할 태그가 없습니다.")).toBeInTheDocument();
+  });
+
+  it("추천 태그 클릭 시 전체 태그를 저장하고 문서와 추천을 갱신한다", async () => {
+    vi.mocked(updateTags).mockResolvedValue({} as never);
+    const refreshDocument = vi.fn();
+    const refreshSuggestions = vi.fn();
+
+    render(
+      <TagSuggestions
+        onApply={async (tag) => {
+          await updateTags("document-1", ["OpenSQL", tag]);
+          refreshDocument();
+          refreshSuggestions();
+        }}
+        response={{
+          items: [{ tag: "pgvector", freq: 2 }],
+          based_on_version: 2,
+          reason: null,
+        }}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "pgvector 태그 적용" }));
+
+    await waitFor(() => {
+      expect(updateTags).toHaveBeenCalledWith("document-1", ["OpenSQL", "pgvector"]);
+    });
+    expect(refreshDocument).toHaveBeenCalledOnce();
+    expect(refreshSuggestions).toHaveBeenCalledOnce();
   });
 });

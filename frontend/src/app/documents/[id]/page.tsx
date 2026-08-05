@@ -6,11 +6,13 @@ import { use, useState } from "react";
 import { DocumentActions } from "@/components/DocumentActions";
 import { DocumentMeta } from "@/components/DocumentMeta";
 import { RelatedDocuments } from "@/components/RelatedDocuments";
+import { TagEditor } from "@/components/TagEditor";
 import { TagSuggestions } from "@/components/TagSuggestions";
 import { TextEditor } from "@/components/TextEditor";
 import { VersionHistory } from "@/components/VersionHistory";
 import { useDocument } from "@/lib/useDocument";
 import { useRelated } from "@/lib/useRelated";
+import { ApiError, updateTags } from "@/lib/api";
 import { getCurrentUser } from "@/lib/user";
 
 export default function DocumentDetailPage({
@@ -22,11 +24,31 @@ export default function DocumentDetailPage({
   const { document, loading, error, refresh } = useDocument(id);
   const relatedData = useRelated(id, document?.chunk_version ?? null);
   const [editing, setEditing] = useState(false);
+  const [tagApplyError, setTagApplyError] = useState<string | null>(null);
+  const [applyingTag, setApplyingTag] = useState(false);
   const anonymous = getCurrentUser() === null;
 
   if (loading) return <p className="text-sm text-neutral-500">불러오는 중…</p>;
   if (document === null) {
     return <p className="text-sm text-neutral-500">{error ?? "문서를 찾을 수 없습니다."}</p>;
+  }
+  const currentTags = document.tags;
+
+  async function applyTag(tag: string): Promise<void> {
+    if (applyingTag) return;
+    setApplyingTag(true);
+    setTagApplyError(null);
+    try {
+      await updateTags(id, [...currentTags, tag]);
+      refresh();
+      relatedData.refresh();
+    } catch (reason: unknown) {
+      setTagApplyError(
+        reason instanceof ApiError ? reason.detail : "추천 태그를 적용하지 못했습니다.",
+      );
+    } finally {
+      setApplyingTag(false);
+    }
   }
 
   return (
@@ -41,6 +63,16 @@ export default function DocumentDetailPage({
         disabled={anonymous || editing}
         document={document}
         onChanged={refresh}
+      />
+
+      <TagEditor
+        disabled={anonymous || editing}
+        document={document}
+        key={`${document.id}:${document.tags.join("\u0000")}`}
+        onSaved={() => {
+          refresh();
+          relatedData.refresh();
+        }}
       />
 
       <TextEditor
@@ -64,7 +96,10 @@ export default function DocumentDetailPage({
       )}
 
       {relatedData.suggestions !== null ? (
-        <TagSuggestions response={relatedData.suggestions} />
+        <TagSuggestions
+          onApply={anonymous || editing || applyingTag ? undefined : applyTag}
+          response={relatedData.suggestions}
+        />
       ) : (
         <section className="space-y-3">
           <h2 className="text-sm font-medium text-neutral-400">태그 추천</h2>
@@ -73,6 +108,10 @@ export default function DocumentDetailPage({
           </p>
         </section>
       )}
+
+      {tagApplyError !== null ? (
+        <p className="text-sm text-[#ef4444]">{tagApplyError}</p>
+      ) : null}
 
       {relatedData.error !== null ? (
         <p className="text-sm text-neutral-500" role="status">
