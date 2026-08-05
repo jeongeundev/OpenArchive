@@ -13,10 +13,11 @@ TEST_DB_NAME = "openarchive_test"
 
 
 def swap_dbname(dsn: str, dbname: str) -> str:
-    """DSN에서 데이터베이스 이름만 바꾼다.
+    """DSN에서 데이터베이스 이름만 바꾼다 — 호스트·포트·자격증명은 그대로 물려받는다.
 
-    호스트·포트·자격증명을 그대로 물려받으므로, DSN을 OpenProxy VIP(:6432)로
-    바꿔도 테스트 하네스는 그대로 동작한다 (ADR-006).
+    로컬 컨테이너 전제다. OpenProxy 경유 DSN에서는 dbname 자리가 데이터베이스가 아니라
+    **pool_name**이므로(`.env.example` 참조) 이 치환이 존재하지 않는 풀을 가리키고,
+    transaction pooling 위에서 CREATE/DROP DATABASE가 도는지도 확인된 바 없다.
     """
     params = conninfo_to_dict(dsn)
     params["dbname"] = dbname

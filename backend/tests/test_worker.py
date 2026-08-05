@@ -14,20 +14,27 @@ UPDATE해 상황을 만든다. 5분을 기다리는 테스트는 존재할 수 �
 """
 
 import asyncio
+import contextlib
+import threading
 
 import psycopg
 import pytest
 
+from app.config import get_settings
+from app.db import close_pool
 from app.embeddings import FakeProvider
 from app.services.chunking import chunk_text
 from app.worker import (
+    CHANNEL,
     MAX_ATTEMPTS,
+    _listen_for_jobs,
     claim_job,
     drain,
     fail_job,
     finalize_job,
     load_document,
     process_once,
+    run_worker,
     sweep_zombies,
 )
 
@@ -45,6 +52,25 @@ class ExplodingProvider:
 
     def embed(self, texts: list[str]) -> list[list[float]]:
         raise RuntimeError("모델 추론 실패를 재현한다")
+
+
+class BlockingProvider:
+    """embed에서 멈춰 서는 프로바이더 — 워커를 처리 **도중**에 붙잡아 둔다.
+
+    embed는 asyncio.to_thread로 도는 동기 함수라 threading.Event로 막는다.
+    """
+
+    name = "blocking"
+    dimension = 1024
+
+    def __init__(self) -> None:
+        self.entered = threading.Event()
+        self.release = threading.Event()
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        self.entered.set()
+        self.release.wait(timeout=10)
+        return FakeProvider().embed(texts)
 
 
 @pytest.fixture
@@ -111,6 +137,21 @@ async def document_state(conn, doc_id) -> tuple:
         "SELECT version, embedding_status FROM documents WHERE id = %s", (doc_id,)
     )
     return await cur.fetchone()
+
+
+async def wait_until(predicate, message: str, timeout: float = 20.0) -> None:
+    """백그라운드 태스크가 만든 효과를 기다린다 — 조건이 설 때까지 짧게 폴링한다.
+
+    run_worker·_listen_for_jobs는 끝나지 않는 루프라 `await`로 결과를 받을 수 없다.
+    관측 가능한 결과가 나타났는지를 바깥에서 확인하는 것이 유일한 방법이다.
+    """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while loop.time() < deadline:
+        if await predicate():
+            return
+        await asyncio.sleep(0.05)
+    raise AssertionError(message)
 
 
 async def test_claim_marks_job_and_document_processing_and_commits(conn, other_conn):
@@ -289,6 +330,35 @@ async def test_competing_workers_converge_on_the_latest_version(conn, other_conn
     assert [j[0] for j in await job_rows(conn, doc_id)] == ["done", "done"]
 
 
+async def test_chunk_version_comes_from_finalize_not_from_load(conn, other_conn):
+    """본문이 A → B → A로 돌아오면 content_hash는 원래대로지만 version은 2 올라 있다.
+
+    이때 version을 load 시점에 읽으면 해시 재확인은 통과하는데 청크에는 낡은 version이
+    박힌다. 그러면 정합성 검증(`c.version <> d.version`)과 /admin/status 카운터가
+    "어긋난 청크가 없다"고 거짓 보고한다 — 지표가 무의미해지는 것이지 에러가 나지 않아
+    더 위험하다. 그래서 version은 finalize의 `FOR UPDATE` 아래에서 읽은 값이어야 한다
+    (이슈 #6 ⚠️, ARCHITECTURE "워커 처리 루프" 3번).
+    """
+    doc_id = await insert_document(conn)
+    job = await claim_job(conn)
+    content, content_hash = await load_document(conn, job.document_id)
+    version_at_load = (await document_state(conn, doc_id))[0]
+    chunks = chunk_text(content)
+    vectors = FakeProvider().embed(chunks)
+
+    # 본문이 떠났다가 그대로 돌아온다 — 해시 재확인은 통과하고 version만 2 오른다.
+    await edit_document(other_conn, doc_id, DOC_V2, "sha256:v2")
+    await edit_document(other_conn, doc_id, DOC_V1, "sha256:v1")
+
+    assert await finalize_job(conn, job, content_hash, chunks, vectors) is True
+
+    version, status = await document_state(conn, doc_id)
+    assert (version, status) == (version_at_load + 2, "ready")
+    rows = await chunk_rows(conn, doc_id)
+    assert [r[1] for r in rows] == chunk_text(DOC_V1)
+    assert all(r[2] == version for r in rows)  # load 시점의 version(1)이면 안 된다
+
+
 async def test_deleting_the_document_mid_processing_is_harmless(conn, other_conn):
     """삭제 정합성 — 처리 도중 문서가 삭제되면 finalize는 예외 없이 0건으로 끝난다.
 
@@ -375,6 +445,27 @@ async def test_fail_job_yields_to_a_newer_pending_job(conn, other_conn):
     assert "낡은 잡의 실패" in jobs[0][2]
 
 
+async def test_exhausted_retries_yield_to_a_newer_job_without_flagging_an_error(conn, other_conn):
+    """재시도가 소진된 시점에 새 pending 잡이 있으면 문서를 error로 떨어뜨리지 않는다.
+
+    이 잡은 낡은 내용을 보고 있었으므로 수명이 끝난 것이지 문서가 실패한 것이 아니다.
+    최신 내용은 새 잡이 처리해 곧 ready로 수렴하는데, 소진 검사를 pending 검사보다
+    먼저 하면 그 사이 사용자에게 거짓 error 배지가 뜬다.
+    """
+    doc_id = await insert_document(conn)
+    job = await claim_job(conn)
+    # 백오프를 기다리지 않는다 — 소진 직전 상태를 attempts로 직접 만든다.
+    await conn.execute(
+        "UPDATE embedding_jobs SET attempts = %s WHERE id = %s", (MAX_ATTEMPTS, job.job_id)
+    )
+    await edit_document(other_conn, doc_id, DOC_V2, "sha256:v2")  # 새 pending 잡
+
+    await fail_job(conn, job, RuntimeError("소진 시점의 실패"))
+
+    assert [j[0] for j in await job_rows(conn, doc_id)] == ["done", "pending"]
+    assert (await document_state(conn, doc_id))[1] != "error"
+
+
 async def test_sweep_returns_old_processing_jobs_to_pending(conn):
     """좀비 회수 — 임계(5분)를 넘긴 processing 잡만 pending으로 되돌린다.
 
@@ -418,6 +509,34 @@ async def test_sweep_completes_a_zombie_whose_document_moved_on(conn, other_conn
     assert [j[0] for j in await job_rows(conn, doc_id)] == ["done", "pending"]
 
 
+async def test_sweep_waits_for_an_uncommitted_edit_before_deciding(conn, other_conn):
+    """좀비 판정도 실패 처리와 똑같이 **문서 행을 잠근 뒤** 한다
+    (ARCHITECTURE "워커 처리 루프" 4·5번 공통 예외).
+
+    잠그지 않으면 "새 pending 잡이 있는가"를 statement 스냅샷으로 판정하게 되어, 아직
+    커밋되지 않은 수정이 만든 잡을 놓치고 좀비를 pending으로 되돌린다. 그 UPDATE는
+    uq_pending_job_per_doc의 미확정 인덱스 항목에서 대기하다가 상대가 커밋되는 순간
+    UniqueViolation으로 터지고, run_worker의 except가 그것을 삼켜 그 주기의 drain이
+    통째로 스킵된다. test_sweep_completes_a_zombie_whose_document_moved_on은 수정이
+    이미 커밋된 뒤라 이 경합을 재현하지 못한다.
+    """
+    doc_id = await insert_document(conn)
+    zombie = await claim_job(conn)
+    await conn.execute(
+        "UPDATE embedding_jobs SET started_at = now() - interval '10 minutes' WHERE id = %s",
+        (zombie.job_id,),
+    )
+
+    async with other_conn.transaction():
+        # 커밋 전이라 스윕의 스냅샷에는 새 잡이 보이지 않는다 — 문서 잠금만이 이것을 막는다.
+        await edit_document(other_conn, doc_id, DOC_V2, "sha256:v2")
+        sweep = asyncio.create_task(sweep_zombies(conn))
+        await asyncio.sleep(0.2)  # 스윕이 문서 잠금까지 도달할 시간을 준다
+
+    assert await asyncio.wait_for(sweep, timeout=5) == 0  # 되돌린 것이 없다
+    assert [j[0] for j in await job_rows(conn, doc_id)] == ["done", "pending"]
+
+
 async def test_polling_drain_handles_multiple_documents_without_listen(conn):
     """폴링만으로 동작한다 (ADR-009) — drain 한 번이 쌓인 잡을 전부 비운다."""
     ids = [
@@ -429,3 +548,118 @@ async def test_polling_drain_handles_multiple_documents_without_listen(conn):
     for doc_id in ids:
         assert (await document_state(conn, doc_id))[1] == "ready"
         assert [j[0] for j in await job_rows(conn, doc_id)] == ["done"]
+
+
+async def test_run_worker_drains_a_new_document_end_to_end(migrated_db, conn, monkeypatch):
+    """워커 진입점 자체를 태운다 — 풀 배선·기동 시 스윕·드레인·프로바이더 선택까지.
+
+    위 테스트들은 전부 픽스처가 만든 커넥션 위에서 워커 함수를 직접 부른다. run_worker의
+    루프와 풀 배선은 여기서만 지나간다. autocommit 계약은 **결과만 봐서는 드러나지
+    않는다** — 없어도 풀 반납 시점에 전부 커밋되어 문서는 결국 ready가 된다. 그래서
+    아래 test_run_worker_holds_no_open_transaction_while_embedding이 따로 본다.
+    """
+    monkeypatch.setenv("DATABASE_URL", migrated_db)
+    monkeypatch.setenv("EMBEDDING_PROVIDER", "fake")
+    get_settings.cache_clear()
+    await close_pool()  # 앞선 테스트가 다른 DSN으로 열어둔 풀을 물려받지 않는다
+
+    doc_id = await insert_document(conn)
+
+    worker = asyncio.create_task(run_worker())
+    try:
+        await wait_until(
+            lambda: _is_ready(conn, doc_id),
+            message="run_worker가 문서를 ready로 만들지 못했다",
+        )
+    finally:
+        worker.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await worker
+        await close_pool()
+
+    assert [r[1] for r in await chunk_rows(conn, doc_id)] == chunk_text(DOC_V1)
+    assert [j[0] for j in await job_rows(conn, doc_id)] == ["done"]
+
+
+async def test_run_worker_holds_no_open_transaction_while_embedding(
+    migrated_db, conn, other_conn, monkeypatch
+):
+    """워커는 풀 커넥션을 autocommit으로 세운다 — 임베딩 중 열린 트랜잭션이 없어야 한다.
+
+    autocommit이 아니면 load_document의 SELECT가 암묵 트랜잭션을 열고, 그 뒤의
+    `transaction()` 블록이 전부 SAVEPOINT로 바뀌어 claim의 "즉시 커밋"이 사라진다.
+    그러면 임베딩이 도는 수 초 동안 잡 행 잠금이 유지되어 다른 워커의 claim이 막힌다.
+    실제로 그 줄을 지워도 위의 end-to-end 테스트는 통과한다 — 드레인이 끝나면 풀 반납
+    시점에 어차피 커밋되기 때문이다. 처리 **도중**의 상태를 봐야만 드러난다.
+    """
+    provider = BlockingProvider()
+    monkeypatch.setattr("app.worker.get_provider", lambda: provider)
+    monkeypatch.setenv("DATABASE_URL", migrated_db)
+    get_settings.cache_clear()
+    await close_pool()
+
+    doc_id = await insert_document(conn)
+
+    worker = asyncio.create_task(run_worker())
+    try:
+        await wait_until(
+            lambda: _embedding_started(provider), message="워커가 임베딩에 진입하지 않았다"
+        )
+        assert await _idle_in_transaction_backends(other_conn) == 0
+        # 같은 이유의 관측 가능한 결과 — claim이 이미 커밋되어 다른 커넥션에서 보인다.
+        assert [j[0] for j in await job_rows(other_conn, doc_id)] == ["processing"]
+    finally:
+        provider.release.set()
+        worker.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await worker
+        await close_pool()
+
+
+async def test_listen_wakes_the_worker_on_the_trigger_notify(migrated_db, conn):
+    """LISTEN 최적화의 **수신** 쪽 (ADR-009). 발행 쪽은 test_triggers.py가 본다.
+
+    깨우기에 실패해도 파이프라인은 폴링으로 계속 동작한다 — 바로 그래서 이 경로가
+    조용히 죽어도 다른 어떤 테스트도 붉어지지 않는다.
+    """
+    wake = asyncio.Event()
+    listener = asyncio.create_task(_listen_for_jobs(migrated_db, wake))
+    try:
+        # 등록 전에 알림을 쏘면 그 알림은 사라진다 — 먼저 등록을 확인한다.
+        await wait_until(
+            lambda: _listen_is_registered(conn), message="LISTEN이 등록되지 않았다", timeout=10.0
+        )
+        await insert_document(conn)
+
+        await asyncio.wait_for(wake.wait(), timeout=5)
+    finally:
+        listener.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await listener
+
+
+async def _is_ready(conn, doc_id) -> bool:
+    return (await document_state(conn, doc_id))[1] == "ready"
+
+
+async def _embedding_started(provider: "BlockingProvider") -> bool:
+    return provider.entered.is_set()
+
+
+async def _idle_in_transaction_backends(conn) -> int:
+    """열린 트랜잭션을 쥔 채 노는 백엔드 수. 테스트 커넥션은 전부 autocommit이라 0이다."""
+    cur = await conn.execute(
+        "SELECT count(*) FROM pg_stat_activity"
+        " WHERE datname = current_database() AND state = 'idle in transaction'"
+    )
+    return (await cur.fetchone())[0]
+
+
+async def _listen_is_registered(conn) -> bool:
+    """다른 세션이 채널에 LISTEN을 걸었는지 본다 (idle 백엔드의 마지막 쿼리로 판별)."""
+    cur = await conn.execute(
+        "SELECT count(*) FROM pg_stat_activity"
+        " WHERE datname = current_database() AND query = %s",
+        (f"LISTEN {CHANNEL}",),
+    )
+    return (await cur.fetchone())[0] > 0

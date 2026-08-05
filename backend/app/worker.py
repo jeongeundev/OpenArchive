@@ -171,6 +171,28 @@ async def fail_job(conn: psycopg.AsyncConnection, job: ClaimedJob, error: Except
             return  # 문서 삭제 — 잡도 CASCADE로 소멸했으니 남길 것이 없다
 
         cur = await conn.execute(
+            "SELECT 1 FROM embedding_jobs WHERE document_id = %s AND status = 'pending'",
+            (job.document_id,),
+        )
+        if await cur.fetchone() is not None:
+            # 처리 중 문서가 수정되어 새 pending 잡이 생겼다. 이 잡을 pending으로 되돌리면
+            # 문서당 pending 1개 제약에 걸리고, 어차피 새 잡이 최신 내용으로 처리한다.
+            # finalize의 낡은 결과 폐기와 같은 원칙으로 마감한다.
+            #
+            # 재시도 소진 검사보다 **먼저** 본다. 이 잡은 낡은 내용을 보고 있었으므로
+            # 수명이 끝난 것이지 문서가 실패한 것이 아니다. 순서를 뒤집으면 소진 시점에
+            # 문서가 error로 떨어져, 새 잡이 ready로 되돌릴 때까지 거짓 배지가 뜬다.
+            await conn.execute(
+                """
+                UPDATE embedding_jobs
+                   SET status = 'done', last_error = %s, finished_at = now()
+                 WHERE id = %s
+                """,
+                (message, job.job_id),
+            )
+            return
+
+        cur = await conn.execute(
             "SELECT attempts FROM embedding_jobs WHERE id = %s", (job.job_id,)
         )
         (attempts,) = await cur.fetchone()  # 문서가 있으면 잡도 있다 (삭제 경로는 CASCADE뿐)
@@ -187,24 +209,6 @@ async def fail_job(conn: psycopg.AsyncConnection, job: ClaimedJob, error: Except
             await conn.execute(
                 "UPDATE documents SET embedding_status = 'error' WHERE id = %s",
                 (job.document_id,),
-            )
-            return
-
-        cur = await conn.execute(
-            "SELECT 1 FROM embedding_jobs WHERE document_id = %s AND status = 'pending'",
-            (job.document_id,),
-        )
-        if await cur.fetchone() is not None:
-            # 처리 중 문서가 수정되어 새 pending 잡이 생겼다. 이 잡을 pending으로 되돌리면
-            # 문서당 pending 1개 제약에 걸리고, 어차피 새 잡이 최신 내용으로 처리한다.
-            # finalize의 낡은 결과 폐기와 같은 원칙으로 마감한다.
-            await conn.execute(
-                """
-                UPDATE embedding_jobs
-                   SET status = 'done', last_error = %s, finished_at = now()
-                 WHERE id = %s
-                """,
-                (message, job.job_id),
             )
             return
 
@@ -227,6 +231,24 @@ async def sweep_zombies(conn: psycopg.AsyncConnection) -> int:
     MAX_ATTEMPTS가 무의미해진다.
     """
     async with conn.transaction():
+        # 판정 전에 대상 문서 행을 잠근다 — fail_job과 같은 이유다 (ARCHITECTURE 4·5번
+        # 공통 예외). 잡 생성은 전부 documents 변경 트리거 안에서 일어나므로, 이 잠금이
+        # 아래 두 UPDATE의 (NOT) EXISTS 판정과 상태 기록 사이에 새 pending 잡이 커밋되는
+        # 것을 막는다. 잠그지 않으면 READ COMMITTED의 statement 스냅샷 탓에 그 잡을 놓쳐
+        # 좀비를 pending으로 되돌리고, uq_pending_job_per_doc 위반으로 스윕이 통째로 터진다.
+        # 잡보다 문서를 먼저 잠그는 순서가 문서 수정 트랜잭션과의 교착도 함께 없앤다.
+        await conn.execute(
+            """
+            SELECT 1 FROM documents
+             WHERE id IN (SELECT document_id FROM embedding_jobs
+                           WHERE status = 'processing'
+                             AND started_at < now() - make_interval(mins => %s))
+             ORDER BY id
+               FOR UPDATE
+            """,
+            (ZOMBIE_TIMEOUT_MINUTES,),
+        )
+
         # 문서가 이미 수정되어 새 pending 잡이 있는 좀비는 pending 복귀가 문서당
         # pending 1개 제약에 걸린다 — 새 잡이 최신 내용으로 처리하므로 done으로 마감한다.
         await conn.execute(
