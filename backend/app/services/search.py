@@ -19,7 +19,7 @@ MAX_K = 20
 
 SEARCH_SQL = f"""
 WITH candidates AS (
-    SELECT c.document_id, c.chunk_index, c.content,
+    SELECT c.document_id, c.chunk_index, c.content, c.version,
            c.embedding <=> %(qvec)s::vector AS dist
     FROM document_chunks c
     JOIN documents d ON d.id = c.document_id
@@ -34,8 +34,8 @@ best_per_doc AS (
     FROM candidates
     ORDER BY document_id, dist
 )
-SELECT d.id, d.title, d.tags, d.content_type,
-       b.chunk_index, b.content, 1 - b.dist AS score
+SELECT d.id, d.title, d.filename, d.tags, d.content_type,
+       b.chunk_index, b.content, 1 - b.dist AS score, b.version
 FROM best_per_doc b
 JOIN documents d ON d.id = b.document_id
 ORDER BY b.dist
@@ -47,11 +47,13 @@ LIMIT %(k)s
 class SearchHit:
     document_id: UUID
     title: str
+    filename: str | None
     tags: list[str]
     content_type: str
     chunk_index: int
     content: str
     score: float
+    based_on_version: int
 
 
 async def search_documents(
@@ -91,11 +93,13 @@ async def search_documents(
         SearchHit(
             document_id=row[0],
             title=row[1],
-            tags=row[2],
-            content_type=row[3],
-            chunk_index=row[4],
-            content=row[5],
-            score=float(row[6]),
+            filename=row[2],
+            tags=row[3],
+            content_type=row[4],
+            chunk_index=row[5],
+            content=row[6],
+            score=float(row[7]),
+            based_on_version=row[8],
         )
         for row in rows
     ]

@@ -12,6 +12,7 @@ dependencies = [
     "uvicorn[standard]",
     "psycopg[binary,pool]",
     "pydantic-settings",
+    "mcp<2",
     # 문서 파싱 — 업로드 phase에서 services/parsing.py가 사용한다.
     "pypdf",
     "python-docx",
@@ -33,8 +34,8 @@ dev = [
 local = ["sentence-transformers"]
 
 [tool.setuptools.packages.find]
-# tests는 설치 대상이 아니다. 배포되는 것은 app 패키지뿐이다.
-include = ["app*"]
+# tests는 설치 대상이 아니다. app과 MCP 서버 패키지만 배포한다.
+include = ["app*", "mcp_server*"]
 
 [tool.ruff]
 target-version = "py312"
