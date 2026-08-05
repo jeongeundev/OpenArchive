@@ -22,7 +22,8 @@
     },
     {
       "dir": "m4-mcp-gateway",
-      "status": "pending"
+      "status": "completed",
+      "completed_at": "2026-08-06T03:26:03+0900"
     }
   ]
 }
