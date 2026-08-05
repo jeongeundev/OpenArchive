@@ -540,6 +540,7 @@ class TestInvokeClaude:
         assert data["step"] == 2
         assert data["name"] == "ui"
         assert data["exitCode"] == 0
+        assert data["agent"] == "claude"
 
     def test_nonexistent_step_file_exits(self, executor):
         step = {"step": 99, "name": "nonexistent"}
@@ -555,6 +556,170 @@ class TestInvokeClaude:
             executor._invoke_claude(step, "preamble")
 
         assert mock_run.call_args[1]["timeout"] == 1800
+
+
+# ---------------------------------------------------------------------------
+# 스텝 세션 모델 지정
+# ---------------------------------------------------------------------------
+
+class TestModelSelection:
+    def test_default_model_is_opus(self, executor):
+        assert executor._model == "opus"
+
+    def test_constructor_accepts_model(self, tmp_project, phase_dir):
+        with patch.object(ex, "ROOT", tmp_project):
+            inst = ex.StepExecutor("0-mvp", model="sonnet")
+        assert inst._model == "sonnet"
+
+    def test_invoke_passes_model_flag(self, executor):
+        executor._model = "sonnet"
+        mock_result = MagicMock(returncode=0, stdout="{}", stderr="")
+
+        with patch("subprocess.run", return_value=mock_result) as mock_run:
+            executor._invoke_claude({"step": 2, "name": "ui"}, "preamble")
+
+        cmd = mock_run.call_args[0][0]
+        assert "--model" in cmd
+        assert cmd[cmd.index("--model") + 1] == "sonnet"
+
+    def test_main_defaults_to_opus(self):
+        with patch("sys.argv", ["execute.py", "0-mvp"]):
+            with patch.object(ex, "StepExecutor") as mock_exec:
+                ex.main()
+        assert mock_exec.call_args[1]["model"] == "opus"
+
+    def test_main_passes_model_flag(self):
+        with patch("sys.argv", ["execute.py", "0-mvp", "--model", "haiku"]):
+            with patch.object(ex, "StepExecutor") as mock_exec:
+                ex.main()
+        assert mock_exec.call_args[1]["model"] == "haiku"
+
+
+# ---------------------------------------------------------------------------
+# _invoke_codex (mocked)
+# ---------------------------------------------------------------------------
+
+class TestInvokeCodex:
+    def test_invokes_codex_with_correct_args(self, executor):
+        mock_result = MagicMock(returncode=0, stdout='{"result": "ok"}', stderr="")
+        step = {"step": 2, "name": "ui"}
+        preamble = "PREAMBLE\n"
+
+        with patch("subprocess.run", return_value=mock_result) as mock_run:
+            executor._invoke_codex(step, preamble)
+
+        cmd = mock_run.call_args[0][0]
+        assert cmd[0] == "codex"
+        assert cmd[1] == "exec"
+        assert "--json" in cmd
+        assert "--dangerously-bypass-approvals-and-sandbox" in cmd
+        assert "PREAMBLE" in cmd[-1]
+        assert "UI를 구현하세요" in cmd[-1]
+
+    def test_saves_output_json(self, executor):
+        mock_result = MagicMock(returncode=0, stdout='{"ok": true}', stderr="")
+        step = {"step": 2, "name": "ui"}
+
+        with patch("subprocess.run", return_value=mock_result):
+            executor._invoke_codex(step, "preamble")
+
+        output_file = executor._phase_dir / "step2-output.json"
+        assert output_file.exists()
+        data = json.loads(output_file.read_text())
+        assert data["step"] == 2
+        assert data["name"] == "ui"
+        assert data["exitCode"] == 0
+        assert data["agent"] == "codex"
+
+    def test_nonexistent_step_file_exits(self, executor):
+        step = {"step": 99, "name": "nonexistent"}
+        with pytest.raises(SystemExit) as exc_info:
+            executor._invoke_codex(step, "preamble")
+        assert exc_info.value.code == 1
+
+    def test_timeout_is_1800(self, executor):
+        mock_result = MagicMock(returncode=0, stdout="{}", stderr="")
+        step = {"step": 2, "name": "ui"}
+
+        with patch("subprocess.run", return_value=mock_result) as mock_run:
+            executor._invoke_codex(step, "preamble")
+
+        assert mock_run.call_args[1]["timeout"] == 1800
+
+
+# ---------------------------------------------------------------------------
+# Codex 우선 + Claude 폴백 (sticky) — 코덱스 사용량 한도 도달 시
+# 이번 phase 실행이 끝날 때까지 남은 모든 step을 Claude로 처리한다.
+# ---------------------------------------------------------------------------
+
+class TestAgentFallback:
+    def test_default_active_agent_is_codex(self, executor):
+        assert executor._active_agent == "codex"
+
+    def test_invoke_agent_uses_codex_when_active(self, executor):
+        mock_result = MagicMock(returncode=0, stdout='{"ok": true}', stderr="")
+        with patch("subprocess.run", return_value=mock_result) as mock_run:
+            executor._invoke_agent({"step": 2, "name": "ui"}, "preamble")
+        assert mock_run.call_args[0][0][0] == "codex"
+
+    def test_invoke_agent_uses_claude_when_active(self, executor):
+        executor._active_agent = "claude"
+        mock_result = MagicMock(returncode=0, stdout='{"ok": true}', stderr="")
+        with patch("subprocess.run", return_value=mock_result) as mock_run:
+            executor._invoke_agent({"step": 2, "name": "ui"}, "preamble")
+        assert mock_run.call_args[0][0][0] == "claude"
+
+    def test_quota_exceeded_switches_to_claude_and_retries_same_step(self, executor):
+        codex_fail = MagicMock(returncode=1, stdout="", stderr="Error: usage limit reached, try again later")
+        claude_ok = MagicMock(returncode=0, stdout='{"ok": true}', stderr="")
+
+        with patch("subprocess.run", side_effect=[codex_fail, claude_ok]) as mock_run:
+            output = executor._invoke_agent({"step": 2, "name": "ui"}, "preamble")
+
+        assert mock_run.call_count == 2
+        assert mock_run.call_args_list[0][0][0][0] == "codex"
+        assert mock_run.call_args_list[1][0][0][0] == "claude"
+        assert executor._active_agent == "claude"
+        assert output["agent"] == "claude"
+
+    def test_fallback_is_sticky_across_subsequent_calls(self, executor):
+        codex_fail = MagicMock(returncode=1, stdout="", stderr="rate limit exceeded")
+        claude_ok = MagicMock(returncode=0, stdout='{"ok": true}', stderr="")
+
+        with patch("subprocess.run", side_effect=[codex_fail, claude_ok]):
+            executor._invoke_agent({"step": 2, "name": "ui"}, "preamble")
+
+        # 이후 호출은 codex를 재시도하지 않고 바로 claude로 간다
+        with patch("subprocess.run", return_value=claude_ok) as mock_run2:
+            executor._invoke_agent({"step": 2, "name": "ui"}, "preamble")
+        assert mock_run2.call_count == 1
+        assert mock_run2.call_args[0][0][0] == "claude"
+
+    def test_non_quota_failure_does_not_switch_agent(self, executor):
+        """quota와 무관한 실패는 codex를 유지한다 — 재시도는 상위 재시도 루프의 몫이다."""
+        codex_fail = MagicMock(returncode=1, stdout="", stderr="SyntaxError: unexpected token")
+
+        with patch("subprocess.run", return_value=codex_fail) as mock_run:
+            executor._invoke_agent({"step": 2, "name": "ui"}, "preamble")
+
+        assert executor._active_agent == "codex"
+        assert mock_run.call_count == 1
+
+    def test_quota_signals_detected_case_insensitively(self):
+        for msg in ["Rate Limit Reached", "USAGE LIMIT", "429 Too Many Requests"]:
+            assert ex.StepExecutor._is_quota_exceeded(
+                {"exitCode": 1, "stdout": "", "stderr": msg}
+            )
+
+    def test_zero_exit_never_counts_as_quota_exceeded(self):
+        assert not ex.StepExecutor._is_quota_exceeded(
+            {"exitCode": 0, "stdout": "", "stderr": "usage limit mentioned but succeeded"}
+        )
+
+    def test_unrelated_failure_is_not_quota_exceeded(self):
+        assert not ex.StepExecutor._is_quota_exceeded(
+            {"exitCode": 1, "stdout": "", "stderr": "SyntaxError: unexpected token"}
+        )
 
 
 # ---------------------------------------------------------------------------
