@@ -52,7 +52,10 @@
       "type": "feat",
       "scope": "frontend",
       "desc": "문서 상세와 텍스트 버전 이력",
-      "status": "pending"
+      "status": "completed",
+      "summary": "useDocument 조건부 폴링 훅과 문서 메타·텍스트 버전 이력을 추가하고 상세 페이지의 읽기 전용 추출 텍스트 영역을 step 5 교체 위치로 구성",
+      "started_at": "2026-08-05T23:09:16+0900",
+      "completed_at": "2026-08-05T23:12:34+0900"
     },
     {
       "step": 5,
