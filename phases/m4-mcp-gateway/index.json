@@ -19,7 +19,10 @@
       "type": "feat",
       "scope": "search",
       "desc": "유사 문서의 태그 빈도로 태그를 추천하는 서비스",
-      "status": "pending"
+      "status": "completed",
+      "summary": "TagSuggestion·TagSuggestionResult 데이터클래스와 suggest_tags 서비스를 구현하고 실제 pgvector DB 테스트를 통과",
+      "started_at": "2026-08-06T03:01:45+0900",
+      "completed_at": "2026-08-06T03:04:47+0900"
     },
     {
       "step": 2,
