@@ -1,11 +1,14 @@
 "use client";
 
 import Link from "next/link";
-import { use } from "react";
+import { use, useState } from "react";
 
+import { DocumentActions } from "@/components/DocumentActions";
 import { DocumentMeta } from "@/components/DocumentMeta";
+import { TextEditor } from "@/components/TextEditor";
 import { VersionHistory } from "@/components/VersionHistory";
 import { useDocument } from "@/lib/useDocument";
+import { getCurrentUser } from "@/lib/user";
 
 export default function DocumentDetailPage({
   params,
@@ -13,7 +16,9 @@ export default function DocumentDetailPage({
   params: Promise<{ id: string }>;
 }): React.ReactElement {
   const { id } = use(params);
-  const { document, loading, error } = useDocument(id);
+  const { document, loading, error, refresh } = useDocument(id);
+  const [editing, setEditing] = useState(false);
+  const anonymous = getCurrentUser() === null;
 
   if (loading) return <p className="text-sm text-neutral-500">불러오는 중…</p>;
   if (document === null) {
@@ -28,12 +33,18 @@ export default function DocumentDetailPage({
 
       <DocumentMeta document={document} />
 
-      <section className="space-y-4">
-        <h2 className="text-sm font-medium text-neutral-400">추출 텍스트</h2>
-        <div className="whitespace-pre-wrap rounded-lg border border-neutral-800 bg-[#141414] p-6 text-sm leading-relaxed text-neutral-300">
-          {document.content}
-        </div>
-      </section>
+      <DocumentActions
+        disabled={anonymous || editing}
+        document={document}
+        onChanged={refresh}
+      />
+
+      <TextEditor
+        disabled={anonymous}
+        document={document}
+        onEditingChange={setEditing}
+        onSaved={refresh}
+      />
 
       <VersionHistory versions={document.versions} currentVersion={document.version} />
 
