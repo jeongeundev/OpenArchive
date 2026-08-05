@@ -5,6 +5,7 @@ import {
   deleteDocument,
   editDocument,
   listDocuments,
+  search,
   uploadDocument,
 } from "./api";
 import { DEMO_USERS, setCurrentUser } from "./user";
@@ -109,6 +110,20 @@ describe("API responses", () => {
     await listDocuments({ status: "error" });
 
     expect(fetchMock.mock.calls[0][0]).toBe("/api/documents?status=error");
+  });
+
+  it("omits the tag filter from the search body when no tag is entered", async () => {
+    // 백엔드 SQL은 "필터 없음"을 NULL로만 표현한다. 빈 배열을 보내면
+    // d.tags && '{}' 가 항상 거짓이라 결과가 0건이 된다.
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response(JSON.stringify({ items: [], sql: "" })));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await search({ query: "OpenSQL", tags: [], contentType: null, k: 10 });
+
+    const body = JSON.parse(fetchMock.mock.calls[0][1]?.body as string);
+    expect(body).not.toHaveProperty("tags");
   });
 
   it("returns normally for a 204 delete response without parsing JSON", async () => {

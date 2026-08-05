@@ -1,4 +1,6 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { hydrateRoot } from "react-dom/client";
+import { renderToString } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { setCurrentUser } from "@/lib/user";
@@ -106,6 +108,33 @@ describe("UploadDropzone", () => {
     expect(
       screen.getByText("업로드했습니다. 임베딩이 끝나면 상태가 완료로 바뀝니다."),
     ).toBeInTheDocument();
+  });
+
+  it("데모 사용자가 저장돼 있어도 프리렌더 마크업 위에 하이드레이션할 수 있다", async () => {
+    // `/`는 static prerender다. 서버에는 localStorage가 없으니 HTML은 항상 익명 상태로
+    // 나오는데, 첫 클라이언트 렌더가 localStorage를 읽으면 트리가 달라져 불일치가 난다.
+    vi.stubGlobal("fetch", vi.fn());
+    localStorage.clear();
+    const serverHtml = renderToString(<UploadDropzone onUploaded={vi.fn()} />);
+    setCurrentUser("alice");
+
+    const container = window.document.createElement("div");
+    container.innerHTML = serverHtml;
+    window.document.body.appendChild(container);
+    const recoverableErrors: string[] = [];
+
+    const root = await act(async () =>
+      hydrateRoot(container, <UploadDropzone onUploaded={vi.fn()} />, {
+        onRecoverableError: (error: unknown) => recoverableErrors.push(String(error)),
+      }),
+    );
+    const textAfterHydration = container.textContent ?? "";
+    await act(async () => root.unmount());
+    container.remove();
+
+    expect(recoverableErrors).toEqual([]);
+    // 하이드레이션 후에는 저장된 사용자를 반영해 업로드가 열려야 한다.
+    expect(textAfterHydration).not.toContain("사용자를 선택하면 업로드할 수 있습니다.");
   });
 
   it("익명이면 업로드를 비활성화하고 사용자를 선택하도록 안내한다", () => {

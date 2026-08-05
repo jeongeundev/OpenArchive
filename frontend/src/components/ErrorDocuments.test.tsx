@@ -1,4 +1,6 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { hydrateRoot } from "react-dom/client";
+import { renderToString } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { DocumentSummary } from "@/lib/types";
 import { setCurrentUser } from "@/lib/user";
@@ -37,6 +39,32 @@ describe("ErrorDocuments", () => {
     render(<ErrorDocuments />);
     expect(await screen.findByRole("button", { name: "재임베딩" })).toBeDisabled();
     expect(screen.getByText("사용자를 선택하면 재임베딩을 요청할 수 있습니다.")).toBeInTheDocument();
+  });
+
+  it("데모 사용자가 저장돼 있어도 프리렌더 마크업 위에 하이드레이션할 수 있다", async () => {
+    // `/admin/status`도 static prerender다. UploadDropzone과 같은 이유로,
+    // 첫 클라이언트 렌더가 localStorage를 읽으면 서버 HTML과 트리가 어긋난다.
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response([])));
+    localStorage.clear();
+    const serverHtml = renderToString(<ErrorDocuments />);
+    setCurrentUser("alice");
+
+    const container = window.document.createElement("div");
+    container.innerHTML = serverHtml;
+    window.document.body.appendChild(container);
+    const recoverableErrors: string[] = [];
+
+    const root = await act(async () =>
+      hydrateRoot(container, <ErrorDocuments />, {
+        onRecoverableError: (error: unknown) => recoverableErrors.push(String(error)),
+      }),
+    );
+    const textAfterHydration = container.textContent ?? "";
+    await act(async () => root.unmount());
+    container.remove();
+
+    expect(recoverableErrors).toEqual([]);
+    expect(textAfterHydration).not.toContain("사용자를 선택하면 재임베딩을 요청할 수 있습니다.");
   });
 
   it("실패 문서가 없으면 빈 목록 문구를 표시한다", async () => {
