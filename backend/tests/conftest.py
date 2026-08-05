@@ -1,11 +1,16 @@
+import hashlib
+from uuid import UUID
+
 import psycopg
 import pytest
 from fastapi.testclient import TestClient
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
 
 from app.config import get_settings
+from app.embeddings.base import EmbeddingProvider
 from app.main import app
 from app.migrations import run_migrations
+from app.worker import process_once
 
 # 개발 DB(openarchive)와 분리한다. 테스트는 매번 스키마를 통째로 비우므로
 # 같은 DB를 쓰면 개발 데이터가 사라진다.
@@ -96,3 +101,38 @@ async def migrated_db(clean_db: str) -> str:
     """
     await run_migrations(clean_db)
     return clean_db
+
+
+async def insert_test_document(
+    conn: psycopg.AsyncConnection,
+    *,
+    title: str,
+    content: str,
+    owner_id: str = "alice",
+    visibility: str = "public",
+    content_type: str = "md",
+    tags: list[str] | None = None,
+    document_id: UUID | None = None,
+) -> UUID:
+    """문서를 넣고 ID를 반환한다. 잡과 버전 이력은 실제 트리거가 만든다."""
+    content_hash = hashlib.sha256(content.encode()).hexdigest()
+    cur = await conn.execute(
+        """
+        INSERT INTO documents
+            (id, title, content_type, content, content_hash, owner_id, visibility, tags)
+        VALUES (COALESCE(%s, gen_random_uuid()), %s, %s, %s, %s, %s, %s, %s)
+        RETURNING id
+        """,
+        (document_id, title, content_type, content, content_hash, owner_id, visibility, tags or []),
+    )
+    return (await cur.fetchone())[0]
+
+
+async def process_all_embedding_jobs(
+    conn: psycopg.AsyncConnection, provider: EmbeddingProvider
+) -> int:
+    """대기 중인 임베딩 잡을 실제 워커로 모두 처리하고 처리 건수를 반환한다."""
+    processed = 0
+    while await process_once(conn, provider):
+        processed += 1
+    return processed
