@@ -30,7 +30,10 @@
       "type": "feat",
       "scope": "api",
       "desc": "관련 문서와 태그 추천 조회 라우터",
-      "status": "pending"
+      "status": "completed",
+      "summary": "GET /api/documents/{id}/related(items·identical·based_on_version·reason)와 /tag-suggestions(items·based_on_version·reason) 엔드포인트를 구현",
+      "started_at": "2026-08-06T03:04:47+0900",
+      "completed_at": "2026-08-06T03:08:19+0900"
     },
     {
       "step": 3,
