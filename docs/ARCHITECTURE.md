@@ -371,6 +371,12 @@ OpenSQL `patroni.yml`의 PostgreSQL 파라미터는 `max_connections: 100`이다
 | `POST /api/search` | 하이브리드 검색 (아래) |
 | `GET /api/system/status` | **운영/데모 전용**: `inet_server_addr()`(현재 접속 노드), pending/processing/error 잡 수, 임베딩 프로바이더명, 최근 재연결 이벤트, **정합성 검증 쿼리 결과**(`c.version <> d.version` 건수). `/admin/status`가 소비하며 사용자 화면은 호출하지 않는다 |
 
+> **구현 현황 (M2 기준)**: `/related`·`/tag-suggestions`를 뺀 나머지가 구현되어 있다. 두 엔드포인트와 `reconnect_events` 값 채우기는 각각 M4·M5 몫이다.
+>
+> `PUT`은 현재 **편집된 추출 텍스트만** 받는다(`{content, version}` JSON). 표에 적힌 "새 파일" 경로는 아직 없다 — 새 파일을 올리려면 업로드 후 이전 문서를 삭제해야 한다.
+>
+> 라우터는 얇다. 요청 검증과 상태 코드 변환만 하고 실제 로직은 `services/documents.py`·`services/search.py`에 있으며, MCP 서버가 같은 함수를 재사용한다. 도메인 예외를 상태 코드로 옮기는 매핑은 `main.py`의 exception handler 한 곳에 있다.
+
 ### 빈 파싱 결과 처리 (`POST /api/documents`)
 
 파싱 결과가 공백 제거 후 빈 문자열이면 **400을 반환하고 저장하지 않는다.**
