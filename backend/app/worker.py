@@ -319,9 +319,14 @@ async def drain(conn: psycopg.AsyncConnection, provider: EmbeddingProvider) -> i
 async def _listen_for_jobs(dsn: str, wake: asyncio.Event) -> None:
     """LISTEN 최적화 — 알림이 오면 다음 폴링을 앞당긴다 (ADR-009).
 
-    어떤 실패도 폴링 주 경로를 막지 않는다. OpenProxy 경유 시 LISTEN 동작이 문서로
-    보장되지 않으므로, 연결 실패·강제 종료(server_lifetime 등)는 백오프 후 재등록만
-    시도하고 워커는 폴링으로 계속 돈다.
+    어떤 실패도 폴링 주 경로를 막지 않는다. 연결 실패·강제 종료(server_lifetime 등)는
+    백오프 후 재등록만 시도하고 워커는 폴링으로 계속 돈다.
+
+    **OpenProxy(6432) 경유에서는 이 최적화가 동작하지 않는다 (2026-08-05 실측).** 프록시가
+    알림을 쥐고 있다가 클라이언트가 다음 쿼리를 보낼 때 밀어내므로, 유휴 상태인 이 연결은
+    깨어나지 못한다. 노드 직결(로컬 컨테이너·개발)에서는 정상 동작한다. 제거하지 않는 이유는
+    직결 환경에서 여전히 유효하고, 실패해도 무해하도록 설계됐기 때문이다.
+    그래서 폴링 주기는 5초를 유지한다 — OPENSQL_RESEARCH.md §7-3, ADR-009 재개정.
     """
     delay = 1.0
     while True:

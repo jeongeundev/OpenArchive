@@ -595,26 +595,38 @@ GET /api/documents/{id}/tag-suggestions
 ### 관련 문서
 
 ```sql
+SET LOCAL hnsw.ef_search = 200;   -- k*10 보다 커야 한다 (ADR-011 보강 4)
+
 WITH me AS (
   SELECT avg(embedding) AS v FROM document_chunks WHERE document_id = %(id)s
 ),
 cand AS (                      -- 1) 벡터 인덱스로 후보 확보
   SELECT c.document_id, c.embedding <=> (SELECT v FROM me) AS dist
-  FROM document_chunks c
-  JOIN documents d ON d.id = c.document_id
-  WHERE c.document_id <> %(id)s
-    AND (d.visibility = 'public' OR d.owner_id = %(user)s)
+  FROM document_chunks c       --    ⚠️ 이 서브쿼리에 JOIN을 두지 않는다
   ORDER BY c.embedding <=> (SELECT v FROM me)
   LIMIT %(k)s * 10
 ),
-best AS (                      -- 2) 문서당 최소 거리 1건
-  SELECT DISTINCT ON (document_id) document_id, dist
-  FROM cand ORDER BY document_id, dist
+best AS (                      -- 2) 자기 제외 · 권한 필터 · 문서당 최소 거리 1건
+  SELECT DISTINCT ON (c.document_id) c.document_id, c.dist
+  FROM cand c
+  JOIN documents d ON d.id = c.document_id
+  WHERE c.document_id <> %(id)s
+    AND (d.visibility = 'public' OR d.owner_id = %(user)s)
+  ORDER BY c.document_id, c.dist
 )
 SELECT d.id, d.title, d.tags, 1 - b.dist AS score   -- 3) 거리순 재정렬 + LIMIT
 FROM best b JOIN documents d ON d.id = b.document_id
 ORDER BY b.dist LIMIT %(k)s;
 ```
+
+> ⚠️ **`cand`에 `documents` JOIN을 넣으면 HNSW 인덱스를 못 쓴다 (실측).** 벡터 정렬과 같은
+> 서브쿼리에 조인이 있으면 플래너가 조인을 먼저 수행해야 하므로 정렬이 인덱스가 아니라 `Sort`
+> 노드로 넘어간다. `enable_seqscan=off`로 강제해도 복구되지 않는다 — 255ms vs 106ms
+> (`OPENSQL_RESEARCH.md` §12-12). 초안 설계가 실제로 이 형태였고, 그래서 경고를 여기 남긴다.
+>
+> **대가**: 권한 필터가 후보 확보 뒤에 적용되므로 상위 후보가 전부 비공개면 결과가 `k`보다 적어진다.
+> **적게 나오는 것을 수용한다** — 2차 조회는 왕복을 늘리고, 부족분을 화면에서 설명하면 비공개
+> 문서의 존재가 누설된다 (ADR-018).
 
 **`score`가 무엇인지 정확히** — 문서 간 유사도가 아니다.
 
@@ -641,21 +653,24 @@ score = 1 − distance( 대상 문서의 청크 평균 벡터 ,  후보 문서�
 태그를 임베딩하지 않는다. 유사 문서를 찾은 뒤 **그 문서들의 태그를 빈도순**으로 제시한다 (ADR-019).
 
 ```sql
+SET LOCAL hnsw.ef_search = 200;   -- 아래 LIMIT 100 보다 커야 한다 (ADR-011 보강 4)
+
 WITH me AS (
   SELECT avg(embedding) AS v FROM document_chunks WHERE document_id = %(id)s
 ),
 cand AS (
   SELECT c.document_id, c.embedding <=> (SELECT v FROM me) AS dist
-  FROM document_chunks c
-  JOIN documents d ON d.id = c.document_id
-  WHERE c.document_id <> %(id)s
-    AND (d.visibility = 'public' OR d.owner_id = %(user)s)
+  FROM document_chunks c       -- ⚠️ 관련 문서와 같은 이유로 JOIN을 두지 않는다
   ORDER BY c.embedding <=> (SELECT v FROM me)
   LIMIT 100
 ),
 best AS (
-  SELECT DISTINCT ON (document_id) document_id, dist
-  FROM cand ORDER BY document_id, dist
+  SELECT DISTINCT ON (c.document_id) c.document_id, c.dist
+  FROM cand c
+  JOIN documents d ON d.id = c.document_id
+  WHERE c.document_id <> %(id)s
+    AND (d.visibility = 'public' OR d.owner_id = %(user)s)
+  ORDER BY c.document_id, c.dist
 ),
 neighbors AS (                 -- ★ 유사도 순으로 자른다 (document_id 순이 아니다)
   SELECT document_id FROM best ORDER BY dist LIMIT 10
@@ -670,7 +685,10 @@ GROUP BY t.tag ORDER BY freq DESC, t.tag LIMIT 5;
 
 `documents.tags`(정형 배열)와 벡터 이웃이 한 쿼리에서 결합된다 — 하이브리드 활용 사례가 하나 더 늘어난다. 문서가 적을 때는 이웃이 없어 추천도 비는데, 이는 콜드스타트로 수용한다.
 
-> **`avg` 결과가 HNSW 인덱스를 타는지 미확인이다.** 플래너가 `(SELECT v FROM me)`를 상수로 접지 못하면 풀스캔이 된다. M0에서 `EXPLAIN (ANALYZE, BUFFERS)`로 확인하고, 인덱스를 못 타면 평균을 별도 쿼리로 조회해 벡터 리터럴 파라미터로 넘긴다(왕복 2회). `docs/OPENSQL_RESEARCH.md` §12.
+> **`avg`는 인덱스를 탄다 — 실측 완료 (2026-08-05).** 플래너가 `(SELECT v FROM me)`를 `InitPlan`으로
+> 접어 한 번만 평가하고 HNSW 프로브로 쓴다. 대비하던 "왕복 2회" 대안은 필요 없다.
+> **인덱스를 막는 것은 `avg`가 아니라 `cand` 안의 JOIN이었고**, 위 쿼리는 그것을 밖으로 뺀 형태다.
+> `docs/OPENSQL_RESEARCH.md` §12-12, ADR-018 개정.
 
 ## 임베딩 프로바이더
 
