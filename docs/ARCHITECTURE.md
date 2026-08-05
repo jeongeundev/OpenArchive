@@ -429,7 +429,8 @@ PUT /api/documents/{id}
 ```sql
 BEGIN;  -- ★ plain BEGIN. READ ONLY 금지 (아래 설명)
 
-SET LOCAL hnsw.ef_search = 200;   -- 필터 통과 후보를 충분히 확보 (기본 40)
+SET LOCAL hnsw.ef_search = 200;      -- 필터 통과 후보를 충분히 확보 (기본 40)
+SET LOCAL random_page_cost = 1.1;    -- 무필터 검색이 HNSW를 타게 한다 (ADR-011 보강 5)
 
 WITH candidates AS (
     -- 1단계: HNSW 인덱스로 후보를 넉넉히 뽑는다 (k의 5배)
@@ -469,9 +470,16 @@ OpenProxy는 `query_parser_read_write_splitting` 활성 시 **트랜잭션 밖�
 
 > ⚠️ **`BEGIN READ ONLY`를 쓰면 안 된다.** OpenProxy 1.1.3부터 `BEGIN READ ONLY`와 `START TRANSACTION READ ONLY`는 **의도적으로 Replica로 라우팅**된다. "읽기 전용이니 READ ONLY로 선언하는 게 맞다"는 직관을 따르면 정확히 반대 결과가 나온다.
 
-**2. `SET LOCAL hnsw.ef_search = 200` (ADR-011)**
+**2. 두 개의 `SET LOCAL` — `hnsw.ef_search`와 `random_page_cost` (ADR-011 보강 4·5)**
 
-HNSW 인덱스는 `document_chunks`에 있는데 필터는 JOIN 상대인 `documents`에 있다. 기본 `ef_search = 40`으로는 태그 필터가 조금만 좁아도 `LIMIT k`를 채우지 못한다. 후보 풀을 키워 이를 완화한다. `SET LOCAL`이므로 트랜잭션이 끝나면 자동 복원된다 — ①의 명시적 트랜잭션이 여기서 한 번 더 쓸모가 있다.
+`ef_search = 200`: HNSW 인덱스는 `document_chunks`에 있는데 필터는 JOIN 상대인 `documents`에 있다. 기본 `ef_search = 40`으로는 태그 필터가 조금만 좁아도 `LIMIT k`를 채우지 못한다. 후보 풀을 키워 이를 완화한다. `SET LOCAL`이므로 트랜잭션이 끝나면 자동 복원된다 — ①의 명시적 트랜잭션이 여기서 한 번 더 쓸모가 있다.
+
+`random_page_cost = 1.1`: VM 기본값 4에서는 플래너가 HNSW를 아예 고르지 않는다. 힙이 3MB인데 인덱스가 47MB라, 임의 접근을 4배로 계산하면 통째로 읽는 쪽이 싸다고 나온다. **태그·유형 필터는 선택적**(`%(tags)s IS NULL OR …`)이므로 이 쿼리에는 필터 없는 경로가 항상 존재하며, 그 경로가 인덱스를 타느냐가 여기 달려 있다. 전역이 아니라 `SET LOCAL`로 거는 이유는 OpenProxy가 백엔드 반납 시 `RESET ALL`만 하고 `DISCARD ALL`은 하지 않아(§5-2) 세션 GUC에 의존하지 않는 편이 안전하기 때문이다.
+
+> **무필터 검색 경로는 아직 직접 측정하지 않았다.** 같은 형태·같은 규모의 관련 문서 쿼리가
+> `rpc=4`에서 Seq Scan 624ms, `rpc=1.1`에서 HNSW 33.8ms인 것에 근거한 적용이다
+> (`OPENSQL_RESEARCH.md` §12 16번). 필터가 붙는 경로는 아래대로 어느 쪽이든 Seq Scan이라
+> **걸어서 손해 볼 것이 없다.**
 
 > **JOIN을 여기 둬도 된다 — 두 번 측정해 확인했다 (2026-08-05).** 1차 실측은 "벡터 정렬 서브쿼리에
 > `documents` JOIN이 있으면 HNSW를 못 쓴다"로 읽었으나 **재측정에서 재현되지 않았다.** 플래너는
@@ -519,6 +527,7 @@ CREATE INDEX idx_chunks_tsv ON document_chunks USING gin (content_tsv);
 ```sql
 BEGIN;
 SET LOCAL hnsw.ef_search = 200;
+SET LOCAL random_page_cost = 1.1;    -- 검색 쿼리와 동일한 이유 (ADR-011 보강 5)
 
 WITH vec AS (          -- 위 candidates 절과 동일한 필터·JOIN 구조
   SELECT c.id, c.document_id, c.chunk_index, c.content,
@@ -605,6 +614,7 @@ GET /api/documents/{id}/tag-suggestions
 ### 관련 문서
 
 ```sql
+BEGIN;  -- ★ SET LOCAL은 트랜잭션 밖에서 경고만 내고 무효다. plain BEGIN (ADR-010)
 SET LOCAL hnsw.ef_search = 200;      -- k*10 보다 커야 한다 (ADR-011 보강 4)
 SET LOCAL random_page_cost = 1.1;    -- 없으면 플래너가 HNSW를 버린다 (ADR-011 보강 5)
 
@@ -628,6 +638,8 @@ best AS (                      -- 2) 문서당 최소 거리 1건
 SELECT d.id, d.title, d.tags, 1 - b.dist AS score   -- 3) 거리순 재정렬 + LIMIT
 FROM best b JOIN documents d ON d.id = b.document_id
 ORDER BY b.dist LIMIT %(k)s;
+
+COMMIT;
 ```
 
 > **왜 필터가 `cand` 안에 있나 — 한 번 밖으로 뺐다가 되돌렸다 (2026-08-05).**
@@ -669,6 +681,7 @@ score = 1 − distance( 대상 문서의 청크 평균 벡터 ,  후보 문서�
 태그를 임베딩하지 않는다. 유사 문서를 찾은 뒤 **그 문서들의 태그를 빈도순**으로 제시한다 (ADR-019).
 
 ```sql
+BEGIN;  -- ★ 관련 문서와 같은 이유 — SET LOCAL은 트랜잭션 안에서만 유효하다
 SET LOCAL hnsw.ef_search = 200;      -- 아래 LIMIT 100 보다 커야 한다 (ADR-011 보강 4)
 SET LOCAL random_page_cost = 1.1;    -- 관련 문서와 같은 이유 (ADR-011 보강 5)
 
@@ -698,6 +711,8 @@ JOIN documents d ON d.id = n.document_id
 CROSS JOIN LATERAL unnest(d.tags) AS t(tag)
 WHERE NOT (t.tag = ANY(%(current_tags)s::text[]))   -- 이미 달린 태그 제외
 GROUP BY t.tag ORDER BY freq DESC, t.tag LIMIT 5;
+
+COMMIT;
 ```
 
 `documents.tags`(정형 배열)와 벡터 이웃이 한 쿼리에서 결합된다 — 하이브리드 활용 사례가 하나 더 늘어난다. 문서가 적을 때는 이웃이 없어 추천도 비는데, 이는 콜드스타트로 수용한다.
