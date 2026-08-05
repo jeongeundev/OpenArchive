@@ -5,7 +5,7 @@ import pytest
 from conftest import insert_test_document, process_all_embedding_jobs
 
 from app.embeddings import FakeProvider
-from app.services.related import find_related
+from app.services.related import find_related, suggest_tags
 from app.services.search import MAX_K
 
 
@@ -41,6 +41,152 @@ async def test_related_documents_are_ranked_by_score_and_exclude_the_source(
     assert [item.score for item in result.items] == sorted(
         (item.score for item in result.items), reverse=True
     )
+
+
+async def test_tag_suggestions_are_sorted_by_frequency_then_name(
+    worker_conn, related_conn
+):
+    provider = FakeProvider()
+    source_id = await insert_test_document(
+        worker_conn, title="기준", content="OpenSQL 정합성 트리거 운영"
+    )
+    await insert_test_document(
+        worker_conn,
+        title="관련 1",
+        content="OpenSQL 정합성 트리거 안내",
+        tags=["database", "opensql", "worker"],
+    )
+    await insert_test_document(
+        worker_conn,
+        title="관련 2",
+        content="OpenSQL 정합성 운영 안내",
+        tags=["database", "opensql"],
+    )
+    await process_all_embedding_jobs(worker_conn, provider)
+
+    result = await suggest_tags(related_conn, document_id=source_id)
+
+    assert [(item.tag, item.freq) for item in result.items] == [
+        ("database", 2),
+        ("opensql", 2),
+        ("worker", 1),
+    ]
+    assert result.based_on_version == 1
+    assert result.reason is None
+
+
+async def test_tag_suggestions_exclude_tags_already_on_the_source(
+    worker_conn, related_conn
+):
+    provider = FakeProvider()
+    source_id = await insert_test_document(
+        worker_conn,
+        title="기준",
+        content="OpenSQL 정합성 트리거 운영",
+        tags=["opensql"],
+    )
+    await insert_test_document(
+        worker_conn,
+        title="관련",
+        content="OpenSQL 정합성 트리거 안내",
+        tags=["opensql", "database"],
+    )
+    await process_all_embedding_jobs(worker_conn, provider)
+
+    result = await suggest_tags(related_conn, document_id=source_id)
+
+    assert [(item.tag, item.freq) for item in result.items] == [("database", 1)]
+
+
+async def test_tag_suggestions_do_not_leak_tags_from_another_users_private_document(
+    worker_conn, related_conn
+):
+    provider = FakeProvider()
+    source_id = await insert_test_document(
+        worker_conn,
+        title="기준",
+        content="기밀 접근통제 운영",
+        owner_id="alice",
+    )
+    await insert_test_document(
+        worker_conn,
+        title="공개",
+        content="기밀 접근통제 안내",
+        tags=["public-tag"],
+    )
+    await insert_test_document(
+        worker_conn,
+        title="타인 비공개",
+        content="기밀 접근통제 지침",
+        owner_id="bob",
+        visibility="private",
+        tags=["secret-tag"],
+    )
+    await process_all_embedding_jobs(worker_conn, provider)
+
+    result = await suggest_tags(
+        related_conn, document_id=source_id, user_id="alice"
+    )
+
+    assert [item.tag for item in result.items] == ["public-tag"]
+
+
+async def test_tag_suggestions_return_not_indexed_without_source_chunks(
+    worker_conn, related_conn
+):
+    source_id = await insert_test_document(
+        worker_conn, title="기준", content="아직 색인되지 않은 문서"
+    )
+
+    result = await suggest_tags(related_conn, document_id=source_id)
+
+    assert result.items == []
+    assert result.based_on_version is None
+    assert result.reason == "not_indexed"
+
+
+@pytest.mark.parametrize("with_untagged_neighbor", [False, True])
+async def test_tag_suggestions_allow_an_empty_cold_start(
+    worker_conn, related_conn, with_untagged_neighbor
+):
+    provider = FakeProvider()
+    source_id = await insert_test_document(
+        worker_conn, title="기준", content="OpenSQL 정합성 트리거 운영"
+    )
+    if with_untagged_neighbor:
+        await insert_test_document(
+            worker_conn, title="태그 없는 이웃", content="OpenSQL 정합성 트리거 안내"
+        )
+    await process_all_embedding_jobs(worker_conn, provider)
+
+    result = await suggest_tags(related_conn, document_id=source_id)
+
+    assert result.items == []
+    assert result.based_on_version == 1
+    assert result.reason is None
+
+
+async def test_tag_suggestion_limit_restricts_the_number_of_items(
+    worker_conn, related_conn
+):
+    provider = FakeProvider()
+    source_id = await insert_test_document(
+        worker_conn, title="기준", content="OpenSQL 정합성 트리거 운영"
+    )
+    await insert_test_document(
+        worker_conn,
+        title="관련",
+        content="OpenSQL 정합성 트리거 안내",
+        tags=["alpha", "beta", "gamma"],
+    )
+    await process_all_embedding_jobs(worker_conn, provider)
+
+    result = await suggest_tags(related_conn, document_id=source_id, limit=2)
+
+    assert [(item.tag, item.freq) for item in result.items] == [
+        ("alpha", 1),
+        ("beta", 1),
+    ]
 
 
 async def test_related_documents_apply_candidate_visibility(worker_conn, related_conn):
