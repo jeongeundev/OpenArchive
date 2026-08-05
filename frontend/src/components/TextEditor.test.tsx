@@ -88,6 +88,47 @@ describe("TextEditor", () => {
     });
   });
 
+  it("편집 중 폴링으로 문서가 갱신돼도 편집을 시작한 버전을 보낸다", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ ...document, version: 4 }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { rerender } = render(
+      <TextEditor
+        disabled={false}
+        document={document}
+        onEditingChange={vi.fn()}
+        onSaved={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "편집" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "추출 텍스트" }), {
+      target: { value: "내가 고친 텍스트" },
+    });
+
+    // 조건부 폴링이 다른 사용자의 저장 결과(v3)를 가져온 상황.
+    rerender(
+      <TextEditor
+        disabled={false}
+        document={{ ...document, content: "남이 고친 텍스트", version: 3 }}
+        onEditingChange={vi.fn()}
+        onSaved={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "저장" }));
+
+    // v3을 보내면 서버가 충돌을 감지하지 못해 남의 변경을 덮어쓴다.
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+    expect(JSON.parse(fetchMock.mock.calls[0][1]?.body as string)).toEqual({
+      content: "내가 고친 텍스트",
+      version: 2,
+    });
+  });
+
   it("409 충돌 뒤에도 사용자가 입력한 내용을 보존한다", async () => {
     vi.stubGlobal(
       "fetch",
