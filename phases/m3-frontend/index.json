@@ -74,7 +74,10 @@
       "type": "feat",
       "scope": "frontend",
       "desc": "검색 화면과 실행 SQL 토글",
-      "status": "pending"
+      "status": "completed",
+      "summary": "제출 시에만 실행되는 검색 훅과 정형 필터 폼, 문서별 결과·서버 실행 SQL 토글을 갖춘 검색 화면을 추가",
+      "started_at": "2026-08-05T23:16:55+0900",
+      "completed_at": "2026-08-05T23:20:25+0900"
     },
     {
       "step": 7,
