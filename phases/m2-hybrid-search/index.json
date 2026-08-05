@@ -1,0 +1,54 @@
+{
+  "project": "OpenArchive",
+  "phase": "m2-hybrid-search",
+  "steps": [
+    {
+      "step": 0,
+      "name": "parsing",
+      "type": "feat",
+      "scope": "api",
+      "desc": "업로드 파일에서 텍스트를 추출하는 파서",
+      "status": "pending"
+    },
+    {
+      "step": 1,
+      "name": "search-service",
+      "type": "feat",
+      "scope": "search",
+      "desc": "정형 필터와 벡터 유사도를 결합한 단일 SQL 검색",
+      "status": "pending"
+    },
+    {
+      "step": 2,
+      "name": "documents-api",
+      "type": "feat",
+      "scope": "api",
+      "desc": "문서 업로드와 조회 라우터",
+      "status": "pending"
+    },
+    {
+      "step": 3,
+      "name": "document-editing",
+      "type": "feat",
+      "scope": "api",
+      "desc": "추출 텍스트 편집·삭제·재임베딩 요청",
+      "status": "pending"
+    },
+    {
+      "step": 4,
+      "name": "search-api",
+      "type": "feat",
+      "scope": "search",
+      "desc": "검색 라우터와 실행 SQL 노출",
+      "status": "pending"
+    },
+    {
+      "step": 5,
+      "name": "system-api",
+      "type": "feat",
+      "scope": "api",
+      "desc": "접속 노드·잡 수·정합성 카운터 조회",
+      "status": "pending"
+    }
+  ]
+}
