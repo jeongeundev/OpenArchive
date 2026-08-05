@@ -363,7 +363,7 @@ OpenSQL `patroni.yml`의 PostgreSQL 파라미터는 `max_connections: 100`이다
 | `POST /api/documents` | multipart 업로드. pypdf/python-docx/plain 파싱 → INSERT. 여기서 트리거가 파이프라인을 자동 기동 — 임베딩 관련 코드 없음. **텍스트 추출 결과가 비면 400** (아래). **원본 파일은 보관하지 않는다** — 추출 텍스트만 저장하고 파일은 버린다 |
 | `GET /api/documents` | 목록 + `status`/`tag` 필터, embedding_status 포함 |
 | `GET /api/documents/{id}` | 상세 + 텍스트 버전 목록 + 청크 수 + 청크 기준 버전 |
-| `PUT /api/documents/{id}` | 새 파일 또는 편집된 추출 텍스트 → `version`+1, `content`, `content_hash` UPDATE. **버전 이력 기록과 재임베딩 잡 생성은 트리거가 수행.** 요청의 `version`이 현재 버전과 다르면 **409** (아래) |
+| `PUT /api/documents/{id}` | 편집된 추출 텍스트(`{content, version}` JSON) → `version`+1, `content`, `content_hash` UPDATE. **버전 이력 기록과 재임베딩 잡 생성은 트리거가 수행.** 요청의 `version`이 현재 버전과 다르면 **409** (아래) |
 | `DELETE /api/documents/{id}` | CASCADE로 벡터까지 원자 삭제 |
 | `POST /api/documents/{id}/reembed` | **임베딩 실패 복구.** 아래 참조 |
 | `GET /api/documents/{id}/related` | **관련 문서.** 청크 평균 벡터로 유사 문서 조회 (ADR-018). 청크가 없으면 `not_indexed` |
@@ -371,9 +371,9 @@ OpenSQL `patroni.yml`의 PostgreSQL 파라미터는 `max_connections: 100`이다
 | `POST /api/search` | 하이브리드 검색 (아래) |
 | `GET /api/system/status` | **운영/데모 전용**: `inet_server_addr()`(현재 접속 노드), pending/processing/error 잡 수, 임베딩 프로바이더명, 최근 재연결 이벤트, **정합성 검증 쿼리 결과**(`c.version <> d.version` 건수). `/admin/status`가 소비하며 사용자 화면은 호출하지 않는다 |
 
-> **구현 현황 (M2 기준)**: `/related`·`/tag-suggestions`를 뺀 나머지가 구현되어 있다. 두 엔드포인트와 `reconnect_events` 값 채우기는 각각 M4·M5 몫이다.
+> **구현 현황 (M3 기준)**: `/related`·`/tag-suggestions`를 뺀 나머지가 구현되어 있다. 두 엔드포인트와 `reconnect_events` 값 채우기는 각각 M4·M5 몫이다.
 >
-> `PUT`은 현재 **편집된 추출 텍스트만** 받는다(`{content, version}` JSON). 표에 적힌 "새 파일" 경로는 아직 없다 — 새 파일을 올리려면 업로드 후 이전 문서를 삭제해야 한다.
+> 새 파일로 교체하는 경로는 없다. 새 파일을 올리려면 업로드 후 이전 문서를 삭제해야 한다.
 >
 > 라우터는 얇다. 요청 검증과 상태 코드 변환만 하고 실제 로직은 `services/documents.py`·`services/search.py`에 있으며, MCP 서버가 같은 함수를 재사용한다. 도메인 예외를 상태 코드로 옮기는 매핑은 `main.py`의 exception handler 한 곳에 있다.
 
@@ -749,14 +749,14 @@ class EmbeddingProvider(Protocol):
 
 ## 프론트엔드 패턴
 
-- 사용자 3화면: `/`(목록 + 업로드 드롭존), `/documents/[id]`(메타데이터·텍스트 버전 이력·청크·**추출 텍스트 편집**·재업로드·관련 문서·태그 추천), `/search`(질의 + 태그/유형 필터 + 결과. "실행된 SQL 보기" 토글)
+- 사용자 3화면: `/`(목록 + 업로드 드롭존), `/documents/[id]`(메타데이터·텍스트 버전 이력·청크 수와 기준 버전 요약·**추출 텍스트 편집**·관련 문서·태그 추천), `/search`(질의 + 태그/유형 필터 + 결과. "실행된 SQL 보기" 토글)
 - **편집은 Client Component**다. 보기 ↔ 편집 토글, 저장 시 `version`을 함께 전송하고 409를 처리한다. 저장 직후 상태 배지가 `pending → processing → ready`로 바뀌는 것을 2초 폴링으로 보여준다
 - **사용자 화면은 인프라 상태를 노출하지 않는다.** 페일오버가 나도 화면 구성이 달라지지 않으며, 사용자는 업로드·검색이 계속 성공하는 것만 본다 (UI_GUIDE 디자인 원칙 3).
 - 운영 1화면: `/admin/status` — `GET /api/system/status`를 폴링해 접속 노드·잡 수·프로바이더 표시. **페일오버 데모의 증거 채널**이며 사용자 내비게이션에 노출하지 않는다.
-- Server Components 기본, 폴링·업로드 등 인터랙션 구간만 Client Component
+- 네 화면은 모두 Client Component다. 데모 사용자 식별이 `localStorage`에 있고 목록·상세·운영 화면이 폴링하기 때문이다
 - API 연동은 `next.config.js` rewrites로 FastAPI 프록시
 
 ## 상태 관리
 
-- 서버 상태: fetch + 2초 폴링 (임베딩 상태 배지, 시스템 상태바). SSE/웹소켓 사용 안 함
-- 클라이언트 상태: useState/useReducer만. 전역 상태 라이브러리 없음
+- 서버 상태: fetch 기반. 목록과 `/admin/status`는 상시 2초 폴링하고, 문서 상세는 `pending`·`processing`일 때만 2초 폴링하며 `ready`·`error`에서는 멈춘다. 폴링 실패 시 마지막 성공 데이터를 유지한다. SSE/웹소켓 사용 안 함
+- 클라이언트 상태: useState만 사용하고 전역 상태 라이브러리는 두지 않는다. 데모 사용자는 `localStorage`에 저장하며 헤더 셀렉터에서 변경하면 `window.location.reload()`로 화면 전체를 다시 그린다

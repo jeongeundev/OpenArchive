@@ -128,6 +128,27 @@ def test_search_applies_tag_and_content_type_filters(db_client: TestClient, migr
     assert [item["document_id"] for item in items] == [expected]
 
 
+def test_search_treats_an_empty_tag_list_as_no_filter(db_client: TestClient, migrated_db: str):
+    """빈 배열은 "태그를 고르지 않았다"는 뜻이지 필터가 아니다.
+
+    필터로 넘기면 `d.tags && '{}'`가 어느 행에서도 참이 되지 않아, 에러 없이 결과가
+    통째로 사라진다. 화면에서 태그 칸을 비우고 검색하는 것이 기본 경로다.
+    """
+    matching_id, _ = seed_documents(
+        migrated_db,
+        [
+            {"title": "정합성 규정", "content": "OpenSQL 정합성 트리거 운영 규정", "tags": ["규정"]},
+            {"title": "휴가 안내", "content": "연차 휴가 신청 승인 안내"},
+        ],
+    )
+
+    items = db_client.post("/api/search", json={"query": "OpenSQL 정합성", "tags": []}).json()[
+        "items"
+    ]
+
+    assert items[0]["document_id"] == matching_id
+
+
 def test_search_combines_structured_filter_with_vector_ranking(
     db_client: TestClient, migrated_db: str
 ):

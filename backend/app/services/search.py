@@ -71,7 +71,10 @@ async def search_documents(
     query_vector = (await asyncio.to_thread(provider.embed, [query]))[0]
     params = {
         "qvec": to_pgvector_literal(query_vector),
-        "tags": tags,
+        # 빈 배열은 "태그를 고르지 않았다"이므로 NULL로 정규화한다. 그대로 넘기면
+        # `d.tags && '{}'`가 어느 행에서도 참이 아니라 에러 없이 결과가 0건이 된다.
+        # 라우터가 아니라 여기 두는 이유: MCP 서버도 이 함수를 그대로 재사용한다.
+        "tags": tags or None,
         "ctype": content_type,
         "user": user_id,
         "k": k,

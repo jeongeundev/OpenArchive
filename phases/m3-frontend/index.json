@@ -1,0 +1,106 @@
+{
+  "project": "OpenArchive",
+  "phase": "m3-frontend",
+  "steps": [
+    {
+      "step": 0,
+      "name": "api-client",
+      "type": "feat",
+      "scope": "frontend",
+      "desc": "백엔드 응답 타입과 API 클라이언트",
+      "status": "completed",
+      "summary": "frontend/src/lib/types.ts의 백엔드 계약 타입, user.ts의 데모 사용자 저장소, api.ts의 문서·검색·시스템 API 함수와 테스트를 추가",
+      "started_at": "2026-08-05T22:51:50+0900",
+      "completed_at": "2026-08-05T22:55:59+0900"
+    },
+    {
+      "step": 1,
+      "name": "layout-shell",
+      "type": "feat",
+      "scope": "frontend",
+      "desc": "공용 레이아웃·사용자 전환·상태 배지",
+      "status": "completed",
+      "summary": "frontend/src/components의 StatusBadge·UserSwitcher·SiteHeader와 app/layout.tsx 공용 셸을 추가",
+      "started_at": "2026-08-05T22:55:59+0900",
+      "completed_at": "2026-08-05T23:01:05+0900"
+    },
+    {
+      "step": 2,
+      "name": "document-list",
+      "type": "feat",
+      "scope": "frontend",
+      "desc": "문서 목록과 임베딩 상태 폴링",
+      "status": "completed",
+      "summary": "useDocuments({ status?, intervalMs? }) 폴링 훅과 DocumentTable을 추가하고 page.tsx는 훅 상태와 목록 표만 조립하도록 구성",
+      "started_at": "2026-08-05T23:01:05+0900",
+      "completed_at": "2026-08-05T23:05:33+0900"
+    },
+    {
+      "step": 3,
+      "name": "upload-dropzone",
+      "type": "feat",
+      "scope": "frontend",
+      "desc": "문서 업로드 드롭존",
+      "status": "completed",
+      "summary": "단일 파일 업로드 드롭존과 메타데이터 폼을 추가하고 성공 시 문서 목록을 즉시 새로고침하도록 연결",
+      "started_at": "2026-08-05T23:05:33+0900",
+      "completed_at": "2026-08-05T23:09:16+0900"
+    },
+    {
+      "step": 4,
+      "name": "document-detail",
+      "type": "feat",
+      "scope": "frontend",
+      "desc": "문서 상세와 텍스트 버전 이력",
+      "status": "completed",
+      "summary": "useDocument 조건부 폴링 훅과 문서 메타·텍스트 버전 이력을 추가하고 상세 페이지의 읽기 전용 추출 텍스트 영역을 step 5 교체 위치로 구성",
+      "started_at": "2026-08-05T23:09:16+0900",
+      "completed_at": "2026-08-05T23:12:34+0900"
+    },
+    {
+      "step": 5,
+      "name": "text-editing",
+      "type": "feat",
+      "scope": "frontend",
+      "desc": "추출 텍스트 인라인 편집과 충돌 처리",
+      "status": "completed",
+      "summary": "추출 텍스트 인라인 편집·409 충돌 보존과 삭제·오류 재임베딩 액션을 상세 화면에 연결",
+      "started_at": "2026-08-05T23:12:34+0900",
+      "completed_at": "2026-08-05T23:16:55+0900"
+    },
+    {
+      "step": 6,
+      "name": "search-page",
+      "type": "feat",
+      "scope": "frontend",
+      "desc": "검색 화면과 실행 SQL 토글",
+      "status": "completed",
+      "summary": "제출 시에만 실행되는 검색 훅과 정형 필터 폼, 문서별 결과·서버 실행 SQL 토글을 갖춘 검색 화면을 추가",
+      "started_at": "2026-08-05T23:16:55+0900",
+      "completed_at": "2026-08-05T23:20:25+0900"
+    },
+    {
+      "step": 7,
+      "name": "admin-status",
+      "type": "feat",
+      "scope": "frontend",
+      "desc": "운영 상태 패널과 실패 문서 재임베딩",
+      "status": "completed",
+      "summary": "마지막 성공값을 보존하는 운영 상태 폴링과 정합성 중심 패널, 권한별 실패 문서 재임베딩 화면을 추가",
+      "started_at": "2026-08-05T23:20:25+0900",
+      "completed_at": "2026-08-05T23:23:13+0900"
+    },
+    {
+      "step": 8,
+      "name": "docs-sync",
+      "type": "docs",
+      "desc": "M3 화면 구성과 API 갭을 문서에 반영",
+      "status": "completed",
+      "summary": "M3의 4개 프론트엔드 화면과 실제 폴링·사용자 전환·문서 편집 계약을 README와 설계 문서에 동기화",
+      "started_at": "2026-08-05T23:23:14+0900",
+      "completed_at": "2026-08-05T23:26:13+0900"
+    }
+  ],
+  "created_at": "2026-08-05T22:51:50+0900",
+  "completed_at": "2026-08-05T23:26:13+0900"
+}
