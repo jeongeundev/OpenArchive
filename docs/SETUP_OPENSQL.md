@@ -422,7 +422,7 @@ psql -U postgres -c "CREATE EXTENSION IF NOT EXISTS pg_trgm;"               # AD
 # 터미널 1 — OpenProxy 경유
 PGPASSWORD=pg_password psql -h 192.168.64.4 -p 6432 -U postgres -d opensql
 opensql=> LISTEN ch1;
-opensql=> SELECT 1;        -- 알림은 다음 쿼리 실행 시 표시된다
+opensql=> SELECT 1;        -- ⚠️ 이 쿼리가 결과를 왜곡한다 — 아래 경고 참조
 ```
 
 ```bash
@@ -430,14 +430,21 @@ opensql=> SELECT 1;        -- 알림은 다음 쿼리 실행 시 표시된다
 psql -U postgres -c "NOTIFY ch1, 'hello from another session';"
 ```
 
-**실측 결과 수신됐다.** `pool_mode = "session"`이라 세션 상태가 보존된다. 설계 영향은 `ADR-009`.
+> ⚠️ **이 절차로는 판정할 수 없다.** 알림은 수신되지만, 그것은 `SELECT 1`이 지연된 알림을 밀어냈기
+> 때문이다. 대화형 psql은 사용자가 계속 입력을 보내므로 **유휴 클라이언트를 재현하지 못한다.**
+> 재실측 결과 **OpenProxy(6432) 경유로는 유휴 세션에 알림이 전달되지 않는다** — 노드 직결(5432)
+> 에서만 즉시 도착한다 (`OPENSQL_RESEARCH.md` §7-3). 유휴 수신을 확인하려면 쿼리를 보내지 않는
+> 비대화형 클라이언트로 측정해야 한다.
+
+`pool_mode = "session"`이라 세션 상태 자체는 보존된다. 설계 영향은 `ADR-009` — **워커는 폴링을 주
+경로로 유지하며, 이 결과와 무관하게 파이프라인이 동작한다.**
 
 ### 아직 측정하지 못한 것
 
 | 항목 | 사유 |
 |---|---|
-| LISTEN 연결의 `idle_timeout` 실동작 | 10분 이상 유휴 관측 필요. **폴링 주기를 늘리기 전 필수** |
-| `avg`가 HNSW 인덱스를 타는지 | 데이터가 쌓여야 `EXPLAIN`이 의미를 가진다 → M1 이후 |
+| ~~LISTEN 연결의 `idle_timeout` 실동작~~ | ✅ **측정 완료** — 유휴 세션은 70분간 끊기지 않았다. 다만 애초에 알림이 오지 않아 **폴링 주기 상향은 철회됐다** (`OPENSQL_RESEARCH.md` §12 6번) |
+| ~~`avg`가 HNSW 인덱스를 타는지~~ | ✅ **측정 완료** — `avg`는 인덱스를 막지 않는다 (`OPENSQL_RESEARCH.md` §12 12번) |
 | Failover | ⛔ Single 구성이라 원리적으로 불가 (ADR-020) |
 
 ---
