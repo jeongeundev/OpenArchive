@@ -4,7 +4,7 @@ import { useRef, useState } from "react";
 
 import { ApiError, uploadDocument } from "@/lib/api";
 import { SUPPORTED_CONTENT_TYPES, type Visibility } from "@/lib/types";
-import { getCurrentUser } from "@/lib/user";
+import { useCurrentUser } from "@/lib/useCurrentUser";
 
 export function UploadDropzone({
   onUploaded,
@@ -20,7 +20,7 @@ export function UploadDropzone({
   const [uploading, setUploading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const user = getCurrentUser();
+  const user = useCurrentUser();
 
   function selectFile(nextFile: File | null): void {
     setFile(nextFile);

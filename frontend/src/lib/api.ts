@@ -135,7 +135,9 @@ export function search(input: {
     content_type?: ContentType;
     k?: number;
   } = { query: input.query };
-  if (input.tags !== undefined) body.tags = input.tags;
+  // 빈 배열은 보내지 않는다. 백엔드 SQL이 "필터 없음"을 NULL로만 표현하므로,
+  // 빈 배열을 넘기면 d.tags && '{}' 가 항상 거짓이 되어 결과가 0건이 된다.
+  if (input.tags !== undefined && input.tags.length > 0) body.tags = input.tags;
   if (input.contentType != null) body.content_type = input.contentType;
   if (input.k !== undefined) body.k = input.k;
 

@@ -3,14 +3,14 @@
 import Link from "next/link";
 import { useState } from "react";
 import { ApiError, reembedDocument } from "@/lib/api";
+import { useCurrentUser } from "@/lib/useCurrentUser";
 import { useDocuments } from "@/lib/useDocuments";
-import { getCurrentUser } from "@/lib/user";
 
 export function ErrorDocuments(): React.ReactElement {
   const { documents, loading, error, refresh } = useDocuments({ status: "error" });
   const [actionError, setActionError] = useState<string | null>(null);
   const [requestingId, setRequestingId] = useState<string | null>(null);
-  const anonymous = getCurrentUser() === null;
+  const anonymous = useCurrentUser() === null;
 
   async function reembed(id: string): Promise<void> {
     setRequestingId(id);
