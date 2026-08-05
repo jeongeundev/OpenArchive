@@ -1,0 +1,69 @@
+{
+  "project": "OpenArchive",
+  "phase": "m4-mcp-gateway",
+  "steps": [
+    {
+      "step": 0,
+      "name": "related-service",
+      "type": "feat",
+      "scope": "search",
+      "desc": "청크 평균 벡터로 관련 문서와 동일 텍스트를 찾는 서비스",
+      "status": "pending"
+    },
+    {
+      "step": 1,
+      "name": "tag-suggestion-service",
+      "type": "feat",
+      "scope": "search",
+      "desc": "유사 문서의 태그 빈도로 태그를 추천하는 서비스",
+      "status": "pending"
+    },
+    {
+      "step": 2,
+      "name": "related-api",
+      "type": "feat",
+      "scope": "api",
+      "desc": "관련 문서와 태그 추천 조회 라우터",
+      "status": "pending"
+    },
+    {
+      "step": 3,
+      "name": "tag-editing",
+      "type": "feat",
+      "scope": "api",
+      "desc": "재임베딩 없이 문서 태그를 교체하는 엔드포인트",
+      "status": "pending"
+    },
+    {
+      "step": 4,
+      "name": "mcp-server",
+      "type": "feat",
+      "scope": "mcp",
+      "desc": "FastMCP stdio 서버와 근거 공급 툴 3개",
+      "status": "pending"
+    },
+    {
+      "step": 5,
+      "name": "related-panel",
+      "type": "feat",
+      "scope": "frontend",
+      "desc": "관련 문서·동일 텍스트·태그 추천 표시",
+      "status": "pending"
+    },
+    {
+      "step": 6,
+      "name": "tag-editing-ui",
+      "type": "feat",
+      "scope": "frontend",
+      "desc": "문서 태그 편집과 추천 태그 적용",
+      "status": "pending"
+    },
+    {
+      "step": 7,
+      "name": "docs-sync",
+      "type": "docs",
+      "desc": "M4 API 계약과 MCP 등록 절차를 문서에 반영",
+      "status": "pending"
+    }
+  ]
+}

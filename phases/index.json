@@ -19,6 +19,10 @@
       "dir": "m3-frontend",
       "status": "completed",
       "completed_at": "2026-08-05T23:26:13+0900"
+    },
+    {
+      "dir": "m4-mcp-gateway",
+      "status": "pending"
     }
   ]
 }
