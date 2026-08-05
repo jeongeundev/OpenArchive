@@ -28,3 +28,12 @@ class DocumentDetail(DocumentSummary):
     versions: list[TextVersion]
     chunk_count: int
     chunk_version: int | None
+
+
+class EditDocumentRequest(BaseModel):
+    content: str
+    version: int
+
+
+class EditDocumentResponse(DocumentSummary):
+    content: str

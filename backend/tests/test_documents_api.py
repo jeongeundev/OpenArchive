@@ -26,6 +26,15 @@ def upload(
     )
 
 
+def edit(client: TestClient, document_id: str, *, content: str, version: int, user_id="alice"):
+    headers = {"X-User-Id": user_id} if user_id is not None else {}
+    return client.put(
+        f"/api/documents/{document_id}",
+        headers=headers,
+        json={"content": content, "version": version},
+    )
+
+
 def test_upload_txt_returns_pending_document(db_client: TestClient):
     response = upload(db_client)
 
@@ -159,3 +168,191 @@ def test_detail_returns_404_for_missing_document(db_client: TestClient):
     response = db_client.get(f"/api/documents/{uuid4()}")
 
     assert response.status_code == 404
+
+
+def test_owner_can_edit_extracted_text_as_a_new_version(db_client: TestClient):
+    document_id = upload(db_client).json()["id"]
+
+    response = edit(db_client, document_id, content="Updated extracted text", version=1)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["content"] == "Updated extracted text"
+    assert body["version"] == 2
+
+
+def test_edit_trigger_creates_version_job_and_pending_status(
+    db_client: TestClient, migrated_db: str
+):
+    document_id = upload(db_client).json()["id"]
+    with psycopg.connect(migrated_db) as conn:
+        conn.execute("UPDATE embedding_jobs SET status = 'done' WHERE document_id = %s", (document_id,))
+        conn.execute("UPDATE documents SET embedding_status = 'ready' WHERE id = %s", (document_id,))
+
+    assert edit(db_client, document_id, content="version two", version=1).status_code == 200
+
+    with psycopg.connect(migrated_db) as conn:
+        assert conn.execute(
+            "SELECT version FROM document_versions WHERE document_id = %s ORDER BY version",
+            (document_id,),
+        ).fetchall() == [(1,), (2,)]
+        assert conn.execute(
+            "SELECT embedding_status FROM documents WHERE id = %s", (document_id,)
+        ).fetchone() == ("pending",)
+        assert conn.execute(
+            "SELECT count(*) FROM embedding_jobs WHERE document_id = %s AND status = 'pending'",
+            (document_id,),
+        ).fetchone() == (1,)
+
+
+def test_stale_edit_returns_current_version_without_changing_document(
+    db_client: TestClient,
+):
+    document_id = upload(db_client).json()["id"]
+    assert edit(db_client, document_id, content="version two", version=1).status_code == 200
+
+    response = edit(db_client, document_id, content="stale overwrite", version=1)
+
+    assert response.status_code == 409
+    assert response.json() == {
+        "detail": "다른 곳에서 문서가 수정되었습니다. 새로고침 후 다시 시도하세요.",
+        "current_version": 2,
+    }
+    detail = db_client.get(f"/api/documents/{document_id}").json()
+    assert (detail["content"], detail["version"]) == ("version two", 2)
+
+
+def test_edit_rejects_blank_content_without_changing_document(db_client: TestClient):
+    document_id = upload(db_client).json()["id"]
+
+    response = edit(db_client, document_id, content=" \n\t", version=1)
+
+    assert response.status_code == 400
+    detail = db_client.get(f"/api/documents/{document_id}").json()
+    assert (detail["content"], detail["version"]) == ("OpenSQL guide", 1)
+
+
+def test_edit_keeps_old_chunks_until_worker_replaces_them_and_exposes_convergence(
+    db_client: TestClient, migrated_db: str
+):
+    document_id = upload(db_client).json()["id"]
+
+    async def process() -> None:
+        async with await psycopg.AsyncConnection.connect(migrated_db, autocommit=True) as conn:
+            await process_all_embedding_jobs(conn, FakeProvider())
+
+    asyncio.run(process())
+    assert edit(db_client, document_id, content="new searchable text", version=1).status_code == 200
+
+    with psycopg.connect(migrated_db) as conn:
+        assert conn.execute(
+            "SELECT DISTINCT version FROM document_chunks WHERE document_id = %s", (document_id,)
+        ).fetchall() == [(1,)]
+        assert conn.execute(
+            """SELECT count(DISTINCT d.id) FROM documents d JOIN document_chunks c
+               ON c.document_id = d.id WHERE c.version <> d.version"""
+        ).fetchone() == (1,)
+
+    asyncio.run(process())
+    with psycopg.connect(migrated_db) as conn:
+        assert conn.execute(
+            """SELECT count(DISTINCT d.id) FROM documents d JOIN document_chunks c
+               ON c.document_id = d.id WHERE c.version <> d.version"""
+        ).fetchone() == (0,)
+
+
+def test_delete_cascades_all_document_rows(db_client: TestClient, migrated_db: str):
+    document_id = upload(db_client).json()["id"]
+
+    async def process() -> None:
+        async with await psycopg.AsyncConnection.connect(migrated_db, autocommit=True) as conn:
+            await process_all_embedding_jobs(conn, FakeProvider())
+
+    asyncio.run(process())
+    with psycopg.connect(migrated_db) as conn:
+        for table in ("document_chunks", "document_versions", "embedding_jobs"):
+            assert conn.execute(
+                f"SELECT count(*) FROM {table} WHERE document_id = %s", (document_id,)
+            ).fetchone()[0] > 0
+
+    response = db_client.delete(f"/api/documents/{document_id}", headers={"X-User-Id": "alice"})
+
+    assert response.status_code == 204
+    assert db_client.get(f"/api/documents/{document_id}").status_code == 404
+    with psycopg.connect(migrated_db) as conn:
+        for table in ("document_chunks", "document_versions", "embedding_jobs"):
+            assert conn.execute(
+                f"SELECT count(*) FROM {table} WHERE document_id = %s", (document_id,)
+            ).fetchone() == (0,)
+
+
+def test_reembed_recovers_error_without_changing_version_and_coalesces_requests(
+    db_client: TestClient, migrated_db: str
+):
+    document_id = upload(db_client).json()["id"]
+    with psycopg.connect(migrated_db) as conn:
+        conn.execute("UPDATE embedding_jobs SET status = 'error' WHERE document_id = %s", (document_id,))
+        conn.execute("UPDATE documents SET embedding_status = 'error' WHERE id = %s", (document_id,))
+
+    for _ in range(2):
+        response = db_client.post(
+            f"/api/documents/{document_id}/reembed", headers={"X-User-Id": "alice"}
+        )
+        assert response.status_code == 200
+
+    with psycopg.connect(migrated_db) as conn:
+        assert conn.execute(
+            "SELECT version, embedding_status FROM documents WHERE id = %s", (document_id,)
+        ).fetchone() == (1, "pending")
+        assert conn.execute(
+            "SELECT count(*) FROM document_versions WHERE document_id = %s", (document_id,)
+        ).fetchone() == (1,)
+        assert conn.execute(
+            "SELECT count(*) FROM embedding_jobs WHERE document_id = %s AND status = 'pending'",
+            (document_id,),
+        ).fetchone() == (1,)
+
+    async def process() -> None:
+        async with await psycopg.AsyncConnection.connect(migrated_db, autocommit=True) as conn:
+            await process_all_embedding_jobs(conn, FakeProvider())
+
+    asyncio.run(process())
+    detail = db_client.get(f"/api/documents/{document_id}").json()
+    assert detail["embedding_status"] == "ready"
+    assert detail["chunk_count"] > 0
+
+
+def test_write_endpoints_share_visibility_aware_ownership_rules(db_client: TestClient):
+    private_id = upload(db_client, data={"visibility": "private"}).json()["id"]
+    public_id = upload(db_client, filename="public.txt", data={"visibility": "public"}).json()["id"]
+
+    requests = (
+        lambda document_id, headers: db_client.put(
+            f"/api/documents/{document_id}", headers=headers, json={"content": "x", "version": 1}
+        ),
+        lambda document_id, headers: db_client.delete(
+            f"/api/documents/{document_id}", headers=headers
+        ),
+        lambda document_id, headers: db_client.post(
+            f"/api/documents/{document_id}/reembed", headers=headers
+        ),
+    )
+    for request in requests:
+        assert request(private_id, {"X-User-Id": "bob"}).status_code == 404
+        assert request(public_id, {"X-User-Id": "bob"}).status_code == 403
+        assert request(public_id, {}).status_code == 400
+
+
+def test_write_endpoints_return_404_for_missing_document(db_client: TestClient):
+    missing_id = str(uuid4())
+    headers = {"X-User-Id": "alice"}
+
+    assert db_client.put(
+        f"/api/documents/{missing_id}",
+        headers=headers,
+        json={"content": "x", "version": 1},
+    ).status_code == 404
+    assert db_client.delete(f"/api/documents/{missing_id}", headers=headers).status_code == 404
+    assert db_client.post(
+        f"/api/documents/{missing_id}/reembed", headers=headers
+    ).status_code == 404
