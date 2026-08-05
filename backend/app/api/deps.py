@@ -2,9 +2,10 @@ from collections.abc import AsyncIterator
 from typing import Annotated
 
 import psycopg
-from fastapi import Header, HTTPException
+from fastapi import Header, HTTPException, Request
 
 from app.db import get_pool
+from app.embeddings.base import EmbeddingProvider
 
 
 async def get_conn() -> AsyncIterator[psycopg.AsyncConnection]:
@@ -23,3 +24,8 @@ def require_user_id(x_user_id: Annotated[str | None, Header()] = None) -> str:
 def optional_user_id(x_user_id: Annotated[str | None, Header()] = None) -> str | None:
     """읽기 요청의 선택적 사용자 ID를 반환한다."""
     return x_user_id
+
+
+def get_embedding_provider(request: Request) -> EmbeddingProvider:
+    """앱 lifespan에서 만든 임베딩 프로바이더를 반환한다."""
+    return request.app.state.provider

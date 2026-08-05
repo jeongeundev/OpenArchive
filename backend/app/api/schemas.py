@@ -1,7 +1,9 @@
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
+
+from app.services.search import MAX_K
 
 
 class DocumentSummary(BaseModel):
@@ -37,3 +39,27 @@ class EditDocumentRequest(BaseModel):
 
 class EditDocumentResponse(DocumentSummary):
     content: str
+
+
+class SearchRequest(BaseModel):
+    query: str
+    tags: list[str] | None = None
+    content_type: str | None = None
+    k: int = Field(default=10, ge=1, le=MAX_K)
+
+
+class SearchResult(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    document_id: UUID
+    title: str
+    tags: list[str]
+    content_type: str
+    chunk_index: int
+    content: str
+    score: float
+
+
+class SearchResponse(BaseModel):
+    items: list[SearchResult]
+    sql: str

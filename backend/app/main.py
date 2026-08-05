@@ -3,8 +3,10 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from app.api.documents import router as documents_router
+from app.api.search import router as search_router
 from app.config import get_settings
 from app.db import close_pool, get_pool
+from app.embeddings import get_provider
 from app.migrations import run_migrations
 
 
@@ -16,6 +18,7 @@ async def lifespan(app: FastAPI):
     await run_migrations(get_settings().database_url)
     pool = get_pool()
     await pool.open()
+    app.state.provider = get_provider()
     try:
         yield
     finally:
@@ -24,6 +27,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="OpenArchive API", lifespan=lifespan)
 app.include_router(documents_router)
+app.include_router(search_router)
 
 
 @app.get("/api/health")
