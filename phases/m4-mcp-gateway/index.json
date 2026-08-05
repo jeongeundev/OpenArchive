@@ -8,7 +8,10 @@
       "type": "feat",
       "scope": "search",
       "desc": "청크 평균 벡터로 관련 문서와 동일 텍스트를 찾는 서비스",
-      "status": "pending"
+      "status": "completed",
+      "summary": "RelatedDocument·IdenticalDocument·RelatedResult 데이터클래스와 find_related 서비스를 구현하고 실제 pgvector DB 테스트를 통과",
+      "started_at": "2026-08-06T02:59:08+0900",
+      "completed_at": "2026-08-06T03:01:45+0900"
     },
     {
       "step": 1,
@@ -65,5 +68,6 @@
       "desc": "M4 API 계약과 MCP 등록 절차를 문서에 반영",
       "status": "pending"
     }
-  ]
+  ],
+  "created_at": "2026-08-06T02:59:08+0900"
 }
