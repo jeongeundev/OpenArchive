@@ -49,6 +49,42 @@ pg_repack 1.5.2
 
 > **교훈**: `PROJECT_CONTEXT.md`의 "PostgreSQL 메이저 버전 확인"이 M0 최우선 항목 중 하나였는데, 문서에는 16.8과 14.13이 함께 언급되어 있어 둘 중 하나로 추정했다. **실제는 17.8로 후보에 없던 값이었다.** 문서 추정으로 설계를 고정하지 않고 미확인으로 표기해둔 것이 맞았다.
 
+### 실 VM 실측 결과 **[실측 2026-08-05]**
+
+`opensql-dev` VM(Rocky 9.7 x86-64, single 모드)에 실제로 설치해 측정했다. 설치 절차는 `SETUP_OPENSQL.md`.
+
+> **`ADR-021`에 따라 이 표가 증거다.** 라이선스가 **2026-09-10에 만료**되면 PostgreSQL이 기동하지 않아 재측정이 불가능하다. 심사는 저장소 상태를 기준으로 하므로(규정 제11조 ②) 여기 남은 기록이 검증의 근거가 된다.
+
+**METADATA 기록과 일치한 항목**
+
+| 항목 | 문서 | 실측 |
+|---|---|---|
+| PostgreSQL | 17.8 | ✅ `17.8 on x86_64-pc-linux-gnu, gcc 11.5.0` |
+| pgvector | 0.8.1 | ✅ `0.8.1` |
+| pgvectorscale | 0.9.0 | ✅ `0.9.0` |
+| `max_connections` | 100 | ✅ `100` |
+
+**미확인이었다가 해소된 항목**
+
+| # | 항목 | 결과 | 영향 |
+|---|---|---|---|
+| ② | HNSW 인덱스 생성 | ✅ `CREATE INDEX ... USING hnsw (v vector_cosine_ops)` 성공 | ADR-002 리스크 해제 |
+| ③ | `avg(vector)` | ✅ 동작 | ADR-018 전제 실증 |
+| ⑥ | `pg_trgm` | ✅ `CREATE EXTENSION` 성공 (번들 목록엔 없으나 contrib로 존재) | ADR-016 한국어 대안 확보 |
+| ① | **OpenProxy 경유 `LISTEN`/`NOTIFY`** | ✅ **동작** — 페이로드까지 수신 | **최대 리스크 해소.** 상세 §7-2 |
+
+**문서 조사와 달랐던 것**
+
+설치기가 생성한 `openproxy.toml`은 `pool_mode = "session"`이다(§5-1). 문서 기본값 `transaction`을 전제로 한 §7의 우려가 여기서 갈렸다. `query_parser_enabled = false`이고 백엔드가 primary 하나뿐이라 Replica 라우팅도 일어나지 않는다 — `ADR-010` 근거 교체가 실측으로 확인됐다.
+
+**아직 측정하지 못한 것**
+
+| 항목 | 사유 |
+|---|---|
+| LISTEN 연결의 `idle_timeout` 실동작 | 10분 이상 유휴 관측 필요. **폴링 주기를 늘리기 전 필수** |
+| `avg`가 HNSW 인덱스를 타는지 | 데이터가 있어야 `EXPLAIN`이 의미를 가진다 → M1 이후 |
+| Failover | ⛔ Single 구성이라 **원리적으로 불가** (ADR-020) |
+
 ### 대회용 구성 지시 **[배포판·메일 확정]**
 
 사무국 안내 메일에 명시된 제약이다.
@@ -332,6 +368,55 @@ bash $OPENSQL_HOME/scripts/reload_openproxy.sh   # SIGHUP, 무중단 설정 반�
 
 **[확정]** `session` 모드 고유 제약은 문서에 없음.
 
+### 5-1. 실측 — 설치기는 `session`으로 생성한다 **[실측 2026-08-05]**
+
+**"기본값이 `transaction`"은 설정 파일을 직접 작성할 때의 이야기다.** `opensql_local_installer.py --mode single`이 생성한 `$OPENSQL_HOME/etc/openproxy/openproxy.toml`은 다음과 같다.
+
+```toml
+[general]
+host = "0.0.0.0"
+port = 6432
+admin_port = 6433
+admin_username = "postgres"
+admin_password = "pg_password"
+connect_timeout = 10000
+
+[pools.opensql]
+pool_mode = "session"            # ← transaction 이 아니다
+default_role = "primary"
+query_parser_enabled = false     # ← 읽기/쓰기 분리 꺼짐
+
+[pools.opensql.users.0]
+username = "postgres"
+password = "pg_password"
+pool_size = 10
+
+[pools.opensql.shards.0]
+servers = [
+    ["192.168.64.4", 5432, "primary"],
+]
+database = "postgres"
+```
+
+| 항목 | 문서 기본값 | 설치기 생성값 |
+|---|---|---|
+| `pool_mode` | `transaction` | **`session`** |
+| `query_parser_enabled` | `false` | `false` (명시) |
+| `default_role` | — | `primary` (명시) |
+| `pool_size` | — | 10 |
+
+> **설계 영향 두 가지**
+>
+> 1. **§7의 LISTEN/NOTIFY 리스크가 해소된다.** `session` 모드는 서버 커넥션을 클라이언트 접속 동안 전용으로 유지하므로 세션 상태가 보존된다. 실제로 동작을 확인했다 (§7-2).
+> 2. **`ADR-010`의 근거 교체가 옳았음이 확인된다.** `query_parser_enabled = false`이고 `servers`에 primary 하나뿐이라 Replica 라우팅이 일어날 수 없다. 명시적 트랜잭션을 유지하는 이유는 이제 "Replica 라우팅 방지"가 아니라 **`SET LOCAL` 보장 + HA 전환 대비**다.
+>
+> **주의**: `pool_size = 10`이고 `max_connections = 100`이다. 애플리케이션 풀(API + 워커)을 이 안에서 산정해야 한다.
+
+> ⚠️ **접속 시 `-d`에 pool 이름을 넣는다.** DB 이름(`postgres`)이 아니라 pool 이름(`opensql`)이다 — OpenProxy 규약(§4).
+> ```bash
+> psql -h <VM_IP> -p 6432 -U postgres -d opensql     # 비밀번호 pg_password
+> ```
+
 ---
 
 ## 6. 읽기/쓰기 분리와 복제 지연 **[확정]** ⚠️ 이 프로젝트에 결정적
@@ -410,7 +495,20 @@ servers = [
 
 ---
 
-## 7. LISTEN / NOTIFY **[미확인]** ⚠️ 최대 리스크
+## 7. LISTEN / NOTIFY **[실측 완료]** ✅ 최대 리스크 해소
+
+> **결론 먼저 (2026-08-05 실측)**: **OpenProxy(6432) 경유로 정상 동작한다.**
+> 다른 세션에서 `NOTIFY ch1, 'hello'`를 발행하자 LISTEN 세션이 **페이로드까지 수신**했다.
+>
+> ```
+> opensql=> LISTEN ch1;
+> opensql=> SELECT 1;
+> "ch1" 비동기 통지를 받음, 부가정보: "hello from another session", 보낸 프로세스: 62653
+> ```
+>
+> 아래 §7-1의 우려는 **`pool_mode` 기본값을 `transaction`으로 가정한 것**이었는데, 실제 설치본은 `session`이다(§5-1). 상세와 설계 영향은 §7-2.
+
+### 7-1. 문서 조사 단계의 우려 (기록 보존)
 
 **공식 문서 전체에 `LISTEN`/`NOTIFY`에 대한 언급이 단 한 줄도 없다.** 지원한다고도, 안 한다고도 쓰여 있지 않다.
 
@@ -425,6 +523,25 @@ servers = [
 > **M0 최우선 검증 항목.** 결과에 따라 두 갈래:
 > - 동작함 → 워커 LISTEN 연결만 `session` 모드 전용 pool 또는 노드 직결로 분리
 > - 동작 안 함 → 폴링을 주 경로로 승격하고 NOTIFY를 최적화로 격하 (설계 서사 수정)
+
+### 7-2. 실측 결과 **[실측 2026-08-05]**
+
+**동작한다.** 위 두 갈래 중 "동작함"이었다. 그러나 **`ADR-009`의 결론(폴링 주 경로)은 바꾸지 않는다.**
+
+| | 실측 전 가정 | 실제 |
+|---|---|---|
+| `pool_mode` | `transaction` (문서 기본값) | **`session`** — 설치기가 그렇게 생성 |
+| LISTEN 수신 | 불가능할 것 | **정상 수신** (페이로드 포함) |
+
+**결론을 유지하는 이유 — 동작 여부와 전달 보장은 다른 문제다.**
+
+1. **연결이 끊긴 구간의 알림은 유실된다.** `NOTIFY`는 커밋 시 발행되고 그때 연결이 없으면 사라진다. 재연결까지의 공백에 발행된 잡은 폴링만이 회수한다
+2. **`idle_timeout`(기본 10분)·`server_lifetime`(기본 1시간)이 그대로다.** LISTEN 연결은 본질적으로 유휴 상태라 주기적으로 끊긴다 (§4)
+3. `ADR-009`의 핵심 주장은 *"기동 방식은 정합성의 일부가 아니다"*이다. 아웃박스와 `SKIP LOCKED`가 유실·중복을 막으므로, LISTEN이 되든 안 되든 **정합성 서사는 흔들리지 않는다**
+
+**바뀌는 것: 폴링 주기.** LISTEN이 즉시 깨워주므로 **5초 → 30초로 늘려도 체감 지연이 없다.** 폴링은 안전망으로 남고 DB 부하는 6분의 1이 된다. 이것이 ADR-009가 예고한 *"동작하면 폴링 주기를 늘려 부하를 낮춘다"*의 실행이다.
+
+> ⚠️ **미검증 항목이 남아 있다.** LISTEN 연결을 10분 이상 유휴로 두었을 때 실제로 끊기는지는 관측하지 못했다. 폴링 주기를 늘리기 전에 이것을 확인해야 한다 — 끊긴다면 워커의 재연결·재등록 로직이 정상 동작하는지가 전제다.
 
 ---
 
@@ -510,16 +627,22 @@ x86-64 에뮬레이션은 네이티브의 1/10~1/20 속도라 임베딩 워커�
 | 11 | `avg(vector)` 지원 | 0.5.0+ 요구 → 충족 |
 | 5 | OpenProxy 설정 | **성격 변경** — "제공받는 클러스터 설정 확인"이 아니라 **우리가 직접 작성**한다. `openproxy.standalone.template.toml`에는 `query_parser_read_write_splitting`이 아예 없고 `servers`도 primary 1개뿐이다 (§6 참조) |
 
-### 🔴 실측이 필요한 항목 (우선순위 순)
+### ✅ 실 VM에서 측정 완료 (2026-08-05)
+
+| # | 검증 항목 | 결과 |
+|---|---|---|
+| 1 | **OpenProxy 경유 `LISTEN`/`NOTIFY`** | ✅ **동작** — 페이로드까지 수신. `pool_mode`가 `session`이라 세션 상태가 보존된다 (§5-1, §7-2). **폴링 주기를 5→30초로 늘릴 수 있다** (단 6번 확인 후) |
+| 4' | HNSW 인덱스 생성 실행 | ✅ 성공 |
+| 10 | `max_connections` / `pool_size` | ✅ `max_connections=100`, OpenProxy `pool_size=10` |
+| 13 | `pg_trgm` 설치 | ✅ 성공 — ADR-016의 한국어 부분 일치 대안 확보 |
+| 5 | OpenProxy 실제 설정 | ✅ 확인 — `pool_mode="session"`, `query_parser_enabled=false` (§5-1) |
+
+### 🔴 아직 남은 실측
 
 | # | 검증 항목 | 방법 | 실패 시 영향 |
 |---|---|---|---|
-| 1 | **OpenProxy 경유 `LISTEN`/`NOTIFY` 동작 여부** | 한 세션에서 `LISTEN ch`, 다른 세션에서 `NOTIFY ch` | 없음 — 이미 폴링이 주 경로다 (ADR-009). 동작하면 폴링 주기를 늘려 부하를 낮춘다 |
-| 4' | HNSW 인덱스 **생성 실행** | `CREATE INDEX ... USING hnsw` | 버전은 맞으므로 실패 가능성은 낮으나, 빌드 옵션 문제는 실행해야 안다 |
-| 12 | **`avg` 결과가 HNSW 인덱스를 타는지** | 관련 문서 쿼리에 `EXPLAIN (ANALYZE, BUFFERS)` | 인덱스를 못 타면 평균을 별도 쿼리로 조회해 벡터 리터럴로 넘긴다 (왕복 2회) — ADR-018 |
-| 6 | LISTEN 연결의 `server_lifetime`/`idle_timeout` 실동작 | 장시간 유휴 LISTEN 유지 관측 | 워커 재연결 정책 |
-| 10 | `max_connections` 여유 및 OpenProxy `pool_size` | `SHOW max_connections` + `SHOW CONFIG` | 풀 크기 산정. `patroni.yml` 기준 **100** |
-| 13 | `pg_trgm` 설치 가능 여부 | `CREATE EXTENSION pg_trgm` | 없어도 무방 — ADR-016은 의존하지 않는다 |
+| 6 | LISTEN 연결의 `server_lifetime`/`idle_timeout` 실동작 | 10분 이상 유휴 LISTEN 유지 관측 | 워커 재연결 정책. **1번 결과로 폴링 주기를 늘리기 전에 반드시 확인** — 연결이 끊기는데 재등록이 안 되면 알림이 영영 안 온다 |
+| 12 | **`avg` 결과가 HNSW 인덱스를 타는지** | 관련 문서 쿼리에 `EXPLAIN (ANALYZE, BUFFERS)` | 인덱스를 못 타면 평균을 별도 쿼리로 조회해 벡터 리터럴로 넘긴다 (왕복 2회) — ADR-018. **데이터가 쌓인 M1 이후에 의미가 있다** |
 
 ### ⛔ Single 구성에서 검증 불가능한 항목
 
@@ -530,9 +653,45 @@ x86-64 에뮬레이션은 네이티브의 1/10~1/20 속도라 임베딩 워커�
 
 사무국이 Single 구성을 지시했으므로(§0) 이 둘은 **원리적으로 수행할 수 없다.** 고가용성 요건을 어떻게 다룰지는 **ADR-020**에 기록한다. `patroni.yml`의 파라미터(`ttl` 등)와 `finalize_single_to_ha.sh`의 존재로 HA 전환 경로가 설계에 남아 있음은 문서로 제시할 수 있다.
 
-> **11·12번 배경**: 관련 문서·태그 추천(ADR-018·019)이 문서 대표 벡터를 저장하지 않고 **질의 시점 `avg(embedding)`**으로 구한다. 저장 컬럼을 만들지 않아 동기화 대상이 늘지 않는 대신, 플래너가 `(SELECT avg(...) FROM ...)`을 상수로 접지 못하면 HNSW 인덱스 정렬을 활용하지 못하고 풀스캔이 된다. 기능 가부(11)와 성능(12)을 나눠 확인한다.
+> **11·12번 배경**: 관련 문서·태그 추천(ADR-018·019)이 문서 대표 벡터를 저장하지 않고 **질의 시점 `avg(embedding)`**으로 구한다. 저장 컬럼을 만들지 않아 동기화 대상이 늘지 않는 대신, 플래너가 `(SELECT avg(...) FROM ...)`을 상수로 접지 못하면 HNSW 인덱스 정렬을 활용하지 못하고 풀스캔이 된다. **기능 가부(11)는 ✅ 확인됐고, 성능(12)이 남았다.**
 >
-> **13번 배경**: `pg_trgm`은 §1의 번들 확장 목록에 **없다.** PostgreSQL contrib 모듈이라 설치본에 포함될 가능성이 높지만, 확인 전까지 설계에 넣지 않는다.
+> **13번 배경**: `pg_trgm`은 §1의 번들 확장 목록에 **없다.** PostgreSQL contrib 모듈이라 설치본에 포함될 가능성이 높다고 봤는데, **실측 결과 설치된다.**
+
+### 실측 재현 명령
+
+라이선스 만료 전에 다시 확인해야 할 일이 생기면 아래를 쓴다. VM에서 `sudo su - opensql` 후 실행한다.
+
+```bash
+# 버전 (소켓 접속은 trust라 비밀번호 불필요)
+psql -U postgres -c "SELECT version();"
+psql -U postgres -c "SELECT name, default_version FROM pg_available_extensions WHERE name LIKE '%vector%';"
+psql -U postgres -c "SHOW max_connections;"
+
+# HNSW + avg
+psql -U postgres -c "CREATE EXTENSION IF NOT EXISTS vector;"
+psql -U postgres -c "CREATE TABLE _t (id int, v vector(1024));"
+psql -U postgres -c "CREATE INDEX ON _t USING hnsw (v vector_cosine_ops);"
+psql -U postgres -c "SELECT avg(v) FROM (SELECT '[1,2,3]'::vector AS v) s;"
+psql -U postgres -c "DROP TABLE _t;"
+
+# pg_trgm
+psql -U postgres -c "CREATE EXTENSION IF NOT EXISTS pg_trgm;"
+
+# 클러스터 상태
+patronictl -c $OPENSQL_HOME/etc/patroni/patroni.yml list
+```
+
+**LISTEN/NOTIFY는 터미널 2개가 필요하다.**
+
+```bash
+# 터미널 1 — OpenProxy 경유 (-d 는 pool 이름)
+PGPASSWORD=pg_password psql -h <VM_IP> -p 6432 -U postgres -d opensql
+opensql=> LISTEN ch1;
+opensql=> SELECT 1;          -- 알림은 다음 쿼리 실행 시 표시된다
+
+# 터미널 2 — 다른 세션에서 발행
+psql -U postgres -c "NOTIFY ch1, 'hello from another session';"
+```
 
 ---
 
