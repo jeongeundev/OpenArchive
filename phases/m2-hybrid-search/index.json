@@ -1,0 +1,74 @@
+{
+  "project": "OpenArchive",
+  "phase": "m2-hybrid-search",
+  "steps": [
+    {
+      "step": 0,
+      "name": "parsing",
+      "type": "feat",
+      "scope": "api",
+      "desc": "업로드 파일에서 텍스트를 추출하는 파서",
+      "status": "completed",
+      "started_at": "2026-08-05T19:20:05+0900",
+      "summary": "detect_content_type(filename: str) -> str와 extract_text(data: bytes, content_type: str) -> str를 구현하고 UnsupportedFileType·TextDecodeError를 제공했으며, 빈 추출 결과는 예외가 아닌 빈 문자열로 반환",
+      "completed_at": "2026-08-05T19:22:45+0900"
+    },
+    {
+      "step": 1,
+      "name": "search-service",
+      "type": "feat",
+      "scope": "search",
+      "desc": "정형 필터와 벡터 유사도를 결합한 단일 SQL 검색",
+      "status": "completed",
+      "started_at": "2026-08-05T19:22:45+0900",
+      "summary": "search_documents(conn: psycopg.AsyncConnection, provider: EmbeddingProvider, *, query: str, user_id: str | None = None, tags: list[str] | None = None, content_type: str | None = None, k: int = 10) -> list[SearchHit]가 provider를 주입받아 SEARCH_SQL 단일 쿼리로 검색하며, SearchHit는 document_id·title·tags·content_type·chunk_index·content·score 필드를 제공하고 MAX_K 상수로 k를 제한하며 conftest에 insert_test_document·process_all_embedding_jobs 헬퍼를 추가",
+      "completed_at": "2026-08-05T19:28:16+0900"
+    },
+    {
+      "step": 2,
+      "name": "documents-api",
+      "type": "feat",
+      "scope": "api",
+      "desc": "문서 업로드와 조회 라우터",
+      "status": "completed",
+      "started_at": "2026-08-05T19:28:16+0900",
+      "summary": "get_conn() -> AsyncIterator[psycopg.AsyncConnection], require_user_id(...) -> str, optional_user_id(...) -> str | None 의존성을 추가하고 documents_router를 app.include_router로 등록했으며 DocumentSummary·TextVersion·DocumentDetail 응답 모델과 db_client TestClient 픽스처를 통해 문서 업로드·목록·상세 API를 검증",
+      "completed_at": "2026-08-05T19:32:33+0900"
+    },
+    {
+      "step": 3,
+      "name": "document-editing",
+      "type": "feat",
+      "scope": "api",
+      "desc": "추출 텍스트 편집·삭제·재임베딩 요청",
+      "status": "completed",
+      "started_at": "2026-08-05T19:32:33+0900",
+      "summary": "JSON PUT /api/documents/{id}는 {content, version}을 받아 추출 텍스트를 한 문장으로 낙관적 갱신하고 409 시 최상위 detail·current_version을 반환하며, DELETE 204와 POST reembed를 추가했다. 세 경로 모두 타인의 private 문서는 404·public 문서는 403이고 X-User-Id가 필수이며, multipart 파일 재업로드는 만들지 않았다.",
+      "completed_at": "2026-08-05T19:36:19+0900"
+    },
+    {
+      "step": 4,
+      "name": "search-api",
+      "type": "feat",
+      "scope": "search",
+      "desc": "검색 라우터와 실행 SQL 노출",
+      "status": "completed",
+      "started_at": "2026-08-05T19:36:19+0900",
+      "summary": "POST /api/search는 SearchRequest(query: str, tags: list[str] | None, content_type: str | None, k: int)를 받아 SearchResponse(items: list[SearchResult], sql: str)를 반환하며, SearchResult는 document_id·title·tags·content_type·chunk_index·content·score를 제공하고 get_embedding_provider 의존성이 lifespan의 앱 상태 프로바이더를 재사용한다.",
+      "completed_at": "2026-08-05T19:39:49+0900"
+    },
+    {
+      "step": 5,
+      "name": "system-api",
+      "type": "feat",
+      "scope": "api",
+      "desc": "접속 노드·잡 수·정합성 카운터 조회",
+      "status": "completed",
+      "started_at": "2026-08-05T19:39:50+0900",
+      "summary": "GET /api/system/status가 nullable 접속 노드·pending/processing/error 잡 수·어긋난 문서 수·앱 상태의 fake 프로바이더명·M5 예약 null 재연결 이벤트를 반환하며, M2 점검에서 단일 SQL 태그+벡터 EXPLAIN·private 권한·문서당 1건·재임베딩 중 검색 유지·낡은 PUT 409를 확인했다.",
+      "completed_at": "2026-08-05T19:42:36+0900"
+    }
+  ],
+  "created_at": "2026-08-05T19:20:05+0900",
+  "completed_at": "2026-08-05T19:42:36+0900"
+}

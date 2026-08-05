@@ -1,11 +1,19 @@
+import asyncio
+import hashlib
+from uuid import UUID
+
 import psycopg
 import pytest
 from fastapi.testclient import TestClient
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
 
 from app.config import get_settings
+from app.db import close_pool
+from app.embeddings.base import EmbeddingProvider
+from app.embeddings.fake import FakeProvider
 from app.main import app
 from app.migrations import run_migrations
+from app.worker import process_once
 
 # 개발 DB(openarchive)와 분리한다. 테스트는 매번 스키마를 통째로 비우므로
 # 같은 DB를 쓰면 개발 데이터가 사라진다.
@@ -96,3 +104,85 @@ async def migrated_db(clean_db: str) -> str:
     """
     await run_migrations(clean_db)
     return clean_db
+
+
+@pytest.fixture
+def db_client(monkeypatch, migrated_db: str) -> TestClient:
+    """테스트 DB로 lifespan을 실행하는 API 클라이언트."""
+    monkeypatch.setenv("DATABASE_URL", migrated_db)
+    get_settings.cache_clear()
+
+    with TestClient(app) as started:
+        yield started
+
+    # app.db의 풀은 모듈 전역이므로 다음 테스트에 DSN이 누수되지 않게 닫는다.
+    import asyncio
+
+    asyncio.run(close_pool())
+
+
+async def insert_test_document(
+    conn: psycopg.AsyncConnection,
+    *,
+    title: str,
+    content: str,
+    owner_id: str = "alice",
+    visibility: str = "public",
+    content_type: str = "md",
+    tags: list[str] | None = None,
+    document_id: UUID | None = None,
+) -> UUID:
+    """문서를 넣고 ID를 반환한다. 잡과 버전 이력은 실제 트리거가 만든다."""
+    content_hash = hashlib.sha256(content.encode()).hexdigest()
+    cur = await conn.execute(
+        """
+        INSERT INTO documents
+            (id, title, content_type, content, content_hash, owner_id, visibility, tags)
+        VALUES (COALESCE(%s, gen_random_uuid()), %s, %s, %s, %s, %s, %s, %s)
+        RETURNING id
+        """,
+        (document_id, title, content_type, content, content_hash, owner_id, visibility, tags or []),
+    )
+    return (await cur.fetchone())[0]
+
+
+async def process_all_embedding_jobs(
+    conn: psycopg.AsyncConnection, provider: EmbeddingProvider
+) -> int:
+    """대기 중인 임베딩 잡을 실제 워커로 모두 처리하고 처리 건수를 반환한다."""
+    processed = 0
+    while await process_once(conn, provider):
+        processed += 1
+    return processed
+
+
+def run_embedding_worker(dsn: str) -> int:
+    """동기 API 테스트에서 워커를 한 번 돌린다.
+
+    TestClient는 동기라 잡이 처리되는 순간을 테스트가 직접 정해야 한다. 워커를
+    백그라운드로 띄우면 "아직 pending"과 "이미 ready"를 구분할 수 없어진다.
+    """
+
+    async def process() -> int:
+        async with await psycopg.AsyncConnection.connect(dsn, autocommit=True) as conn:
+            return await process_all_embedding_jobs(conn, FakeProvider())
+
+    return asyncio.run(process())
+
+
+def upload_document(
+    client: TestClient,
+    *,
+    filename: str = "guide.txt",
+    content: bytes = b"OpenSQL guide",
+    user_id: str | None = "alice",
+    data: dict[str, str] | None = None,
+):
+    """업로드 요청을 보내고 응답을 그대로 돌려준다. 상태 코드 판정은 호출부의 몫이다."""
+    headers = {"X-User-Id": user_id} if user_id is not None else {}
+    return client.post(
+        "/api/documents",
+        headers=headers,
+        files={"file": (filename, content, "application/octet-stream")},
+        data=data,
+    )

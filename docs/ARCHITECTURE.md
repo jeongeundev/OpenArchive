@@ -329,7 +329,7 @@ DATABASE_URL="postgresql://app@<vip>:6432/<pool_name>"
 
 ### 애플리케이션이 담당하는 복구 로직
 
-- **API**: `psycopg_pool.AsyncConnectionPool(check=AsyncConnectionPool.check_connection)` — 죽은 연결을 대여 시점에 감지·폐기·재수립. 요청 핸들러는 `OperationalError` 1회 재시도.
+- **API**: `psycopg_pool.AsyncConnectionPool(check=AsyncConnectionPool.check_connection)` — 죽은 연결을 대여 시점에 감지·폐기·재수립. 처리 도중 끊긴 요청은 미들웨어가 **1회 재시도**하되 대상은 **읽기 전용 요청**뿐이다(`GET`·`HEAD`·`POST /api/search`). 쓰기는 커밋 도달 여부를 구분할 수 없어 재시도 시 중복 생성 위험이 있다 (ADR-023).
 - **워커 (잡 처리)**: 동일한 풀 정책. 처리 중 연결이 끊기면 트랜잭션이 롤백되고, 잡은 `processing` 상태로 남았다가 좀비 회수 스윕이 `pending`으로 되돌린다.
 - **워커 (기동)**: **주기 폴링(5초)이 주 경로**다. `LISTEN`은 최적화이며, 연결이 끊기면 백오프 재연결 후 `LISTEN`을 재등록한다. **LISTEN이 아예 동작하지 않아도 파이프라인은 정상 작동한다** (ADR-009).
 - **잡 큐 내구성**: `embedding_jobs`는 일반 WAL 로깅 테이블이므로 스탠바이에 복제된다. Failover 후 미처리 잡이 새 Primary에 그대로 존재하고, 워커 재연결 즉시 재개된다.
@@ -370,6 +370,12 @@ OpenSQL `patroni.yml`의 PostgreSQL 파라미터는 `max_connections: 100`이다
 | `GET /api/documents/{id}/tag-suggestions` | **태그 추천.** 유사 문서의 태그 빈도 (ADR-019). 청크가 없으면 `not_indexed` |
 | `POST /api/search` | 하이브리드 검색 (아래) |
 | `GET /api/system/status` | **운영/데모 전용**: `inet_server_addr()`(현재 접속 노드), pending/processing/error 잡 수, 임베딩 프로바이더명, 최근 재연결 이벤트, **정합성 검증 쿼리 결과**(`c.version <> d.version` 건수). `/admin/status`가 소비하며 사용자 화면은 호출하지 않는다 |
+
+> **구현 현황 (M2 기준)**: `/related`·`/tag-suggestions`를 뺀 나머지가 구현되어 있다. 두 엔드포인트와 `reconnect_events` 값 채우기는 각각 M4·M5 몫이다.
+>
+> `PUT`은 현재 **편집된 추출 텍스트만** 받는다(`{content, version}` JSON). 표에 적힌 "새 파일" 경로는 아직 없다 — 새 파일을 올리려면 업로드 후 이전 문서를 삭제해야 한다.
+>
+> 라우터는 얇다. 요청 검증과 상태 코드 변환만 하고 실제 로직은 `services/documents.py`·`services/search.py`에 있으며, MCP 서버가 같은 함수를 재사용한다. 도메인 예외를 상태 코드로 옮기는 매핑은 `main.py`의 exception handler 한 곳에 있다.
 
 ### 빈 파싱 결과 처리 (`POST /api/documents`)
 

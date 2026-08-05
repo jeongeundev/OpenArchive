@@ -9,7 +9,7 @@
 [![Embedding](https://img.shields.io/badge/embedding-BGE--M3%20(MIT)-orange.svg)](https://huggingface.co/BAAI/bge-m3)
 
 > 2026년 오픈소스 개발자대회 기업 지정과제 출품작
-> **현재 상태: 설계 완료, 구현 진행 중**
+> **현재 상태**: DB 계층(트리거·잡 큐·워커)과 백엔드 API·하이브리드 검색까지 동작합니다. 프론트엔드 화면과 MCP 서버는 진행 중입니다.
 
 ---
 
@@ -102,7 +102,7 @@ document_chunks 교체 (단일 트랜잭션)
 
 ## 빠른 시작
 
-> ⚠️ 구현 진행 중입니다. 아래 절차는 완성 시점 기준이며, 현재는 일부만 동작합니다.
+> ⚠️ 아래 절차는 완성 시점 기준입니다. 현재 **4번(프론트엔드)은 화면이 없습니다** — 업로드·검색·상태 조회는 API로 확인하십시오.
 
 ### 준비물
 - Docker · Docker Compose
@@ -133,6 +133,16 @@ npm install && npm run dev
 ```
 
 `http://localhost:3000` 접속.
+
+### API 확인
+
+엔드포인트 목록과 요청·응답 스키마는 서버가 직접 제공합니다. 구현과 어긋날 수 없는 유일한 출처입니다.
+
+```
+http://localhost:8000/docs
+```
+
+설계 의도와 각 엔드포인트의 근거는 [Architecture](docs/ARCHITECTURE.md#api-설계)에 있습니다.
 
 ### 검증
 

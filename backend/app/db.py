@@ -17,7 +17,11 @@ def get_pool() -> AsyncConnectionPool:
     if _pool is None:
         # open=False가 핵심이다. 켜두면 생성 시점에 커넥션이 열려, 여는 시점을
         # 호출부가 통제할 수 없다.
-        _pool = AsyncConnectionPool(get_settings().database_url, open=False)
+        _pool = AsyncConnectionPool(
+            get_settings().database_url,
+            open=False,
+            check=AsyncConnectionPool.check_connection,
+        )
     return _pool
 
 

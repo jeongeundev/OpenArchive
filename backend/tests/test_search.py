@@ -1,0 +1,354 @@
+from contextlib import asynccontextmanager
+from uuid import UUID
+
+import psycopg
+import pytest
+from conftest import insert_test_document, process_all_embedding_jobs
+
+from app.embeddings import FakeProvider
+from app.services.search import (
+    CANDIDATE_MULTIPLIER,
+    EF_SEARCH,
+    MAX_K,
+    SEARCH_SQL,
+    search_documents,
+)
+from app.vectors import to_pgvector_literal
+
+
+class RecordingConnection:
+    """실행된 문장만 받아 적고 나머지는 진짜 연결에 그대로 위임한다.
+
+    가짜 DB가 아니다 — 모든 문장이 실제 컨테이너에서 실행된다. 검증 대상은
+    "무엇을 어떤 순서로 실행했는가"뿐이라, 실행 결과는 진짜여야 한다.
+    """
+
+    def __init__(self, conn: psycopg.AsyncConnection) -> None:
+        self._conn = conn
+        self.statements: list[str] = []
+
+    @asynccontextmanager
+    async def transaction(self):
+        async with self._conn.transaction():
+            self.statements.append("BEGIN")
+            yield
+
+    async def execute(self, query, params=None):
+        self.statements.append(query)
+        return await self._conn.execute(query, params)
+
+
+@pytest.fixture
+async def worker_conn(migrated_db: str):
+    """워커의 claim이 즉시 커밋되도록 autocommit 연결을 쓴다."""
+    async with await psycopg.AsyncConnection.connect(migrated_db, autocommit=True) as conn:
+        yield conn
+
+
+@pytest.fixture
+async def search_conn(migrated_db: str):
+    """검색 서비스가 자체 plain 트랜잭션을 열 수 있는 기본 연결이다."""
+    async with await psycopg.AsyncConnection.connect(migrated_db) as conn:
+        yield conn
+
+
+async def test_matching_document_is_ranked_first(worker_conn, search_conn):
+    """SQL의 거리순 정렬을 검증한다. 검색 품질은 BGE-M3의 성질이라 FakeProvider로 검증하지 않는다."""
+    provider = FakeProvider()
+    matching_id = await insert_test_document(
+        worker_conn, title="정합성 규정", content="OpenSQL 정합성 트리거 운영 규정"
+    )
+    await insert_test_document(
+        worker_conn, title="휴가 안내", content="연차 휴가 신청 승인 안내"
+    )
+    await process_all_embedding_jobs(worker_conn, provider)
+
+    hits = await search_documents(search_conn, provider, query="OpenSQL 정합성")
+
+    assert hits[0].document_id == matching_id
+
+
+async def test_private_document_is_hidden_from_another_user(worker_conn, search_conn):
+    provider = FakeProvider()
+    private_id = await insert_test_document(
+        worker_conn,
+        title="비공개 규정",
+        content="기밀 접근통제 규정",
+        owner_id="alice",
+        visibility="private",
+    )
+    await insert_test_document(worker_conn, title="공개 안내", content="기밀 접근통제 안내")
+    await process_all_embedding_jobs(worker_conn, provider)
+
+    hits = await search_documents(search_conn, provider, query="기밀 접근통제", user_id="bob")
+
+    assert private_id not in {hit.document_id for hit in hits}
+
+
+async def test_owner_can_search_own_private_document(worker_conn, search_conn):
+    provider = FakeProvider()
+    private_id = await insert_test_document(
+        worker_conn,
+        title="비공개 규정",
+        content="기밀 접근통제 규정",
+        owner_id="alice",
+        visibility="private",
+    )
+    await process_all_embedding_jobs(worker_conn, provider)
+
+    hits = await search_documents(search_conn, provider, query="기밀 접근통제", user_id="alice")
+
+    assert private_id in {hit.document_id for hit in hits}
+
+
+async def test_anonymous_search_returns_only_public_documents(worker_conn, search_conn):
+    provider = FakeProvider()
+    public_id = await insert_test_document(
+        worker_conn, title="공개 규정", content="접근통제 공개 규정"
+    )
+    await insert_test_document(
+        worker_conn,
+        title="비공개 규정",
+        content="접근통제 비공개 규정",
+        visibility="private",
+    )
+    await process_all_embedding_jobs(worker_conn, provider)
+
+    hits = await search_documents(search_conn, provider, query="접근통제")
+
+    assert [hit.document_id for hit in hits] == [public_id]
+
+
+async def test_tag_filter_uses_array_overlap(worker_conn, search_conn):
+    provider = FakeProvider()
+    tagged_id = await insert_test_document(
+        worker_conn, title="규정", content="보안 점검 규정", tags=["규정", "보안"]
+    )
+    await insert_test_document(
+        worker_conn, title="안내", content="보안 점검 안내", tags=["안내"]
+    )
+    await process_all_embedding_jobs(worker_conn, provider)
+
+    hits = await search_documents(search_conn, provider, query="보안 점검", tags=["규정"])
+
+    assert [hit.document_id for hit in hits] == [tagged_id]
+
+
+async def test_content_type_filter(worker_conn, search_conn):
+    provider = FakeProvider()
+    pdf_id = await insert_test_document(
+        worker_conn, title="PDF", content="감사 보고서", content_type="pdf"
+    )
+    await insert_test_document(
+        worker_conn, title="Markdown", content="감사 보고서", content_type="md"
+    )
+    await process_all_embedding_jobs(worker_conn, provider)
+
+    hits = await search_documents(search_conn, provider, query="감사 보고서", content_type="pdf")
+
+    assert [hit.document_id for hit in hits] == [pdf_id]
+
+
+async def test_structured_filter_and_vector_ranking_apply_together(worker_conn, search_conn):
+    """SQL 거리순 정렬과 태그 필터의 결합을 본다. 의미 품질은 FakeProvider의 검증 대상이 아니다."""
+    provider = FakeProvider()
+    both_id = await insert_test_document(
+        worker_conn, title="정합성 규정", content="OpenSQL 정합성 운영", tags=["규정"]
+    )
+    unrelated_id = await insert_test_document(
+        worker_conn, title="복지 규정", content="식대 휴가 복지", tags=["규정"]
+    )
+    await insert_test_document(
+        worker_conn, title="태그 불일치", content="OpenSQL 정합성 운영", tags=["안내"]
+    )
+    await process_all_embedding_jobs(worker_conn, provider)
+
+    hits = await search_documents(search_conn, provider, query="OpenSQL 정합성", tags=["규정"])
+
+    assert hits[0].document_id == both_id
+    assert hits[0].score > next(hit.score for hit in hits if hit.document_id == unrelated_id)
+
+
+async def test_long_document_appears_only_once(worker_conn, search_conn):
+    provider = FakeProvider()
+    long_id = await insert_test_document(
+        worker_conn,
+        title="긴 문서",
+        content=("OpenSQL 정합성 " * 900),
+    )
+    await insert_test_document(worker_conn, title="짧은 문서", content="OpenSQL 정합성 안내")
+    await process_all_embedding_jobs(worker_conn, provider)
+
+    hits = await search_documents(search_conn, provider, query="OpenSQL 정합성", k=10)
+
+    assert [hit.document_id for hit in hits].count(long_id) == 1
+
+
+async def test_distinct_documents_are_finally_sorted_by_distance(worker_conn, search_conn):
+    """SQL의 최종 거리순 정렬을 검증한다. 검색 품질은 BGE-M3의 성질이라 FakeProvider로 검증하지 않는다."""
+    provider = FakeProvider()
+    expected = await insert_test_document(
+        worker_conn,
+        document_id=UUID("ffffffff-ffff-ffff-ffff-ffffffffffff"),
+        title="가장 관련",
+        content=("OpenSQL 정합성 " * 500),
+    )
+    for index in range(5):
+        await insert_test_document(
+            worker_conn,
+            document_id=UUID(int=index + 1),
+            title=f"무관 {index}",
+            content=(f"휴가 복지 식대 {index} " * 200),
+        )
+    await process_all_embedding_jobs(worker_conn, provider)
+
+    hits = await search_documents(search_conn, provider, query="OpenSQL 정합성", k=3)
+
+    assert hits[0].document_id == expected
+    assert [hit.score for hit in hits] == sorted((hit.score for hit in hits), reverse=True)
+
+
+async def test_pending_reembedding_keeps_previous_chunks_searchable(worker_conn, search_conn):
+    provider = FakeProvider()
+    document_id = await insert_test_document(
+        worker_conn, title="수정 문서", content="OpenSQL 정합성 이전 내용"
+    )
+    await process_all_embedding_jobs(worker_conn, provider)
+    await worker_conn.execute(
+        """
+        UPDATE documents
+           SET version = version + 1, content = %s, content_hash = %s
+         WHERE id = %s
+        """,
+        ("완전히 새로운 내용", "new-hash", document_id),
+    )
+
+    hits = await search_documents(search_conn, provider, query="OpenSQL 정합성")
+
+    assert document_id in {hit.document_id for hit in hits}
+
+
+async def test_document_without_chunks_is_not_searchable(worker_conn, search_conn):
+    provider = FakeProvider()
+    document_id = await insert_test_document(
+        worker_conn, title="미색인", content="OpenSQL 정합성 대기"
+    )
+
+    hits = await search_documents(search_conn, provider, query="OpenSQL 정합성")
+
+    assert document_id not in {hit.document_id for hit in hits}
+
+
+@pytest.mark.parametrize("k", [0, MAX_K + 1])
+async def test_k_outside_supported_range_is_rejected(search_conn, k):
+    with pytest.raises(ValueError, match="k는"):
+        await search_documents(search_conn, FakeProvider(), query="질의", k=k)
+
+
+async def test_max_k_is_accepted(worker_conn, search_conn):
+    provider = FakeProvider()
+    await insert_test_document(worker_conn, title="문서", content="최대 검색 건수")
+    await process_all_embedding_jobs(worker_conn, provider)
+
+    hits = await search_documents(search_conn, provider, query="최대 검색 건수", k=MAX_K)
+
+    assert len(hits) == 1
+
+
+async def test_ef_search_returns_max_k_distinct_documents(worker_conn, search_conn):
+    provider = FakeProvider()
+    for index in range(MAX_K + 5):
+        await insert_test_document(
+            worker_conn, title=f"문서 {index}", content=f"공통 검색어 고유{index}"
+        )
+    await process_all_embedding_jobs(worker_conn, provider)
+
+    hits = await search_documents(search_conn, provider, query="공통 검색어", k=MAX_K)
+
+    assert len(hits) == MAX_K
+
+
+def test_candidate_limit_stays_below_ef_search():
+    """ADR-011 보강 4: 과다 조회 LIMIT이 ef_search를 넘으면 에러 없이 행이 모자란다.
+
+    등호도 안 된다 — 두 벽 사이에 여유를 두라는 것이 보강 4의 결론이다.
+    """
+    assert MAX_K * CANDIDATE_MULTIPLIER < EF_SEARCH
+
+
+async def test_search_issues_both_tunings_inside_the_query_transaction(
+    worker_conn, search_conn
+):
+    """search_documents가 실제로 두 SET LOCAL을 검색 쿼리와 같은 트랜잭션에 건다.
+
+    두 값을 테스트 안에서 재현하면 search.py에서 지워도 통과한다. 실행된 문장을
+    받아 적어, ADR-011 보강 4·5 준수를 구현 쪽에서 검증한다.
+    """
+    provider = FakeProvider()
+    await insert_test_document(worker_conn, title="튜닝", content="검색 튜닝 확인")
+    await process_all_embedding_jobs(worker_conn, provider)
+    recorder = RecordingConnection(search_conn)
+
+    await search_documents(recorder, provider, query="검색 튜닝 확인")
+
+    assert recorder.statements[0] == "BEGIN"
+    assert recorder.statements[1] == f"SET LOCAL hnsw.ef_search = {EF_SEARCH}"
+    assert recorder.statements[2] == "SET LOCAL random_page_cost = 1.1"
+    assert recorder.statements[3] == SEARCH_SQL
+
+
+async def test_search_tuning_does_not_leak_past_the_transaction(worker_conn):
+    """SET LOCAL이므로 트랜잭션이 끝나면 세션 값이 되돌아온다.
+
+    OpenProxy는 백엔드를 넘길 때 RESET ALL만 하므로(ADR-022), 세션에 남는 값이
+    다음 클라이언트로 새는지가 실제 위험이다. autocommit 연결을 쓰는 이유는
+    앞선 문장이 트랜잭션을 열어두면 conn.transaction()이 SAVEPOINT가 되어
+    SET LOCAL의 범위가 바깥 트랜잭션으로 넓어지기 때문이다.
+    """
+    provider = FakeProvider()
+    await insert_test_document(worker_conn, title="튜닝", content="검색 튜닝 확인")
+    await process_all_embedding_jobs(worker_conn, provider)
+    before_ef = (await (await worker_conn.execute("SHOW hnsw.ef_search")).fetchone())[0]
+    before_rpc = (await (await worker_conn.execute("SHOW random_page_cost")).fetchone())[0]
+
+    await search_documents(worker_conn, provider, query="검색 튜닝 확인")
+
+    after_ef = (await (await worker_conn.execute("SHOW hnsw.ef_search")).fetchone())[0]
+    after_rpc = (await (await worker_conn.execute("SHOW random_page_cost")).fetchone())[0]
+    assert after_ef == before_ef != str(EF_SEARCH)
+    assert after_rpc == before_rpc != "1.1"
+
+
+async def test_explain_contains_structured_filters_and_vector_ordering(worker_conn, migrated_db):
+    provider = FakeProvider()
+    for index in range(10):
+        await insert_test_document(
+            worker_conn,
+            title=f"계획 문서 {index}",
+            content=f"OpenSQL 정합성 계획 {index}",
+            tags=["규정"],
+        )
+    await process_all_embedding_jobs(worker_conn, provider)
+    params = {
+        "qvec": to_pgvector_literal(provider.embed(["OpenSQL 정합성"])[0]),
+        "tags": ["규정"],
+        "ctype": None,
+        "user": "alice",
+        "k": 5,
+    }
+
+    async with (
+        await psycopg.AsyncConnection.connect(migrated_db, autocommit=True) as conn,
+        conn.transaction(),
+    ):
+        await conn.execute(f"SET LOCAL hnsw.ef_search = {EF_SEARCH}")
+        await conn.execute("SET LOCAL random_page_cost = 1.1")
+        cur = await conn.execute("EXPLAIN " + SEARCH_SQL, params)
+        plan = "\n".join(row[0] for row in await cur.fetchall())
+
+    # 프로덕션과 같은 조건으로 계획을 본다. 인덱스 선택은 검증 대상이 아니다 —
+    # 로컬의 열 몇 건짜리 데이터에서는 Seq Scan이 실제로 더 싸고, HNSW 선택 여부는
+    # 실 VM 6000행 실측이 판정했다 (ADR-011 보강 5). 여기서 확인하는 것은
+    # 정형 필터와 벡터 정렬이 **하나의 계획**에 결합된다는 사실뿐이다.
+    assert "visibility" in plan and "owner_id" in plan, plan
+    assert "tags" in plan and "<=>" in plan, plan
