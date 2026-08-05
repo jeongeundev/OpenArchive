@@ -18,13 +18,19 @@ export function TextEditor({
 }): React.ReactElement {
   const [editing, setEditing] = useState(false);
   const [content, setContent] = useState(document.content);
+  // 편집을 시작한 시점의 버전. 조건부 폴링이 편집 도중 document를 갱신하므로,
+  // 저장 시 document.version을 그대로 쓰면 남의 변경을 409 없이 덮어쓴다.
+  const [editingVersion, setEditingVersion] = useState(document.version);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const showsExtractionNotice =
     document.content_type === "pdf" || document.content_type === "docx";
 
   function changeEditing(nextEditing: boolean): void {
-    if (nextEditing) setContent(document.content);
+    if (nextEditing) {
+      setContent(document.content);
+      setEditingVersion(document.version);
+    }
     setEditing(nextEditing);
     onEditingChange(nextEditing);
   }
@@ -42,7 +48,7 @@ export function TextEditor({
     setSaving(true);
     setError(null);
     try {
-      await editDocument(document.id, { content, version: document.version });
+      await editDocument(document.id, { content, version: editingVersion });
       changeEditing(false);
       onSaved();
     } catch (reason: unknown) {
