@@ -30,7 +30,10 @@
       "type": "feat",
       "scope": "api",
       "desc": "문서 업로드와 조회 라우터",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-08-05T19:28:16+0900",
+      "summary": "get_conn() -> AsyncIterator[psycopg.AsyncConnection], require_user_id(...) -> str, optional_user_id(...) -> str | None 의존성을 추가하고 documents_router를 app.include_router로 등록했으며 DocumentSummary·TextVersion·DocumentDetail 응답 모델과 db_client TestClient 픽스처를 통해 문서 업로드·목록·상세 API를 검증",
+      "completed_at": "2026-08-05T19:32:33+0900"
     },
     {
       "step": 3,
