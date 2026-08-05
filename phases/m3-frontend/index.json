@@ -30,7 +30,10 @@
       "type": "feat",
       "scope": "frontend",
       "desc": "문서 목록과 임베딩 상태 폴링",
-      "status": "pending"
+      "status": "completed",
+      "summary": "useDocuments({ status?, intervalMs? }) 폴링 훅과 DocumentTable을 추가하고 page.tsx는 훅 상태와 목록 표만 조립하도록 구성",
+      "started_at": "2026-08-05T23:01:05+0900",
+      "completed_at": "2026-08-05T23:05:33+0900"
     },
     {
       "step": 3,
