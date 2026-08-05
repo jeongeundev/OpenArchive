@@ -41,7 +41,10 @@
       "type": "feat",
       "scope": "frontend",
       "desc": "문서 업로드 드롭존",
-      "status": "pending"
+      "status": "completed",
+      "summary": "단일 파일 업로드 드롭존과 메타데이터 폼을 추가하고 성공 시 문서 목록을 즉시 새로고침하도록 연결",
+      "started_at": "2026-08-05T23:05:33+0900",
+      "completed_at": "2026-08-05T23:09:16+0900"
     },
     {
       "step": 4,
