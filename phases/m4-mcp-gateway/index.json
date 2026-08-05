@@ -63,7 +63,10 @@
       "type": "feat",
       "scope": "frontend",
       "desc": "관련 문서·동일 텍스트·태그 추천 표시",
-      "status": "pending"
+      "status": "completed",
+      "summary": "RelatedDocuments(response)·TagSuggestions(response) 표시 컴포넌트와 useRelated(id, chunkVersion)의 병렬 조회·refresh 훅을 구현",
+      "started_at": "2026-08-06T03:15:00+0900",
+      "completed_at": "2026-08-06T03:19:07+0900"
     },
     {
       "step": 6,
