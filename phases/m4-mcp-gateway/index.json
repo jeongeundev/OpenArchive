@@ -52,7 +52,10 @@
       "type": "feat",
       "scope": "mcp",
       "desc": "FastMCP stdio 서버와 근거 공급 툴 3개",
-      "status": "pending"
+      "status": "completed",
+      "summary": "mcp<2 의존성과 python -m mcp_server.server stdio 서버를 추가하고 MCP_USER_ID 기반 근거 검색·상세·목록 툴 3개를 실제 DB 테스트 및 전체 AC로 검증",
+      "started_at": "2026-08-06T03:10:23+0900",
+      "completed_at": "2026-08-06T03:15:00+0900"
     },
     {
       "step": 5,
