@@ -85,7 +85,10 @@
       "type": "feat",
       "scope": "frontend",
       "desc": "운영 상태 패널과 실패 문서 재임베딩",
-      "status": "pending"
+      "status": "completed",
+      "summary": "마지막 성공값을 보존하는 운영 상태 폴링과 정합성 중심 패널, 권한별 실패 문서 재임베딩 화면을 추가",
+      "started_at": "2026-08-05T23:20:25+0900",
+      "completed_at": "2026-08-05T23:23:13+0900"
     },
     {
       "step": 8,
