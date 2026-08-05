@@ -14,6 +14,10 @@
       "dir": "m2-hybrid-search",
       "status": "completed",
       "completed_at": "2026-08-05T19:42:36+0900"
+    },
+    {
+      "dir": "m3-frontend",
+      "status": "pending"
     }
   ]
 }
