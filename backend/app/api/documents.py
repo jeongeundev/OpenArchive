@@ -21,6 +21,7 @@ from app.api.schemas import (
     EditDocumentResponse,
     RelatedResponse,
     TagSuggestionsResponse,
+    UpdateTagsRequest,
 )
 from app.services import documents as service
 from app.services.parsing import SUPPORTED_CONTENT_TYPES, UnsupportedFileType
@@ -123,6 +124,19 @@ async def edit_document(
         client_version=body.version,
     )
     return EditDocumentResponse.model_validate(document)
+
+
+@router.put("/{document_id}/tags", response_model=DocumentSummary)
+async def update_tags(
+    document_id: UUID,
+    body: UpdateTagsRequest,
+    conn: Connection,
+    user_id: Annotated[str, Depends(require_user_id)],
+) -> DocumentSummary:
+    document = await service.update_tags(
+        conn, document_id, user_id=user_id, tags=body.tags
+    )
+    return DocumentSummary.model_validate(document)
 
 
 @router.delete("/{document_id}", status_code=status.HTTP_204_NO_CONTENT)

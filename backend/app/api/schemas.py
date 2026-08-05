@@ -41,6 +41,10 @@ class EditDocumentResponse(DocumentSummary):
     content: str
 
 
+class UpdateTagsRequest(BaseModel):
+    tags: list[str]
+
+
 class SearchRequest(BaseModel):
     query: str
     tags: list[str] | None = None
