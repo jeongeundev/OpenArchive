@@ -52,7 +52,10 @@
       "type": "feat",
       "scope": "search",
       "desc": "검색 라우터와 실행 SQL 노출",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-08-05T19:36:19+0900",
+      "summary": "POST /api/search는 SearchRequest(query: str, tags: list[str] | None, content_type: str | None, k: int)를 받아 SearchResponse(items: list[SearchResult], sql: str)를 반환하며, SearchResult는 document_id·title·tags·content_type·chunk_index·content·score를 제공하고 get_embedding_provider 의존성이 lifespan의 앱 상태 프로바이더를 재사용한다.",
+      "completed_at": "2026-08-05T19:39:49+0900"
     },
     {
       "step": 5,
