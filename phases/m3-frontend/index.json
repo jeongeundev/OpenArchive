@@ -19,7 +19,10 @@
       "type": "feat",
       "scope": "frontend",
       "desc": "공용 레이아웃·사용자 전환·상태 배지",
-      "status": "pending"
+      "status": "completed",
+      "summary": "frontend/src/components의 StatusBadge·UserSwitcher·SiteHeader와 app/layout.tsx 공용 셸을 추가",
+      "started_at": "2026-08-05T22:55:59+0900",
+      "completed_at": "2026-08-05T23:01:05+0900"
     },
     {
       "step": 2,
