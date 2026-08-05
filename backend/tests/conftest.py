@@ -44,17 +44,21 @@ def client() -> TestClient:
 
 @pytest.fixture(scope="session")
 def test_dsn() -> str:
-    """테스트 전용 DB를 만들고 그 DSN을 반환한다."""
+    """테스트 전용 DB를 세션마다 새로 만들고 그 DSN을 반환한다."""
     admin_dsn = get_settings().database_url
     dsn = swap_dbname(admin_dsn, TEST_DB_NAME)
 
     try:
         with psycopg.connect(admin_dsn, autocommit=True, connect_timeout=5) as conn:
-            exists = conn.execute(
-                "SELECT 1 FROM pg_database WHERE datname = %s", (TEST_DB_NAME,)
-            ).fetchone()
-            if exists is None:
-                conn.execute(f'CREATE DATABASE "{TEST_DB_NAME}"')
+            # 남아 있는 DB를 재사용하지 않고 매번 새로 만든다.
+            # clean_db가 public 스키마를 갈아 끼울 때 vector 확장이 함께 드롭되지 않고
+            # 사라진 스키마를 가리키는 고아 레코드로 남는 경우가 있다. 그러면
+            # CREATE EXTENSION IF NOT EXISTS가 "이미 있다"고 건너뛰어, 이후 모든 DB
+            # 테스트가 'type "vector" does not exist'로 죽는다. 그 상태는 DROP EXTENSION으로
+            # 복구되지 않는다 — 실제로 시도하면 서버가 죽는다. DB째로 새로 만드는 것이
+            # 유일하게 확실한 복구 경로이고, 세션당 한 번이라 비용도 작다.
+            conn.execute(f'DROP DATABASE IF EXISTS "{TEST_DB_NAME}" WITH (FORCE)')
+            conn.execute(f'CREATE DATABASE "{TEST_DB_NAME}"')
     except psycopg.OperationalError as exc:
         # skip하지 않는다. 트리거·SKIP LOCKED·vector 연산자는 실제 DB에서만
         # 검증되므로, 조용한 skip은 "검증했다"는 거짓 신호가 된다.
