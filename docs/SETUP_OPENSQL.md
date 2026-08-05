@@ -395,6 +395,29 @@ pool_size = 10
 
 > ⚠️ `pg_hba`에 `host all all all md5`가 있고 비밀번호가 기본값(`pg_password`)이다. 애플리케이션 계정을 만들 때 함께 정리한다.
 
+### ⚠️ 풀이 바라보는 데이터베이스를 교정한다 (필수)
+
+설치기는 `opensql` 데이터베이스를 만들어놓고, 정작 풀은 관리용 기본 DB인 `postgres`를 바라보게 설정한다.
+클라이언트는 DSN에 **풀 이름**을 적으므로 실제 저장 위치가 드러나지 않는다 — 그대로 두면
+마이그레이션과 애플리케이션 데이터가 `postgres`에 쌓인다.
+
+```bash
+CONF=$OPENSQL_HOME/etc/openproxy/openproxy.toml
+cp $CONF $CONF.bak.$(date +%Y%m%d-%H%M%S)
+sed -i 's|^database = "postgres"$|database = "opensql"|' $CONF
+diff $CONF.bak.* $CONF          # 23행 한 줄만 바뀌어야 한다
+bash $OPENSQL_HOME/scripts/restart_openproxy.sh
+```
+
+`reload`(SIGHUP)가 아니라 **restart**를 쓴다. 이미 열린 백엔드 연결이 옛 DB를 향한 채 재사용될 수 있다.
+
+```bash
+PGPASSWORD=pg_password psql -h <VM_IP> -p 6432 -U postgres -d opensql \
+  -c "SELECT current_database(), count(*) FROM pg_stat_user_tables"
+```
+
+`opensql | 0`이 나오면 반영된 것이다. **`DATABASE_URL`은 바뀌지 않는다** — 풀 이름은 그대로다.
+
 ---
 
 ## 11. 설치 후 검증
