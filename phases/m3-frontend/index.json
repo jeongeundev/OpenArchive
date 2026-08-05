@@ -63,7 +63,10 @@
       "type": "feat",
       "scope": "frontend",
       "desc": "추출 텍스트 인라인 편집과 충돌 처리",
-      "status": "pending"
+      "status": "completed",
+      "summary": "추출 텍스트 인라인 편집·409 충돌 보존과 삭제·오류 재임베딩 액션을 상세 화면에 연결",
+      "started_at": "2026-08-05T23:12:34+0900",
+      "completed_at": "2026-08-05T23:16:55+0900"
     },
     {
       "step": 6,
