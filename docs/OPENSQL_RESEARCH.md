@@ -71,7 +71,7 @@ pg_repack 1.5.2
 | ② | HNSW 인덱스 생성 | ✅ `CREATE INDEX ... USING hnsw (v vector_cosine_ops)` 성공 | ADR-002 리스크 해제 |
 | ③ | `avg(vector)` | ✅ 동작 | ADR-018 전제 실증 |
 | ⑥ | `pg_trgm` | ✅ `CREATE EXTENSION` 성공 (번들 목록엔 없으나 contrib로 존재) | ADR-016 한국어 대안 확보 |
-| ① | **OpenProxy 경유 `LISTEN`/`NOTIFY`** | ✅ **동작** — 페이로드까지 수신 | **최대 리스크 해소.** 상세 §7-2 |
+| ① | **OpenProxy 경유 `LISTEN`/`NOTIFY`** | ❌ **정정됨** — ~~동작~~. **유휴 세션에는 전달되지 않는다** (§7-3) | 리스크는 남아 있으나 **ADR-009가 폴링을 주 경로로 잡아 흡수한다** |
 
 **문서 조사와 달랐던 것**
 
@@ -81,8 +81,8 @@ pg_repack 1.5.2
 
 | 항목 | 사유 |
 |---|---|
-| LISTEN 연결의 `idle_timeout` 실동작 | 10분 이상 유휴 관측 필요. **폴링 주기를 늘리기 전 필수** |
-| `avg`가 HNSW 인덱스를 타는지 | 데이터가 있어야 `EXPLAIN`이 의미를 가진다 → M1 이후 |
+| ~~LISTEN 연결의 `idle_timeout` 실동작~~ | ✅ **M1 이후 측정됨** (§12 6번) — 유휴 세션은 끊기지 않았으나 애초에 알림이 오지 않는다. **폴링 주기 상향은 철회됐다** (§7-3) |
+| ~~`avg`가 HNSW 인덱스를 타는지~~ | ✅ **M1 이후 측정됨** (§12 12번) — `avg`는 무죄, 문제는 벡터 정렬 서브쿼리 안의 JOIN이었다 |
 | Failover | ⛔ Single 구성이라 **원리적으로 불가** (ADR-020) |
 
 ### 대회용 구성 지시 **[배포판·메일 확정]**
@@ -333,7 +333,9 @@ bash $OPENSQL_HOME/scripts/restart_openproxy.sh
 bash $OPENSQL_HOME/scripts/reload_openproxy.sh   # SIGHUP, 무중단 설정 반영
 ```
 
-> `server_lifetime`(1시간)과 `idle_timeout`(10분)은 **워커의 장수 LISTEN 연결에 직접 영향을 준다.** OpenProxy를 경유하면 LISTEN 연결이 최대 1시간마다 강제로 끊길 수 있다 (§7과 연결).
+> ~~`server_lifetime`(1시간)과 `idle_timeout`(10분)은 **워커의 장수 LISTEN 연결에 직접 영향을 준다.** OpenProxy를 경유하면 LISTEN 연결이 최대 1시간마다 강제로 끊길 수 있다 (§7과 연결).~~
+>
+> **정정 (2026-08-05 재실측)** — 두 정책 모두 발동하지 않았다. 유휴 세션이 **70분간 유지**되고 backend pid도 불변이었다. `pool_mode = "session"`에서는 백엔드가 클라이언트에 고정되어 풀로 반납되지 않으므로 정책이 발동할 기회가 없는 것으로 보인다 (§12 6번). 단, 관측이 체크포인트마다 쿼리를 보냈으므로 **무활동 최대 구간은 15분**이다.
 
 ### OpenProxy의 Failover 기여 **[확정]**
 
@@ -407,7 +409,7 @@ database = "postgres"
 
 > **설계 영향 두 가지**
 >
-> 1. **§7의 LISTEN/NOTIFY 리스크가 해소된다.** `session` 모드는 서버 커넥션을 클라이언트 접속 동안 전용으로 유지하므로 세션 상태가 보존된다. 실제로 동작을 확인했다 (§7-2).
+> 1. **~~§7의 LISTEN/NOTIFY 리스크가 해소된다.~~ → 정정됨.** `session` 모드라 세션 상태가 보존되는 것은 맞지만, **유휴 세션에 알림이 전달되지 않는 문제는 그대로다** (§7-3). 워커는 폴링을 주 경로로 유지한다 (ADR-009).
 > 2. **`ADR-010`의 근거 교체가 옳았음이 확인된다.** `query_parser_enabled = false`이고 `servers`에 primary 하나뿐이라 Replica 라우팅이 일어날 수 없다. 명시적 트랜잭션을 유지하는 이유는 이제 "Replica 라우팅 방지"가 아니라 **`SET LOCAL` 보장 + HA 전환 대비**다.
 >
 > **주의**: `pool_size = 10`이고 `max_connections = 100`이다. 애플리케이션 풀(API + 워커)을 이 안에서 산정해야 한다.
@@ -717,7 +719,7 @@ x86-64 에뮬레이션은 네이티브의 1/10~1/20 속도라 임베딩 워커�
 
 | # | 검증 항목 | 결과 |
 |---|---|---|
-| 1 | **OpenProxy 경유 `LISTEN`/`NOTIFY`** | ✅ **동작** — 페이로드까지 수신. `pool_mode`가 `session`이라 세션 상태가 보존된다 (§5-1, §7-2). **폴링 주기를 5→30초로 늘릴 수 있다** (단 6번 확인 후) |
+| 1 | **OpenProxy 경유 `LISTEN`/`NOTIFY`** | ❌ **정정됨 (2026-08-05 재실측, 아래 6번)** — 대화형 psql로 측정해 잘못된 결론을 냈다. **유휴 세션에는 알림이 전달되지 않는다** (§7-3). ~~폴링 주기를 5→30초로 늘릴 수 있다~~ → **철회** |
 | 4' | HNSW 인덱스 생성 실행 | ✅ 성공 |
 | 10 | `max_connections` / `pool_size` | ✅ `max_connections=100`, OpenProxy `pool_size=10` |
 | 13 | `pg_trgm` 설치 | ✅ 성공 — ADR-016의 한국어 부분 일치 대안 확보 |

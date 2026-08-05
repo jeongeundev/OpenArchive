@@ -436,7 +436,7 @@ WITH candidates AS (
     SELECT c.document_id, c.chunk_index, c.content,
            c.embedding <=> %(qvec)s AS dist
     FROM document_chunks c
-    JOIN documents d ON d.id = c.document_id
+    JOIN documents d ON d.id = c.document_id   -- ⚠️ 미개정: 이 JOIN이 HNSW를 막는다 (설계 결정 2)
     WHERE (%(tags)s::text[] IS NULL OR d.tags && %(tags)s)
       AND (%(ctype)s::text IS NULL OR d.content_type = %(ctype)s)
       AND (d.visibility = 'public' OR d.owner_id = %(user)s)
@@ -471,7 +471,18 @@ OpenProxy는 `query_parser_read_write_splitting` 활성 시 **트랜잭션 밖�
 
 **2. `SET LOCAL hnsw.ef_search = 200` (ADR-011)**
 
-HNSW 인덱스는 `document_chunks`에 있는데 필터는 JOIN 상대인 `documents`에 있다. 즉 **벡터 인덱스가 후보를 뽑은 뒤에 필터가 적용**되는 post-filter 구조다. 기본 `ef_search = 40`으로는 태그 필터가 조금만 좁아도 `LIMIT k`를 채우지 못한다. 후보 풀을 키워 이를 완화한다. `SET LOCAL`이므로 트랜잭션이 끝나면 자동 복원된다 — ①의 명시적 트랜잭션이 여기서 한 번 더 쓸모가 있다.
+HNSW 인덱스는 `document_chunks`에 있는데 필터는 JOIN 상대인 `documents`에 있다. 기본 `ef_search = 40`으로는 태그 필터가 조금만 좁아도 `LIMIT k`를 채우지 못한다. 후보 풀을 키워 이를 완화한다. `SET LOCAL`이므로 트랜잭션이 끝나면 자동 복원된다 — ①의 명시적 트랜잭션이 여기서 한 번 더 쓸모가 있다.
+
+> ⚠️ **정정 (2026-08-05 실측)** — 여기에 원래 "**벡터 인덱스가 후보를 뽑은 뒤에 필터가 적용**되는
+> post-filter 구조다"라고 적혀 있었으나 **사실이 아니다.** 벡터 정렬 서브쿼리 안에 `documents`
+> JOIN이 있으면 플래너가 **조인을 먼저 수행해 HNSW 인덱스를 아예 쓰지 않는다** —
+> `enable_seqscan=off`로도 복구되지 않는다 (`OPENSQL_RESEARCH.md` §12 12번, ADR-018 개정).
+> 즉 `ef_search`를 키워도 post-filter 손실을 완화하는 게 아니라, 애초에 인덱스를 타지 않는다.
+>
+> **이 검색 쿼리와 아래 RRF 쿼리는 아직 개정되지 않았다.** 관련 문서·태그 추천은 ADR-018 개정으로
+> 재구성했지만, 검색은 같은 해법을 그대로 쓸 수 없다 — 권한 필터를 후보 확보 뒤로 옮기면 **태그·유형
+> 필터를 건 검색에서 결과가 0건이 될 수 있다.** 관련 문서는 "적게 나오는 것을 수용"이 가능한 보조
+> 기능이지만 검색은 그렇지 않다. 별도 설계 판단이 필요하며 **이슈 #18**에서 다룬다.
 
 **3. 문서당 1건으로 중복 제거 (ADR-011)**
 
@@ -510,7 +521,7 @@ CREATE INDEX idx_chunks_tsv ON document_chunks USING gin (content_tsv);
 BEGIN;
 SET LOCAL hnsw.ef_search = 200;
 
-WITH vec AS (          -- 위 candidates 절과 동일한 필터·JOIN 구조
+WITH vec AS (          -- 위 candidates 절과 동일한 필터·JOIN 구조 (⚠️ 동일하게 미개정)
   SELECT c.id, c.document_id, c.chunk_index, c.content,
          row_number() OVER (ORDER BY c.embedding <=> %(qvec)s) AS rnk
   FROM document_chunks c JOIN documents d ON d.id = c.document_id
