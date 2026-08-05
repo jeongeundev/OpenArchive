@@ -43,6 +43,36 @@ export interface SearchResponse {
   sql: string;
 }
 
+export interface RelatedDocument {
+  document_id: string;
+  title: string;
+  tags: string[];
+  score: number;
+}
+
+export interface IdenticalDocument {
+  document_id: string;
+  title: string;
+}
+
+export interface RelatedResponse {
+  items: RelatedDocument[];
+  identical: IdenticalDocument[];
+  based_on_version: number | null;
+  reason: string | null;
+}
+
+export interface TagSuggestion {
+  tag: string;
+  freq: number;
+}
+
+export interface TagSuggestionsResponse {
+  items: TagSuggestion[];
+  based_on_version: number | null;
+  reason: string | null;
+}
+
 export interface JobCounts {
   pending: number;
   processing: number;

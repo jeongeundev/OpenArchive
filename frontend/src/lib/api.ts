@@ -3,8 +3,10 @@ import type {
   DocumentDetail,
   DocumentSummary,
   EmbeddingStatus,
+  RelatedResponse,
   SearchResponse,
   SystemStatus,
+  TagSuggestionsResponse,
   Visibility,
 } from "./types";
 import { getCurrentUser } from "./user";
@@ -78,6 +80,27 @@ export function listDocuments(params?: {
 
 export function getDocument(id: string): Promise<DocumentDetail> {
   return request<DocumentDetail>(`/api/documents/${encodeURIComponent(id)}`);
+}
+
+export function getRelated(id: string, k?: number): Promise<RelatedResponse> {
+  const query = new URLSearchParams();
+  if (k !== undefined) query.set("k", String(k));
+  const suffix = query.size > 0 ? `?${query}` : "";
+  return request<RelatedResponse>(
+    `/api/documents/${encodeURIComponent(id)}/related${suffix}`,
+  );
+}
+
+export function getTagSuggestions(
+  id: string,
+  limit?: number,
+): Promise<TagSuggestionsResponse> {
+  const query = new URLSearchParams();
+  if (limit !== undefined) query.set("limit", String(limit));
+  const suffix = query.size > 0 ? `?${query}` : "";
+  return request<TagSuggestionsResponse>(
+    `/api/documents/${encodeURIComponent(id)}/tag-suggestions${suffix}`,
+  );
 }
 
 export function uploadDocument(input: {
