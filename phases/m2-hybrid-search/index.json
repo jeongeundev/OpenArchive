@@ -41,7 +41,10 @@
       "type": "feat",
       "scope": "api",
       "desc": "추출 텍스트 편집·삭제·재임베딩 요청",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-08-05T19:32:33+0900",
+      "summary": "JSON PUT /api/documents/{id}는 {content, version}을 받아 추출 텍스트를 한 문장으로 낙관적 갱신하고 409 시 최상위 detail·current_version을 반환하며, DELETE 204와 POST reembed를 추가했다. 세 경로 모두 타인의 private 문서는 404·public 문서는 403이고 X-User-Id가 필수이며, multipart 파일 재업로드는 만들지 않았다.",
+      "completed_at": "2026-08-05T19:36:19+0900"
     },
     {
       "step": 4,
