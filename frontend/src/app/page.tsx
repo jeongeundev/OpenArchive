@@ -1,8 +1,31 @@
-export default function Home() {
+"use client";
+
+import { DocumentTable } from "@/components/DocumentTable";
+import { useDocuments } from "@/lib/useDocuments";
+
+export default function Home(): React.ReactElement {
+  const { documents, loading, error } = useDocuments();
+
   return (
-    <main className="mx-auto w-full max-w-5xl px-6 py-16">
-      <h1 className="text-4xl font-semibold text-white">OpenArchive</h1>
-      <p className="mt-3 text-sm text-neutral-400">구현 진행 중입니다.</p>
-    </main>
+    <section className="space-y-8">
+      <div>
+        <h1 className="text-4xl font-semibold text-white">문서</h1>
+        <p className="mt-3 text-sm text-neutral-400">
+          저장된 문서와 임베딩 처리 상태를 확인합니다.
+        </p>
+      </div>
+
+      {loading ? (
+        <p className="text-sm text-neutral-500">불러오는 중…</p>
+      ) : (
+        <DocumentTable documents={documents} />
+      )}
+
+      {error !== null && !loading ? (
+        <p className="text-sm text-neutral-500" role="status">
+          {error}
+        </p>
+      ) : null}
+    </section>
   );
 }
