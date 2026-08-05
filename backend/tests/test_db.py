@@ -33,6 +33,10 @@ def pool_spy(monkeypatch):
     created = []
 
     class SpyPool:
+        @staticmethod
+        async def check_connection(_connection):
+            pass
+
         def __init__(self, conninfo="", **kwargs):
             self.conninfo = conninfo
             self.kwargs = kwargs
@@ -75,6 +79,12 @@ def test_pool_is_created_with_auto_open_disabled(pool_spy):
     app.db.get_pool()
 
     assert pool_spy[0].kwargs["open"] is False
+
+
+def test_pool_checks_connections_when_borrowed(pool_spy):
+    app.db.get_pool()
+
+    assert pool_spy[0].kwargs["check"] is app.db.AsyncConnectionPool.check_connection
 
 
 def test_pool_uses_dsn_from_settings(monkeypatch, pool_spy):

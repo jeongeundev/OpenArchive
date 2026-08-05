@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
 
 from app.config import get_settings
+from app.db import close_pool
 from app.embeddings.base import EmbeddingProvider
 from app.main import app
 from app.migrations import run_migrations
@@ -101,6 +102,21 @@ async def migrated_db(clean_db: str) -> str:
     """
     await run_migrations(clean_db)
     return clean_db
+
+
+@pytest.fixture
+def db_client(monkeypatch, migrated_db: str) -> TestClient:
+    """테스트 DB로 lifespan을 실행하는 API 클라이언트."""
+    monkeypatch.setenv("DATABASE_URL", migrated_db)
+    get_settings.cache_clear()
+
+    with TestClient(app) as started:
+        yield started
+
+    # app.db의 풀은 모듈 전역이므로 다음 테스트에 DSN이 누수되지 않게 닫는다.
+    import asyncio
+
+    asyncio.run(close_pool())
 
 
 async def insert_test_document(

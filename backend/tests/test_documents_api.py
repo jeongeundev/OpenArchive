@@ -1,0 +1,161 @@
+import asyncio
+import hashlib
+from uuid import uuid4
+
+import psycopg
+from conftest import process_all_embedding_jobs
+from fastapi.testclient import TestClient
+
+from app.embeddings.fake import FakeProvider
+
+
+def upload(
+    client: TestClient,
+    *,
+    filename: str = "guide.txt",
+    content: bytes = b"OpenSQL guide",
+    user_id: str | None = "alice",
+    data: dict[str, str] | None = None,
+):
+    headers = {"X-User-Id": user_id} if user_id is not None else {}
+    return client.post(
+        "/api/documents",
+        headers=headers,
+        files={"file": (filename, content, "application/octet-stream")},
+        data=data,
+    )
+
+
+def test_upload_txt_returns_pending_document(db_client: TestClient):
+    response = upload(db_client)
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["title"] == "guide"
+    assert body["filename"] == "guide.txt"
+    assert body["embedding_status"] == "pending"
+    assert body["owner_id"] == "alice"
+
+
+def test_upload_trigger_creates_job_and_initial_text_version(
+    db_client: TestClient, migrated_db: str
+):
+    document_id = upload(db_client).json()["id"]
+
+    with psycopg.connect(migrated_db) as conn:
+        assert conn.execute(
+            "SELECT status FROM embedding_jobs WHERE document_id = %s", (document_id,)
+        ).fetchone() == ("pending",)
+        assert conn.execute(
+            "SELECT version FROM document_versions WHERE document_id = %s", (document_id,)
+        ).fetchone() == (1,)
+
+
+def test_upload_rejects_blank_text_without_saving(db_client: TestClient, migrated_db: str):
+    response = upload(db_client, content=b" \t\r\n\f")
+
+    assert response.status_code == 400
+    assert response.json() == {
+        "detail": "문서에서 텍스트를 추출하지 못했습니다. 스캔 이미지 PDF는 지원하지 않습니다."
+    }
+    with psycopg.connect(migrated_db) as conn:
+        assert conn.execute("SELECT count(*) FROM documents").fetchone() == (0,)
+
+
+def test_upload_rejects_unsupported_extension(db_client: TestClient):
+    response = upload(db_client, filename="document.hwp")
+
+    assert response.status_code == 400
+    assert "pdf, docx, txt, md" in response.json()["detail"]
+
+
+def test_upload_rejects_non_utf8_text(db_client: TestClient):
+    response = upload(db_client, content="한글".encode("cp949"))
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "텍스트 파일은 UTF-8 인코딩이어야 합니다."
+
+
+def test_upload_requires_user_id(db_client: TestClient):
+    response = upload(db_client, user_id=None)
+
+    assert response.status_code == 400
+
+
+def test_upload_stores_sha256_of_extracted_text(db_client: TestClient, migrated_db: str):
+    content = "해시 기준 텍스트"
+    document_id = upload(db_client, content=content.encode()).json()["id"]
+
+    with psycopg.connect(migrated_db) as conn:
+        (stored_hash,) = conn.execute(
+            "SELECT content_hash FROM documents WHERE id = %s", (document_id,)
+        ).fetchone()
+
+    assert stored_hash == hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+
+def test_list_hides_other_users_private_documents_and_anonymous_sees_public_only(
+    db_client: TestClient,
+):
+    public_id = upload(db_client, data={"visibility": "public"}).json()["id"]
+    private_id = upload(
+        db_client, filename="private.txt", data={"visibility": "private"}
+    ).json()["id"]
+
+    bob_ids = {item["id"] for item in db_client.get("/api/documents", headers={"X-User-Id": "bob"}).json()}
+    anonymous_ids = {item["id"] for item in db_client.get("/api/documents").json()}
+
+    assert public_id in bob_ids
+    assert private_id not in bob_ids
+    assert anonymous_ids == {public_id}
+
+
+def test_list_filters_by_tag_and_status(db_client: TestClient):
+    matching_id = upload(
+        db_client, data={"tags": "database", "visibility": "public"}
+    ).json()["id"]
+    upload(db_client, filename="other.txt", data={"tags": "manual"})
+
+    response = db_client.get("/api/documents", params={"tag": "database", "status": "pending"})
+
+    assert response.status_code == 200
+    assert [item["id"] for item in response.json()] == [matching_id]
+    assert "content" not in response.json()[0]
+
+
+def test_detail_reports_versions_and_chunk_state_before_and_after_embedding(
+    db_client: TestClient, migrated_db: str
+):
+    document_id = upload(db_client).json()["id"]
+
+    before = db_client.get(f"/api/documents/{document_id}").json()
+    assert before["content"] == "OpenSQL guide"
+    assert [version["version"] for version in before["versions"]] == [1]
+    assert before["chunk_count"] == 0
+    assert before["chunk_version"] is None
+
+    async def process() -> None:
+        async with await psycopg.AsyncConnection.connect(migrated_db, autocommit=True) as conn:
+            await process_all_embedding_jobs(conn, FakeProvider())
+
+    asyncio.run(process())
+
+    after = db_client.get(f"/api/documents/{document_id}").json()
+    assert after["chunk_count"] > 0
+    assert after["chunk_version"] == 1
+
+
+def test_detail_hides_other_users_private_document(db_client: TestClient):
+    document_id = upload(db_client, data={"visibility": "private"}).json()["id"]
+
+    response = db_client.get(
+        f"/api/documents/{document_id}", headers={"X-User-Id": "bob"}
+    )
+
+    assert response.status_code == 404
+
+
+def test_detail_returns_404_for_missing_document(db_client: TestClient):
+    response = db_client.get(f"/api/documents/{uuid4()}")
+
+    assert response.status_code == 404
