@@ -19,7 +19,10 @@
       "type": "feat",
       "scope": "search",
       "desc": "정형 필터와 벡터 유사도를 결합한 단일 SQL 검색",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-08-05T19:22:45+0900",
+      "summary": "search_documents(conn: psycopg.AsyncConnection, provider: EmbeddingProvider, *, query: str, user_id: str | None = None, tags: list[str] | None = None, content_type: str | None = None, k: int = 10) -> list[SearchHit]가 provider를 주입받아 SEARCH_SQL 단일 쿼리로 검색하며, SearchHit는 document_id·title·tags·content_type·chunk_index·content·score 필드를 제공하고 MAX_K 상수로 k를 제한하며 conftest에 insert_test_document·process_all_embedding_jobs 헬퍼를 추가",
+      "completed_at": "2026-08-05T19:28:16+0900"
     },
     {
       "step": 2,
