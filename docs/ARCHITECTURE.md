@@ -41,7 +41,7 @@ OpenArchive/
 ├── docker-compose.yml            # 로컬 개발용 pgvector 컨테이너
 ├── scripts/check.sh              # 통합 검증 (backend lint+test, frontend lint+test+build)
 ├── backend/
-│   ├── pyproject.toml            # fastapi, psycopg[binary,pool], pydantic-settings, pypdf, python-docx / [dev]: pytest, ruff / [local]: sentence-transformers
+│   ├── pyproject.toml            # fastapi, psycopg[binary,pool], pydantic-settings, mcp<2, pypdf, python-docx / [dev]: pytest, ruff / [local]: sentence-transformers
 │   ├── migrations/               # 001_extensions.sql, 002_tables.sql, 003_triggers.sql, 004_indexes.sql
 │   ├── app/
 │   │   ├── main.py               # FastAPI 앱 조립
@@ -49,10 +49,10 @@ OpenArchive/
 │   │   ├── db.py                 # AsyncConnectionPool만 — import 시 부작용 없음
 │   │   ├── migrations.py         # 마이그레이션 러너 — API 서버 startup에서만 호출
 │   │   ├── api/                  # 라우터: documents.py, search.py, system.py
-│   │   ├── services/             # parsing.py, chunking.py, documents.py, search.py
+│   │   ├── services/             # parsing.py, chunking.py, documents.py, search.py, related.py
 │   │   ├── embeddings/           # base.py(Protocol), local.py(bge-m3), fake.py
 │   │   └── worker.py             # 임베딩 워커 진입점
-│   ├── mcp_server/server.py      # FastMCP stdio 서버 — app.services를 직접 import
+│   ├── mcp_server/server.py      # FastMCP stdio 서버 — search_documents, get_document, list_documents
 │   └── tests/                    # test_chunking.py, test_triggers.py, test_worker.py, test_search_api.py ...
 └── frontend/
     └── src/
@@ -61,6 +61,8 @@ OpenArchive/
         ├── types/
         └── lib/                  # API 클라이언트 (fetch 래퍼)
 ```
+
+MCP 서버는 `app.services`를 직접 재사용한다. `search_documents`는 발췌(`excerpt`)·출처(`document_id`, `title`, `filename`)·기준 버전(`based_on_version`)을 반환하고, `get_document`는 추출 텍스트와 텍스트 버전·청크 상태를, `list_documents`는 접근 가능한 문서 메타데이터를 반환한다. 사용자 컨텍스트는 툴 인자가 아니라 `MCP_USER_ID` 환경변수로 고정하며, 미설정 시 public 문서만 조회한다 (ADR-025).
 
 ## DB 스키마
 
@@ -364,6 +366,7 @@ OpenSQL `patroni.yml`의 PostgreSQL 파라미터는 `max_connections: 100`이다
 | `GET /api/documents` | 목록 + `status`/`tag` 필터, embedding_status 포함 |
 | `GET /api/documents/{id}` | 상세 + 텍스트 버전 목록 + 청크 수 + 청크 기준 버전 |
 | `PUT /api/documents/{id}` | 편집된 추출 텍스트(`{content, version}` JSON) → `version`+1, `content`, `content_hash` UPDATE. **버전 이력 기록과 재임베딩 잡 생성은 트리거가 수행.** 요청의 `version`이 현재 버전과 다르면 **409** (아래) |
+| `PUT /api/documents/{id}/tags` | `{tags: string[]}`로 태그 전체 교체. 트리거는 `UPDATE OF content_hash`에만 걸려 있으므로 **재임베딩을 유발하지 않는다** |
 | `DELETE /api/documents/{id}` | CASCADE로 벡터까지 원자 삭제 |
 | `POST /api/documents/{id}/reembed` | **임베딩 실패 복구.** 아래 참조 |
 | `GET /api/documents/{id}/related` | **관련 문서.** 청크 평균 벡터로 유사 문서 조회 (ADR-018). 청크가 없으면 `not_indexed` |
@@ -371,7 +374,7 @@ OpenSQL `patroni.yml`의 PostgreSQL 파라미터는 `max_connections: 100`이다
 | `POST /api/search` | 하이브리드 검색 (아래) |
 | `GET /api/system/status` | **운영/데모 전용**: `inet_server_addr()`(현재 접속 노드), pending/processing/error 잡 수, 임베딩 프로바이더명, 최근 재연결 이벤트, **정합성 검증 쿼리 결과**(`c.version <> d.version` 건수). `/admin/status`가 소비하며 사용자 화면은 호출하지 않는다 |
 
-> **구현 현황 (M3 기준)**: `/related`·`/tag-suggestions`를 뺀 나머지가 구현되어 있다. 두 엔드포인트와 `reconnect_events` 값 채우기는 각각 M4·M5 몫이다.
+> **구현 현황 (M4 기준)**: `/related`·`/tag-suggestions`와 MCP 서버까지 구현되어 있다. 남은 것은 M5의 `reconnect_events` 값 채우기다.
 >
 > 새 파일로 교체하는 경로는 없다. 새 파일을 올리려면 업로드 후 이전 문서를 삭제해야 한다.
 >
@@ -608,14 +611,17 @@ COMMIT;
 GET /api/documents/{id}/related
 GET /api/documents/{id}/tag-suggestions
 
-  청크 0건 → 200 { "items": [], "reason": "not_indexed" }
-  청크 있음 → 200 { "items": [...], "based_on_version": 2 }
+  /related, 청크 0건 → 200 { "items": [], "identical": [...], "based_on_version": null, "reason": "not_indexed" }
+  /related, 청크 있음 → 200 { "items": [...], "identical": [...], "based_on_version": 2, "reason": null }
+  /tag-suggestions, 청크 0건 → 200 { "items": [], "based_on_version": null, "reason": "not_indexed" }
+  /tag-suggestions, 청크 있음 → 200 { "items": [...], "based_on_version": 2, "reason": null }
 ```
 
 - **404·400이 아니라 200이다.** 문서는 존재하고 요청도 유효하다. "아직 색인 전"은 오류가 아니라 상태다
 - 분기 기준은 `embedding_status`가 **아니라 청크 존재 여부**다. 재임베딩 중(`processing`)에도 이전 청크가 남아 있으므로 정상 응답해야 하며, 이는 검색이 재임베딩 중 이전 벡터로 동작하는 정책과 일치한다
 - `based_on_version`은 `document_chunks.version`을 그대로 쓴다. UI에 "v2 기준"으로 표시되어 **버전 일관성 보장을 화면에서 뒷받침한다**
 - 발생 상황: 최초 업로드 직후(`pending`), 최초 임베딩 실패(`error`)
+- `/related`의 `identical`은 벡터가 아니라 `content_hash`로 계산하므로, 청크가 없는 `not_indexed` 상태에서도 반환된다
 
 ### 관련 문서
 
