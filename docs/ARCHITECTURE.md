@@ -41,7 +41,7 @@ OpenArchive/
 ├── docker-compose.yml            # 로컬 개발용 pgvector 컨테이너
 ├── scripts/check.sh              # 통합 검증 (backend lint+test, frontend lint+test+build)
 ├── backend/
-│   ├── pyproject.toml            # fastapi, psycopg[binary,pool], pydantic-settings, pypdf, python-docx / [dev]: pytest, ruff
+│   ├── pyproject.toml            # fastapi, psycopg[binary,pool], pydantic-settings, pypdf, python-docx / [dev]: pytest, ruff / [local]: sentence-transformers
 │   ├── migrations/               # 001_extensions.sql, 002_tables.sql, 003_triggers.sql, 004_indexes.sql
 │   ├── app/
 │   │   ├── main.py               # FastAPI 앱 조립
@@ -83,7 +83,9 @@ CREATE TABLE documents (
 
   -- 텍스트를 추출하지 못한 문서(스캔 이미지 PDF 등)가 저장되는 것을 DB에서 차단한다.
   -- 빈 본문은 임베딩할 것이 없어 검색에 영원히 잡히지 않는 유령 행이 된다.
-  CONSTRAINT documents_content_not_blank CHECK (length(btrim(content)) > 0)
+  -- 제거 문자를 명시한다: btrim의 1인자 형태는 공백만 제거해 탭·개행만 남은 본문이
+  -- 그대로 통과하는데, 스캔 이미지 PDF의 추출 결과가 정확히 그 형태다 (M1에서 실측).
+  CONSTRAINT documents_content_not_blank CHECK (length(btrim(content, E' \t\r\n\f')) > 0)
 );
 
 -- document_versions: 추출 텍스트의 버전 이력 (append-only)
@@ -245,9 +247,17 @@ COMMIT;
 >
 > 2번에서 미리 읽지 않는 이유: 본문이 `A → B → A`로 되돌아온 경우 `content_hash`는 원래대로 돌아오지만 `version`은 2 올라가 있다. 해시 재확인은 통과하는데 2번에서 읽은 `version`은 낡은 값이 된다. 잠금 아래에서 읽으면 이 경우에도 잠금 시점의 `version`이 정확히 기록된다.
 
-4. 실패 시: `attempts` 기반 지수 백오프로 `next_attempt_at` 갱신 후 `pending` 복귀. 3회 초과 시 job `error` + `documents.embedding_status='error'`.
+4. 실패 시: `attempts` 기반 지수 백오프로 `next_attempt_at` 갱신 후 `pending` 복귀. `attempts`는 claim 시점에 이미 올라 있으므로 **3회를 소진하면**(3회째 실패) job `error` + `documents.embedding_status='error'`.
 
-5. 좀비 회수: `processing` 상태로 5분 초과된 잡을 워커 기동 시 + 주기 스윕에서 `pending`으로 리셋.
+5. 좀비 회수: `processing` 상태로 5분 초과된 잡을 워커 기동 시 + 주기 스윕에서 `pending`으로 리셋. `attempts`는 초기화하지 않는다 — 초기화하면 계속 죽는 잡이 영원히 재시도되어 재시도 상한이 무의미해진다.
+
+> **4번과 5번에는 공통 예외가 있다: 그 문서에 새 `pending` 잡이 이미 있으면 `pending`으로 되돌리지 않고 `done`으로 마감한다.**
+>
+> 처리 중 문서가 수정되면 트리거가 새 잡을 만든다. 이때 실패한 잡이나 좀비 잡까지 `pending`으로 되돌리면 **문서당 pending 1건**을 강제하는 `uq_pending_job_per_doc` 위반이 되어 **워커가 죽는다.** 코얼레싱 제약과 재시도 로직이 만나는 지점이며, 파셜 유니크 인덱스를 둔 이상 구조적으로 발생한다.
+>
+> 확인과 복귀 사이의 경쟁을 없애려면 **문서 행을 `FOR UPDATE`로 잠근 뒤** 판단한다. 잡 생성은 전부 문서 변경 트리거 안에서 일어나므로 이 잠금이 새 잡의 커밋을 막는다. 잠그지 않으면 READ COMMITTED의 statement 스냅샷 탓에 방금 커밋된 새 잡을 놓치고, 그 `pending` 복귀가 유니크 제약 위반으로 터진다. 마감해도 유실이 아니다 — 최신 내용은 새 잡이 처리하며, 이는 3번에서 낡은 결과를 폐기하면서도 잡을 `done`으로 마감하는 것과 같은 원리다.
+>
+> **이 예외는 4번의 재시도 소진 판정보다 먼저 본다.** 낡은 내용을 보던 잡의 수명이 끝난 것이지 문서가 실패한 것이 아니므로, 소진 시점이라도 `documents.embedding_status`를 `error`로 떨어뜨리지 않는다. 순서를 뒤집으면 새 잡이 곧 `ready`로 되돌릴 문서에 거짓 `error` 배지가 뜬다.
 
 > **3번의 `content_hash` 재확인이 멀티 워커 정합성의 핵심이다.**
 > 워커A가 job1을 처리하는 도중 문서가 수정되면 새 pending job2가 생기고, 워커B가 이를 즉시 claim할 수 있다. 두 워커가 같은 `document_id`의 청크를 동시에 교체하면 **완료 순서에 따라 낡은 버전이 최종 상태로 남을 수 있다.**
@@ -371,7 +381,7 @@ OpenSQL `patroni.yml`의 PostgreSQL 파라미터는 `max_connections: 100`이다
 ```
 
 저장 후 `error` 상태로 두는 대안을 택하지 않은 이유: 빈 문서는 임베딩할 것이 없어 **영원히 검색에 잡히지 않는 유령 행**이 되고, 사용자는 목록에서 실패 배지만 볼 뿐 원인을 모른다. 업로드 시점에 즉시 알리는 편이 낫다.
-DB 계층에도 `CHECK (length(btrim(content)) > 0)`를 두어 이중으로 막는다 (스키마 절 참조).
+DB 계층에도 `CHECK (length(btrim(content, E' \t\r\n\f')) > 0)`를 두어 이중으로 막는다 (스키마 절 참조). 여기서 "공백 제거"는 **공백·탭·CR·LF·폼피드**를 뜻한다 — `btrim`의 1인자 형태는 공백만 제거하므로 개행뿐인 추출 결과를 걸러내지 못한다.
 
 ### 임베딩 실패 복구 (`POST /api/documents/{id}/reembed`)
 

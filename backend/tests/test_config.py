@@ -23,7 +23,7 @@ def test_database_url_defaults_to_local_compose_dsn(monkeypatch):
 
     settings = Settings(**NO_ENV_FILE)
 
-    assert settings.database_url == "postgresql://openarchive:openarchive@localhost:5432/openarchive"
+    assert settings.database_url == "postgresql://openarchive:openarchive@localhost:5433/openarchive"
 
 
 def test_embedding_provider_defaults_to_fake(monkeypatch):

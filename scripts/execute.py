@@ -3,13 +3,14 @@
 Harness Step Executor — phase 내 step을 순차 실행하고 자가 교정한다.
 
 Usage:
-    python3 scripts/execute.py <phase-dir> [--push]
+    python3 scripts/execute.py <phase-dir> [--push] [--model MODEL]
 """
 
 import argparse
 import contextlib
 import json
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -20,6 +21,13 @@ from pathlib import Path
 from typing import Optional
 
 ROOT = Path(__file__).resolve().parent.parent
+
+# 스텝 세션 기본 모델. 전역 설정(~/.claude/settings.json)을 상속하지 않도록 명시한다.
+DEFAULT_MODEL = "opus"
+
+# Codex 사용량 한도 초과를 알리는 문구. exitCode != 0 이면서 이 패턴이 stdout/stderr에
+# 있으면 "일시적 실패"가 아니라 "한도 소진"으로 간주하고 이번 실행 내내 Claude로 전환한다.
+QUOTA_SIGNAL_PATTERN = re.compile(r"rate limit|usage limit|\b429\b", re.IGNORECASE)
 
 
 @contextlib.contextmanager
@@ -62,13 +70,16 @@ class StepExecutor:
     DEFAULT_TYPE = "feat"
     TZ = timezone(timedelta(hours=9))
 
-    def __init__(self, phase_dir_name: str, *, auto_push: bool = False):
+    def __init__(self, phase_dir_name: str, *, auto_push: bool = False,
+                 model: str = DEFAULT_MODEL):
         self._root = str(ROOT)
         self._phases_dir = ROOT / "phases"
         self._phase_dir = self._phases_dir / phase_dir_name
         self._phase_dir_name = phase_dir_name
         self._top_index_file = self._phases_dir / "index.json"
         self._auto_push = auto_push
+        self._model = model
+        self._active_agent = "codex"
 
         if not self._phase_dir.is_dir():
             print(f"ERROR: {self._phase_dir} not found")
@@ -262,7 +273,8 @@ class StepExecutor:
 
         prompt = preamble + step_file.read_text()
         result = subprocess.run(
-            ["claude", "-p", "--dangerously-skip-permissions", "--output-format", "json", prompt],
+            ["claude", "-p", "--dangerously-skip-permissions",
+             "--model", self._model, "--output-format", "json", prompt],
             cwd=self._root, capture_output=True, text=True, timeout=1800,
         )
 
@@ -272,7 +284,7 @@ class StepExecutor:
                 print(f"  stderr: {result.stderr[:500]}")
 
         output = {
-            "step": step_num, "name": step_name,
+            "step": step_num, "name": step_name, "agent": "claude",
             "exitCode": result.returncode,
             "stdout": result.stdout, "stderr": result.stderr,
         }
@@ -282,12 +294,73 @@ class StepExecutor:
 
         return output
 
+    # --- Codex 호출 ---
+
+    def _invoke_codex(self, step: dict, preamble: str) -> dict:
+        step_num, step_name = step["step"], step["name"]
+        step_file = self._phase_dir / f"step{step_num}.md"
+
+        if not step_file.exists():
+            print(f"  ERROR: {step_file} not found")
+            sys.exit(1)
+
+        prompt = preamble + step_file.read_text()
+        result = subprocess.run(
+            ["codex", "exec", "--json", "--dangerously-bypass-approvals-and-sandbox", prompt],
+            cwd=self._root, capture_output=True, text=True, timeout=1800,
+        )
+
+        if result.returncode != 0:
+            print(f"\n  WARN: Codex가 비정상 종료됨 (code {result.returncode})")
+            if result.stderr:
+                print(f"  stderr: {result.stderr[:500]}")
+
+        output = {
+            "step": step_num, "name": step_name, "agent": "codex",
+            "exitCode": result.returncode,
+            "stdout": result.stdout, "stderr": result.stderr,
+        }
+        out_path = self._phase_dir / f"step{step_num}-output.json"
+        with open(out_path, "w") as f:
+            json.dump(output, f, indent=2, ensure_ascii=False)
+
+        return output
+
+    @staticmethod
+    def _is_quota_exceeded(output: dict) -> bool:
+        """Codex 사용량 한도 초과 신호 감지 (휴리스틱).
+
+        Codex CLI는 한도 초과를 별도 구조화 필드로 안정적으로 노출하지 않는다
+        (openai/codex#14728 — exec 모드의 rate_limits가 종종 null로 온다).
+        exitCode 비정상 종료 + 에러 문구 매칭으로만 판별 가능하다.
+        """
+        if output.get("exitCode", 0) == 0:
+            return False
+        text = f"{output.get('stdout', '')}\n{output.get('stderr', '')}"
+        return bool(QUOTA_SIGNAL_PATTERN.search(text))
+
+    def _invoke_agent(self, step: dict, preamble: str) -> dict:
+        """Codex를 우선 시도하고, 사용량 한도 초과 시 이번 실행 내내 Claude로 전환한다.
+
+        전환은 sticky하다 — Codex 한도는 보통 5시간/주간 단위로 오래 지속되므로,
+        매 step마다 Codex를 재시도하면 실패 호출만 반복된다.
+        """
+        if self._active_agent == "codex":
+            output = self._invoke_codex(step, preamble)
+            if self._is_quota_exceeded(output):
+                print("  ⚠ Codex 사용량 한도 도달 — 이후 step은 Claude로 전환합니다.")
+                self._active_agent = "claude"
+                output = self._invoke_claude(step, preamble)
+            return output
+        return self._invoke_claude(step, preamble)
+
     # --- 헤더 & 검증 ---
 
     def _print_header(self):
         print(f"\n{'='*60}")
         print(f"  Harness Step Executor")
         print(f"  Phase: {self._phase_name} | Steps: {self._total}")
+        print(f"  Agent: Codex → Claude ({self._model}, 한도 소진 시 폴백)")
         if self._auto_push:
             print(f"  Auto-push: enabled")
         print(f"{'='*60}")
@@ -332,7 +405,7 @@ class StepExecutor:
                 tag += f" [retry {attempt}/{self.MAX_RETRIES}]"
 
             with progress_indicator(tag) as pi:
-                self._invoke_claude(step, preamble)
+                self._invoke_agent(step, preamble)
                 elapsed = int(pi.elapsed)
 
             index = self._read_json(self._index_file)
@@ -434,9 +507,13 @@ def main():
     parser = argparse.ArgumentParser(description="Harness Step Executor")
     parser.add_argument("phase_dir", help="Phase directory name (e.g. 0-mvp)")
     parser.add_argument("--push", action="store_true", help="Push branch after completion")
+    parser.add_argument(
+        "--model", default=DEFAULT_MODEL,
+        help=f"Model for step sessions (default: {DEFAULT_MODEL})",
+    )
     args = parser.parse_args()
 
-    StepExecutor(args.phase_dir, auto_push=args.push).run()
+    StepExecutor(args.phase_dir, auto_push=args.push, model=args.model).run()
 
 
 if __name__ == "__main__":

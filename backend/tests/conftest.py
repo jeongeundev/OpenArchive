@@ -1,8 +1,27 @@
+import psycopg
 import pytest
 from fastapi.testclient import TestClient
+from psycopg.conninfo import conninfo_to_dict, make_conninfo
 
 from app.config import get_settings
 from app.main import app
+from app.migrations import run_migrations
+
+# 개발 DB(openarchive)와 분리한다. 테스트는 매번 스키마를 통째로 비우므로
+# 같은 DB를 쓰면 개발 데이터가 사라진다.
+TEST_DB_NAME = "openarchive_test"
+
+
+def swap_dbname(dsn: str, dbname: str) -> str:
+    """DSN에서 데이터베이스 이름만 바꾼다 — 호스트·포트·자격증명은 그대로 물려받는다.
+
+    로컬 컨테이너 전제다. OpenProxy 경유 DSN에서는 dbname 자리가 데이터베이스가 아니라
+    **pool_name**이므로(`.env.example` 참조) 이 치환이 존재하지 않는 풀을 가리키고,
+    transaction pooling 위에서 CREATE/DROP DATABASE가 도는지도 확인된 바 없다.
+    """
+    params = conninfo_to_dict(dsn)
+    params["dbname"] = dbname
+    return make_conninfo(**params)
 
 
 @pytest.fixture(autouse=True)
@@ -18,4 +37,62 @@ def _clear_settings_cache():
 
 @pytest.fixture
 def client() -> TestClient:
+    # 컨텍스트 매니저로 쓰지 않으므로 lifespan이 돌지 않는다. 의도된 것이다 —
+    # 앱 테스트 전체가 DB에 묶이지 않게 한다. lifespan 자체를 보는 테스트는
+    # test_main.py에서 `with TestClient(app)`으로 명시적으로 태운다.
     return TestClient(app)
+
+
+@pytest.fixture(scope="session")
+def test_dsn() -> str:
+    """테스트 전용 DB를 세션마다 새로 만들고 그 DSN을 반환한다."""
+    admin_dsn = get_settings().database_url
+    dsn = swap_dbname(admin_dsn, TEST_DB_NAME)
+
+    try:
+        with psycopg.connect(admin_dsn, autocommit=True, connect_timeout=5) as conn:
+            # 남아 있는 DB를 재사용하지 않고 매번 새로 만든다.
+            # clean_db가 public 스키마를 갈아 끼울 때 vector 확장이 함께 드롭되지 않고
+            # 사라진 스키마를 가리키는 고아 레코드로 남는 경우가 있다. 그러면
+            # CREATE EXTENSION IF NOT EXISTS가 "이미 있다"고 건너뛰어, 이후 모든 DB
+            # 테스트가 'type "vector" does not exist'로 죽는다. 그 상태는 DROP EXTENSION으로
+            # 복구되지 않는다 — 실제로 시도하면 서버가 죽는다. DB째로 새로 만드는 것이
+            # 유일하게 확실한 복구 경로이고, 세션당 한 번이라 비용도 작다.
+            conn.execute(f'DROP DATABASE IF EXISTS "{TEST_DB_NAME}" WITH (FORCE)')
+            conn.execute(f'CREATE DATABASE "{TEST_DB_NAME}"')
+    except psycopg.OperationalError as exc:
+        # skip하지 않는다. 트리거·SKIP LOCKED·vector 연산자는 실제 DB에서만
+        # 검증되므로, 조용한 skip은 "검증했다"는 거짓 신호가 된다.
+        pytest.fail(
+            f"테스트 DB에 접속할 수 없습니다: {exc}\n"
+            f"  DSN(관리 연결): {admin_dsn}\n"
+            "  프로젝트 루트에서 `docker compose up -d` 후 `docker compose ps`로 healthy를 확인하세요.",
+            pytrace=False,
+        )
+
+    return dsn
+
+
+@pytest.fixture
+def clean_db(test_dsn: str) -> str:
+    """스키마가 비워진 테스트 DB의 DSN. 매 테스트마다 초기화된다.
+
+    테이블을 하나씩 지우는 대신 스키마를 통째로 갈아 끼운다. 격리 규칙이
+    "이 DB에는 직전 테스트의 흔적이 없다" 한 줄로 끝나고, 빈 스키마라 비용도 없다.
+    """
+    with psycopg.connect(test_dsn, autocommit=True) as conn:
+        conn.execute("DROP SCHEMA IF EXISTS public CASCADE")
+        conn.execute("CREATE SCHEMA public")
+
+    return test_dsn
+
+
+@pytest.fixture
+async def migrated_db(clean_db: str) -> str:
+    """실제 backend/migrations/ 를 적용한 테스트 DB의 DSN.
+
+    테스트가 스키마를 자체 SQL로 만들면 검증 대상이 테스트 코드가 되어버린다.
+    러너를 그대로 태워, 심사 산출물인 마이그레이션 파일 자체를 검증 대상으로 삼는다.
+    """
+    await run_migrations(clean_db)
+    return clean_db

@@ -14,7 +14,9 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-openarchive}
       POSTGRES_DB: ${POSTGRES_DB:-openarchive}
     ports:
-      - "5432:5432"
+      # 호스트는 5433이다. 개발 머신에 이미 PostgreSQL이 떠 있는 경우가 흔한데,
+      # 그러면 localhost:5432가 그쪽으로 잡혀 컨테이너가 조용히 가려진다.
+      - "5433:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
