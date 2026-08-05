@@ -8,7 +8,10 @@
       "type": "feat",
       "scope": "api",
       "desc": "업로드 파일에서 텍스트를 추출하는 파서",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-08-05T19:20:05+0900",
+      "summary": "detect_content_type(filename: str) -> str와 extract_text(data: bytes, content_type: str) -> str를 구현하고 UnsupportedFileType·TextDecodeError를 제공했으며, 빈 추출 결과는 예외가 아닌 빈 문자열로 반환",
+      "completed_at": "2026-08-05T19:22:45+0900"
     },
     {
       "step": 1,
@@ -50,5 +53,6 @@
       "desc": "접속 노드·잡 수·정합성 카운터 조회",
       "status": "pending"
     }
-  ]
+  ],
+  "created_at": "2026-08-05T19:20:05+0900"
 }
