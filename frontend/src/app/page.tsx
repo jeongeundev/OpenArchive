@@ -1,10 +1,11 @@
 "use client";
 
 import { DocumentTable } from "@/components/DocumentTable";
+import { UploadDropzone } from "@/components/UploadDropzone";
 import { useDocuments } from "@/lib/useDocuments";
 
 export default function Home(): React.ReactElement {
-  const { documents, loading, error } = useDocuments();
+  const { documents, loading, error, refresh } = useDocuments();
 
   return (
     <section className="space-y-8">
@@ -14,6 +15,8 @@ export default function Home(): React.ReactElement {
           저장된 문서와 임베딩 처리 상태를 확인합니다.
         </p>
       </div>
+
+      <UploadDropzone onUploaded={refresh} />
 
       {loading ? (
         <p className="text-sm text-neutral-500">불러오는 중…</p>
