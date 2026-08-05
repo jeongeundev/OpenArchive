@@ -4,6 +4,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from app.api.documents import router as documents_router
+from app.api.retry import RetryOnOperationalError
 from app.api.search import router as search_router
 from app.api.system import router as system_router
 from app.config import get_settings
@@ -29,6 +30,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="OpenArchive API", lifespan=lifespan)
+app.add_middleware(RetryOnOperationalError)
 app.include_router(documents_router)
 app.include_router(search_router)
 app.include_router(system_router)
