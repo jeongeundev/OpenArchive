@@ -2,7 +2,7 @@ from collections.abc import AsyncIterator
 from typing import Annotated
 
 import psycopg
-from fastapi import Header, HTTPException, Request
+from fastapi import Depends, Header, HTTPException, Request
 
 from app.db import get_pool
 from app.embeddings.base import EmbeddingProvider
@@ -12,6 +12,9 @@ async def get_conn() -> AsyncIterator[psycopg.AsyncConnection]:
     """요청 하나에 풀 커넥션 하나를 빌려준다."""
     async with get_pool().connection() as conn:
         yield conn
+
+
+Connection = Annotated[psycopg.AsyncConnection, Depends(get_conn)]
 
 
 def require_user_id(x_user_id: Annotated[str | None, Header()] = None) -> str:

@@ -1,9 +1,8 @@
 from typing import Annotated
 
-import psycopg
 from fastapi import APIRouter, Depends, HTTPException
 
-from app.api.deps import get_conn, get_embedding_provider, optional_user_id
+from app.api.deps import Connection, get_embedding_provider, optional_user_id
 from app.api.schemas import SearchRequest, SearchResponse
 from app.embeddings.base import EmbeddingProvider
 from app.services.search import SEARCH_SQL, search_documents
@@ -14,7 +13,7 @@ router = APIRouter(prefix="/api/search", tags=["search"])
 @router.post("", response_model=SearchResponse)
 async def search(
     body: SearchRequest,
-    conn: Annotated[psycopg.AsyncConnection, Depends(get_conn)],
+    conn: Connection,
     provider: Annotated[EmbeddingProvider, Depends(get_embedding_provider)],
     user_id: Annotated[str | None, Depends(optional_user_id)],
 ) -> SearchResponse:

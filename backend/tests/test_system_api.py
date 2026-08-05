@@ -1,28 +1,11 @@
-import asyncio
-
-import psycopg
-from conftest import process_all_embedding_jobs
+from conftest import run_embedding_worker, upload_document
 from fastapi.testclient import TestClient
-
-from app.embeddings.fake import FakeProvider
 
 
 def upload(client: TestClient, content: str = "OpenSQL status") -> dict:
-    response = client.post(
-        "/api/documents",
-        headers={"X-User-Id": "alice"},
-        files={"file": ("status.txt", content.encode(), "text/plain")},
-    )
+    response = upload_document(client, filename="status.txt", content=content.encode())
     assert response.status_code == 201
     return response.json()
-
-
-def process_jobs(dsn: str) -> None:
-    async def process() -> None:
-        async with await psycopg.AsyncConnection.connect(dsn, autocommit=True) as conn:
-            await process_all_embedding_jobs(conn, FakeProvider())
-
-    asyncio.run(process())
 
 
 def test_status_is_available_without_authentication_and_reports_operational_fields(
@@ -32,16 +15,22 @@ def test_status_is_available_without_authentication_and_reports_operational_fiel
 
     assert response.status_code == 200
     body = response.json()
-    assert body == {
-        "node_address": body["node_address"],
-        "node_port": body["node_port"],
-        "jobs": {"pending": 0, "processing": 0, "error": 0},
-        "inconsistent_documents": 0,
-        "embedding_provider": "fake",
-        "reconnect_events": None,
+    assert set(body) == {
+        "node_address",
+        "node_port",
+        "jobs",
+        "inconsistent_documents",
+        "embedding_provider",
+        "reconnect_events",
     }
+    assert body["jobs"] == {"pending": 0, "processing": 0, "error": 0}
+    assert body["inconsistent_documents"] == 0
+    assert body["embedding_provider"] == "fake"
+    assert body["reconnect_events"] is None
+    # 접속 노드는 환경마다 다르다. TCP면 주소가, 유닉스 소켓이면 NULL이 온다.
+    # 값 자체가 아니라 페일오버 데모가 읽을 수 있는 형태인지를 본다.
     assert body["node_address"] is None or isinstance(body["node_address"], str)
-    assert isinstance(body["node_port"], int)
+    assert isinstance(body["node_port"], int) and body["node_port"] > 0
 
 
 def test_status_reports_pending_jobs_until_the_worker_processes_them(
@@ -55,7 +44,7 @@ def test_status_reports_pending_jobs_until_the_worker_processes_them(
         "error": 0,
     }
 
-    process_jobs(migrated_db)
+    run_embedding_worker(migrated_db)
 
     assert db_client.get("/api/system/status").json()["jobs"] == {
         "pending": 0,
@@ -68,7 +57,7 @@ def test_status_observes_version_drift_and_convergence(
     db_client: TestClient, migrated_db: str
 ):
     document = upload(db_client)
-    process_jobs(migrated_db)
+    run_embedding_worker(migrated_db)
     assert db_client.get("/api/system/status").json()["inconsistent_documents"] == 0
 
     response = db_client.put(
@@ -79,7 +68,7 @@ def test_status_observes_version_drift_and_convergence(
     assert response.status_code == 200
     assert db_client.get("/api/system/status").json()["inconsistent_documents"] == 1
 
-    process_jobs(migrated_db)
+    run_embedding_worker(migrated_db)
 
     assert db_client.get("/api/system/status").json()["inconsistent_documents"] == 0
 
@@ -88,7 +77,7 @@ def test_consistency_counter_counts_documents_not_chunks(
     db_client: TestClient, migrated_db: str
 ):
     document = upload(db_client, "OpenSQL 정합성 문단.\n\n" * 300)
-    process_jobs(migrated_db)
+    run_embedding_worker(migrated_db)
     detail = db_client.get(f"/api/documents/{document['id']}").json()
     assert detail["chunk_count"] >= 2
 

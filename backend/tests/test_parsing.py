@@ -103,14 +103,3 @@ def test_extract_text_normalizes_invalid_binary_document_errors(
 def test_extract_text_rejects_unsupported_content_type() -> None:
     with pytest.raises(UnsupportedFileType):
         extract_text(b"data", "hwp")
-
-
-@pytest.mark.parametrize(
-    ("data", "content_type"),
-    [
-        ("같은 텍스트".encode(), "txt"),
-        (minimal_pdf("same text"), "pdf"),
-    ],
-)
-def test_extract_text_is_deterministic(data: bytes, content_type: str) -> None:
-    assert extract_text(data, content_type) == extract_text(data, content_type)

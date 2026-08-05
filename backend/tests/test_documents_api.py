@@ -1,29 +1,10 @@
-import asyncio
 import hashlib
 from uuid import uuid4
 
 import psycopg
-from conftest import process_all_embedding_jobs
+from conftest import run_embedding_worker
+from conftest import upload_document as upload
 from fastapi.testclient import TestClient
-
-from app.embeddings.fake import FakeProvider
-
-
-def upload(
-    client: TestClient,
-    *,
-    filename: str = "guide.txt",
-    content: bytes = b"OpenSQL guide",
-    user_id: str | None = "alice",
-    data: dict[str, str] | None = None,
-):
-    headers = {"X-User-Id": user_id} if user_id is not None else {}
-    return client.post(
-        "/api/documents",
-        headers=headers,
-        files={"file": (filename, content, "application/octet-stream")},
-        data=data,
-    )
 
 
 def edit(client: TestClient, document_id: str, *, content: str, version: int, user_id="alice"):
@@ -143,11 +124,7 @@ def test_detail_reports_versions_and_chunk_state_before_and_after_embedding(
     assert before["chunk_count"] == 0
     assert before["chunk_version"] is None
 
-    async def process() -> None:
-        async with await psycopg.AsyncConnection.connect(migrated_db, autocommit=True) as conn:
-            await process_all_embedding_jobs(conn, FakeProvider())
-
-    asyncio.run(process())
+    run_embedding_worker(migrated_db)
 
     after = db_client.get(f"/api/documents/{document_id}").json()
     assert after["chunk_count"] > 0
@@ -237,11 +214,7 @@ def test_edit_keeps_old_chunks_until_worker_replaces_them_and_exposes_convergenc
 ):
     document_id = upload(db_client).json()["id"]
 
-    async def process() -> None:
-        async with await psycopg.AsyncConnection.connect(migrated_db, autocommit=True) as conn:
-            await process_all_embedding_jobs(conn, FakeProvider())
-
-    asyncio.run(process())
+    run_embedding_worker(migrated_db)
     assert edit(db_client, document_id, content="new searchable text", version=1).status_code == 200
 
     with psycopg.connect(migrated_db) as conn:
@@ -253,7 +226,7 @@ def test_edit_keeps_old_chunks_until_worker_replaces_them_and_exposes_convergenc
                ON c.document_id = d.id WHERE c.version <> d.version"""
         ).fetchone() == (1,)
 
-    asyncio.run(process())
+    run_embedding_worker(migrated_db)
     with psycopg.connect(migrated_db) as conn:
         assert conn.execute(
             """SELECT count(DISTINCT d.id) FROM documents d JOIN document_chunks c
@@ -264,11 +237,7 @@ def test_edit_keeps_old_chunks_until_worker_replaces_them_and_exposes_convergenc
 def test_delete_cascades_all_document_rows(db_client: TestClient, migrated_db: str):
     document_id = upload(db_client).json()["id"]
 
-    async def process() -> None:
-        async with await psycopg.AsyncConnection.connect(migrated_db, autocommit=True) as conn:
-            await process_all_embedding_jobs(conn, FakeProvider())
-
-    asyncio.run(process())
+    run_embedding_worker(migrated_db)
     with psycopg.connect(migrated_db) as conn:
         for table in ("document_chunks", "document_versions", "embedding_jobs"):
             assert conn.execute(
@@ -312,11 +281,7 @@ def test_reembed_recovers_error_without_changing_version_and_coalesces_requests(
             (document_id,),
         ).fetchone() == (1,)
 
-    async def process() -> None:
-        async with await psycopg.AsyncConnection.connect(migrated_db, autocommit=True) as conn:
-            await process_all_embedding_jobs(conn, FakeProvider())
-
-    asyncio.run(process())
+    run_embedding_worker(migrated_db)
     detail = db_client.get(f"/api/documents/{document_id}").json()
     assert detail["embedding_status"] == "ready"
     assert detail["chunk_count"] > 0

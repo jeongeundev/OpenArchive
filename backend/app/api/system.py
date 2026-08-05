@@ -1,11 +1,10 @@
 from typing import Annotated
 
-import psycopg
 from fastapi import APIRouter, Depends
 from psycopg.rows import dict_row
 from pydantic import BaseModel
 
-from app.api.deps import get_conn, get_embedding_provider
+from app.api.deps import Connection, get_embedding_provider
 from app.embeddings.base import EmbeddingProvider
 
 router = APIRouter(prefix="/api/system", tags=["system"])
@@ -30,7 +29,7 @@ class SystemStatus(BaseModel):
 
 @router.get("/status", response_model=SystemStatus)
 async def get_system_status(
-    conn: Annotated[psycopg.AsyncConnection, Depends(get_conn)],
+    conn: Connection,
     provider: Annotated[EmbeddingProvider, Depends(get_embedding_provider)],
 ) -> SystemStatus:
     cur = conn.cursor(row_factory=dict_row)
