@@ -4,6 +4,7 @@ from fastapi import FastAPI
 
 from app.api.documents import router as documents_router
 from app.api.search import router as search_router
+from app.api.system import router as system_router
 from app.config import get_settings
 from app.db import close_pool, get_pool
 from app.embeddings import get_provider
@@ -28,6 +29,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="OpenArchive API", lifespan=lifespan)
 app.include_router(documents_router)
 app.include_router(search_router)
+app.include_router(system_router)
 
 
 @app.get("/api/health")
