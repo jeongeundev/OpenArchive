@@ -41,7 +41,10 @@
       "type": "feat",
       "scope": "api",
       "desc": "재임베딩 없이 문서 태그를 교체하는 엔드포인트",
-      "status": "pending"
+      "status": "completed",
+      "summary": "PUT /api/documents/{id}/tags에 {tags: string[]}를 보내 재임베딩 없이 문서 태그 전체를 교체하는 엔드포인트를 구현",
+      "started_at": "2026-08-06T03:08:20+0900",
+      "completed_at": "2026-08-06T03:10:23+0900"
     },
     {
       "step": 4,
