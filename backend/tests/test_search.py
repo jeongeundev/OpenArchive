@@ -1,3 +1,4 @@
+from contextlib import asynccontextmanager
 from uuid import UUID
 
 import psycopg
@@ -12,6 +13,29 @@ from app.services.search import (
     SEARCH_SQL,
     search_documents,
 )
+from app.vectors import to_pgvector_literal
+
+
+class RecordingConnection:
+    """실행된 문장만 받아 적고 나머지는 진짜 연결에 그대로 위임한다.
+
+    가짜 DB가 아니다 — 모든 문장이 실제 컨테이너에서 실행된다. 검증 대상은
+    "무엇을 어떤 순서로 실행했는가"뿐이라, 실행 결과는 진짜여야 한다.
+    """
+
+    def __init__(self, conn: psycopg.AsyncConnection) -> None:
+        self._conn = conn
+        self.statements: list[str] = []
+
+    @asynccontextmanager
+    async def transaction(self):
+        async with self._conn.transaction():
+            self.statements.append("BEGIN")
+            yield
+
+    async def execute(self, query, params=None):
+        self.statements.append(query)
+        return await self._conn.execute(query, params)
 
 
 @pytest.fixture
@@ -244,26 +268,55 @@ async def test_ef_search_returns_max_k_distinct_documents(worker_conn, search_co
     assert len(hits) == MAX_K
 
 
-async def test_search_tuning_is_local_to_one_transaction(migrated_db):
-    async with await psycopg.AsyncConnection.connect(migrated_db, autocommit=True) as conn:
-        await conn.execute("SELECT %s::vector", ("[" + ",".join(["0"] * 1024) + "]",))
-        before_ef = (await (await conn.execute("SHOW hnsw.ef_search")).fetchone())[0]
-        before_rpc = (await (await conn.execute("SHOW random_page_cost")).fetchone())[0]
+def test_candidate_limit_stays_below_ef_search():
+    """ADR-011 보강 4: 과다 조회 LIMIT이 ef_search를 넘으면 에러 없이 행이 모자란다.
 
-        async with conn.transaction():
-            await conn.execute(f"SET LOCAL hnsw.ef_search = {EF_SEARCH}")
-            await conn.execute("SET LOCAL random_page_cost = 1.1")
-            inside_ef = (await (await conn.execute("SHOW hnsw.ef_search")).fetchone())[0]
-            inside_rpc = (await (await conn.execute("SHOW random_page_cost")).fetchone())[0]
+    등호도 안 된다 — 두 벽 사이에 여유를 두라는 것이 보강 4의 결론이다.
+    """
+    assert MAX_K * CANDIDATE_MULTIPLIER < EF_SEARCH
 
-        after_ef = (await (await conn.execute("SHOW hnsw.ef_search")).fetchone())[0]
-        after_rpc = (await (await conn.execute("SHOW random_page_cost")).fetchone())[0]
 
-    assert MAX_K * CANDIDATE_MULTIPLIER == EF_SEARCH
-    assert inside_ef == str(EF_SEARCH)
-    assert float(inside_rpc) == 1.1
-    assert after_ef == before_ef
-    assert after_rpc == before_rpc
+async def test_search_issues_both_tunings_inside_the_query_transaction(
+    worker_conn, search_conn
+):
+    """search_documents가 실제로 두 SET LOCAL을 검색 쿼리와 같은 트랜잭션에 건다.
+
+    두 값을 테스트 안에서 재현하면 search.py에서 지워도 통과한다. 실행된 문장을
+    받아 적어, ADR-011 보강 4·5 준수를 구현 쪽에서 검증한다.
+    """
+    provider = FakeProvider()
+    await insert_test_document(worker_conn, title="튜닝", content="검색 튜닝 확인")
+    await process_all_embedding_jobs(worker_conn, provider)
+    recorder = RecordingConnection(search_conn)
+
+    await search_documents(recorder, provider, query="검색 튜닝 확인")
+
+    assert recorder.statements[0] == "BEGIN"
+    assert recorder.statements[1] == f"SET LOCAL hnsw.ef_search = {EF_SEARCH}"
+    assert recorder.statements[2] == "SET LOCAL random_page_cost = 1.1"
+    assert recorder.statements[3] == SEARCH_SQL
+
+
+async def test_search_tuning_does_not_leak_past_the_transaction(worker_conn):
+    """SET LOCAL이므로 트랜잭션이 끝나면 세션 값이 되돌아온다.
+
+    OpenProxy는 백엔드를 넘길 때 RESET ALL만 하므로(ADR-022), 세션에 남는 값이
+    다음 클라이언트로 새는지가 실제 위험이다. autocommit 연결을 쓰는 이유는
+    앞선 문장이 트랜잭션을 열어두면 conn.transaction()이 SAVEPOINT가 되어
+    SET LOCAL의 범위가 바깥 트랜잭션으로 넓어지기 때문이다.
+    """
+    provider = FakeProvider()
+    await insert_test_document(worker_conn, title="튜닝", content="검색 튜닝 확인")
+    await process_all_embedding_jobs(worker_conn, provider)
+    before_ef = (await (await worker_conn.execute("SHOW hnsw.ef_search")).fetchone())[0]
+    before_rpc = (await (await worker_conn.execute("SHOW random_page_cost")).fetchone())[0]
+
+    await search_documents(worker_conn, provider, query="검색 튜닝 확인")
+
+    after_ef = (await (await worker_conn.execute("SHOW hnsw.ef_search")).fetchone())[0]
+    after_rpc = (await (await worker_conn.execute("SHOW random_page_cost")).fetchone())[0]
+    assert after_ef == before_ef != str(EF_SEARCH)
+    assert after_rpc == before_rpc != "1.1"
 
 
 async def test_explain_contains_structured_filters_and_vector_ordering(worker_conn, migrated_db):
@@ -276,10 +329,8 @@ async def test_explain_contains_structured_filters_and_vector_ordering(worker_co
             tags=["규정"],
         )
     await process_all_embedding_jobs(worker_conn, provider)
-    vector = provider.embed(["OpenSQL 정합성"])[0]
-    vector_literal = "[" + ",".join(str(value) for value in vector) + "]"
     params = {
-        "qvec": vector_literal,
+        "qvec": to_pgvector_literal(provider.embed(["OpenSQL 정합성"])[0]),
         "tags": ["규정"],
         "ctype": None,
         "user": "alice",
@@ -292,11 +343,12 @@ async def test_explain_contains_structured_filters_and_vector_ordering(worker_co
     ):
         await conn.execute(f"SET LOCAL hnsw.ef_search = {EF_SEARCH}")
         await conn.execute("SET LOCAL random_page_cost = 1.1")
-        await conn.execute("SET LOCAL enable_seqscan = off")
         cur = await conn.execute("EXPLAIN " + SEARCH_SQL, params)
         plan = "\n".join(row[0] for row in await cur.fetchall())
 
-    # 선택적인 태그 필터에서는 작은 로컬 데이터에 HNSW보다 필터 우선 계획이 더 싸다.
-    # 여기서는 인덱스 선택이 아니라 정형 필터와 벡터 정렬이 한 계획에 결합됨을 확인한다.
+    # 프로덕션과 같은 조건으로 계획을 본다. 인덱스 선택은 검증 대상이 아니다 —
+    # 로컬의 열 몇 건짜리 데이터에서는 Seq Scan이 실제로 더 싸고, HNSW 선택 여부는
+    # 실 VM 6000행 실측이 판정했다 (ADR-011 보강 5). 여기서 확인하는 것은
+    # 정형 필터와 벡터 정렬이 **하나의 계획**에 결합된다는 사실뿐이다.
     assert "visibility" in plan and "owner_id" in plan, plan
     assert "tags" in plan and "<=>" in plan, plan

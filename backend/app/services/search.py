@@ -7,10 +7,15 @@ from uuid import UUID
 import psycopg
 
 from app.embeddings.base import EmbeddingProvider
+from app.vectors import to_pgvector_literal
 
 EF_SEARCH = 200
 CANDIDATE_MULTIPLIER = 5
-MAX_K = EF_SEARCH // CANDIDATE_MULTIPLIER
+# ADR-011 보강 4: 과다 조회 LIMIT(k * CANDIDATE_MULTIPLIER)이 ef_search에 닿으면
+# HNSW가 에러 없이 행을 덜 돌려준다. EF_SEARCH // CANDIDATE_MULTIPLIER로 두면
+# 상한에서 정확히 등호가 되어 여유가 사라지므로, ADR이 안전하다고 못 박은 20을 쓴다
+# (관련 문서·태그 추천의 k*10까지 함께 본 값이다).
+MAX_K = 20
 
 SEARCH_SQL = f"""
 WITH candidates AS (
@@ -65,7 +70,7 @@ async def search_documents(
 
     query_vector = (await asyncio.to_thread(provider.embed, [query]))[0]
     params = {
-        "qvec": _vector_literal(query_vector),
+        "qvec": to_pgvector_literal(query_vector),
         "tags": tags,
         "ctype": content_type,
         "user": user_id,
@@ -91,7 +96,3 @@ async def search_documents(
         )
         for row in rows
     ]
-
-
-def _vector_literal(vector: list[float]) -> str:
-    return "[" + ",".join(str(value) for value in vector) + "]"

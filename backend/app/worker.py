@@ -31,6 +31,7 @@ from app.config import get_settings
 from app.db import close_pool, get_pool
 from app.embeddings import EmbeddingProvider, get_provider
 from app.services.chunking import chunk_text
+from app.vectors import to_pgvector_literal
 
 logger = logging.getLogger(__name__)
 
@@ -140,7 +141,7 @@ async def finalize_job(
                 INSERT INTO document_chunks (document_id, version, chunk_index, content, embedding)
                 VALUES (%s, %s, %s, %s, %s::vector)
                 """,
-                (job.document_id, version, index, chunk, _vector_literal(vector)),
+                (job.document_id, version, index, chunk, to_pgvector_literal(vector)),
             )
         await conn.execute(
             "UPDATE documents SET embedding_status = 'ready' WHERE id = %s",
@@ -383,11 +384,6 @@ async def run_worker() -> None:
         with contextlib.suppress(asyncio.CancelledError):
             await listen_task
         await close_pool()
-
-
-def _vector_literal(vector: list[float]) -> str:
-    """pgvector 입력 리터럴('[1.0,2.0,...]'). 쓰기 전용이라 어댑터 패키지 없이 충분하다."""
-    return "[" + ",".join(map(repr, vector)) + "]"
 
 
 def main() -> None:
