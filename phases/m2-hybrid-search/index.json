@@ -63,7 +63,10 @@
       "type": "feat",
       "scope": "api",
       "desc": "접속 노드·잡 수·정합성 카운터 조회",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-08-05T19:39:50+0900",
+      "summary": "GET /api/system/status가 nullable 접속 노드·pending/processing/error 잡 수·어긋난 문서 수·앱 상태의 fake 프로바이더명·M5 예약 null 재연결 이벤트를 반환하며, M2 점검에서 단일 SQL 태그+벡터 EXPLAIN·private 권한·문서당 1건·재임베딩 중 검색 유지·낡은 PUT 409를 확인했다.",
+      "completed_at": "2026-08-05T19:42:36+0900"
     }
   ],
   "created_at": "2026-08-05T19:20:05+0900"
