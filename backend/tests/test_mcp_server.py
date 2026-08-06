@@ -1,5 +1,6 @@
 from uuid import uuid4
 
+import httpx
 import psycopg
 import pytest
 from conftest import insert_test_document, process_all_embedding_jobs
@@ -7,7 +8,27 @@ from conftest import insert_test_document, process_all_embedding_jobs
 from app.config import get_settings
 from app.db import close_pool, get_pool
 from app.embeddings import FakeProvider
-from app.services.search import search_documents as search_documents_service
+from app.main import app
+
+
+@pytest.fixture
+async def rest_client(monkeypatch, migrated_db: str):
+    """MCP 서버와 **같은 이벤트 루프·같은 풀**에서 REST API를 호출하는 클라이언트.
+
+    동기 TestClient는 실행 중인 루프 안에서 부르면 막힌다. 두 경로를 한 테스트에서
+    비교하려면 ASGI 전송으로 앱 lifespan을 그대로 태워야 한다.
+    """
+    monkeypatch.setenv("DATABASE_URL", migrated_db)
+    monkeypatch.setenv("EMBEDDING_PROVIDER", "fake")
+    monkeypatch.delenv("MCP_USER_ID", raising=False)
+    get_settings.cache_clear()
+    async with (
+        app.router.lifespan_context(app),
+        httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client,
+    ):
+        yield client
 
 
 @pytest.fixture
@@ -59,23 +80,33 @@ async def test_registers_exactly_three_evidence_tools():
     }
 
 
-async def test_search_tool_matches_shared_service_and_returns_evidence(mcp_database):
+async def test_search_tool_matches_the_rest_endpoint_and_returns_evidence(
+    rest_client, migrated_db: str
+):
+    """이슈 #9 완료 조건: 같은 질의에 REST와 MCP가 같은 결과를 준다.
+
+    서비스 함수를 양쪽에서 부르면 동어반복이다 — 두 경로가 실제로 노출하는 응답을 본다.
+    """
     from mcp_server.server import search_documents
 
-    await _seed_documents(mcp_database)
+    await _seed_documents(migrated_db)
 
-    tool_result = await search_documents("OpenSQL 공개 정합성")
-    async with get_pool().connection() as conn:
-        service_result = await search_documents_service(
-            conn, FakeProvider(), query="OpenSQL 공개 정합성"
-        )
+    tool_items = (await search_documents("OpenSQL 공개 정합성"))["items"]
+    response = await rest_client.post("/api/search", json={"query": "OpenSQL 공개 정합성"})
+    rest_items = response.json()["items"]
 
-    assert [item["document_id"] for item in tool_result["items"]] == [
-        str(hit.document_id) for hit in service_result
+    assert tool_items
+    assert [item["document_id"] for item in tool_items] == [
+        item["document_id"] for item in rest_items
     ]
-    assert tool_result["items"][0]["excerpt"]
-    assert tool_result["items"][0]["title"]
-    assert tool_result["items"][0]["based_on_version"] == 1
+    assert [item["excerpt"] for item in tool_items] == [
+        item["content"] for item in rest_items
+    ]
+    for field in ("title", "filename", "content_type", "tags", "based_on_version"):
+        assert [item[field] for item in tool_items] == [
+            item[field] for item in rest_items
+        ], field
+    assert tool_items[0]["based_on_version"] == 1
 
 
 async def test_mcp_user_setting_controls_private_access_for_all_tools(

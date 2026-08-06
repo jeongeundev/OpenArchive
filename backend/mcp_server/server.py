@@ -80,6 +80,13 @@ async def search_documents(
     }
 
 
+def _document_payload(document: dict) -> dict:
+    """서비스의 `id`를 MCP 응답 규약인 `document_id`로 바꾼다."""
+    payload = _json_value(document)
+    payload["document_id"] = str(payload.pop("id"))
+    return payload
+
+
 async def get_document(document_id: str) -> dict:
     """문서의 추출 텍스트·텍스트 버전 목록·청크 상태를 반환합니다.
 
@@ -89,9 +96,7 @@ async def get_document(document_id: str) -> dict:
         document = await get_document_service(
             conn, UUID(document_id), user_id=get_settings().mcp_user_id
         )
-    result = _json_value(document)
-    result["document_id"] = str(result.pop("id"))
-    return result
+    return _document_payload(document)
 
 
 async def list_documents(tag: str | None = None, status: str | None = None) -> dict:
@@ -106,12 +111,7 @@ async def list_documents(tag: str | None = None, status: str | None = None) -> d
             tag=tag,
             embedding_status=status,
         )
-    items = []
-    for document in documents:
-        item = _json_value(document)
-        item["document_id"] = str(item.pop("id"))
-        items.append(item)
-    return {"items": items}
+    return {"items": [_document_payload(document) for document in documents]}
 
 
 mcp.tool()(search_documents)

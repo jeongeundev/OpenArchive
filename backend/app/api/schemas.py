@@ -57,11 +57,13 @@ class SearchResult(BaseModel):
 
     document_id: UUID
     title: str
+    filename: str | None
     tags: list[str]
     content_type: str
     chunk_index: int
     content: str
     score: float
+    based_on_version: int
 
 
 class SearchResponse(BaseModel):
