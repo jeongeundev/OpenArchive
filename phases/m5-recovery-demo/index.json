@@ -41,7 +41,10 @@
       "type": "refactor",
       "scope": "frontend",
       "desc": "운영 화면의 빈 재연결 이벤트 카드 제거",
-      "status": "pending"
+      "status": "completed",
+      "summary": "운영 화면에서 수집하지 않는 재연결 이벤트 카드와 프론트 타입 필드를 제거하고 렌더링 부재를 테스트로 고정",
+      "started_at": "2026-08-06T13:44:21+0900",
+      "completed_at": "2026-08-06T13:46:11+0900"
     },
     {
       "step": 4,
