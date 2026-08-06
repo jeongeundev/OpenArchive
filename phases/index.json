@@ -24,6 +24,10 @@
       "dir": "m4-mcp-gateway",
       "status": "completed",
       "completed_at": "2026-08-06T03:26:03+0900"
+    },
+    {
+      "dir": "m5-recovery-demo",
+      "status": "pending"
     }
   ]
 }

@@ -1,0 +1,52 @@
+{
+  "project": "OpenArchive",
+  "phase": "m5-recovery-demo",
+  "steps": [
+    {
+      "step": 0,
+      "name": "guardrail-fix",
+      "type": "docs",
+      "scope": "adr",
+      "desc": "ef_search 지침의 등호 함정 명시와 보강 4 근거 교체",
+      "status": "pending"
+    },
+    {
+      "step": 1,
+      "name": "zombie-timeout-config",
+      "type": "refactor",
+      "scope": "worker",
+      "desc": "좀비 회수 임계를 모듈 상수에서 설정으로 이동",
+      "status": "pending"
+    },
+    {
+      "step": 2,
+      "name": "drop-reconnect-field",
+      "type": "refactor",
+      "scope": "api",
+      "desc": "수집하지 않는 reconnect_events 응답 필드 제거",
+      "status": "pending"
+    },
+    {
+      "step": 3,
+      "name": "drop-reconnect-panel",
+      "type": "refactor",
+      "scope": "frontend",
+      "desc": "운영 화면의 빈 재연결 이벤트 카드 제거",
+      "status": "pending"
+    },
+    {
+      "step": 4,
+      "name": "demo-recovery",
+      "type": "feat",
+      "desc": "DB 정지와 워커 강제 종료로부터의 복구를 검증하는 데모 스크립트",
+      "status": "pending"
+    },
+    {
+      "step": 5,
+      "name": "docs-sync",
+      "type": "docs",
+      "desc": "복구 데모 절차와 제거된 필드를 문서에 반영",
+      "status": "pending"
+    }
+  ]
+}
