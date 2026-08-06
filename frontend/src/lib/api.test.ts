@@ -6,6 +6,7 @@ import {
   editDocument,
   listDocuments,
   search,
+  updateTags,
   uploadDocument,
 } from "./api";
 import { DEMO_USERS, setCurrentUser } from "./user";
@@ -130,5 +131,18 @@ describe("API responses", () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(null, { status: 204 })));
 
     await expect(deleteDocument("doc-1")).resolves.toBeUndefined();
+  });
+
+  it("replaces the full tag list through the tag endpoint", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response("{}"));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await updateTags("doc/1", ["OpenSQL", "pgvector"]);
+
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/documents/doc%2F1/tags");
+    expect(fetchMock.mock.calls[0][1]?.method).toBe("PUT");
+    expect(JSON.parse(fetchMock.mock.calls[0][1]?.body as string)).toEqual({
+      tags: ["OpenSQL", "pgvector"],
+    });
   });
 });

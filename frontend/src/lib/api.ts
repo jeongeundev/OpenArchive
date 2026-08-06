@@ -3,8 +3,10 @@ import type {
   DocumentDetail,
   DocumentSummary,
   EmbeddingStatus,
+  RelatedResponse,
   SearchResponse,
   SystemStatus,
+  TagSuggestionsResponse,
   Visibility,
 } from "./types";
 import { getCurrentUser } from "./user";
@@ -80,6 +82,16 @@ export function getDocument(id: string): Promise<DocumentDetail> {
   return request<DocumentDetail>(`/api/documents/${encodeURIComponent(id)}`);
 }
 
+export function getRelated(id: string): Promise<RelatedResponse> {
+  return request<RelatedResponse>(`/api/documents/${encodeURIComponent(id)}/related`);
+}
+
+export function getTagSuggestions(id: string): Promise<TagSuggestionsResponse> {
+  return request<TagSuggestionsResponse>(
+    `/api/documents/${encodeURIComponent(id)}/tag-suggestions`,
+  );
+}
+
 export function uploadDocument(input: {
   file: File;
   title?: string;
@@ -107,6 +119,14 @@ export function editDocument(
       body: JSON.stringify(input),
     },
   );
+}
+
+export function updateTags(id: string, tags: string[]): Promise<DocumentSummary> {
+  return request<DocumentSummary>(`/api/documents/${encodeURIComponent(id)}/tags`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ tags }),
+  });
 }
 
 export function deleteDocument(id: string): Promise<void> {

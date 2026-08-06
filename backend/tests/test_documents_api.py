@@ -16,6 +16,15 @@ def edit(client: TestClient, document_id: str, *, content: str, version: int, us
     )
 
 
+def replace_tags(client: TestClient, document_id: str, tags: list[str], user_id="alice"):
+    headers = {"X-User-Id": user_id} if user_id is not None else {}
+    return client.put(
+        f"/api/documents/{document_id}/tags",
+        headers=headers,
+        json={"tags": tags},
+    )
+
+
 def test_upload_txt_returns_pending_document(db_client: TestClient):
     response = upload(db_client)
 
@@ -156,6 +165,74 @@ def test_owner_can_edit_extracted_text_as_a_new_version(db_client: TestClient):
     body = response.json()
     assert body["content"] == "Updated extracted text"
     assert body["version"] == 2
+
+
+def test_owner_can_replace_tags_and_detail_reflects_them(db_client: TestClient):
+    document_id = upload(db_client, data={"tags": "old"}).json()["id"]
+
+    response = replace_tags(db_client, document_id, ["database", "manual"])
+
+    assert response.status_code == 200
+    assert response.json()["tags"] == ["database", "manual"]
+    assert db_client.get(f"/api/documents/{document_id}").json()["tags"] == [
+        "database",
+        "manual",
+    ]
+
+
+def test_replacing_tags_does_not_trigger_text_versioning_or_reembedding(
+    db_client: TestClient, migrated_db: str
+):
+    document_id = upload(db_client).json()["id"]
+    with psycopg.connect(migrated_db) as conn:
+        conn.execute(
+            "UPDATE embedding_jobs SET status = 'done' WHERE document_id = %s",
+            (document_id,),
+        )
+        conn.execute(
+            "UPDATE documents SET embedding_status = 'ready' WHERE id = %s",
+            (document_id,),
+        )
+
+    assert replace_tags(db_client, document_id, ["database"]).status_code == 200
+
+    with psycopg.connect(migrated_db) as conn:
+        assert conn.execute(
+            "SELECT version, embedding_status FROM documents WHERE id = %s",
+            (document_id,),
+        ).fetchone() == (1, "ready")
+        assert conn.execute(
+            "SELECT count(*) FROM embedding_jobs WHERE document_id = %s AND status = 'pending'",
+            (document_id,),
+        ).fetchone() == (0,)
+        assert conn.execute(
+            "SELECT count(*) FROM document_versions WHERE document_id = %s",
+            (document_id,),
+        ).fetchone() == (1,)
+
+
+def test_replacing_tags_strips_blanks_deduplicates_and_preserves_order(
+    db_client: TestClient,
+):
+    document_id = upload(db_client).json()["id"]
+
+    response = replace_tags(
+        db_client,
+        document_id,
+        [" database ", "", "manual", "database", "  ", "Manual"],
+    )
+
+    assert response.status_code == 200
+    assert response.json()["tags"] == ["database", "manual", "Manual"]
+
+
+def test_replacing_tags_with_empty_array_removes_all_tags(db_client: TestClient):
+    document_id = upload(db_client, data={"tags": "old"}).json()["id"]
+
+    response = replace_tags(db_client, document_id, [])
+
+    assert response.status_code == 200
+    assert response.json()["tags"] == []
 
 
 def test_edit_trigger_creates_version_job_and_pending_status(
@@ -301,6 +378,11 @@ def test_write_endpoints_share_visibility_aware_ownership_rules(db_client: TestC
         lambda document_id, headers: db_client.post(
             f"/api/documents/{document_id}/reembed", headers=headers
         ),
+        lambda document_id, headers: db_client.put(
+            f"/api/documents/{document_id}/tags",
+            headers=headers,
+            json={"tags": ["database"]},
+        ),
     )
     for request in requests:
         assert request(private_id, {"X-User-Id": "bob"}).status_code == 404
@@ -320,4 +402,9 @@ def test_write_endpoints_return_404_for_missing_document(db_client: TestClient):
     assert db_client.delete(f"/api/documents/{missing_id}", headers=headers).status_code == 404
     assert db_client.post(
         f"/api/documents/{missing_id}/reembed", headers=headers
+    ).status_code == 404
+    assert db_client.put(
+        f"/api/documents/{missing_id}/tags",
+        headers=headers,
+        json={"tags": ["database"]},
     ).status_code == 404

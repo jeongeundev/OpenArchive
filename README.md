@@ -9,7 +9,7 @@
 [![Embedding](https://img.shields.io/badge/embedding-BGE--M3%20(MIT)-orange.svg)](https://huggingface.co/BAAI/bge-m3)
 
 > 2026년 오픈소스 개발자대회 기업 지정과제 출품작
-> **현재 상태**: DB 계층(트리거·잡 큐·워커), 백엔드 API·하이브리드 검색과 프론트엔드 4화면(문서·상세·검색·운영 상태)이 동작합니다. 관련 문서·태그 추천과 MCP 서버는 M4에서 구현합니다.
+> **현재 상태**: DB 계층(트리거·잡 큐·워커), 백엔드 API·하이브리드 검색, 관련 문서·태그 추천, MCP 서버와 프론트엔드 4화면(문서·상세·검색·운영 상태)이 동작합니다.
 
 ---
 
@@ -80,9 +80,9 @@ document_chunks 교체 (단일 트랜잭션)
 | 자동 임베딩 파이프라인 | PDF·DOCX·TXT·MD 업로드 시 트리거가 작업 생성, 워커가 청킹·임베딩·저장 |
 | 하이브리드 검색 | 정형 필터(태그·유형·권한)와 벡터 유사도를 **하나의 SQL**로 결합 |
 | 텍스트 버전 관리·자동 재임베딩 | 플랫폼 안에서 **추출 텍스트를 직접 편집**. 수정하면 이력이 쌓이고 재임베딩이 자동 기동. 처리 중에는 이전 벡터로 검색이 계속됨 |
-| 관련 문서·태그 추천 (M4 예정) | 청크 평균 벡터로 유사 문서를 찾고, 그 문서들의 태그를 추천. 검색과 동일한 권한 필터 적용 |
+| 관련 문서·태그 추천 | 청크 평균 벡터로 유사 문서를 찾고, 그 문서들의 태그를 추천. 검색과 동일한 권한 필터 적용 |
 | 장애 자동 복구 | Primary 장애 시 재연결, 미처리 작업 무손실 재개 |
-| MCP 근거 게이트웨이 (M4 예정) | AI 에이전트에 사내 문서의 근거를 공급. 답변 생성은 클라이언트가 수행 |
+| MCP 근거 게이트웨이 | AI 에이전트에 발췌·출처·기준 버전을 공급. 답변 생성은 클라이언트가 수행 |
 
 > **원본 파일은 보관하지 않습니다.** 업로드된 PDF·DOCX에서 텍스트만 추출해 저장하며, 편집·버전 관리·임베딩의 대상은 그 **추출 텍스트**입니다. 원본 파일 다운로드는 지원하지 않습니다 ([ADR-017](docs/ADR.md)).
 
@@ -128,9 +128,35 @@ python -m app.worker
 # 4. 프론트엔드 (별도 터미널)
 cd frontend
 npm install && npm run dev
+
+# 5. MCP 서버 (Claude Desktop/Code가 기동한다. 수동 확인은 아래 커맨드)
+cd backend && source .venv/bin/activate
+MCP_USER_ID=alice python -m mcp_server.server
 ```
 
 `http://localhost:3000` 접속.
+
+### Claude Code/Desktop에 MCP 서버 등록
+
+stdio 서버 설정에 백엔드 가상환경의 Python과 모듈을 등록한다. `<REPOSITORY>`는 이 저장소의 절대 경로로 바꾼다.
+
+```json
+{
+  "mcpServers": {
+    "openarchive": {
+      "command": "<REPOSITORY>/backend/.venv/bin/python",
+      "args": ["-m", "mcp_server.server"],
+      "env": {
+        "DATABASE_URL": "postgresql://openarchive:openarchive@localhost:5433/openarchive",
+        "EMBEDDING_PROVIDER": "fake",
+        "MCP_USER_ID": "alice"
+      }
+    }
+  }
+}
+```
+
+`DATABASE_URL`, `EMBEDDING_PROVIDER`, `MCP_USER_ID`를 MCP 프로세스에 함께 전달해야 한다. `MCP_USER_ID`를 생략하면 public 문서만 보인다. MCP 서버는 마이그레이션을 실행하지 않으므로 API 서버를 먼저 기동해 스키마가 적용된 상태여야 한다 (ADR-012).
 
 ### API 확인
 

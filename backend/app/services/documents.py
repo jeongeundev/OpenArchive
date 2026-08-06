@@ -200,6 +200,31 @@ async def update_extracted_text(
     return document
 
 
+async def update_tags(
+    conn: psycopg.AsyncConnection,
+    document_id: UUID,
+    *,
+    user_id: str,
+    tags: list[str],
+) -> dict:
+    """태그만 교체한다. 추출 텍스트 버전과 임베딩 파이프라인은 건드리지 않는다."""
+    await _load_for_write(conn, document_id, user_id)
+    normalized_tags = list(dict.fromkeys(tag.strip() for tag in tags if tag.strip()))
+
+    cur = conn.cursor(row_factory=dict_row)
+    await cur.execute(
+        f"""
+        UPDATE documents SET tags = %(tags)s, updated_at = now() WHERE id = %(id)s
+        RETURNING {SUMMARY_COLUMNS}
+        """,
+        {"id": document_id, "tags": normalized_tags},
+    )
+    document = await cur.fetchone()
+    if document is None:
+        raise DocumentNotFound
+    return document
+
+
 async def _current_version(conn: psycopg.AsyncConnection, document_id: UUID) -> int:
     row = await (
         await conn.execute("SELECT version FROM documents WHERE id = %s", (document_id,))

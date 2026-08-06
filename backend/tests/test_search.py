@@ -68,6 +68,22 @@ async def test_matching_document_is_ranked_first(worker_conn, search_conn):
     assert hits[0].document_id == matching_id
 
 
+async def test_search_hit_contains_source_and_chunk_version(worker_conn, search_conn):
+    provider = FakeProvider()
+    document_id = await insert_test_document(
+        worker_conn, title="근거 문서", content="OpenSQL 근거 버전"
+    )
+    await worker_conn.execute(
+        "UPDATE documents SET filename = %s WHERE id = %s", ("evidence.md", document_id)
+    )
+    await process_all_embedding_jobs(worker_conn, provider)
+
+    hit = (await search_documents(search_conn, provider, query="OpenSQL 근거 버전"))[0]
+
+    assert hit.filename == "evidence.md"
+    assert hit.based_on_version == 1
+
+
 async def test_private_document_is_hidden_from_another_user(worker_conn, search_conn):
     provider = FakeProvider()
     private_id = await insert_test_document(

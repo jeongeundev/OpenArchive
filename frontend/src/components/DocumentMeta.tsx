@@ -57,14 +57,6 @@ export function DocumentMeta({
         </div>
       </dl>
 
-      <div className="mt-6 flex flex-wrap gap-2">
-        {document.tags.map((tag) => (
-          <span key={tag} className="rounded bg-neutral-800 px-2 py-1 text-xs text-neutral-300">
-            {tag}
-          </span>
-        ))}
-      </div>
-
       <p className="mt-6 border-t border-neutral-800 pt-4 text-sm text-neutral-500">
         {indexStatus(document)}
       </p>

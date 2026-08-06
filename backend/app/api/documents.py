@@ -19,9 +19,14 @@ from app.api.schemas import (
     DocumentSummary,
     EditDocumentRequest,
     EditDocumentResponse,
+    RelatedResponse,
+    TagSuggestionsResponse,
+    UpdateTagsRequest,
 )
 from app.services import documents as service
 from app.services.parsing import SUPPORTED_CONTENT_TYPES, UnsupportedFileType
+from app.services.related import find_related, suggest_tags
+from app.services.search import MAX_K
 
 router = APIRouter(prefix="/api/documents", tags=["documents"])
 
@@ -78,6 +83,32 @@ async def get_document(
     return DocumentDetail.model_validate(document)
 
 
+@router.get("/{document_id}/related", response_model=RelatedResponse)
+async def get_related(
+    document_id: UUID,
+    conn: Connection,
+    user_id: Annotated[str | None, Depends(optional_user_id)],
+    k: Annotated[int, Query(ge=1, le=MAX_K)] = 10,
+) -> RelatedResponse:
+    await service.get_document(conn, document_id, user_id=user_id)
+    result = await find_related(conn, document_id=document_id, user_id=user_id, k=k)
+    return RelatedResponse.model_validate(result)
+
+
+@router.get("/{document_id}/tag-suggestions", response_model=TagSuggestionsResponse)
+async def get_tag_suggestions(
+    document_id: UUID,
+    conn: Connection,
+    user_id: Annotated[str | None, Depends(optional_user_id)],
+    limit: Annotated[int, Query(ge=1, le=20)] = 5,
+) -> TagSuggestionsResponse:
+    await service.get_document(conn, document_id, user_id=user_id)
+    result = await suggest_tags(
+        conn, document_id=document_id, user_id=user_id, limit=limit
+    )
+    return TagSuggestionsResponse.model_validate(result)
+
+
 @router.put("/{document_id}", response_model=EditDocumentResponse)
 async def edit_document(
     document_id: UUID,
@@ -93,6 +124,19 @@ async def edit_document(
         client_version=body.version,
     )
     return EditDocumentResponse.model_validate(document)
+
+
+@router.put("/{document_id}/tags", response_model=DocumentSummary)
+async def update_tags(
+    document_id: UUID,
+    body: UpdateTagsRequest,
+    conn: Connection,
+    user_id: Annotated[str, Depends(require_user_id)],
+) -> DocumentSummary:
+    document = await service.update_tags(
+        conn, document_id, user_id=user_id, tags=body.tags
+    )
+    return DocumentSummary.model_validate(document)
 
 
 @router.delete("/{document_id}", status_code=status.HTTP_204_NO_CONTENT)
