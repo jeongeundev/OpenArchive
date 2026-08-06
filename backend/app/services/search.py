@@ -12,9 +12,10 @@ from app.vectors import to_pgvector_literal
 EF_SEARCH = 200
 CANDIDATE_MULTIPLIER = 5
 # ADR-011 보강 4: 과다 조회 LIMIT(k * CANDIDATE_MULTIPLIER)이 ef_search에 닿으면
-# HNSW가 에러 없이 행을 덜 돌려준다. EF_SEARCH // CANDIDATE_MULTIPLIER로 두면
-# 상한에서 정확히 등호가 되어 여유가 사라지므로, ADR이 안전하다고 못 박은 20을 쓴다
-# (관련 문서·태그 추천의 k*10까지 함께 본 값이다).
+# HNSW가 에러 없이 행을 덜 돌려준다(실측: ef_search=200에서 LIMIT 200 → 193행).
+# 등호에서도 모자라므로 상한에서 여유가 남아야 한다 — 여기서는 20 * 5 = 100이다.
+# 배수가 다른 호출부(관련 문서·태그 추천)는 자기 배수를 EF_SEARCH에서 역산한다
+# (app/services/related.py). 이 불변식은 test_related.py가 지킨다.
 MAX_K = 20
 
 SEARCH_SQL = f"""
@@ -41,6 +42,17 @@ JOIN documents d ON d.id = b.document_id
 ORDER BY b.dist
 LIMIT %(k)s
 """
+
+
+async def apply_vector_search_settings(conn: psycopg.AsyncConnection) -> None:
+    """벡터 정렬 트랜잭션에 필요한 두 설정을 건다 (ADR-011 보강 4·5).
+
+    항상 짝으로 걸어야 한다 — `random_page_cost`만 빠져도 플래너가 HNSW를 아예 고르지
+    않는다. 호출부마다 두 줄을 반복하면 한쪽을 빠뜨려도 에러 없이 느려질 뿐이라
+    한 곳에 모은다. SET LOCAL은 바인딩할 수 없고, 두 값은 사용자 입력이 아닌 모듈 상수다.
+    """
+    await conn.execute(f"SET LOCAL hnsw.ef_search = {EF_SEARCH}")
+    await conn.execute("SET LOCAL random_page_cost = 1.1")
 
 
 @dataclass(frozen=True)
@@ -83,9 +95,7 @@ async def search_documents(
     }
 
     async with conn.transaction():
-        # SET LOCAL은 바인딩할 수 없다. 두 값은 사용자 입력이 아닌 모듈 상수다.
-        await conn.execute(f"SET LOCAL hnsw.ef_search = {EF_SEARCH}")
-        await conn.execute("SET LOCAL random_page_cost = 1.1")
+        await apply_vector_search_settings(conn)
         cur = await conn.execute(SEARCH_SQL, params)
         rows = await cur.fetchall()
 

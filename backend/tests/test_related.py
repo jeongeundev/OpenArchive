@@ -5,8 +5,15 @@ import pytest
 from conftest import insert_test_document, process_all_embedding_jobs
 
 from app.embeddings import FakeProvider
-from app.services.related import find_related, suggest_tags
-from app.services.search import MAX_K
+from app.services.related import (
+    CANDIDATE_MULTIPLIER,
+    NEIGHBOR_LIMIT,
+    RELATED_SQL,
+    find_related,
+    suggest_tags,
+)
+from app.services.search import CANDIDATE_MULTIPLIER as SEARCH_CANDIDATE_MULTIPLIER
+from app.services.search import EF_SEARCH, MAX_K, apply_vector_search_settings
 
 
 @pytest.fixture
@@ -301,3 +308,50 @@ async def test_identical_documents_apply_visibility_even_when_indexed(
 async def test_k_outside_supported_range_is_rejected(related_conn, k):
     with pytest.raises(ValueError, match="k는"):
         await find_related(related_conn, document_id=UUID(int=0), k=k)
+
+
+def test_candidate_limits_stay_under_ef_search():
+    """후보 LIMIT이 ef_search에 **닿기만 해도** HNSW가 에러 없이 행을 덜 돌려준다.
+
+    실측으로 ef_search=200에서 LIMIT 200은 193행만 반환했다. 등호도 안전하지 않으므로
+    k 상한에서도 여유가 남아야 한다 (ADR-011 보강 4).
+    """
+    assert MAX_K * SEARCH_CANDIDATE_MULTIPLIER < EF_SEARCH
+    assert MAX_K * CANDIDATE_MULTIPLIER < EF_SEARCH
+    assert NEIGHBOR_LIMIT * CANDIDATE_MULTIPLIER < EF_SEARCH
+
+
+async def test_related_plan_keeps_permission_filter_inside_the_vector_order(
+    worker_conn, migrated_db: str
+):
+    provider = FakeProvider()
+    source_id = await insert_test_document(
+        worker_conn, title="기준", content="OpenSQL 정합성 트리거 운영"
+    )
+    await insert_test_document(
+        worker_conn, title="관련", content="OpenSQL 정합성 트리거 안내"
+    )
+    await process_all_embedding_jobs(worker_conn, provider)
+
+    async with (
+        await psycopg.AsyncConnection.connect(migrated_db, autocommit=True) as conn,
+        conn.transaction(),
+    ):
+        await apply_vector_search_settings(conn)
+        cur = await conn.execute(
+            "EXPLAIN " + RELATED_SQL,
+            {
+                "id": source_id,
+                "user": "alice",
+                "k": 10,
+                "cand_limit": 10 * CANDIDATE_MULTIPLIER,
+            },
+        )
+        plan = "\n".join(row[0] for row in await cur.fetchall())
+
+    # test_search.py의 계획 회귀와 같은 기준이다. 인덱스 선택은 검증 대상이 아니다 —
+    # 로컬의 몇 건짜리 데이터에서는 Seq Scan이 실제로 더 싸고, HNSW 선택 여부는 실 VM
+    # 실측이 판정한다 (ADR-011 보강 5). 여기서 보는 것은 권한 필터가 벡터 정렬 서브쿼리
+    # **안**에 남아 있다는 사실이다 (ADR-018 재개정).
+    assert "visibility" in plan and "owner_id" in plan, plan
+    assert "<=>" in plan, plan
