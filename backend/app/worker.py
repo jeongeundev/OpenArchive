@@ -36,7 +36,6 @@ from app.vectors import to_pgvector_literal
 logger = logging.getLogger(__name__)
 
 POLL_INTERVAL_SECONDS = 5.0
-ZOMBIE_TIMEOUT_MINUTES = 5
 MAX_ATTEMPTS = 3
 
 CHANNEL = "embedding_jobs"
@@ -225,12 +224,17 @@ async def fail_job(conn: psycopg.AsyncConnection, job: ClaimedJob, error: Except
         )
 
 
-async def sweep_zombies(conn: psycopg.AsyncConnection) -> int:
+async def sweep_zombies(
+    conn: psycopg.AsyncConnection, *, timeout_minutes: int | None = None
+) -> int:
     """죽은 워커가 processing으로 방치한 잡을 회수한다. pending으로 복귀시킨 건수 반환.
 
     attempts는 초기화하지 않는다 — 매번 초기화하면 계속 죽는 잡이 영원히 재시도되어
     MAX_ATTEMPTS가 무의미해진다.
     """
+    if timeout_minutes is None:
+        timeout_minutes = get_settings().zombie_timeout_minutes
+
     async with conn.transaction():
         # 판정 전에 대상 문서 행을 잠근다 — fail_job과 같은 이유다 (ARCHITECTURE 4·5번
         # 공통 예외). 잡 생성은 전부 documents 변경 트리거 안에서 일어나므로, 이 잠금이
@@ -247,7 +251,7 @@ async def sweep_zombies(conn: psycopg.AsyncConnection) -> int:
              ORDER BY id
                FOR UPDATE
             """,
-            (ZOMBIE_TIMEOUT_MINUTES,),
+            (timeout_minutes,),
         )
 
         # 문서가 이미 수정되어 새 pending 잡이 있는 좀비는 pending 복귀가 문서당
@@ -261,7 +265,7 @@ async def sweep_zombies(conn: psycopg.AsyncConnection) -> int:
                AND EXISTS (SELECT 1 FROM embedding_jobs p
                             WHERE p.document_id = j.document_id AND p.status = 'pending')
             """,
-            (ZOMBIE_TIMEOUT_MINUTES,),
+            (timeout_minutes,),
         )
         cur = await conn.execute(
             """
@@ -272,7 +276,7 @@ async def sweep_zombies(conn: psycopg.AsyncConnection) -> int:
                AND NOT EXISTS (SELECT 1 FROM embedding_jobs p
                                 WHERE p.document_id = j.document_id AND p.status = 'pending')
             """,
-            (ZOMBIE_TIMEOUT_MINUTES,),
+            (timeout_minutes,),
         )
         return cur.rowcount
 
