@@ -24,30 +24,37 @@ export default function DocumentDetailPage({
   const { document, loading, error, refresh } = useDocument(id);
   const relatedData = useRelated(id, document?.chunk_version ?? null);
   const [editing, setEditing] = useState(false);
-  const [tagApplyError, setTagApplyError] = useState<string | null>(null);
-  const [applyingTag, setApplyingTag] = useState(false);
+  const [draftTags, setDraftTags] = useState<string[] | null>(null);
+  const [savingTags, setSavingTags] = useState(false);
+  const [tagError, setTagError] = useState<string | null>(null);
   const anonymous = getCurrentUser() === null;
 
   if (loading) return <p className="text-sm text-neutral-500">불러오는 중…</p>;
   if (document === null) {
     return <p className="text-sm text-neutral-500">{error ?? "문서를 찾을 수 없습니다."}</p>;
   }
-  const currentTags = document.tags;
+  // 화면에 보이는 태그 목록. 저장 전 편집분이 있으면 그쪽이 기준이다 — 추천 적용도
+  // 이 목록 위에 얹어야 편집 중이던 태그가 조용히 사라지지 않는다.
+  const tags = draftTags ?? document.tags;
 
-  async function applyTag(tag: string): Promise<void> {
-    if (applyingTag) return;
-    setApplyingTag(true);
-    setTagApplyError(null);
+  // 태그 저장은 여기 한 곳에서만 한다. 편집 저장과 추천 적용이 각자 updateTags를
+  // 부르면 서로 다른 목록을 기준으로 삼게 된다.
+  async function saveTags(next: string[]): Promise<void> {
+    if (savingTags) return;
+    setSavingTags(true);
+    setTagError(null);
     try {
-      await updateTags(id, [...currentTags, tag]);
+      await updateTags(id, next);
+      setDraftTags(next);
       refresh();
       relatedData.refresh();
     } catch (reason: unknown) {
-      setTagApplyError(
-        reason instanceof ApiError ? reason.detail : "추천 태그를 적용하지 못했습니다.",
+      // 실패해도 편집 중이던 태그는 지우지 않는다 (TextEditor의 409 처리와 같은 원칙).
+      setTagError(
+        reason instanceof ApiError ? reason.detail : "태그를 저장하지 못했습니다.",
       );
     } finally {
-      setApplyingTag(false);
+      setSavingTags(false);
     }
   }
 
@@ -67,12 +74,11 @@ export default function DocumentDetailPage({
 
       <TagEditor
         disabled={anonymous || editing}
-        document={document}
-        key={`${document.id}:${document.tags.join("\u0000")}`}
-        onSaved={() => {
-          refresh();
-          relatedData.refresh();
-        }}
+        error={tagError}
+        onChange={setDraftTags}
+        onSave={() => void saveTags(tags)}
+        saving={savingTags}
+        tags={tags}
       />
 
       <TextEditor
@@ -97,7 +103,11 @@ export default function DocumentDetailPage({
 
       {relatedData.suggestions !== null ? (
         <TagSuggestions
-          onApply={anonymous || editing || applyingTag ? undefined : applyTag}
+          onApply={
+            anonymous || editing || savingTags
+              ? undefined
+              : (tag) => saveTags([...tags, tag])
+          }
           response={relatedData.suggestions}
         />
       ) : (
@@ -108,10 +118,6 @@ export default function DocumentDetailPage({
           </p>
         </section>
       )}
-
-      {tagApplyError !== null ? (
-        <p className="text-sm text-[#ef4444]">{tagApplyError}</p>
-      ) : null}
 
       {relatedData.error !== null ? (
         <p className="text-sm text-neutral-500" role="status">

@@ -82,24 +82,13 @@ export function getDocument(id: string): Promise<DocumentDetail> {
   return request<DocumentDetail>(`/api/documents/${encodeURIComponent(id)}`);
 }
 
-export function getRelated(id: string, k?: number): Promise<RelatedResponse> {
-  const query = new URLSearchParams();
-  if (k !== undefined) query.set("k", String(k));
-  const suffix = query.size > 0 ? `?${query}` : "";
-  return request<RelatedResponse>(
-    `/api/documents/${encodeURIComponent(id)}/related${suffix}`,
-  );
+export function getRelated(id: string): Promise<RelatedResponse> {
+  return request<RelatedResponse>(`/api/documents/${encodeURIComponent(id)}/related`);
 }
 
-export function getTagSuggestions(
-  id: string,
-  limit?: number,
-): Promise<TagSuggestionsResponse> {
-  const query = new URLSearchParams();
-  if (limit !== undefined) query.set("limit", String(limit));
-  const suffix = query.size > 0 ? `?${query}` : "";
+export function getTagSuggestions(id: string): Promise<TagSuggestionsResponse> {
   return request<TagSuggestionsResponse>(
-    `/api/documents/${encodeURIComponent(id)}/tag-suggestions${suffix}`,
+    `/api/documents/${encodeURIComponent(id)}/tag-suggestions`,
   );
 }
 

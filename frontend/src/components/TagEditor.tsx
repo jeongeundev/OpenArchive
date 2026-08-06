@@ -2,42 +2,28 @@
 
 import { useState } from "react";
 
-import { ApiError, updateTags } from "@/lib/api";
-import type { DocumentDetail } from "@/lib/types";
-
 export function TagEditor({
-  document,
+  tags,
   disabled,
-  onSaved,
+  saving,
+  error,
+  onChange,
+  onSave,
 }: {
-  document: DocumentDetail;
+  tags: string[];
   disabled: boolean;
-  onSaved: () => void;
+  saving: boolean;
+  error: string | null;
+  onChange: (tags: string[]) => void;
+  onSave: () => void;
 }): React.ReactElement {
-  const [tags, setTags] = useState(document.tags);
   const [input, setInput] = useState("");
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
 
   function addTag(): void {
     const tag = input.trim();
     if (tag === "" || tags.includes(tag)) return;
-    setTags([...tags, tag]);
+    onChange([...tags, tag]);
     setInput("");
-  }
-
-  async function save(): Promise<void> {
-    if (saving) return;
-    setSaving(true);
-    setError(null);
-    try {
-      await updateTags(document.id, tags);
-      onSaved();
-    } catch (reason: unknown) {
-      setError(reason instanceof ApiError ? reason.detail : "태그를 저장하지 못했습니다.");
-    } finally {
-      setSaving(false);
-    }
   }
 
   const controlsDisabled = disabled || saving;
@@ -56,7 +42,7 @@ export function TagEditor({
               aria-label={`${tag} 태그 삭제`}
               className="text-neutral-500 hover:text-neutral-300 disabled:text-neutral-600"
               disabled={controlsDisabled}
-              onClick={() => setTags(tags.filter((item) => item !== tag))}
+              onClick={() => onChange(tags.filter((item) => item !== tag))}
               type="button"
             >
               ×
@@ -90,7 +76,7 @@ export function TagEditor({
         <button
           className="rounded-lg bg-white px-4 py-2 text-sm text-black hover:bg-neutral-200 disabled:bg-neutral-700 disabled:text-neutral-400"
           disabled={controlsDisabled}
-          onClick={() => void save()}
+          onClick={onSave}
           type="button"
         >
           {saving ? "저장 중…" : "태그 저장"}
