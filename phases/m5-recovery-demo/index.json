@@ -51,7 +51,10 @@
       "name": "demo-recovery",
       "type": "feat",
       "desc": "DB 정지와 워커 강제 종료로부터의 복구를 검증하는 데모 스크립트",
-      "status": "pending"
+      "status": "completed",
+      "summary": "DB 정지 후 자동 재연결·미처리 잡 재개와 워커 강제 종료 후 좀비 회수·정합성 수렴을 실제 실행으로 검증",
+      "started_at": "2026-08-06T13:46:11+0900",
+      "completed_at": "2026-08-06T13:51:24+0900"
     },
     {
       "step": 5,
