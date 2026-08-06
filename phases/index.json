@@ -27,7 +27,8 @@
     },
     {
       "dir": "m5-recovery-demo",
-      "status": "pending"
+      "status": "completed",
+      "completed_at": "2026-08-06T13:55:05+0900"
     }
   ]
 }
