@@ -30,7 +30,10 @@
       "type": "refactor",
       "scope": "api",
       "desc": "수집하지 않는 reconnect_events 응답 필드 제거",
-      "status": "pending"
+      "status": "completed",
+      "summary": "시스템 상태 API에서 수집하지 않는 reconnect_events 필드를 제거하고 응답 키 부재를 테스트로 고정",
+      "started_at": "2026-08-06T13:41:52+0900",
+      "completed_at": "2026-08-06T13:44:21+0900"
     },
     {
       "step": 3,
