@@ -19,7 +19,10 @@
       "type": "refactor",
       "scope": "worker",
       "desc": "좀비 회수 임계를 모듈 상수에서 설정으로 이동",
-      "status": "pending"
+      "status": "completed",
+      "summary": "좀비 회수 임계를 기본값 5의 런타임 설정으로 이동하고 데모용 0 및 명시 인자 우선순위를 실제 DB 테스트로 검증",
+      "started_at": "2026-08-06T13:39:40+0900",
+      "completed_at": "2026-08-06T13:41:52+0900"
     },
     {
       "step": 2,
