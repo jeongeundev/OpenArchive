@@ -8,7 +8,10 @@
       "type": "docs",
       "scope": "adr",
       "desc": "ef_search 지침의 등호 함정 명시와 보강 4 근거 교체",
-      "status": "pending"
+      "status": "completed",
+      "summary": "ef_search 등호 과소 검색 함정과 예산 역산 규칙을 명시하고 ADR-011 보강 4의 근거를 rpc=1.1 실측으로 교체",
+      "started_at": "2026-08-06T13:37:48+0900",
+      "completed_at": "2026-08-06T13:39:40+0900"
     },
     {
       "step": 1,
@@ -48,5 +51,6 @@
       "desc": "복구 데모 절차와 제거된 필드를 문서에 반영",
       "status": "pending"
     }
-  ]
+  ],
+  "created_at": "2026-08-06T13:37:48+0900"
 }
