@@ -6,7 +6,7 @@ import { StatusPanel } from "./StatusPanel";
 const status: SystemStatus = {
   node_address: "192.168.64.4", node_port: 6432,
   jobs: { pending: 1, processing: 2, error: 3 },
-  inconsistent_documents: 0, embedding_provider: "BAAI/bge-m3", reconnect_events: null,
+  inconsistent_documents: 0, embedding_provider: "BAAI/bge-m3",
 };
 
 describe("StatusPanel", () => {
@@ -28,5 +28,10 @@ describe("StatusPanel", () => {
     expect(screen.getByText("상태 조회 실패: 연결 실패")).toBeInTheDocument();
     expect(screen.getByText("192.168.64.4:6432")).toBeInTheDocument();
     expect(screen.getByText("BAAI/bge-m3")).toBeInTheDocument();
+  });
+
+  it("수집하지 않는 이벤트 카드를 표시하지 않는다", () => {
+    render(<StatusPanel status={status} error={null} />);
+    expect(screen.queryByText(["재", "연결 이벤트"].join(""))).not.toBeInTheDocument();
   });
 });
