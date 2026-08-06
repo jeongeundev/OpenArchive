@@ -61,7 +61,10 @@
       "name": "docs-sync",
       "type": "docs",
       "desc": "복구 데모 절차와 제거된 필드를 문서에 반영",
-      "status": "pending"
+      "status": "completed",
+      "summary": "좀비 회수 설정과 복구 데모 절차를 문서화하고 제거된 재연결 이벤트 API·UI 서술을 현재 구현에 맞게 정리",
+      "started_at": "2026-08-06T13:51:24+0900",
+      "completed_at": "2026-08-06T13:55:05+0900"
     }
   ],
   "created_at": "2026-08-06T13:37:48+0900"
