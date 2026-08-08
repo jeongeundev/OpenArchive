@@ -253,7 +253,7 @@ COMMIT;
 
 4. 실패 시: `attempts` 기반 지수 백오프로 `next_attempt_at` 갱신 후 `pending` 복귀. `attempts`는 claim 시점에 이미 올라 있으므로 **3회를 소진하면**(3회째 실패) job `error` + `documents.embedding_status='error'`.
 
-5. 좀비 회수: `processing` 상태로 5분 초과된 잡을 워커 기동 시 + 주기 스윕에서 `pending`으로 리셋. `attempts`는 초기화하지 않는다 — 초기화하면 계속 죽는 잡이 영원히 재시도되어 재시도 상한이 무의미해진다.
+5. 좀비 회수: `processing` 상태로 설정된 임계(`ZOMBIE_TIMEOUT_MINUTES`, 기본 5분)를 초과한 잡을 워커 기동 시 + 주기 스윕에서 `pending`으로 리셋. `attempts`는 초기화하지 않는다 — 초기화하면 계속 죽는 잡이 영원히 재시도되어 재시도 상한이 무의미해진다. 값 `0`은 단일 워커 복구 데모에서만 사용한다.
 
 > **4번과 5번에는 공통 예외가 있다: 그 문서에 새 `pending` 잡이 이미 있으면 `pending`으로 되돌리지 않고 `done`으로 마감한다.**
 >
@@ -281,7 +281,7 @@ COMMIT;
 | 읽기 정합성 | 검색을 plain `BEGIN`으로 감싸 OpenProxy가 Primary로 라우팅하게 강제한다. 복제 지연으로 방금 임베딩된 청크가 누락되지 않는다 (ADR-010) |
 | 멱등성 | 청크 교체가 delete+insert라 잡 재실행의 종착 상태가 항상 동일 |
 
-> **이 표가 보장하지 않는 것: "항상 최신".** 재임베딩 중에는 이전 버전이 검색되고, 폴링 주기(5초)와 임베딩 소요만큼 반영이 늦으며, Failover 구간에는 요청이 실패한다. 우리가 보장하는 것은 **버전 일관성**과 **최신으로의 수렴**이며, 그 사이의 어긋난 구간은 정합성 검증 쿼리로 **관측할 수 있다**. 문서·데모에서 "항상 최신"이나 "실시간 동기화"로 표현하지 않는다 (ADR-015).
+> **이 표는 즉시 반영을 보장하지 않는다.** 재임베딩 중에는 이전 버전이 검색되고, 폴링 주기(5초)와 임베딩 소요만큼 반영이 늦으며, Failover 구간에는 요청이 실패한다. 우리가 보장하는 것은 **버전 일관성**과 **최신으로의 수렴**이며, 그 사이의 어긋난 구간은 정합성 검증 쿼리로 **관측할 수 있다**. 문서·데모에서 "항상 최신"이나 "실시간 동기화"로 표현하지 않는다 (ADR-015).
 
 ## 고가용성(HA) 전략
 
@@ -338,6 +338,24 @@ DATABASE_URL="postgresql://app@<vip>:6432/<pool_name>"
 - **워커 (기동)**: **주기 폴링(5초)이 주 경로**다. `LISTEN`은 최적화이며, 연결이 끊기면 백오프 재연결 후 `LISTEN`을 재등록한다. **LISTEN이 아예 동작하지 않아도 파이프라인은 정상 작동한다** (ADR-009).
 - **잡 큐 내구성**: `embedding_jobs`는 일반 WAL 로깅 테이블이므로 스탠바이에 복제된다. Failover 후 미처리 잡이 새 Primary에 그대로 존재하고, 워커 재연결 즉시 재개된다.
 
+복구 동작은 저장소 루트에서 다음 스크립트로 검증한다. 로컬에서는 `docker compose up -d`로 DB를 먼저 띄우면 기본 정지·기동 명령을 사용한다.
+
+```bash
+bash scripts/demo_recovery.sh
+
+# 실 OpenSQL VM에서는 해당 환경의 DB 운영 명령을 SSH로 주입한다.
+DB_STOP_CMD="ssh <vm> '<db-stop-command>'" \
+DB_START_CMD="ssh <vm> '<db-start-command>'" \
+DATABASE_URL="postgresql://postgres:pg_password@<vm-ip>:6432/opensql" \
+bash scripts/demo_recovery.sh
+```
+
+이 데모는 DB 정지 뒤 애플리케이션 재연결과 미처리 잡 재개, 워커 강제 종료 뒤 좀비 회수와 정합성 수렴을 검증한다. Single 구성에는 승격할 replica가 없으므로 Patroni 리더 선출·승격과 소요 시간은 검증하지 않는다 (ADR-020 결정 3).
+
+검증 대상이 잡 큐와 정합성이라 임베딩 품질은 무관하다. 그래서 스크립트가 `.env` 설정과 무관하게 **`EMBEDDING_PROVIDER=fake`를 고정**한다 — BGE-M3 로딩 시간이 복구 시나리오의 타임아웃 여유를 잠식하기 때문이다. 실 모델로 재현하려면 스크립트를 고쳐야 한다.
+
+DB 정지 구간의 검색은 5xx로 실패하지 않고 **커넥션 풀 대기로 응답하지 않는다.** 스크립트가 출력하는 `search_http=000`은 오류 응답이 아니라 클라이언트 타임아웃이다. 이 구간을 서술할 때 "검색이 실패한다"로 쓰지 않는다.
+
 ### Failover 시간 특성
 
 OpenSQL이 배포하는 `patroni.yml` 기준값:
@@ -374,9 +392,9 @@ OpenSQL `patroni.yml`의 PostgreSQL 파라미터는 `max_connections: 100`이다
 | `GET /api/documents/{id}/related` | **관련 문서.** 청크 평균 벡터로 유사 문서 조회 (ADR-018). 청크가 없으면 `not_indexed` |
 | `GET /api/documents/{id}/tag-suggestions` | **태그 추천.** 유사 문서의 태그 빈도 (ADR-019). 청크가 없으면 `not_indexed` |
 | `POST /api/search` | 하이브리드 검색 (아래) |
-| `GET /api/system/status` | **운영/데모 전용**: `inet_server_addr()`(현재 접속 노드), pending/processing/error 잡 수, 임베딩 프로바이더명, 최근 재연결 이벤트, **정합성 검증 쿼리 결과**(`c.version <> d.version` 건수). `/admin/status`가 소비하며 사용자 화면은 호출하지 않는다 |
+| `GET /api/system/status` | **운영/데모 전용**: `inet_server_addr()`(현재 접속 노드), pending/processing/error 잡 수, 임베딩 프로바이더명, **정합성 검증 쿼리 결과**(`c.version <> d.version` 건수). `/admin/status`가 소비하며 사용자 화면은 호출하지 않는다 |
 
-> **구현 현황 (M4 기준)**: `/related`·`/tag-suggestions`와 MCP 서버까지 구현되어 있다. 남은 것은 M5의 `reconnect_events` 값 채우기다.
+> **구현 현황 (M5 기준)**: `/related`·`/tag-suggestions`, MCP 서버와 복구 데모까지 구현되어 있다. 수집하지 않던 상태 응답 필드는 채우지 않고 제거했다 — 워커 로그와 잡·정합성 카운터가 같은 복구 사실을 검증하기 때문이다.
 >
 > 새 파일로 교체하는 경로는 없다. 새 파일을 올리려면 업로드 후 이전 문서를 삭제해야 한다.
 >

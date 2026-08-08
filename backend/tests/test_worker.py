@@ -466,6 +466,25 @@ async def test_exhausted_retries_yield_to_a_newer_job_without_flagging_an_error(
     assert (await document_state(conn, doc_id))[1] != "error"
 
 
+async def test_sweep_uses_zero_timeout_from_settings(conn, monkeypatch):
+    """데모 설정 0은 방금 processing이 된 잡도 즉시 회수한다."""
+    monkeypatch.setenv("ZOMBIE_TIMEOUT_MINUTES", "0")
+    doc_id = await insert_document(conn)
+    await claim_job(conn)
+
+    assert await sweep_zombies(conn) == 1
+    assert await job_rows(conn, doc_id) == [("pending", 1, None)]
+
+
+async def test_sweep_keeps_fresh_job_with_default_timeout(conn):
+    """기본 5분 임계에서는 방금 processing이 된 잡을 회수하지 않는다."""
+    doc_id = await insert_document(conn)
+    await claim_job(conn)
+
+    assert await sweep_zombies(conn) == 0
+    assert [row[0] for row in await job_rows(conn, doc_id)] == ["processing"]
+
+
 async def test_sweep_returns_old_processing_jobs_to_pending(conn):
     """좀비 회수 — 임계(5분)를 넘긴 processing 잡만 pending으로 되돌린다.
 

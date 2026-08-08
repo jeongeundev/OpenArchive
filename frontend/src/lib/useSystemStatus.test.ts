@@ -10,7 +10,6 @@ const status: SystemStatus = {
   jobs: { pending: 1, processing: 0, error: 0 },
   inconsistent_documents: 0,
   embedding_provider: "fake",
-  reconnect_events: null,
 };
 
 function response(body: unknown, code = 200): Response {

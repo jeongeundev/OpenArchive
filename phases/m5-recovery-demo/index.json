@@ -1,0 +1,72 @@
+{
+  "project": "OpenArchive",
+  "phase": "m5-recovery-demo",
+  "steps": [
+    {
+      "step": 0,
+      "name": "guardrail-fix",
+      "type": "docs",
+      "scope": "adr",
+      "desc": "ef_search 지침의 등호 함정 명시와 보강 4 근거 교체",
+      "status": "completed",
+      "summary": "ef_search 등호 과소 검색 함정과 예산 역산 규칙을 명시하고 ADR-011 보강 4의 근거를 rpc=1.1 실측으로 교체",
+      "started_at": "2026-08-06T13:37:48+0900",
+      "completed_at": "2026-08-06T13:39:40+0900"
+    },
+    {
+      "step": 1,
+      "name": "zombie-timeout-config",
+      "type": "refactor",
+      "scope": "worker",
+      "desc": "좀비 회수 임계를 모듈 상수에서 설정으로 이동",
+      "status": "completed",
+      "summary": "좀비 회수 임계를 기본값 5의 런타임 설정으로 이동하고 데모용 0 및 명시 인자 우선순위를 실제 DB 테스트로 검증",
+      "started_at": "2026-08-06T13:39:40+0900",
+      "completed_at": "2026-08-06T13:41:52+0900"
+    },
+    {
+      "step": 2,
+      "name": "drop-reconnect-field",
+      "type": "refactor",
+      "scope": "api",
+      "desc": "수집하지 않는 reconnect_events 응답 필드 제거",
+      "status": "completed",
+      "summary": "시스템 상태 API에서 수집하지 않는 reconnect_events 필드를 제거하고 응답 키 부재를 테스트로 고정",
+      "started_at": "2026-08-06T13:41:52+0900",
+      "completed_at": "2026-08-06T13:44:21+0900"
+    },
+    {
+      "step": 3,
+      "name": "drop-reconnect-panel",
+      "type": "refactor",
+      "scope": "frontend",
+      "desc": "운영 화면의 빈 재연결 이벤트 카드 제거",
+      "status": "completed",
+      "summary": "운영 화면에서 수집하지 않는 재연결 이벤트 카드와 프론트 타입 필드를 제거하고 렌더링 부재를 테스트로 고정",
+      "started_at": "2026-08-06T13:44:21+0900",
+      "completed_at": "2026-08-06T13:46:11+0900"
+    },
+    {
+      "step": 4,
+      "name": "demo-recovery",
+      "type": "feat",
+      "desc": "DB 정지와 워커 강제 종료로부터의 복구를 검증하는 데모 스크립트",
+      "status": "completed",
+      "summary": "DB 정지 후 자동 재연결·미처리 잡 재개와 워커 강제 종료 후 좀비 회수·정합성 수렴을 실제 실행으로 검증",
+      "started_at": "2026-08-06T13:46:11+0900",
+      "completed_at": "2026-08-06T13:51:24+0900"
+    },
+    {
+      "step": 5,
+      "name": "docs-sync",
+      "type": "docs",
+      "desc": "복구 데모 절차와 제거된 필드를 문서에 반영",
+      "status": "completed",
+      "summary": "좀비 회수 설정과 복구 데모 절차를 문서화하고 제거된 재연결 이벤트 API·UI 서술을 현재 구현에 맞게 정리",
+      "started_at": "2026-08-06T13:51:24+0900",
+      "completed_at": "2026-08-06T13:55:05+0900"
+    }
+  ],
+  "created_at": "2026-08-06T13:37:48+0900",
+  "completed_at": "2026-08-06T13:55:05+0900"
+}

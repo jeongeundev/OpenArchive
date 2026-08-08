@@ -17,6 +17,10 @@ class Settings(BaseSettings):
     # local = BAAI/bge-m3, fake = 결정론적 해시 벡터(테스트·CI). 상용 API 프로바이더는 없다 (ADR-003).
     embedding_provider: Literal["local", "fake"] = "fake"
 
+    # 0은 단일 워커 복구 데모 전용이다. 여러 워커에서 쓰면 정상 처리 중인 잡을 서로
+    # 회수한다. 데모는 워커가 하나이고 run_worker의 sweep → drain 루프가 순차라 안전하다.
+    zombie_timeout_minutes: int = 5
+
     # MCP는 HTTP 헤더가 없으므로 프로세스 환경으로만 사용자 컨텍스트를 고정한다.
     # 미설정(None)이면 서비스 권한 술어에 따라 public 문서만 보인다.
     mcp_user_id: str | None = None

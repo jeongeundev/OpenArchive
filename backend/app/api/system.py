@@ -17,14 +17,13 @@ class JobCounts(BaseModel):
 
 
 class SystemStatus(BaseModel):
-    """운영 상태 응답. reconnect_events는 M5에서 재연결 추적을 구현할 때 채운다."""
+    """운영 상태 응답."""
 
     node_address: str | None
     node_port: int
     jobs: JobCounts
     inconsistent_documents: int
     embedding_provider: str
-    reconnect_events: None = None
 
 
 @router.get("/status", response_model=SystemStatus)

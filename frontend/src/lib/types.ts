@@ -85,7 +85,6 @@ export interface SystemStatus {
   jobs: JobCounts;
   inconsistent_documents: number;
   embedding_provider: string;
-  reconnect_events: null;
 }
 
 export const SUPPORTED_CONTENT_TYPES = ["pdf", "docx", "txt", "md"] as const;

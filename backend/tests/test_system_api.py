@@ -21,12 +21,11 @@ def test_status_is_available_without_authentication_and_reports_operational_fiel
         "jobs",
         "inconsistent_documents",
         "embedding_provider",
-        "reconnect_events",
     }
+    assert "reconnect_events" not in body
     assert body["jobs"] == {"pending": 0, "processing": 0, "error": 0}
     assert body["inconsistent_documents"] == 0
     assert body["embedding_provider"] == "fake"
-    assert body["reconnect_events"] is None
     # 접속 노드는 환경마다 다르다. TCP면 주소가, 유닉스 소켓이면 NULL이 온다.
     # 값 자체가 아니라 페일오버 데모가 읽을 수 있는 형태인지를 본다.
     assert body["node_address"] is None or isinstance(body["node_address"], str)

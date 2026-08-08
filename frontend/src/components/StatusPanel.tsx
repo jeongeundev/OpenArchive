@@ -23,7 +23,6 @@ export function StatusPanel({ status, error }: { status: SystemStatus | null; er
             <dl className="mt-2 flex gap-5 text-sm"><div><dt className="text-neutral-500">pending</dt><dd className="text-white">{status.jobs.pending}</dd></div><div><dt className="text-neutral-500">processing</dt><dd className="text-white">{status.jobs.processing}</dd></div><div><dt className="text-[#ef4444]">error</dt><dd className="text-[#ef4444]">{status.jobs.error}</dd></div></dl>
           </div>
           <div className="rounded-lg border border-neutral-800 bg-[#141414] p-6"><p className="text-sm font-medium text-neutral-400">임베딩 프로바이더</p><p className="mt-2 text-sm text-white">{status.embedding_provider}</p></div>
-          <div className="rounded-lg border border-neutral-800 bg-[#141414] p-6"><p className="text-sm font-medium text-neutral-400">재연결 이벤트</p><p className="mt-2 text-sm text-neutral-500">아직 수집하지 않습니다.</p></div>
         </div>
       )}
     </section>
