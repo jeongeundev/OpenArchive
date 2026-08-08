@@ -500,6 +500,95 @@ docker compose up -d      # pgvector/pgvector:pg17 단일 컨테이너
 
 ---
 
+## 14. AWS EC2에 같은 환경 만들기
+
+**2026-08-09 실제로 설치해 확인했다.** 배포를 위해 클라우드에서 OpenSQL이 기동하는지가 미확인 상태였고, 된다.
+
+### VM보다 오히려 쉽다
+
+| | UTM VM | AWS EC2 |
+|---|---|---|
+| OS 준비 | ISO로 설치, hostname 수동 설정 | **Rocky 9.7 AMI가 그대로 있다** |
+| §5 dnf 9.7 고정 | 필수 (9.8이면 glibc 충돌) | **불필요** — AMI가 이미 9.7 |
+| 네트워크(§4) | 고정 IP·방화벽 수동 설정 | 보안그룹만 |
+| 아키텍처 | Apple Silicon에서 x86-64 에뮬레이션 | 네이티브 x86-64 |
+
+라이선스가 묶는 것은 `<identified_by_host>`(hostname)와 `<limit_cpu>`뿐이다 — MAC·IP·machine-id는 보지 않는다. **hostname을 맞추고 CPU를 상한 이하로 잡으면 어느 머신에서든 뜬다.**
+
+### 인스턴스 생성
+
+hostname은 cloud-init으로 잡는다. 라이선스가 이 이름에 묶여 있어 다르면 PostgreSQL이 기동하지 않는다.
+
+```bash
+cat > /tmp/user-data.yaml <<'YAML'
+#cloud-config
+preserve_hostname: false
+hostname: opensql-dev
+fqdn: opensql-dev
+manage_etc_hosts: true
+YAML
+```
+
+AMI ID는 리전마다 다르다. 이름으로 조회한다.
+
+```bash
+aws ec2 describe-images --region ap-northeast-2 --owners 792107900819 \
+  --filters "Name=name,Values=Rocky-9-EC2-Base-9.7-*x86_64*" "Name=state,Values=available" \
+  --query 'sort_by(Images,&CreationDate)[-1].[ImageId,Name]' --output text
+```
+
+> 2026-08-09 기준 서울 리전은 `ami-0ed6cd3fecc849a03` (`Rocky-9-EC2-Base-9.7-20251123.2.x86_64`)이다.
+
+```bash
+aws ec2 run-instances --region ap-northeast-2 \
+  --image-id <위에서 조회한 AMI> \
+  --instance-type t3.large \
+  --key-name <키페어> \
+  --security-group-ids <보안그룹> \
+  --block-device-mappings '[{"DeviceName":"/dev/sda1","Ebs":{"VolumeSize":40,"VolumeType":"gp3"}}]' \
+  --user-data file:///tmp/user-data.yaml \
+  --tag-specifications 'ResourceType=instance,Tags=[{Key=Name,Value=opensql-dev}]'
+```
+
+**보안그룹은 SSH(22)만 본인 IP로 연다.** 5432·6432·2379·8008을 외부에 열지 않는다 — DB 비밀번호가 기본값(`pg_password`)인 상태이고, 애플리케이션은 어차피 같은 호스트나 같은 VPC에서 붙는다.
+
+### 설치
+
+설치 파일(897MB)은 상용 배포판이라 저장소에 없다. 기존 VM에서 스트리밍하는 것이 가장 빠르다.
+
+```bash
+ssh <vm> "tar cf - -C ~ Tmax_OpenSQL_3.17.8.7_rockylinux9.7_buildtime20260720" \
+  | gzip -1 \
+  | ssh -i <키> rocky@<EC2> "gunzip | tar xf - -C ~"
+```
+
+이후는 스크립트가 §6·§8·§9를 한 번에 처리한다. 사전 조건(아키텍처·OS 버전·hostname·CPU 수)을 먼저 검사하므로, 설치기가 도중에 죽고 원인을 찾는 일이 없다.
+
+```bash
+bash scripts/install_opensql_host.sh ~/Tmax_OpenSQL_3.17.8.7_rockylinux9.7_buildtime20260720
+```
+
+### 확인된 결과 (t3.large, 2 vCPU / 8GB)
+
+| 항목 | 결과 |
+|---|---|
+| `patronictl list` | `postgresql1 · Leader · running · TL 1` |
+| PostgreSQL | 17.8 x86_64 — VM과 동일 |
+| 4개 컴포넌트 | PostgreSQL · Patroni · etcd · OpenProxy 전부 기동 |
+| 라이선스 | 통과. `opensql_license checker` 동작 |
+| `shared_preload_libraries` | **VM과 완전히 동일한 12종** — `pg_cron`·`pgaudit`·`pg_hint_plan` 포함 |
+
+마지막 줄이 중요하다. 번들 확장을 채택하기로 결정하면 **배포 환경에서도 그대로 쓸 수 있다.**
+
+### 제약
+
+- **라이선스는 2026-09-10에 만료된다.** 그 후에는 이 인스턴스의 PostgreSQL도 기동하지 않는다 (ADR-021)
+- **인스턴스를 정지했다 켜면 공인 IP가 바뀐다.** 심사용 링크를 유지하려면 Elastic IP나 도메인이 필요하다
+- **CPU는 4개를 넘길 수 없다.** 라이선스 `<limit_cpu>` 상한이라 t3.xlarge(4 vCPU)가 최대다
+- 설치 파일과 라이선스 xml은 **저장소에 커밋하지 않는다.** 저장소는 규정상 public이어야 한다 (`PROJECT_CONTEXT.md` 제10조 ②)
+
+---
+
 ## 부록: 붙여넣기 주의
 
 에뮬레이션 콘솔과 SSH 모두에서 겪은 문제다.
