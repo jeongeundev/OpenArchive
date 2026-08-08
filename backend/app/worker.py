@@ -224,16 +224,13 @@ async def fail_job(conn: psycopg.AsyncConnection, job: ClaimedJob, error: Except
         )
 
 
-async def sweep_zombies(
-    conn: psycopg.AsyncConnection, *, timeout_minutes: int | None = None
-) -> int:
+async def sweep_zombies(conn: psycopg.AsyncConnection) -> int:
     """죽은 워커가 processing으로 방치한 잡을 회수한다. pending으로 복귀시킨 건수 반환.
 
     attempts는 초기화하지 않는다 — 매번 초기화하면 계속 죽는 잡이 영원히 재시도되어
     MAX_ATTEMPTS가 무의미해진다.
     """
-    if timeout_minutes is None:
-        timeout_minutes = get_settings().zombie_timeout_minutes
+    timeout_minutes = get_settings().zombie_timeout_minutes
 
     async with conn.transaction():
         # 판정 전에 대상 문서 행을 잠근다 — fail_job과 같은 이유다 (ARCHITECTURE 4·5번

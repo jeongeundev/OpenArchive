@@ -485,16 +485,6 @@ async def test_sweep_keeps_fresh_job_with_default_timeout(conn):
     assert [row[0] for row in await job_rows(conn, doc_id)] == ["processing"]
 
 
-async def test_sweep_explicit_timeout_overrides_settings(conn, monkeypatch):
-    """명시적 임계는 환경 설정보다 우선한다."""
-    monkeypatch.setenv("ZOMBIE_TIMEOUT_MINUTES", "0")
-    doc_id = await insert_document(conn)
-    await claim_job(conn)
-
-    assert await sweep_zombies(conn, timeout_minutes=5) == 0
-    assert [row[0] for row in await job_rows(conn, doc_id)] == ["processing"]
-
-
 async def test_sweep_returns_old_processing_jobs_to_pending(conn):
     """좀비 회수 — 임계(5분)를 넘긴 processing 잡만 pending으로 되돌린다.
 

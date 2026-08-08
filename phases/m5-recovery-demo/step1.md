@@ -50,16 +50,13 @@ zombie_timeout_minutes: int = 5
 ### 3) `backend/app/worker.py`를 고친다
 
 - 모듈 상수 `ZOMBIE_TIMEOUT_MINUTES = 5`를 **제거**한다
-- `sweep_zombies`의 시그니처를 다음으로 바꾼다:
-
-```python
-async def sweep_zombies(
-    conn: psycopg.AsyncConnection, *, timeout_minutes: int | None = None
-) -> int: ...
-```
-
-- `timeout_minutes`가 `None`이면 **함수 안에서** `get_settings().zombie_timeout_minutes`를 읽는다
+- `sweep_zombies`는 시그니처를 바꾸지 않는다. 함수 **본문 첫 줄**에서
+  `get_settings().zombie_timeout_minutes`를 읽어 지역 변수에 담는다
 - 함수 본문의 SQL 3곳에 쓰이는 `make_interval(mins => %s)` 파라미터를 이 값으로 바꾼다
+
+**임계를 넘기는 인자를 추가하지 마라.** 이유: 유일한 호출부인 `run_worker`가 `sweep_zombies(conn)`로만
+부르므로 그 인자는 테스트만 쓰게 되고, 그러면 "인자가 설정을 덮어쓴다"를 검증하는 자기참조 테스트가
+따라붙는다. 데모는 환경변수 주입만으로 성립한다.
 
 **`get_settings()`를 모듈 최상단에서 호출하지 마라.** 이유: `app/db.py`의 모듈 docstring이
 정한 규약대로 이 패키지는 import 시 부작용이 없어야 하고, 모듈 로드 시점에 값을 고정하면
