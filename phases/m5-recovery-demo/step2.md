@@ -51,8 +51,10 @@ M5 설계에서 **이 필드를 채우지 않고 제거하기로 결정했다.**
 ```bash
 cd backend
 
-# 1) 백엔드에서 필드가 사라졌는지
-grep -rn "reconnect_events" app/ tests/     # 출력 없어야 함
+# 1) 백엔드 구현부에서 필드가 사라졌는지
+grep -rn "reconnect_events" app/            # 출력 없어야 함
+# tests/는 검색 범위에서 뺀다 — "필드가 없다"를 검증하려면 테스트가 그 이름을 써야 한다.
+# 여기에 tests/를 넣으면 테스트가 문자열을 쪼개 grep을 피해가고, 검사는 초록인데 잔재는 남는다.
 
 # 2) 시스템 API 테스트
 .venv/bin/pytest tests/test_system_api.py -v

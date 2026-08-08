@@ -22,9 +22,7 @@ def test_status_is_available_without_authentication_and_reports_operational_fiel
         "inconsistent_documents",
         "embedding_provider",
     }
-    removed_field_parts = ("reconnect", "events")
-    removed_field = "_".join(removed_field_parts)
-    assert removed_field not in body
+    assert "reconnect_events" not in body
     assert body["jobs"] == {"pending": 0, "processing": 0, "error": 0}
     assert body["inconsistent_documents"] == 0
     assert body["embedding_provider"] == "fake"

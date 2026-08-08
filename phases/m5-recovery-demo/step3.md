@@ -45,9 +45,11 @@ M5 설계에서 재연결 이벤트 수집을 구현하지 않기로 결정했�
 ```bash
 cd frontend
 
-# 1) 필드와 카드가 사라졌는지
-grep -rn "reconnect_events" src/          # 출력 없어야 함
-grep -rn "재연결" src/                     # 출력 없어야 함
+# 1) 필드와 카드가 사라졌는지 — 구현부만 본다. 출력 없어야 함
+# 테스트 파일은 제외한다: "카드가 없다"를 검증하려면 테스트가 그 문구를 써야 하는데,
+# 여기서 걸리게 두면 테스트가 문자열을 쪼개 grep을 피해간다(검사는 초록, 잔재는 잔존).
+grep -rn "reconnect_events" src/ | grep -v "\.test\."
+grep -rn "재연결" src/ | grep -v "\.test\."
 
 # 2) 프론트 검증
 npm run lint

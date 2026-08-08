@@ -32,6 +32,6 @@ describe("StatusPanel", () => {
 
   it("수집하지 않는 이벤트 카드를 표시하지 않는다", () => {
     render(<StatusPanel status={status} error={null} />);
-    expect(screen.queryByText(["재", "연결 이벤트"].join(""))).not.toBeInTheDocument();
+    expect(screen.queryByText("재연결 이벤트")).not.toBeInTheDocument();
   });
 });
