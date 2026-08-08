@@ -118,7 +118,10 @@ cleanup() {
   fi
 
   if [[ -n "$API_PID" ]] && kill -0 "$API_PID" 2>/dev/null; then
-    for document_id in "${DOCUMENT_IDS[@]}"; do
+    # 배열이 비어 있을 수 있다 — 업로드 전에 실패하면 그렇다. macOS 기본 bash 3.2는
+    # set -u에서 빈 배열 전개를 unbound variable로 죽이고, 그러면 아래 프로세스 정리가
+    # 통째로 건너뛰어져 API·워커가 고아로 남는다.
+    for document_id in ${DOCUMENT_IDS[@]+"${DOCUMENT_IDS[@]}"}; do
       curl -fsS --max-time 5 -X DELETE \
         -H "X-User-Id: $DEMO_USER" \
         "$API_URL/api/documents/$document_id" >/dev/null 2>&1 || true
@@ -153,8 +156,7 @@ upload_document() {
 
 edit_document() {
   local document_id="$1"
-  local version="$2"
-  local body_file="$3"
+  local body_file="$2"
   curl -fsS --max-time 10 -X PUT \
     -H "X-User-Id: $DEMO_USER" \
     -H "Content-Type: application/json" \
@@ -195,7 +197,7 @@ echo "A-1 기준 상태: documents=$BASE_DOCUMENTS, chunks=$BASE_CHUNKS, inconsi
 
 kill -STOP "$WORKER_PID"
 "$PYTHON" -c 'import json,sys; json.dump({"content":"복구 데모 기준 문서 1 수정", "version":1}, open(sys.argv[1], "w"))' "$TMP_DIR/edit-a.json"
-edit_document "$DOC_A" 1 "$TMP_DIR/edit-a.json"
+edit_document "$DOC_A" "$TMP_DIR/edit-a.json"
 [[ "$(status_value jobs.pending)" == "1" ]] || fail "A-3 pending 잡이 1건이 아닙니다"
 [[ "$(status_value inconsistent_documents)" == "1" ]] || fail "A-3 정합성 어긋남이 1건이 아닙니다"
 echo "A-3 DB 정지 전: pending=1, inconsistent=1"
@@ -232,7 +234,7 @@ wait_until 45 "B 시나리오 기준 문서 임베딩" jobs_drained || fail "B �
 kill -STOP "$WORKER_PID"
 "$PYTHON" -c 'import json,sys; json.dump({"content":open(sys.argv[1]).read(), "version":1}, open(sys.argv[2], "w"))' "$LONG_TEXT_FILE" "$TMP_DIR/edit-long.json"
 for document_id in "${LONG_DOCUMENT_IDS[@]}"; do
-  edit_document "$document_id" 1 "$TMP_DIR/edit-long.json"
+  edit_document "$document_id" "$TMP_DIR/edit-long.json"
 done
 [[ "$(status_value jobs.pending)" == "6" ]] || fail "B-1 pending 잡이 6건이 아닙니다"
 echo "B-1 워커 정지 상태: pending=6"
