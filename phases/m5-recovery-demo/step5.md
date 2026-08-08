@@ -66,8 +66,13 @@ grep -rn "demo_recovery" README.md docs/ARCHITECTURE.md
 # 3) 좀비 임계 설정이 문서화됐는지
 grep -rn "ZOMBIE_TIMEOUT_MINUTES" .env.example docs/ARCHITECTURE.md
 
-# 4) 금지 문구가 새로 들어가지 않았는지 (출력 없어야 함)
-grep -rnE "failover를 시연|무중단|항상 최신|실시간 동기화" README.md docs/ARCHITECTURE.md docs/UI_GUIDE.md
+# 4) 금지 문구가 사용자 대상 문서에 새로 들어가지 않았는지 (출력 없어야 함)
+grep -rnE "failover를 시연|무중단|항상 최신|실시간 동기화" README.md docs/UI_GUIDE.md
+
+# 4-1) ARCHITECTURE.md는 이 금지어를 규칙으로 인용하는 문서다. 인용까지 막으면 규칙 문장이
+#      지워지므로 자동 판정하지 않고 눈으로 본다 — 보장으로 쓰였으면 위반, "쓰지 않는다"의
+#      목적어로 쓰였으면 정상이다.
+grep -rnE "무중단|항상 최신|실시간 동기화" docs/ARCHITECTURE.md
 
 # 5) 코드를 건드리지 않았는지 — 출력 없어야 함
 git diff --name-only | grep -E "\.(py|ts|tsx|sql|sh)$"

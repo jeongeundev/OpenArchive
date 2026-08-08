@@ -335,8 +335,16 @@ SET LOCAL hnsw.ef_search = 200;
 | 1000 | 100행 | **Seq Scan** | 595.8ms |
 
 **등호에서도 모자란다.** 별도 측정에서 `ef_search=200`에 `LIMIT 200`을 요청하니 **193행**만
-돌아왔다. 그래서 M4 코드는 과다 조회 배수를 상수로 박지 않고 예산에서 역산한다:
-`CANDIDATE_MULTIPLIER = (EF_SEARCH - 1) // MAX_K`. 후보 `LIMIT`이 항상 `ef_search`보다 작아야 한다.
+돌아왔다. 그래서 지켜야 할 불변식은 `LIMIT ≤ ef_search`가 아니라 **`MAX_K * 배수 < EF_SEARCH`**다.
+M4 코드가 이를 지키는 방식은 호출부마다 다르다:
+
+- **검색**(`app/services/search.py`)은 `CANDIDATE_MULTIPLIER = 5` 상수다. `20 * 5 = 100`으로
+  200에서 여유가 크고, 배수를 손댈 일이 없어 상수가 읽기 쉽다.
+- **관련 문서·태그 추천**(`app/services/related.py`)은 배수가 커서 벽에 가깝다. 그래서
+  `CANDIDATE_MULTIPLIER = (EF_SEARCH - 1) // MAX_K`로 예산에서 역산한다.
+
+어느 쪽이든 상수를 눈으로 지키지 않는다 — `test_search.py`와 `test_related.py`가 세 호출부의
+불변식을 각각 단언하므로, `EF_SEARCH`나 `MAX_K`를 한쪽만 움직이면 테스트가 깨진다.
 
 아래 표는 최초 근거였던 §12-14 측정 기록이다. **`random_page_cost=4` 체제·합성 벡터·`LIMIT 50`**
 조건이므로, 현재 `rpc=1.1` 코드의 상한 근거로는 쓰지 않는다.
