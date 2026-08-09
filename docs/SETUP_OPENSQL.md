@@ -584,8 +584,99 @@ bash scripts/install_opensql_host.sh ~/Tmax_OpenSQL_3.17.8.7_rockylinux9.7_build
 
 - **라이선스는 2026-09-10에 만료된다.** 그 후에는 이 인스턴스의 PostgreSQL도 기동하지 않는다 (ADR-021)
 - **인스턴스를 정지했다 켜면 공인 IP가 바뀐다.** 심사용 링크를 유지하려면 Elastic IP나 도메인이 필요하다
+  - 반면 **사설 IP는 보존된다**(실측: 정지·기동 후에도 `172.31.25.213`). `patroni.yml`·`openproxy.toml`이 사설 IP에 묶여 있으므로 재설정 없이 그대로 뜬다
+- **재부팅하면 `opensql-etcd.service` 하나만 살아난다.** Patroni·PostgreSQL·OpenProxy는 systemd 유닛이 없는 `nohup` 맨 프로세스라(#27) 인스턴스를 켤 때마다 수동 기동이 필요하다 (§15)
 - **CPU는 4개를 넘길 수 없다.** 라이선스 `<limit_cpu>` 상한이라 t3.xlarge(4 vCPU)가 최대다
 - 설치 파일과 라이선스 xml은 **저장소에 커밋하지 않는다.** 저장소는 규정상 public이어야 한다 (`PROJECT_CONTEXT.md` 제10조 ②)
+
+---
+
+## 15. 앱을 배포해 공개 URL로 띄우기
+
+**2026-08-09 실제로 관통했다.** DB만 뜨는 것과 앱이 공개 URL에서 도는 것은 별개였고, 된다.
+
+업로드 → 임베딩 → 검색이 맥에서 EC2 공인 IP로 전부 확인됐다.
+
+### 인스턴스를 켤 때마다: OpenSQL 먼저
+
+재부팅 후 살아나는 것은 etcd뿐이다. 순서가 있다 — Patroni가 PostgreSQL을 띄우고, OpenProxy가 그 뒤에 붙는다.
+
+```bash
+sudo -u opensql -i bash -c 'export OPENSQL_HOME=/home/opensql; bash /home/opensql/scripts/start_patroni.sh'
+sudo -u opensql -i bash -c 'export OPENSQL_HOME=/home/opensql; bash /home/opensql/scripts/start_openproxy.sh'
+sudo -u opensql /home/opensql/bin/patronictl -c /home/opensql/etc/patroni/patroni.yml list
+```
+
+`Leader · running`이 나오면 된다. **재기동할 때마다 `TL`(timeline)이 1씩 오른다** — 장애가 아니라 정상이다.
+
+### 런타임 (최초 1회)
+
+Rocky 9.7 기본은 Python 3.9이고 Node는 없다. 둘 다 dnf에 있다.
+
+```bash
+sudo dnf install -y python3.12 python3.12-devel
+sudo dnf module install -y nodejs:22/common
+```
+
+> `python3.12`는 `el9_8` 빌드로 잡히지만 **glibc를 건드리지 않는다**(sqlite-libs만 올라간다). 애초에 이 AMI의 glibc가 이미 `2.34-275.el9_8`이고 OpenSQL은 그 위에서 돈다 — §5의 9.7 고정은 VM에서 ISO로 설치할 때의 이야기다.
+
+### 소스 전송 (맥에서)
+
+저장소가 아직 public이 아니라 `git clone` 대신 rsync로 밀어 넣는다.
+
+```bash
+rsync -az --delete \
+  --exclude='.git' --exclude='.venv' --exclude='node_modules' \
+  --exclude='__pycache__' --exclude='.next' --exclude='*.egg-info' \
+  --exclude='.pytest_cache' --exclude='*.pem' \
+  -e "ssh -i ~/.ssh/<키>.pem" \
+  ./ rocky@<EC2 공인 IP>:~/OpenArchive/
+```
+
+### 배포 (EC2에서)
+
+```bash
+cd ~/OpenArchive && bash scripts/deploy_app_host.sh
+```
+
+venv 구성·프론트 빌드·3종 기동·헬스체크까지 한 번에 한다. **재실행 47초**(의존성이 이미 받아져 있을 때). DB가 안 떠 있으면 위 기동 명령을 안내하고 멈춘다.
+
+### 보안그룹
+
+```bash
+aws ec2 authorize-security-group-ingress --region ap-northeast-2 \
+  --group-id <SG> --protocol tcp --port 3000 --cidr <내 IP>/32
+```
+
+**3000만 연다.** API(8000)는 `127.0.0.1`에만 바인딩하고 Next.js가 `/api/*`를 rewrite로 프록시한다(`next.config.ts`). `X-User-Id`를 검증 없이 신원으로 쓰는 상태(`deps.py:20`)라 API를 직접 열면 남의 private 문서가 그대로 열린다.
+
+같은 이유로 **상시 공개는 최소 로그인이 들어간 뒤**다. 확인용으로 열었다면 끝나고 규칙을 지운다.
+
+```bash
+aws ec2 revoke-security-group-ingress --region ap-northeast-2 \
+  --group-id <SG> --protocol tcp --port 3000 --cidr <내 IP>/32
+```
+
+### 알고 있을 것
+
+- **CPU 전용 torch를 먼저 깐다.** PyPI 기본 wheel은 CUDA 빌드라 GPU 없는 인스턴스에 `nvidia-*` 2.7GB가 따라온다. 순서를 지키면 venv가 **5.1GB → 1.4GB**, 설치가 **2m37s → 1m16s**로 준다. `deploy_app_host.sh`가 이미 그렇게 한다
+- **BGE-M3가 두 벌 올라간다.** 워커(2233MB)와 API(2006MB)가 각각 모델을 로드한다 — 워커는 청크를, API는 검색 질의를 임베딩하기 때문이다. t3.large 8GB에서 **합계 4.2GB**로 여유가 좁고, swap이 없다. 모델 캐시는 디스크 4.3GB
+- **첫 검색만 느리다.** API 프로세스가 모델을 lazy load 하므로 재기동 후 첫 질의가 **16~19초**, 이후는 **0.4~0.5초**다. 시연 전에 질의를 한 번 흘려 예열한다
+- **재부팅 생존은 없다.** 앱도 `nohup` 맨 프로세스다. OpenSQL 자신이 그렇게 도는 설치라 앱만 systemd로 감싸도 DB가 없어 의미가 없다
+
+### 측정값 (2026-08-09, t3.large 2 vCPU / 8GB)
+
+| 항목 | 값 | 비교 |
+|---|---|---|
+| 맥 → EC2 TCP RTT | **10.0 ms** (중앙값, n=10) | 맥 → 로컬 VM 3.9 ms |
+| OpenProxy(6432) 경유 | **앱 전 구간 동작** | 업로드·임베딩·검색 전부 |
+| `pytest` 1회 (239 passed) | **32.1초** | 맥 로컬 컨테이너 15.9초 — **2.0배** |
+| 프론트 `npm ci` / `build` | 23초 / 25초 | |
+| 배포 스크립트 재실행 | 47.7초 | |
+
+`pytest`는 **5432 직결**로 잰 것이다. OpenProxy 경유로는 돌지 않는다 — dbname 자리가 pool 이름이라 `conftest.py`의 `swap_dbname`이 존재하지 않는 풀을 가리킨다(해당 함수 주석 참조).
+
+> **2.0배를 개발 환경 이전의 근거로 쓰지 마라.** #26이 VM에서 잰 11.9배에는 Apple Silicon 에뮬레이션이 섞여 있었고 EC2는 네이티브 x86-64라 격차가 작다. 그렇더라도 로컬 컨테이너가 여전히 두 배 빠르고, EC2는 확인 후 정지하는 자원이다 (ADR-026).
 
 ---
 
