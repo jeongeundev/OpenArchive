@@ -500,6 +500,186 @@ docker compose up -d      # pgvector/pgvector:pg17 단일 컨테이너
 
 ---
 
+## 14. AWS EC2에 같은 환경 만들기
+
+**2026-08-09 실제로 설치해 확인했다.** 배포를 위해 클라우드에서 OpenSQL이 기동하는지가 미확인 상태였고, 된다.
+
+### VM보다 오히려 쉽다
+
+| | UTM VM | AWS EC2 |
+|---|---|---|
+| OS 준비 | ISO로 설치, hostname 수동 설정 | **Rocky 9.7 AMI가 그대로 있다** |
+| §5 dnf 9.7 고정 | 필수 (9.8이면 glibc 충돌) | **불필요** — AMI가 이미 9.7 |
+| 네트워크(§4) | 고정 IP·방화벽 수동 설정 | 보안그룹만 |
+| 아키텍처 | Apple Silicon에서 x86-64 에뮬레이션 | 네이티브 x86-64 |
+
+라이선스가 묶는 것은 `<identified_by_host>`(hostname)와 `<limit_cpu>`뿐이다 — MAC·IP·machine-id는 보지 않는다. **hostname을 맞추고 CPU를 상한 이하로 잡으면 어느 머신에서든 뜬다.**
+
+### 인스턴스 생성
+
+hostname은 cloud-init으로 잡는다. 라이선스가 이 이름에 묶여 있어 다르면 PostgreSQL이 기동하지 않는다.
+
+```bash
+cat > /tmp/user-data.yaml <<'YAML'
+#cloud-config
+preserve_hostname: false
+hostname: opensql-dev
+fqdn: opensql-dev
+manage_etc_hosts: true
+YAML
+```
+
+AMI ID는 리전마다 다르다. 이름으로 조회한다.
+
+```bash
+aws ec2 describe-images --region ap-northeast-2 --owners 792107900819 \
+  --filters "Name=name,Values=Rocky-9-EC2-Base-9.7-*x86_64*" "Name=state,Values=available" \
+  --query 'sort_by(Images,&CreationDate)[-1].[ImageId,Name]' --output text
+```
+
+> 2026-08-09 기준 서울 리전은 `ami-0ed6cd3fecc849a03` (`Rocky-9-EC2-Base-9.7-20251123.2.x86_64`)이다.
+
+```bash
+aws ec2 run-instances --region ap-northeast-2 \
+  --image-id <위에서 조회한 AMI> \
+  --instance-type t3.large \
+  --key-name <키페어> \
+  --security-group-ids <보안그룹> \
+  --block-device-mappings '[{"DeviceName":"/dev/sda1","Ebs":{"VolumeSize":40,"VolumeType":"gp3"}}]' \
+  --user-data file:///tmp/user-data.yaml \
+  --tag-specifications 'ResourceType=instance,Tags=[{Key=Name,Value=opensql-dev}]'
+```
+
+**보안그룹은 SSH(22)만 본인 IP로 연다.** 5432·6432·2379·8008을 외부에 열지 않는다 — DB 비밀번호가 기본값(`pg_password`)인 상태이고, 애플리케이션은 어차피 같은 호스트나 같은 VPC에서 붙는다.
+
+### 설치
+
+설치 파일(897MB)은 상용 배포판이라 저장소에 없다. 기존 VM에서 스트리밍하는 것이 가장 빠르다.
+
+```bash
+ssh <vm> "tar cf - -C ~ Tmax_OpenSQL_3.17.8.7_rockylinux9.7_buildtime20260720" \
+  | gzip -1 \
+  | ssh -i <키> rocky@<EC2> "gunzip | tar xf - -C ~"
+```
+
+이후는 스크립트가 §6·§8·§9를 한 번에 처리한다. 사전 조건(아키텍처·OS 버전·hostname·CPU 수)을 먼저 검사하므로, 설치기가 도중에 죽고 원인을 찾는 일이 없다.
+
+```bash
+bash scripts/install_opensql_host.sh ~/Tmax_OpenSQL_3.17.8.7_rockylinux9.7_buildtime20260720
+```
+
+### 확인된 결과 (t3.large, 2 vCPU / 8GB)
+
+| 항목 | 결과 |
+|---|---|
+| `patronictl list` | `postgresql1 · Leader · running · TL 1` |
+| PostgreSQL | 17.8 x86_64 — VM과 동일 |
+| 4개 컴포넌트 | PostgreSQL · Patroni · etcd · OpenProxy 전부 기동 |
+| 라이선스 | 통과. `opensql_license checker` 동작 |
+| `shared_preload_libraries` | **VM과 완전히 동일한 12종** — `pg_cron`·`pgaudit`·`pg_hint_plan` 포함 |
+
+마지막 줄이 중요하다. 번들 확장을 채택하기로 결정하면 **배포 환경에서도 그대로 쓸 수 있다.**
+
+### 제약
+
+- **라이선스는 2026-09-10에 만료된다.** 그 후에는 이 인스턴스의 PostgreSQL도 기동하지 않는다 (ADR-021)
+- **인스턴스를 정지했다 켜면 공인 IP가 바뀐다.** 심사용 링크를 유지하려면 Elastic IP나 도메인이 필요하다
+  - 반면 **사설 IP는 보존된다**(실측: 정지·기동 후에도 `172.31.25.213`). `patroni.yml`·`openproxy.toml`이 사설 IP에 묶여 있으므로 재설정 없이 그대로 뜬다
+- **재부팅하면 `opensql-etcd.service` 하나만 살아난다.** Patroni·PostgreSQL·OpenProxy는 systemd 유닛이 없는 `nohup` 맨 프로세스라(#27) 인스턴스를 켤 때마다 수동 기동이 필요하다 (§15)
+- **CPU는 4개를 넘길 수 없다.** 라이선스 `<limit_cpu>` 상한이라 t3.xlarge(4 vCPU)가 최대다
+- 설치 파일과 라이선스 xml은 **저장소에 커밋하지 않는다.** 저장소는 규정상 public이어야 한다 (`PROJECT_CONTEXT.md` 제10조 ②)
+
+---
+
+## 15. 앱을 배포해 공개 URL로 띄우기
+
+**2026-08-09 실제로 관통했다.** DB만 뜨는 것과 앱이 공개 URL에서 도는 것은 별개였고, 된다.
+
+업로드 → 임베딩 → 검색이 맥에서 EC2 공인 IP로 전부 확인됐다.
+
+### 인스턴스를 켤 때마다: OpenSQL 먼저
+
+재부팅 후 살아나는 것은 etcd뿐이다. 순서가 있다 — Patroni가 PostgreSQL을 띄우고, OpenProxy가 그 뒤에 붙는다.
+
+```bash
+sudo -u opensql -i bash -c 'export OPENSQL_HOME=/home/opensql; bash /home/opensql/scripts/start_patroni.sh'
+sudo -u opensql -i bash -c 'export OPENSQL_HOME=/home/opensql; bash /home/opensql/scripts/start_openproxy.sh'
+sudo -u opensql /home/opensql/bin/patronictl -c /home/opensql/etc/patroni/patroni.yml list
+```
+
+`Leader · running`이 나오면 된다. **재기동할 때마다 `TL`(timeline)이 1씩 오른다** — 장애가 아니라 정상이다.
+
+### 런타임 (최초 1회)
+
+Rocky 9.7 기본은 Python 3.9이고 Node는 없다. 둘 다 dnf에 있다.
+
+```bash
+sudo dnf install -y python3.12 python3.12-devel
+sudo dnf module install -y nodejs:22/common
+```
+
+> `python3.12`는 `el9_8` 빌드로 잡히지만 **glibc를 건드리지 않는다**(sqlite-libs만 올라간다). 애초에 이 AMI의 glibc가 이미 `2.34-275.el9_8`이고 OpenSQL은 그 위에서 돈다 — §5의 9.7 고정은 VM에서 ISO로 설치할 때의 이야기다.
+
+### 소스 전송 (맥에서)
+
+저장소가 아직 public이 아니라 `git clone` 대신 rsync로 밀어 넣는다.
+
+```bash
+rsync -az --delete \
+  --exclude='.git' --exclude='.venv' --exclude='node_modules' \
+  --exclude='__pycache__' --exclude='.next' --exclude='*.egg-info' \
+  --exclude='.pytest_cache' --exclude='*.pem' \
+  -e "ssh -i ~/.ssh/<키>.pem" \
+  ./ rocky@<EC2 공인 IP>:~/OpenArchive/
+```
+
+### 배포 (EC2에서)
+
+```bash
+cd ~/OpenArchive && bash scripts/deploy_app_host.sh
+```
+
+venv 구성·프론트 빌드·3종 기동·헬스체크까지 한 번에 한다. **재실행 47초**(의존성이 이미 받아져 있을 때). DB가 안 떠 있으면 위 기동 명령을 안내하고 멈춘다.
+
+### 보안그룹
+
+```bash
+aws ec2 authorize-security-group-ingress --region ap-northeast-2 \
+  --group-id <SG> --protocol tcp --port 3000 --cidr <내 IP>/32
+```
+
+**3000만 연다.** API(8000)는 `127.0.0.1`에만 바인딩하고 Next.js가 `/api/*`를 rewrite로 프록시한다(`next.config.ts`). `X-User-Id`를 검증 없이 신원으로 쓰는 상태(`deps.py:20`)라 API를 직접 열면 남의 private 문서가 그대로 열린다.
+
+같은 이유로 **상시 공개는 최소 로그인이 들어간 뒤**다. 확인용으로 열었다면 끝나고 규칙을 지운다.
+
+```bash
+aws ec2 revoke-security-group-ingress --region ap-northeast-2 \
+  --group-id <SG> --protocol tcp --port 3000 --cidr <내 IP>/32
+```
+
+### 알고 있을 것
+
+- **CPU 전용 torch를 먼저 깐다.** PyPI 기본 wheel은 CUDA 빌드라 GPU 없는 인스턴스에 `nvidia-*` 2.7GB가 따라온다. 순서를 지키면 venv가 **5.1GB → 1.4GB**, 설치가 **2m37s → 1m16s**로 준다. `deploy_app_host.sh`가 이미 그렇게 한다
+- **BGE-M3가 두 벌 올라간다.** 워커(2233MB)와 API(2006MB)가 각각 모델을 로드한다 — 워커는 청크를, API는 검색 질의를 임베딩하기 때문이다. t3.large 8GB에서 **합계 4.2GB**로 여유가 좁고, swap이 없다. 모델 캐시는 디스크 4.3GB
+- **첫 검색만 느리다.** API 프로세스가 모델을 lazy load 하므로 재기동 후 첫 질의가 **16~19초**, 이후는 **0.4~0.5초**다. 시연 전에 질의를 한 번 흘려 예열한다
+- **재부팅 생존은 없다.** 앱도 `nohup` 맨 프로세스다. OpenSQL 자신이 그렇게 도는 설치라 앱만 systemd로 감싸도 DB가 없어 의미가 없다
+
+### 측정값 (2026-08-09, t3.large 2 vCPU / 8GB)
+
+| 항목 | 값 | 비교 |
+|---|---|---|
+| 맥 → EC2 TCP RTT | **10.0 ms** (중앙값, n=10) | 맥 → 로컬 VM 3.9 ms |
+| OpenProxy(6432) 경유 | **앱 전 구간 동작** | 업로드·임베딩·검색 전부 |
+| `pytest` 1회 (239 passed) | **32.1초** | 맥 로컬 컨테이너 15.9초 — **2.0배** |
+| 프론트 `npm ci` / `build` | 23초 / 25초 | |
+| 배포 스크립트 재실행 | 47.7초 | |
+
+`pytest`는 **5432 직결**로 잰 것이다. OpenProxy 경유로는 돌지 않는다 — dbname 자리가 pool 이름이라 `conftest.py`의 `swap_dbname`이 존재하지 않는 풀을 가리킨다(해당 함수 주석 참조).
+
+> **2.0배를 개발 환경 이전의 근거로 쓰지 마라.** #26이 VM에서 잰 11.9배에는 Apple Silicon 에뮬레이션이 섞여 있었고 EC2는 네이티브 x86-64라 격차가 작다. 그렇더라도 로컬 컨테이너가 여전히 두 배 빠르고, EC2는 확인 후 정지하는 자원이다 (ADR-026).
+
+---
+
 ## 부록: 붙여넣기 주의
 
 에뮬레이션 콘솔과 SSH 모두에서 겪은 문제다.
