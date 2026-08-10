@@ -165,7 +165,18 @@ INFO: continue to run as a leader because failsafe mode is enabled and all membe
 1. **WAL 아카이빙은 켜진 것처럼 보이지만 실질적으로 꺼져 있다.** `archive_mode = on`인데
    `archive_command = "/bin/true"`라 WAL을 보관하지 않는다. 따라서 DR(백업·PITR)은 동작하지
    않으며, barman을 "채택 비용 0"으로 본 판정도 Patroni 관리 설정 변경이 필요하다는 점에서
-   전제가 흔들린다. 다만 #29가 barman을 기각했으므로 지금 고칠 대상은 아니며 사실만 기록한다.
+   전제가 흔들린다. **`archive_command`를 잘못 켜면 지금 도는 것이 깨진다** — 명령이 실패하면
+   PostgreSQL이 해당 WAL을 지우지 않고 계속 쌓아 디스크가 찬다. `/bin/true`는 게으른 값이
+   아니라 안전한 기본값이다.
+   > **[실측 2026-08-10, #41] barman은 설치되어 있지 않다.** `~/Tmax_OpenSQL_.../barman/`에
+   > tarball이 풀려만 있고 바이너리는 PATH 어디에도 없으며, `opensql-installer/` 전체에
+   > barman 언급이 **0건**이다 — 설치 자동화가 다루지 않는 컴포넌트다. #25의
+   > *"채택 비용이 구조적으로 0"*은 **코드 비용**을 말한 것이고 설치·SSH 키·서버 등록은 그대로
+   > 남아 있다. **DR을 켜지 않기로 확정했다** (ADR-020 결정 6).
+
+   관련 실측값 (2026-08-10): `wal_level = replica` · `archive_timeout = 0` ·
+   `wal_keep_size = 1024` (MB) · `summarize_wal = off` (PG17 블록 증분 비활성) ·
+   `pg_database_size('opensql')` = **8390 kB**
 2. **이 설치의 OpenProxy에는 Patroni·etcd 연동이 없다.** `use_patroni`도 `[general.etcd]`도
    없고 `servers`에 primary 하나가 하드코딩돼 있다. 노드가 하나인 Single 구성 자체와 모순되지는
    않지만, ADR-006의 "새 프라이머리 발견·재연결은 OpenProxy가 수행한다"는 서술과 실물이
