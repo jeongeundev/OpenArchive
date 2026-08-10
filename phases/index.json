@@ -34,6 +34,18 @@
       "dir": "m6-docs-recovery",
       "status": "completed",
       "completed_at": "2026-08-10T17:16:47+0900"
+    },
+    {
+      "dir": "m7-graph-relations",
+      "status": "pending"
+    },
+    {
+      "dir": "m8-auth-diagnostics",
+      "status": "pending"
+    },
+    {
+      "dir": "m9-wikilink-rrf",
+      "status": "pending"
     }
   ]
 }
