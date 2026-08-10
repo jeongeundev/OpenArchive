@@ -14,6 +14,8 @@ DEMO_USER="recovery-demo"
 API_PID=""
 WORKER_PID=""
 APP_PROBE_PID=""
+PATRONI_LOG_LINE=0
+T0_REMOTE=""
 DOCUMENT_IDS=()
 LAST_DOCUMENT_ID=""
 LAST_STAGE="스크립트 시작"
@@ -125,11 +127,49 @@ app_exception_seen() {
   [[ -s "$TMP_DIR/app-exception.txt" ]]
 }
 
-patroni_log_contains() {
+# 로그 사건의 경과는 로그가 스스로 적어둔 시각에서 뺀다. ssh 폴링이 성공한 시각을 쓰면
+# 폴링 주기·왕복 지연이 그대로 값이 되어 46 ms 급 사건을 초 단위로 부풀린다.
+# 소급 계산이므로 언제 읽어도 값이 같다 — 그래서 t4 뒤로 미뤄 읽어도 t2·t3이 왜곡되지 않는다.
+# t0를 VM 시계로 따로 받아두는 이유: 로그 시각과 뺄셈하려면 같은 시계여야 한다.
+patroni_log_event_offset() {
   local pattern="$1"
   ssh -o BatchMode=yes -o ConnectTimeout=4 "$OPENSQL_SSH" \
     "sudo -n tail -n +$((PATRONI_LOG_LINE + 1)) '$PATRONI_LOG' 2>/dev/null" |
-    grep -Fq "$pattern"
+    T0_REMOTE="$T0_REMOTE" "$PYTHON" -c '
+import os, sys
+from datetime import datetime
+
+pattern = sys.argv[1]
+t0 = datetime.strptime(os.environ["T0_REMOTE"], "%Y-%m-%d %H:%M:%S.%f")
+for line in sys.stdin:
+    if pattern not in line:
+        continue
+    try:
+        # Patroni 기본 포맷: "2026-08-10 17:05:12,345 WARNING: ..."
+        stamp = datetime.strptime(line[:23], "%Y-%m-%d %H:%M:%S,%f")
+    except ValueError:
+        continue
+    print(f"{(stamp - t0).total_seconds():.3f}s")
+    break
+else:
+    sys.exit(1)
+' "$pattern"
+}
+
+wait_log_offset() {
+  local pattern="$1"
+  local timeout="$2"
+  local deadline=$((SECONDS + timeout))
+  local offset
+  while (( SECONDS < deadline )); do
+    if offset="$(patroni_log_event_offset "$pattern")"; then
+      printf '%s' "$offset"
+      return 0
+    fi
+    sleep 0.5
+  done
+  echo "타임아웃: Patroni 로그에서 '$pattern'을 찾지 못했습니다" >&2
+  return 1
 }
 
 cleanup() {
@@ -229,6 +269,8 @@ DOC_ID="$LAST_DOCUMENT_ID"
 wait_until 30 "기준 문서 임베딩" jobs_drained || fail "기준 문서의 잡이 완료되지 않았습니다"
 wait_until 10 "기준 정합성" consistent || fail "기준 문서의 정합성 카운터가 0이 아닙니다"
 
+# 워커를 잠깐 세워 장애 시점에 미처리 잡이 남아 있는 상태를 만든다. 시나리오를 만드는
+# 장치이며 복구 경로에 개입하는 것이 아니다 — 재개(kill -CONT)는 SIGKILL과 같은 순간이다.
 kill -STOP "$WORKER_PID"
 "$PYTHON" -c 'import json,sys; json.dump({"content":"OpenSQL DB 프로세스 장애 중 재개할 수정 텍스트", "version":1}, open(sys.argv[1], "w"))' "$TMP_DIR/edit.json"
 edit_document "$DOC_ID" "$TMP_DIR/edit.json"
@@ -254,7 +296,6 @@ with psycopg.connect(os.environ["DATABASE_URL"], connect_timeout=3) as conn:
 APP_PROBE_PID=$!
 wait_until 5 "앱 DB 프로브 연결" test -f "$TMP_DIR/app-probe-ready" || fail "장애 전 앱 DB 연결을 준비하지 못했습니다"
 
-PATRONI_LOG_LINE=0
 if ssh -o BatchMode=yes -o ConnectTimeout=4 "$OPENSQL_SSH" "sudo -n test -r '$PATRONI_LOG'"; then
   # 리다이렉션은 sudo가 아니라 원격 셸이 수행한다. /home/opensql이 drwx------이라
   # `sudo -n wc -l < file`은 허가 거부로 떨어지고 t2·t3이 영영 미관측이 된다.
@@ -265,11 +306,25 @@ else
 fi
 
 T0_EPOCH="$($PYTHON -c 'import time; print(time.time())')"
-POSTMASTER_PID="$(ssh -o BatchMode=yes -o ConnectTimeout=4 "$OPENSQL_SSH" \
-  "pid=\$(sudo -n head -1 /home/opensql/data/pgsql/postmaster.pid); test \"\$(sudo -n ps -o comm= -p \"\$pid\" | tr -d ' ')\" = postgres; sudo -n kill -9 \"\$pid\"; printf '%s' \"\$pid\"")" || fail "postmaster 부모 프로세스 SIGKILL에 실패했습니다"
+# 원격 셸에는 이쪽의 `set -e`가 전파되지 않는다. `;`로 이으면 postgres 확인이 실패해도
+# kill -9이 그대로 실행되고, 종료 코드는 마지막 printf의 0이라 `|| fail`이 죽은 코드가 된다.
+# `&&`로 이어 어느 단계가 실패하든 kill 전에 멈추고 실패 코드가 그대로 올라오게 한다.
+KILL_RESULT="$(ssh -o BatchMode=yes -o ConnectTimeout=4 "$OPENSQL_SSH" \
+  "pid=\$(sudo -n head -1 /home/opensql/data/pgsql/postmaster.pid) &&
+   test \"\$(sudo -n ps -o comm= -p \"\$pid\" | tr -d ' ')\" = postgres &&
+   t0=\$(date '+%Y-%m-%d %H:%M:%S.%6N') &&
+   sudo -n kill -9 \"\$pid\" &&
+   printf '%s|%s' \"\$pid\" \"\$t0\"")" || fail "postmaster 부모 프로세스 SIGKILL에 실패했습니다"
+POSTMASTER_PID="${KILL_RESULT%%|*}"
+T0_REMOTE="${KILL_RESULT#*|}"
+[[ "$POSTMASTER_PID" =~ ^[0-9]+$ ]] || fail "postmaster PID를 확인하지 못했습니다: $KILL_RESULT"
+# `%6N`은 GNU date의 확장이다. VM이 아닌 곳에서 돌리면 리터럴로 남아 t2·t3 계산에서
+# 알아보기 어려운 예외가 되므로 여기서 형식을 확인하고 끊는다.
+[[ "$T0_REMOTE" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}\ [0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{6}$ ]] ||
+  fail "VM 시계를 읽지 못했습니다 (GNU date가 필요합니다): $T0_REMOTE"
 touch "$TMP_DIR/app-probe-trigger"
 kill -CONT "$WORKER_PID"
-echo "★ 사람 개입 1회: t0 +0.00s postmaster PID $POSTMASTER_PID SIGKILL"
+echo "★ 장애 주입 1회: t0 +0.00s postmaster PID $POSTMASTER_PID SIGKILL"
 mark_stage "3. postmaster SIGKILL 완료"
 
 wait_until 15 "애플리케이션 OperationalError 계열 예외" app_exception_seen || fail "앱 DB 클라이언트에서 연결 예외를 관측하지 못했습니다"
@@ -277,23 +332,22 @@ T1_EPOCH="$(cut -d '|' -f 1 "$TMP_DIR/app-exception.txt")"
 T1_CLASS="$(cut -d '|' -f 2 "$TMP_DIR/app-exception.txt")"
 T1="$($PYTHON -c 'import sys; print(f"{float(sys.argv[1]) - float(sys.argv[2]):.2f}s")' "$T1_EPOCH" "$T0_EPOCH")"
 
-T2="미관측"
-T3="미관측"
-if (( PATRONI_LOG_LINE > 0 )); then
-  if wait_until 15 "Patroni 장애 감지 로그" patroni_log_contains "Postgresql is not running"; then
-    T2="$(elapsed "$T0_EPOCH")"
-  fi
-  if wait_until 15 "Patroni primary 재기동 로그" patroni_log_contains "starting primary after failure"; then
-    T3="$(elapsed "$T0_EPOCH")"
-  fi
-fi
-
+# 아래 세 값은 폴링으로 재는 것이므로 반드시 사건 순서대로 즉시 관측해야 한다.
+# Patroni 로그 사건(t2·t3)을 여기 앞에 두면 그 대기 시간이 t4에 그대로 더해져
+# t4 >= t3이 구조적으로 보장돼 버린다. 로그는 소급 계산이 가능하니 뒤로 미룬다.
 wait_until 30 "OpenProxy 6432 재접속" db_ready || fail "OpenProxy 6432를 통한 DB 접속이 복구되지 않았습니다"
 T4="$(elapsed "$T0_EPOCH")"
 wait_until 45 "pending 잡 재개" jobs_drained || fail "pending 잡이 0으로 수렴하지 않았습니다"
 T5="$(elapsed "$T0_EPOCH")"
 wait_until 10 "정합성 수렴" consistent || fail "inconsistent_documents가 0으로 수렴하지 않았습니다"
 T6="$(elapsed "$T0_EPOCH")"
+
+T2="미관측"
+T3="미관측"
+if (( PATRONI_LOG_LINE > 0 )); then
+  T2="$(wait_log_offset "Postgresql is not running" 15)" || T2="미관측"
+  T3="$(wait_log_offset "starting primary after failure" 15)" || T3="미관측"
+fi
 mark_stage "4. 자동 복구 관측 완료"
 
 FINAL_TL="$(patroni_value timeline)"
@@ -310,14 +364,19 @@ echo
 echo "복구 타임라인"
 echo "  t0  +0.00s  postmaster PID $POSTMASTER_PID SIGKILL"
 echo "  t1  +$T1  앱 첫 예외: $T1_CLASS"
-echo "  t2  +$T2  Patroni: Postgresql is not running"
-echo "  t3  +$T3  Patroni: starting primary after failure"
-echo "  t4  +$T4  OpenProxy 6432 재접속 성공"
+echo "  t2  +$T2  Patroni: Postgresql is not running        (로그 시각)"
+echo "  t3  +$T3  Patroni: starting primary after failure  (로그 시각)"
+echo "  t4  +$T4  OpenProxy 6432 재접속 성공  (앱 관측)"
 echo "  t5  +$T5  pending/processing 잡 0"
 echo "  t6  +$T6  inconsistent_documents=0"
 echo
+echo "  t2·t3은 Patroni 로그가 적은 시각이고, 나머지는 앱이 관측한 시각이다."
+echo "  t4는 PostgreSQL이 접속을 수락한 시점이 아니라 앱이 재접속에 성공한 시점이므로"
+echo "  PostgreSQL 기동 완료보다 폴링 주기만큼 뒤에 온다."
+echo
 echo "완료: DB 프로세스 장애로부터의 자동 복구를 확인했습니다."
-echo "      Patroni가 감지하고 스스로 재기동했으며, 사람의 개입은 kill 1회뿐입니다."
+echo "      Patroni가 감지하고 스스로 재기동했습니다. 복구 과정에 사람의 개입은 없었고,"
+echo "      주입한 장애는 postmaster SIGKILL 1회입니다."
 echo
 echo "한계: 노드 사망은 복구되지 않습니다. 노드 2대 이상이 물리적 전제이며,"
 echo "      사무국 지시에 따른 Single 구성의 제약입니다."
