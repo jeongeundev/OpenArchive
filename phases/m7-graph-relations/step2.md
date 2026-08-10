@@ -144,17 +144,17 @@ test -f scripts/measure_relations.sql || test -f scripts/measure_relations.py
 grep -n "^## 14\." docs/OPENSQL_RESEARCH.md
 
 # 3) 상수 셋이 값과 함께 확정됐는가 — 이름만으로는 통과할 수 없다
-sed -n '/^## 14\./,/^## 15\.\|^---$/p' docs/OPENSQL_RESEARCH.md | grep -nE "NEIGHBOR_N"
-sed -n '/^## 14\./,/^## 15\.\|^---$/p' docs/OPENSQL_RESEARCH.md | grep -nE "OVERLAP_RATIO"
-sed -n '/^## 14\./,/^## 15\.\|^---$/p' docs/OPENSQL_RESEARCH.md | grep -nE "BROADER_MARGIN"
+sed -nE '/^## 14\./,/^(## 15\.|---)$/p' docs/OPENSQL_RESEARCH.md | grep -nE "NEIGHBOR_N"
+sed -nE '/^## 14\./,/^(## 15\.|---)$/p' docs/OPENSQL_RESEARCH.md | grep -nE "OVERLAP_RATIO"
+sed -nE '/^## 14\./,/^(## 15\.|---)$/p' docs/OPENSQL_RESEARCH.md | grep -nE "BROADER_MARGIN"
 
 # 4) 실제로 잰 흔적이 있는가 — 계획 문자열과 측정 환경
-sed -n '/^## 14\./,/^## 15\.\|^---$/p' docs/OPENSQL_RESEARCH.md | grep -niE "hnsw"
-sed -n '/^## 14\./,/^## 15\.\|^---$/p' docs/OPENSQL_RESEARCH.md | grep -nE "ms|초"
-sed -n '/^## 14\./,/^## 15\.\|^---$/p' docs/OPENSQL_RESEARCH.md | grep -n "DISTINCT embedding"
+sed -nE '/^## 14\./,/^(## 15\.|---)$/p' docs/OPENSQL_RESEARCH.md | grep -niE "hnsw"
+sed -nE '/^## 14\./,/^(## 15\.|---)$/p' docs/OPENSQL_RESEARCH.md | grep -nE "ms|초"
+sed -nE '/^## 14\./,/^(## 15\.|---)$/p' docs/OPENSQL_RESEARCH.md | grep -n "DISTINCT embedding"
 
 # 5) 못 잰 것 셋이 넘길 자리와 함께 적혔는가
-sed -n '/^## 14\./,/^## 15\.\|^---$/p' docs/OPENSQL_RESEARCH.md | grep -nE "재귀|WITH RECURSIVE"
+sed -nE '/^## 14\./,/^(## 15\.|---)$/p' docs/OPENSQL_RESEARCH.md | grep -nE "재귀|WITH RECURSIVE"
 
 # 6) 마이그레이션을 만들지 않았는가 — 출력이 없어야 한다
 git status --porcelain backend/migrations/ | grep -E "^\?\?|^ M"

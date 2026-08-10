@@ -1,5 +1,11 @@
 # Step 7: related-on-edges
 
+> ⚠️ **이 step은 한 레이어를 넘는다** — 서비스·API 스키마·MCP 응답을 함께 고친다.
+> `harness.md`의 「하나의 step에서 하나의 레이어」에서 벗어나는 자리다. 쪼개지 않은 이유는
+> `kind` 필드 **하나**가 세 곳을 관통해서, 중간 상태로 커밋하면 응답 스키마가 어긋난 채
+> 남기 때문이다. **커밋 스코프(`api`)가 변경 범위를 다 담지 못하므로 `summary`에 MCP를
+> 건드렸다는 사실을 적는다.**
+
 ## 배경 — 관련 문서가 "비슷함" 하나에서 종류로 갈린다
 
 지금 `find_related`는 대상 문서의 **청크 평균**(`avg(embedding)`)에 가까운 문서를 점수순으로
@@ -28,8 +34,8 @@ avg(embedding) 계산            document_edges 조회
   **벡터 정렬이 사라지므로 그 단언도 사라진다**
 - `backend/tests/test_visibility.py` — step 4가 네 호출부를 덮어 둔 행동 테스트.
   **이 테스트는 그대로 통과해야 한다** — 구현이 바뀌어도 권한 동작은 같아야 한다
-- `backend/app/routers/` · `backend/mcp/` — `RelatedDocument`를 쓰는 곳.
-  필드가 늘면 여기도 바뀐다
+- `backend/app/api/documents.py` · `backend/app/api/schemas.py` · `backend/mcp_server/server.py` —
+  `RelatedDocument`를 쓰는 곳. 필드가 늘면 여기도 바뀐다
 
 ## 작업
 
@@ -83,7 +89,7 @@ avg(embedding) 계산            document_edges 조회
 
 `kind`가 늘었으므로 응답 스키마와 MCP 툴 출력이 바뀐다.
 
-> ⚠️ **`app/schemas.py`와 MCP `server.py`는 tdd-guard의 매핑 구멍이다.** 훅이 대응 테스트를
+> ⚠️ **`app/api/schemas.py`와 MCP `server.py`는 tdd-guard의 매핑 구멍이다.** 훅이 대응 테스트를
 > 요구하지 않으므로 **스스로 테스트를 쓴다** — `test_related_api.py`·`test_mcp_server.py`에
 > `kind`가 실제로 응답에 실리는지 단언을 더한다.
 
@@ -121,10 +127,11 @@ grep -n "VISIBLE_TO_USER" app/services/related.py
 # 8) avg(embedding)이 사라졌는가 — 출력이 없어야 한다
 grep -n "avg(embedding)" app/services/related.py
 
-# 9) seed 데이터로 실제 응답 확인
+# 9) seed 데이터로 실제 응답 확인 — 문서 id는 목록에서 뽑는다 (손으로 채워 넣지 마라)
 python -m pytest -q
 uvicorn app.main:app --port 8901 & sleep 3
-curl -s "localhost:8901/api/documents/<seed문서id>/related" | head -40; kill %1
+DOC=$(curl -s "localhost:8901/api/documents" | python -c "import sys, json; print(json.load(sys.stdin)[0]['id'])")
+curl -s "localhost:8901/api/documents/$DOC/related" | head -40; kill %1
 
 # 10) 전체 검증
 cd .. && bash scripts/check.sh

@@ -1,5 +1,11 @@
 # Step 7: cluster-graph
 
+> ⚠️ **이 step은 한 레이어를 넘는다** — 덩어리 집계 서비스·`GET /api/clusters`·화면을
+> 함께 만든다. `harness.md`의 「하나의 step에서 하나의 레이어」에서 벗어나는 자리다.
+> 쪼개지 않은 이유는 자르는 기준이 **「단독 시연이 성립하는가」**여서(#38), 그래프 없이
+> 집계 API만 있는 중간 step은 보여줄 것이 없기 때문이다. **커밋 스코프(`frontend`)가
+> 변경 범위를 다 담지 못하므로 `summary`에 API 신설을 적는다.**
+
 ## 배경 — 노드는 문서가 아니라 주제 덩어리다
 
 #29가 시각화 설계를 근거와 함께 정했다.
@@ -32,15 +38,23 @@
   후자가 훨씬 싸고 step 6의 진단과도 이어진다
 - **덩어리 수를 10~20개로 제한**한다(#29). 넘으면 작은 덩어리를 "기타"로 합친다
 
-### 2) 덩어리 사이의 연결
+### 2) 덩어리 사이의 연결 — `backend/app/services/clusters.py`
 
 `document_edges`를 **덩어리 단위로 집계**한다 — 덩어리 A의 문서와 덩어리 B의 문서 사이에
 edge가 몇 개인가. 그 수가 **선의 굵기**다.
 
 - **열람 범위 기준으로 센다.** 못 보는 문서의 edge는 세지 않는다 (ADR-027 결정 3)
 - 덩어리 크기 = 그 덩어리의 **내가 볼 수 있는 문서 수**
+- 노출은 엔드포인트 하나다
 
-### 3) 테스트
+| 엔드포인트 | 하는 일 |
+|---|---|
+| `GET /api/clusters` | 덩어리 목록(이름·크기)과 덩어리 쌍의 연결 수 |
+
+### 3) 테스트 — `backend/tests/test_clusters.py`
+
+**파일 이름을 정해 두는 것이 중요하다.** tdd-guard는 구현 파일 이름으로 대응 테스트를
+찾으므로, 이름이 없으면 순서를 강제할 장치가 사라진다.
 
 - 덩어리 목록과 연결이 나오는가
 - **세 시선에서 덩어리 크기가 다른가** — `tests/test_visibility.py`에 추가
@@ -66,13 +80,18 @@ edge가 몇 개인가. 그 수가 **선의 굵기**다.
 cd backend
 
 # 1) 테스트 통과
-python -m pytest tests/test_visibility.py -q
+test -f tests/test_clusters.py
+python -m pytest tests/test_clusters.py tests/test_visibility.py -q
 python -m pytest -q
 
 # 2) 덩어리 크기가 시선에 따라 다른가
+#    쿠키는 로그인해서 파일로 받는다. 자리표시자를 손으로 채우지 마라
+: "${TEST_ADMIN_PW:?step 1 픽스처에서 쓴 관리자 비밀번호를 환경변수로 넣고 실행하라}"
 uvicorn app.main:app --port 8906 & sleep 3
-curl -s localhost:8906/api/clusters | head -30
-curl -s localhost:8906/api/clusters -b "session=<쿠키>" | head -30
+curl -s localhost:8906/api/clusters | head -30                  # 익명
+curl -s -c /tmp/oa-session.txt -X POST localhost:8906/api/auth/login -H 'content-type: application/json' \
+     -d "{\"username\":\"admin\",\"password\":\"$TEST_ADMIN_PW\"}" > /dev/null
+curl -s localhost:8906/api/clusters -b /tmp/oa-session.txt | head -30   # 로그인한 시선
 kill %1
 #   → 크기·개수가 달라야 한다
 

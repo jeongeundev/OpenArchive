@@ -89,6 +89,9 @@ m7~m9가 만든 것이 PRD에 없으면 제출 서류를 쓸 때 근거가 없�
 
 - `avg(embedding)` 관련 CRITICAL — `find_related`가 더 이상 쓰지 않는다.
   **다만 그 규칙이 다른 자리에 여전히 유효한지 먼저 확인하라**
+- **`ef_search` 불변식 CRITICAL의 "`test_search.py`·`test_related.py`가 호출부별로
+  단언한다"** — m7 step 7이 `test_related.py`의 단언을 지웠다(`find_related`에 벡터 정렬이
+  없어졌다). **불변식 자체는 살아 있으므로 지우지 말고 단언하는 파일 이름만 실제와 맞춘다**
 - 관계 그래프의 권한 규칙 — ADR-027 줄에 ADR-029·030이 더해질 자리가 있는지
 
 > **줄 수는 늘리지 않는다.** `CLAUDE.md`는 매 세션 주입되는 파일이라 길어지면 손해다.
@@ -100,8 +103,8 @@ m7~m9가 만든 것이 PRD에 없으면 제출 서류를 쓸 때 근거가 없�
 grep -n "### ADR-030" docs/ADR.md
 
 # 2) ADR-030의 근거들이 들어갔는가
-sed -n '/### ADR-030/,/^### ADR-031\|^---$/p' docs/ADR.md | grep -nE "UNIQUE|유일성"
-sed -n '/### ADR-030/,/^### ADR-031\|^---$/p' docs/ADR.md | grep -n "ADR-027"
+sed -nE '/### ADR-030/,/^(### ADR-031|---)$/p' docs/ADR.md | grep -nE "UNIQUE|유일성"
+sed -nE '/### ADR-030/,/^(### ADR-031|---)$/p' docs/ADR.md | grep -n "ADR-027"
 
 # 3) ADR-016이 정정됐는가 — 원안이 남아 있으면서 실측이 더해졌는지
 sed -n '/### ADR-016/,/^### ADR-017/p' docs/ADR.md | grep -n "pg_trgm"

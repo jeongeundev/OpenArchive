@@ -102,9 +102,9 @@ python -m pytest tests/test_search.py tests/test_visibility.py -q
 # 2) 순회 권한 테스트가 실제로 있는가 — 경유 차단이 핵심이다
 grep -nE "경유|traverse|through" tests/test_visibility.py
 
-# 3) 측정이 §14에 덧붙었는가 — 새 절을 만들지 않았어야 한다
-sed -n '/^## 14\./,/^## 15\.\|^---$/p' docs/OPENSQL_RESEARCH.md | grep -nE "RECURSIVE|재귀"
-grep -c "^## 15\." docs/OPENSQL_RESEARCH.md   # 0 이어야 한다
+# 3) 측정이 §14에 덧붙었는가 — 새 절을 만들지 않았어야 한다 (여기는 backend/ 안이다)
+sed -nE '/^## 14\./,/^(## 15\.|---)$/p' ../docs/OPENSQL_RESEARCH.md | grep -nE "RECURSIVE|재귀"
+grep -c "^## 15\." ../docs/OPENSQL_RESEARCH.md   # 0 이어야 한다
 
 # 4) 깊이 상한과 사이클 방지가 쿼리에 있는가
 grep -nE "CYCLE|depth" app/services/search.py

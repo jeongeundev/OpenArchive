@@ -12,7 +12,7 @@ step 3이 랭킹을 바꿨다. **화면이 그대로면 아무도 모른다.** #
 
 - `docs/UI_GUIDE.md` — 화면 규칙
 - `frontend/src/app/search/` — 검색 결과 화면. m7 step 9가 관계 표시를 이미 얹었다
-- `backend/app/schemas.py` — step 3이 더한 필드
+- `backend/app/api/schemas.py` — step 3이 더한 필드
 - `docs/ADR.md` **ADR-015** — 사용자 대상 문구 규칙
 
 ## 작업

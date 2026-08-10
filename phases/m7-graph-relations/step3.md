@@ -155,25 +155,27 @@ step 4부터 코드가 나간다. 그 전에 **왜 이 모양인가**를 ADR로 
 grep -n "### ADR-029" docs/ADR.md
 
 # 2) 결정 다섯 개가 전부 들어갔는가 — 각각 고유한 근거 문자열로 확인한다
-sed -n '/### ADR-029/,/^### ADR-030\|^---$/p' docs/ADR.md | grep -n "bigserial"
-sed -n '/### ADR-029/,/^### ADR-030\|^---$/p' docs/ADR.md | grep -n "content_hash"
-sed -n '/### ADR-029/,/^### ADR-030\|^---$/p' docs/ADR.md | grep -nE "NEIGHBOR_N|OVERLAP_RATIO"
-sed -n '/### ADR-029/,/^### ADR-030\|^---$/p' docs/ADR.md | grep -n "edge_jobs"
-sed -n '/### ADR-029/,/^### ADR-030\|^---$/p' docs/ADR.md | grep -n "no_edges"
-sed -n '/### ADR-029/,/^### ADR-030\|^---$/p' docs/ADR.md | grep -nE "kNN|비대칭"
+sed -nE '/### ADR-029/,/^(### ADR-030|---)$/p' docs/ADR.md | grep -n "bigserial"
+sed -nE '/### ADR-029/,/^(### ADR-030|---)$/p' docs/ADR.md | grep -n "content_hash"
+sed -nE '/### ADR-029/,/^(### ADR-030|---)$/p' docs/ADR.md | grep -nE "NEIGHBOR_N|OVERLAP_RATIO"
+sed -nE '/### ADR-029/,/^(### ADR-030|---)$/p' docs/ADR.md | grep -n "edge_jobs"
+sed -nE '/### ADR-029/,/^(### ADR-030|---)$/p' docs/ADR.md | grep -n "no_edges"
+sed -nE '/### ADR-029/,/^(### ADR-030|---)$/p' docs/ADR.md | grep -nE "kNN|비대칭"
 
 # 3) 저장하지 않는 넷의 근거가 적혔는가
-sed -n '/### ADR-029/,/^### ADR-030\|^---$/p' docs/ADR.md | grep -nE "003_triggers|UPDATE OF"
+sed -nE '/### ADR-029/,/^(### ADR-030|---)$/p' docs/ADR.md | grep -nE "003_triggers|UPDATE OF"
 
 # 4) 위키링크를 m9로 넘긴 것이 명시됐는가
-sed -n '/### ADR-029/,/^### ADR-030\|^---$/p' docs/ADR.md | grep -nE "dst_document_id|NOT NULL"
+sed -nE '/### ADR-029/,/^(### ADR-030|---)$/p' docs/ADR.md | grep -nE "dst_document_id|NOT NULL"
 
 # 5) ADR-018이 개정됐는가 — 기존 본문이 남아 있으면서 상태가 갱신됐는지
 sed -n '/### ADR-018/,/^### ADR-019/p' docs/ADR.md | grep -n "ADR-029"
 sed -n '/### ADR-018/,/^### ADR-019/p' docs/ADR.md | grep -n "서브쿼리"
 
-# 6) §14의 실측값을 인용했는가 — 문서에 실제 숫자가 있어야 한다
-sed -n '/### ADR-029/,/^### ADR-030\|^---$/p' docs/ADR.md | grep -nE "[0-9]+(\.[0-9]+)?"
+# 6) §14의 실측값을 인용했는가 — 상수 이름과 숫자가 같은 줄에 있어야 한다
+#    "[0-9]"만 보면 "ADR-029"·"003_triggers"의 숫자로도 통과한다
+sed -nE '/### ADR-029/,/^(### ADR-030|---)$/p' docs/ADR.md \
+  | grep -cE "(NEIGHBOR_N|OVERLAP_RATIO|BROADER_MARGIN)[^0-9]*[0-9]"   # 3 이상
 
 # 7) 코드·마이그레이션을 건드리지 않았는가 — 출력이 없어야 한다
 git diff --name-only | grep -E "\.(py|ts|tsx|sql|sh)$"

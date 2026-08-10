@@ -13,7 +13,7 @@ m8·m9가 잘려도 **여기까지가 완결된 시연**이어야 한다.
 - `docs/UI_GUIDE.md` — **UI 규칙 전부.** 새 표현을 만들기 전에 여기 있는 어휘를 먼저 쓴다
 - `frontend/src/app/search/` · `frontend/src/app/documents/` — 지금 검색 결과와 문서 상세가
   그려지는 자리. **기존 스타일에 맞춘다** (`CLAUDE.md`: 다르게 했을지라도 기존 스타일을 따른다)
-- `backend/app/schemas.py` — step 7·8이 더한 `kind`·`via` 필드의 실제 이름과 타입
+- `backend/app/api/schemas.py` — step 7·8이 더한 `kind`·`via` 필드의 실제 이름과 타입
 - `docs/ADR.md` **ADR-027** — 화면에도 그대로 적용된다. **`🔒` 같은 자리를 만들지 마라**
 - `docs/ADR.md` **ADR-015** — 사용자 대상 문구 규칙
 

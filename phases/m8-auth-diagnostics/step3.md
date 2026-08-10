@@ -82,8 +82,12 @@ grep -rn "is_admin" app/api/ | wc -l
 grep -n -B3 -A3 "\.size" app/api/*.py
 
 # 5) 응답에 해시가 없는가 — 출력이 없어야 한다
+#    쿠키는 로그인해서 파일로 받는다. 자리표시자를 손으로 채우지 마라
+: "${TEST_ADMIN_PW:?step 1 픽스처에서 쓴 관리자 비밀번호를 환경변수로 넣고 실행하라}"
 uvicorn app.main:app --port 8904 & sleep 3
-curl -s localhost:8904/api/admin/users -b "session=<관리자쿠키>" | grep -i "hash"
+curl -s -c /tmp/oa-admin.txt -X POST localhost:8904/api/auth/login -H 'content-type: application/json' \
+     -d "{\"username\":\"admin\",\"password\":\"$TEST_ADMIN_PW\"}" > /dev/null
+curl -s localhost:8904/api/admin/users -b /tmp/oa-admin.txt | grep -i "hash"
 kill %1
 
 # 6) 사용자 삭제 시 문서 처리가 정해졌는가 — 코드나 주석에 있어야 한다

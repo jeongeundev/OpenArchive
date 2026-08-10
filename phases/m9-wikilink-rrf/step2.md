@@ -13,7 +13,7 @@ step 1까지는 API 응답에만 링크가 있다. 이 step이 본문에서 `[[�
 - `docs/UI_GUIDE.md` — 화면 규칙. m7 step 9가 남긴 관계 어휘표도 여기 있다
 - `frontend/src/app/documents/` — 문서 상세와 본문 렌더
 - `docs/ADR.md` **ADR-027 결정 5** — 깨진 링크와 권한 없음이 **같아 보여야** 한다
-- `backend/app/schemas.py` — step 1이 만든 응답 형태
+- `backend/app/api/schemas.py` — step 1이 만든 응답 형태
 
 ## 작업
 

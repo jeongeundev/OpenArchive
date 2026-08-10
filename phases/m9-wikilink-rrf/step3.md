@@ -108,18 +108,19 @@ grep -n -A5 -B5 "DISTINCT ON" app/services/search.py
 git diff app/services/search.py | grep -nE "^\+.*(sorted\(|merge|for .* in .*results)"
 #   → 융합 로직이 파이썬에 있으면 안 된다
 
-# 5) tsvector를 쓰지 않았는가 — 출력이 없어야 한다
-grep -rn "to_tsvector" app/ backend/migrations/ 2>/dev/null
+# 5) tsvector를 쓰지 않았는가 — 출력이 없어야 한다 (여기는 backend/ 안이다)
+#    `2>/dev/null`을 붙이지 마라. 경로가 틀려도 에러가 삼켜져 "출력 없음"이 거짓으로 성립한다
+grep -rn "to_tsvector" app/ migrations/
 
 # 6) 측정이 §14에 덧붙었는가
-sed -n '/^## 14\./,/^## 15\.\|^---$/p' ../docs/OPENSQL_RESEARCH.md | grep -niE "RRF|trgm"
+sed -nE '/^## 14\./,/^(## 15\.|---)$/p' ../docs/OPENSQL_RESEARCH.md | grep -niE "RRF|trgm"
 
 # 7) 실제 비교 — 세 방식이 나란히 있는가
-sed -n '/^## 14\./,/^## 15\.\|^---$/p' ../docs/OPENSQL_RESEARCH.md | grep -nE "벡터만|키워드만|융합"
+sed -nE '/^## 14\./,/^(## 15\.|---)$/p' ../docs/OPENSQL_RESEARCH.md | grep -nE "벡터만|키워드만|융합"
 
 # 8) #12 티켓이 정정됐는가
-gh issue view 12 --json body -q .body | grep -c "pg_trgm"   # 1 이상
-gh issue view 12 --json body -q .body | grep -c "to_tsvector"
+gh issue view 12 --json body -q .body | grep -c "pg_trgm"     # 1 이상
+gh issue view 12 --json body -q .body | grep -c "to_tsvector" # 0 이어야 한다
 
 # 9) 실제 응답
 uvicorn app.main:app --port 8908 & sleep 3

@@ -114,8 +114,11 @@ python -m pytest tests/test_tables.py tests/test_indexes.py -q
 ls migrations/005_trgm_extensions.sql migrations/006_edges_tables.sql migrations/007_edges_indexes.sql
 
 # 3) 실제로 적용되는가 — 깨끗한 DB에 전량 적용
-docker compose down -v && docker compose up -d && sleep 5
-python -m app.migrate 2>/dev/null || uvicorn app.main:app --port 8999 & sleep 8; kill %1
+#    compose 파일은 저장소 루트에 있다. 마이그레이션 CLI는 없고 앱 lifespan이 run_migrations를 부르므로
+#    직접 호출한다 — `A || B & sleep; kill %1`은 `&`가 `||` 리스트 전체를 백그라운드로 보내 어긋난다
+docker compose -f ../docker-compose.yml down -v && docker compose -f ../docker-compose.yml up -d && sleep 5
+python -c "import asyncio; from app.config import get_settings; from app.migrations import run_migrations; print(asyncio.run(run_migrations(get_settings().database_url)))"
+#   → 적용된 파일 목록에 005·006·007이 있어야 한다
 
 # 4) 스키마가 결정대로인가
 psql "$DATABASE_URL" -c "\d document_edges"

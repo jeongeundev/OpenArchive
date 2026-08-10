@@ -90,12 +90,16 @@ grep -nE "동명|같은 제목|duplicate.*title" tests/test_visibility.py
 grep -nE "broken|깨진" app/services/diagnostics.py
 
 # 5) 순회 비용 측정이 §14에 덧붙었는가 (순회에 넣은 경우)
-sed -n '/^## 14\./,/^## 15\.\|^---$/p' ../docs/OPENSQL_RESEARCH.md | grep -nE "resolve|제목 조인"
+sed -nE '/^## 14\./,/^(## 15\.|---)$/p' ../docs/OPENSQL_RESEARCH.md | grep -nE "resolve|제목 조인"
 
 # 6) 실제 응답 — 두 시선에서 깨진 링크 수가 다른가
+#    쿠키는 로그인해서 파일로 받는다. 자리표시자를 손으로 채우지 마라
+: "${TEST_ADMIN_PW:?m8 step 1 픽스처에서 쓴 관리자 비밀번호를 환경변수로 넣고 실행하라}"
 uvicorn app.main:app --port 8907 & sleep 3
-curl -s localhost:8907/api/diagnostics | grep -i broken
-curl -s localhost:8907/api/diagnostics -b "session=<쿠키>" | grep -i broken
+curl -s localhost:8907/api/diagnostics | grep -i broken                # 익명
+curl -s -c /tmp/oa-session.txt -X POST localhost:8907/api/auth/login -H 'content-type: application/json' \
+     -d "{\"username\":\"admin\",\"password\":\"$TEST_ADMIN_PW\"}" > /dev/null
+curl -s localhost:8907/api/diagnostics -b /tmp/oa-session.txt | grep -i broken   # 로그인한 시선
 kill %1
 
 # 7) 전체 검증

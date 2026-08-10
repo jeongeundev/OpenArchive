@@ -1,5 +1,11 @@
 # Step 6: diagnostics
 
+> ⚠️ **이 step은 한 레이어를 넘는다** — 진단 서비스·API·화면을 함께 만든다.
+> `harness.md`의 「하나의 step에서 하나의 레이어」에서 벗어나는 자리다. 쪼개지 않은 이유는
+> 자르는 기준이 **「단독 시연이 성립하는가」**여서(#38), API만 있는 중간 step은 보여줄 것이
+> 없기 때문이다. **커밋 스코프(`api`)가 변경 범위를 다 담지 못하므로 `summary`에 프론트
+> 변경도 적는다.**
+
 ## 배경 — 관계가 저장돼 있으면 진단은 집계 쿼리다
 
 #29의 2순위 첫 항목이다. m7이 관계를 이미 저장했으므로 **새 알고리즘 없이 집계 쿼리와
@@ -94,10 +100,14 @@ grep -c "VISIBLE_TO_USER" app/services/diagnostics.py   # 3 이상
 # 4) 손으로 쓴 술어가 없는가 — 출력이 없어야 한다
 grep -nE "visibility = 'public'" app/services/diagnostics.py
 
-# 5) 실제 응답 — seed 데이터 위에서 세 시선의 개수가 다른가
+# 5) 실제 응답 — seed 데이터 위에서 두 시선의 개수가 다른가
+#    쿠키는 로그인해서 파일로 받는다. 자리표시자를 손으로 채우지 마라
+: "${TEST_ADMIN_PW:?step 1 픽스처에서 쓴 관리자 비밀번호를 환경변수로 넣고 실행하라}"
 uvicorn app.main:app --port 8905 & sleep 3
 curl -s localhost:8905/api/diagnostics | head -30              # 익명
-curl -s localhost:8905/api/diagnostics -b "session=<쿠키>" | head -30
+curl -s -c /tmp/oa-session.txt -X POST localhost:8905/api/auth/login -H 'content-type: application/json' \
+     -d "{\"username\":\"admin\",\"password\":\"$TEST_ADMIN_PW\"}" > /dev/null
+curl -s localhost:8905/api/diagnostics -b /tmp/oa-session.txt | head -30   # 로그인한 시선
 kill %1
 #   → 두 응답의 개수가 달라야 한다
 

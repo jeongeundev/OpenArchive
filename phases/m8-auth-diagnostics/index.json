@@ -55,7 +55,7 @@
       "name": "diagnostics",
       "type": "feat",
       "scope": "api",
-      "desc": "관계 기반 진단 목록 — 고아·중복·미분류",
+      "desc": "관계 기반 진단 목록과 화면 — 고아·중복·미분류",
       "status": "pending"
     },
     {
@@ -63,7 +63,7 @@
       "name": "cluster-graph",
       "type": "feat",
       "scope": "frontend",
-      "desc": "주제 덩어리 그래프",
+      "desc": "주제 덩어리 그래프 — 집계 API와 SVG 화면",
       "status": "pending"
     },
     {
@@ -71,7 +71,7 @@
       "name": "admin-zombie-display",
       "type": "fix",
       "scope": "frontend",
-      "desc": "좀비 잡 상태 표시를 실제 동작에 맞게 정정",
+      "desc": "좀비 잡 상태 표시를 상태 API와 화면 양쪽에서 정정",
       "status": "pending"
     }
   ]

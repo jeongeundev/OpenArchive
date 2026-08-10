@@ -8,21 +8,24 @@ ADR-027이 원칙을 정하고 **강제 수단까지 지정**했다.
 > **`grep`으로 강제하지 마라** — 검사 범위에 테스트나 규칙 문서가 들어가면 문자열을 쪼개
 > 빠져나간다(M5에서 결함 3건의 원인). **쿼리별 행동 테스트**로 고정한다.
 
-지금 같은 술어가 **세 곳에 손으로 복사돼 있다.**
+지금 같은 술어가 **다섯 곳에 손으로 복사돼 있다.**
 
-| 자리 | 파일 |
-|---|---|
-| `SEARCH_SQL` | `backend/app/services/search.py:29` |
-| `_NEIGHBOR_CTE` | `backend/app/services/related.py:30` |
-| `IDENTICAL_SQL` | `backend/app/services/related.py:56` |
+| 자리 | 파일 | 별칭 |
+|---|---|---|
+| `SEARCH_SQL` | `backend/app/services/search.py:29` | `d` |
+| `_NEIGHBOR_CTE` | `backend/app/services/related.py:30` | `d` |
+| `IDENTICAL_SQL` | `backend/app/services/related.py:56` | `o` |
+| `list_documents` | `backend/app/services/documents.py:118` | 없음 (`FROM documents`) |
+| `get_document` | `backend/app/services/documents.py:141` | `d` (선언만 있고 술어는 별칭 없이 씀) |
 
-step 8이 그래프 순회 쿼리를 새로 만드는데, **네 번째 복사본이 생기기 전에** 상수를 세운다.
+step 8이 그래프 순회 쿼리를 새로 만드는데, **여섯 번째 복사본이 생기기 전에** 상수를 세운다.
 
-### ⚠️ 이 step은 일부러 2곳만 고친다
+### ⚠️ 이 step은 일부러 `_NEIGHBOR_CTE` 하나만 남긴다
 
 `_NEIGHBOR_CTE`는 **step 7이 통째로 지운다**(관련 문서가 edge 기반으로 바뀐다). 지금 고치면
-사흘 뒤 사라질 코드를 손보는 것이다. 그래서 **구현은 2곳**(`SEARCH_SQL`·`IDENTICAL_SQL`)만
-바꾸고, `_NEIGHBOR_CTE` 자리는 step 7이 새 쿼리를 쓰면서 상수를 쓴다.
+사흘 뒤 사라질 코드를 손보는 것이다. 그래서 **구현은 네 곳**(`SEARCH_SQL`·`IDENTICAL_SQL`·
+`list_documents`·`get_document`)을 바꾸고, `_NEIGHBOR_CTE` 자리는 step 7이 새 쿼리를 쓰면서
+상수를 쓴다.
 
 **대신 테스트는 지금 네 호출부를 전부 덮는다.** 테스트는 쿼리 형태와 무관하게 *"익명에게
 private가 보이는가"*를 묻기 때문에, step 7이 구현을 갈아엎어도 **그대로 살아남아 회귀를
@@ -36,9 +39,14 @@ private가 보이는가"*를 묻기 때문에, step 7이 구현을 갈아엎어�
   `apply_vector_search_settings`. **권한 필터는 벡터 정렬 서브쿼리 *안*에 있어야 한다**
   (ADR-018 재개정) — 상수로 빼면서 밖으로 옮기지 마라
 - `backend/app/services/related.py` — `IDENTICAL_SQL`과 `_NEIGHBOR_CTE`
+- `backend/app/services/documents.py` — `list_documents`(118행 근처)와 `get_document`(141행 근처).
+  둘 다 술어를 별칭 없이 쓴다
 - `backend/tests/conftest.py` — DB 픽스처와 문서 생성 헬퍼. 행동 테스트가 이 위에 선다
 - `backend/tests/test_search.py` · `test_related.py` — 기존 권한 관련 단언이 있는지.
   있으면 새 테스트와 겹치지 않게 한다
+- `backend/tests/test_documents_api.py` — **목록·상세의 권한 회귀는 이미 여기가 잡는다**
+  (`test_list_hides_other_users_private_documents_and_anonymous_sees_public_only`,
+  `test_detail_hides_other_users_private_document`). 새 테스트에서 중복해 쓰지 마라
 
 ## 작업
 
@@ -80,13 +88,16 @@ VISIBLE_TO_USER = "(d.visibility = 'public' OR d.owner_id = %(user)s)"
 - **모듈 docstring에 원칙 한 문장과 ADR-027 참조**를 적는다. 다음 사람이 이 파일을 열었을 때
   *"왜 상수인가"*가 거기 있어야 한다
 
-### 3) 두 곳에 적용한다
+### 3) 네 곳에 적용한다
 
-`SEARCH_SQL`과 `IDENTICAL_SQL`이 `VISIBLE_TO_USER`를 쓰도록 바꾼다.
+`SEARCH_SQL`·`IDENTICAL_SQL`·`list_documents`·`get_document`가 `VISIBLE_TO_USER`를 쓰도록 바꾼다.
 
 - **술어의 위치를 옮기지 마라.** `SEARCH_SQL`에서는 벡터 정렬 서브쿼리 **안**에 남아야 한다
   (ADR-018 재개정 — 밖으로 빼면 비공개 문서가 후보 자리를 차지해 손해만 본다)
 - `IDENTICAL_SQL`의 `o` 별칭을 `d`로 바꾼다. **다른 의미 변화가 없어야 한다**
+- `list_documents`는 `FROM documents`에 별칭 `d`를 붙인다(`FROM documents d`). 그것 말고는
+  바꾸지 마라 — 컬럼 참조는 별칭 없이도 그대로 동작한다
+- `get_document`는 이미 `FROM documents d`이므로 술어 줄만 상수로 갈아 끼운다
 - `_NEIGHBOR_CTE`는 **건드리지 않는다** (step 7이 지운다)
 
 ## Acceptance Criteria
@@ -103,20 +114,26 @@ grep -c "def test_" tests/test_visibility.py            # 8 이상
 grep -c "suggest_tags" tests/test_visibility.py         # 1 이상
 grep -c "identical" tests/test_visibility.py            # 1 이상
 
-# 3) 상수가 생겼고 두 곳이 그것을 쓰는가
+# 3) 상수가 생겼고 네 곳이 그것을 쓰는가
 grep -n "VISIBLE_TO_USER" app/services/visibility.py
 grep -n "VISIBLE_TO_USER" app/services/search.py
 grep -n "VISIBLE_TO_USER" app/services/related.py
+grep -c "VISIBLE_TO_USER" app/services/documents.py   # 2 이상
 
 # 4) 손으로 쓴 술어가 남아 있지 않은가 — 구현부만 검사한다 (테스트·문서는 범위 밖)
-grep -nE "visibility = 'public'" app/services/*.py app/routers/*.py | grep -v "visibility.py"
-#   → 출력이 없어야 한다
+#    glob(app/services/*.py)을 쓰지 마라. 없는 디렉토리를 만나면 zsh가 명령 자체를 죽여
+#    "출력이 없다"가 거짓으로 성립한다
+grep -rnE "visibility = 'public'" app/services app/api --include='*.py' | grep -v "app/services/visibility.py"
+#   → `related.py`의 `_NEIGHBOR_CTE` 안 **1줄만** 남아야 한다 (step 7이 지운다).
+#      다른 파일이나 다른 줄이 함께 나오면 실패다
 
 # 5) 술어가 벡터 정렬 서브쿼리 밖으로 나가지 않았는가 — 눈으로 확인할 것
 sed -n '/^SEARCH_SQL/,/^"""/p' app/services/search.py
 
-# 6) _NEIGHBOR_CTE는 그대로인가 — 출력이 없어야 한다
-git diff -U0 app/services/related.py | grep -E "^[+-].*_NEIGHBOR_CTE" | grep -v "^[+-][+-]"
+# 6) _NEIGHBOR_CTE 본문이 통째로 그대로인가 — 출력이 없어야 한다
+#    식별자가 적힌 줄만 보면 CTE **본문**의 술어를 고치는 회피가 빠져나간다. 블록을 통째로 비교한다
+diff <(git show HEAD:backend/app/services/related.py | sed -n '/^_NEIGHBOR_CTE/,/^"""$/p') \
+     <(sed -n '/^_NEIGHBOR_CTE/,/^"""$/p' app/services/related.py)
 
 # 7) 기존 테스트가 전부 살아 있는가 — 회귀 확인
 python -m pytest -q
