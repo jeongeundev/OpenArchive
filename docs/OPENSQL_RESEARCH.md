@@ -210,6 +210,7 @@ pgaudit, pg_cron, dbms_alert, dbms_pipe, dbms_assert, dbms_output, credcheck
 | `system_stats 3.2` | `system_stats` **3.0** | 패키지 버전 ≠ 확장 SQL 버전 |
 | `tibero_fdw 0.6.4` | `tibero_fdw` **1.0** | 위와 동일 |
 | `postgis 3.5.4` | `postgis` + `postgis_raster` `postgis_sfcgal` `postgis_tiger_geocoder` `postgis_topology` `address_standardizer(_data_us)` | 6종으로 전개 |
+| `opencrypto 1.0.0` | `opencrypto` 1.0.0 (**이름·버전 모두 일치**) | 이름이 같아 표에서 걸러졌으나 **내용이 이름에 드러나지 않는 경우**다. ARIA·SEED 국산 블록암호가 들어 있고, 이는 **출제자가 「기술 소개」에 직접 올린 항목**이다 |
 | (목록에 없음) | `dbms_alert` `dbms_assert` `dbms_job` `dbms_output` `dbms_pipe` `dbms_random` `dbms_rls` `dbms_scheduler` `dbms_sql` `utl_file` | METADATA에 없는 10종이 더 있다 |
 | (목록에 없음) | `opensql_license` 1.0 | 라이선스 검증 확장 |
 
@@ -217,6 +218,10 @@ pgaudit, pg_cron, dbms_alert, dbms_pipe, dbms_assert, dbms_output, credcheck
 실제 확장 이름은 [Tmax O2 Extensions 설치 문서](https://docs.tibero.com/tmaxopensql.en/tmax-o2-extensions/installation/o2-extension-installation)와
 `pg_available_extensions` 결과를 기준으로 사용해야 한다. `dbms_scheduler`는 `o2scheduler` 확장 모듈에
 의존하므로 설치할 때 `CASCADE`가 필요하다.
+
+이름이 같은 확장도 실제 내용을 열어봐야 한다. `utl_file`·`dbms_scheduler`처럼 이름만으로 내용을
+알 수 없고 아직 내부 기능을 확인하지 않은 확장이 남아 있으므로, 이름 불일치만 조사 축으로 삼으면
+같은 누락이 반복된다.
 
 `postgis`는 이 VM에서 설치 자체가 깨져 있다.
 
@@ -228,6 +233,54 @@ ERROR: "/home/opensql/lib/postgis-3.so" 라이브러리를 불러 올 수 없음
 이는 우연한 별도 장애가 아니다. `SETUP_OPENSQL.md`가 설치 중 SFCGAL 요구사항을 우회하는 절차를
 담고 있고 그 우회의 결과다. **`postgis`는 이 프로젝트에 접점이 없을 뿐 아니라 쓰려면 재설치부터
 해야 한다.** 이 실측은 확장 채택을 뜻하지 않으며, 현재 마이그레이션은 계속 `vector`만 생성한다.
+
+### opencrypto — ARIA·SEED 실측 [실측 2026-08-10]
+
+`CREATE EXTENSION opencrypto` 한 줄로 설치되며 preload는 필요 없다. 제공 함수는 33개이고
+`pgcrypto`와 함수 이름뿐 아니라 시그니처까지 같다.
+
+**ARIA 구현은 실제 표준 벡터와 일치한다.** RFC 5794(KS X 1213)의 공식 시험벡터를 바이트 단위로
+대조했으며 세 키 길이 모두 기대 암호문과 일치했다.
+
+| 키 길이 | 기대 암호문 |
+|---:|---|
+| 128 | `d718fbd6ab644c739da95f3be6451778` |
+| 192 | `26449c1805dbe7aa25a468ce263a9e79` |
+| 256 | `f92bd7c79fb72e2f2b8f80c1972d24fc` |
+
+**SEED의 `encrypt()`·`encrypt_iv()` 경로는 깨져 있다.** 모든 표기와 키 길이에서 실제 오류는
+`Cipher cannot be initialized`였다. 이는 `No such cipher algorithm`과 다르다. 알고리즘 이름은
+등록됐지만 암호 초기화 단계에서 실패한다는 뜻이다. 다음 세 가설은 실측으로 배제했다.
+
+1. OpenSSL 3.5.1의 **default** provider에 `SEED-CBC`와 `SEED-ECB`가 존재한다.
+2. `fips_enabled = 0`이다.
+3. `postgres`와 `opencrypto.so`가 같은 `libcrypto.so.3`를 사용한다.
+
+**PGP 경로는 동작하지만 표준 PGP가 아니다.** `pgp_sym_encrypt`는 미지원 값을 거부하므로 다른
+알고리즘으로 조용히 폴백한 결과가 아니다. 패킷의 알고리즘 ID도 `aria = 0x0b`, `seed = 0x0e`로
+구분된다. 그러나 두 ID는 RFC 4880 비표준이어서 표준 PGP 도구로 복호화할 수 없다.
+
+채택했다면 다음 네 제약에 걸린다.
+
+1. `pgcrypto`와 `digest`가 충돌하므로 같은 스키마에 공존할 수 없다. 별도 스키마에서는 가능하다.
+2. `public.gen_random_uuid()`를 코어 함수와 중복 정의한다. 이 함수는
+   `backend/migrations/002_tables.sql:12`에서 문서 ID 기본값으로 사용한다.
+3. 로컬 `pgvector/pgvector:pg17` 컨테이너와 PGDG에 모두 없다. #28의 Dockerfile 해법이 통하지 않는
+   첫 확장이다.
+4. 국산 해시인 HAS-160·LSH는 없고 블록암호만 제공한다.
+
+**채택하지 않는다.** 근거는 셋이다.
+
+1. 추출 텍스트를 암호화하면 벡터 검색뿐 아니라 m9의 `pg_trgm` RRF와 검색 스니펫까지 동시에
+   깨진다. `pg_trgm`은 #29가 `tsvector`를 버리고 고른 유일한 한국어 부분 일치 대안이다.
+2. TDE가 아니라 컬럼 암호화이고 키가 SQL 인자다. DB가 키를 관리하지 않으므로 “DB 계층에서
+   암호화”하는 구조가 성립하지 않는다.
+3. 남는 적용처도 이미 기각한 논리에 걸린다. `password_hash`는 해시이지 암호화가 아니고,
+   메타데이터 암호화는 화면에 드러나지 않으며(#29의 `pg_cron` 기각 논리), “민감 문서” 등급
+   신설은 요구에 없다(#37의 워크스페이스 기각 논리).
+
+AI 준비도 지도의 기준으로 재면 ARIA 컬럼 암호화는 외부 벡터 DB 구성에서도 RDBMS 쪽에서 똑같이
+할 수 있다. 오히려 현재 구조에서는 암호문과 평문 벡터가 한 테이블에 나란히 놓여 불리하다.
 
 ### 대회용 구성 지시 **[배포판·메일 확정]**
 
