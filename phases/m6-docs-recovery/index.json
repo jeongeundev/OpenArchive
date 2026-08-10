@@ -17,7 +17,10 @@
       "name": "research-failure-injection",
       "type": "docs",
       "desc": "Single 장애 주입 실측과 HA 컴포넌트 구성 실태를 조사 문서에 반영",
-      "status": "pending"
+      "status": "completed",
+      "summary": "Single 장애 주입 3개 시나리오와 OpenProxy·프로세스 감독 구성 실태 및 검증 한계를 조사 문서에 반영",
+      "started_at": "2026-08-10T16:50:56+0900",
+      "completed_at": "2026-08-10T16:54:16+0900"
     },
     {
       "step": 2,
