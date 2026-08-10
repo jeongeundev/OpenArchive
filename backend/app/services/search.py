@@ -7,6 +7,7 @@ from uuid import UUID
 import psycopg
 
 from app.embeddings.base import EmbeddingProvider
+from app.services.visibility import VISIBLE_TO_USER
 from app.vectors import to_pgvector_literal
 
 EF_SEARCH = 200
@@ -26,7 +27,7 @@ WITH candidates AS (
     JOIN documents d ON d.id = c.document_id
     WHERE (%(tags)s::text[] IS NULL OR d.tags && %(tags)s)
       AND (%(ctype)s::text IS NULL OR d.content_type = %(ctype)s)
-      AND (d.visibility = 'public' OR d.owner_id = %(user)s)
+      AND {VISIBLE_TO_USER}
     ORDER BY c.embedding <=> %(qvec)s::vector
     LIMIT %(k)s * {CANDIDATE_MULTIPLIER}
 ),

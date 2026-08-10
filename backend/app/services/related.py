@@ -6,6 +6,7 @@ from uuid import UUID
 import psycopg
 
 from app.services.search import EF_SEARCH, MAX_K, apply_vector_search_settings
+from app.services.visibility import VISIBLE_TO_USER
 
 # ADR-011 보강 4: 후보 LIMIT은 ef_search보다 작아야 한다. 문서당 1건으로 줄이는 쿼리라
 # 검색보다 넉넉히 과다 조회해야 하므로, ef_search 예산을 k 상한으로 나눠 배수를 역산한다.
@@ -47,14 +48,14 @@ ORDER BY b.dist LIMIT %(k)s
 """
 )
 
-IDENTICAL_SQL = """
-SELECT o.id, o.title
+IDENTICAL_SQL = f"""
+SELECT d.id, d.title
 FROM documents me
-JOIN documents o
-  ON o.content_hash = me.content_hash AND o.id <> me.id
+JOIN documents d
+  ON d.content_hash = me.content_hash AND d.id <> me.id
 WHERE me.id = %(id)s
-  AND (o.visibility = 'public' OR o.owner_id = %(user)s)
-ORDER BY o.created_at, o.id
+  AND {VISIBLE_TO_USER}
+ORDER BY d.created_at, d.id
 """
 
 TAG_SUGGESTION_SQL = (
