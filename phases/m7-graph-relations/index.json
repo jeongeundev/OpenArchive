@@ -83,7 +83,10 @@
       "type": "feat",
       "scope": "api",
       "desc": "관련 문서와 태그 추천을 저장된 관계 기반으로 교체 — API·MCP 응답까지",
-      "status": "pending"
+      "status": "completed",
+      "summary": "관련 문서·태그 추천을 권한 필터된 저장 edge로 전환하고 kind·no_edges를 REST와 MCP 문서 상세 응답까지 전달",
+      "started_at": "2026-08-11T02:03:56+0900",
+      "completed_at": "2026-08-11T02:09:51+0900"
     },
     {
       "step": 8,
