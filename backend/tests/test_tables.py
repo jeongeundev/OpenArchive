@@ -15,7 +15,13 @@
 import psycopg
 import pytest
 
-CORE_TABLES = {"documents", "document_versions", "document_chunks", "embedding_jobs"}
+CORE_TABLES = {
+    "documents",
+    "document_versions",
+    "document_chunks",
+    "embedding_jobs",
+    "document_edges",
+}
 
 # 임베딩 차원은 vector(1024) 고정이다 (ADR-003).
 VECTOR_1024 = "[" + ",".join(["0.1"] * 1024) + "]"
@@ -231,3 +237,99 @@ def test_job_defaults_are_filled_in(conn: psycopg.Connection):
     assert attempts == 0
     assert claimable is True
     assert (last_error, started_at, finished_at) == (None, None, None)
+
+
+def insert_edge(
+    conn: psycopg.Connection,
+    src_id: str,
+    dst_id: str,
+    *,
+    kind: str = "related",
+    src_chunk_index: int | None = None,
+    dst_chunk_index: int | None = None,
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO document_edges
+            (src_document_id, dst_document_id, kind,
+             src_chunk_index, dst_chunk_index, score)
+        VALUES (%s, %s, %s, %s, %s, 0.75)
+        """,
+        (src_id, dst_id, kind, src_chunk_index, dst_chunk_index),
+    )
+
+
+def test_document_edges_columns_match_the_document_node_model(conn: psycopg.Connection):
+    rows = conn.execute(
+        """
+        SELECT column_name, data_type, is_nullable
+        FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'document_edges'
+        ORDER BY ordinal_position
+        """
+    ).fetchall()
+
+    assert rows == [
+        ("src_document_id", "uuid", "NO"),
+        ("dst_document_id", "uuid", "NO"),
+        ("kind", "text", "NO"),
+        ("src_chunk_index", "integer", "YES"),
+        ("dst_chunk_index", "integer", "YES"),
+        ("score", "real", "NO"),
+    ]
+
+
+def test_document_edge_rejects_a_self_reference(conn: psycopg.Connection):
+    doc_id = insert_document(conn)
+
+    with pytest.raises(psycopg.errors.CheckViolation):
+        insert_edge(conn, doc_id, doc_id)
+
+
+def test_document_edge_rejects_an_unknown_kind(conn: psycopg.Connection):
+    src_id = insert_document(conn, content_hash="sha256:edge-kind-src")
+    dst_id = insert_document(conn, content_hash="sha256:edge-kind-dst")
+
+    with pytest.raises(psycopg.errors.CheckViolation):
+        insert_edge(conn, src_id, dst_id, kind="follows")
+
+
+@pytest.mark.parametrize("chunk_pair", [(None, None), (2, 7)])
+def test_document_edge_rejects_a_duplicate_chunk_pair(
+    conn: psycopg.Connection, chunk_pair: tuple[int | None, int | None]
+):
+    src_id = insert_document(conn, content_hash=f"sha256:edge-dup-src:{chunk_pair}")
+    dst_id = insert_document(conn, content_hash=f"sha256:edge-dup-dst:{chunk_pair}")
+    src_chunk_index, dst_chunk_index = chunk_pair
+
+    insert_edge(
+        conn,
+        src_id,
+        dst_id,
+        src_chunk_index=src_chunk_index,
+        dst_chunk_index=dst_chunk_index,
+    )
+
+    with pytest.raises(psycopg.errors.UniqueViolation):
+        insert_edge(
+            conn,
+            src_id,
+            dst_id,
+            src_chunk_index=src_chunk_index,
+            dst_chunk_index=dst_chunk_index,
+        )
+
+
+@pytest.mark.parametrize("deleted_side", ["src", "dst"])
+def test_deleting_either_document_cascades_to_edges(
+    conn: psycopg.Connection, deleted_side: str
+):
+    src_id = insert_document(conn, content_hash=f"sha256:edge-cascade-src:{deleted_side}")
+    dst_id = insert_document(conn, content_hash=f"sha256:edge-cascade-dst:{deleted_side}")
+    insert_edge(conn, src_id, dst_id)
+
+    deleted_id = src_id if deleted_side == "src" else dst_id
+    conn.execute("DELETE FROM documents WHERE id = %s", (deleted_id,))
+
+    (remaining,) = conn.execute("SELECT count(*) FROM document_edges").fetchone()
+    assert remaining == 0

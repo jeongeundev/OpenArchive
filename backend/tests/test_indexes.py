@@ -17,6 +17,10 @@ import psycopg
 import pytest
 
 INDEX_NAME = "idx_chunks_embedding"
+EDGE_INDEXES = {
+    "src": "idx_document_edges_src_kind",
+    "dst": "idx_document_edges_dst_kind",
+}
 
 # ADR-011이 검색 트랜잭션에서 끌어올릴 파라미터. 기본값은 40이다.
 EF_SEARCH_DEFAULT = "40"
@@ -220,3 +224,24 @@ def test_cosine_distance_orders_chunks_by_similarity(conn: psycopg.Connection):
     assert rows[0][1] == pytest.approx(0.0, abs=1e-6)
     assert rows[1][1] == pytest.approx(1 - 1 / 2**0.5, abs=1e-6)
     assert rows[2][1] == pytest.approx(1.0, abs=1e-6)
+
+
+@pytest.mark.parametrize("side", ["src", "dst"])
+def test_planner_can_use_each_document_edge_traversal_index(
+    conn: psycopg.Connection, side: str
+):
+    column = f"{side}_document_id"
+    index_name = EDGE_INDEXES[side]
+
+    with conn.transaction():
+        conn.execute("SET LOCAL enable_seqscan = off")
+        plan = "\n".join(
+            row[0]
+            for row in conn.execute(
+                f"EXPLAIN SELECT kind FROM document_edges WHERE {column} = %s AND kind = %s",
+                ("00000000-0000-0000-0000-000000000001", "related"),
+            ).fetchall()
+        )
+
+    assert index_name in plan, f"순회 인덱스를 타지 않았다:\n{plan}"
+    assert "Index" in plan, f"인덱스 계획이 아니다:\n{plan}"
