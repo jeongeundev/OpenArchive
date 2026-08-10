@@ -32,7 +32,8 @@
     },
     {
       "dir": "m6-docs-recovery",
-      "status": "pending"
+      "status": "completed",
+      "completed_at": "2026-08-10T17:16:47+0900"
     }
   ]
 }
