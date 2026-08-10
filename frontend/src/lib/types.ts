@@ -31,11 +31,20 @@ export interface DocumentDetail extends DocumentSummary {
 export interface SearchResult {
   document_id: string;
   title: string;
+  filename: string | null;
   tags: string[];
   content_type: ContentType;
   chunk_index: number;
   content: string;
   score: number;
+  based_on_version: number;
+  via: SearchVia | null;
+}
+
+export interface SearchVia {
+  from_document_id: string;
+  kind: string;
+  depth: number;
 }
 
 export interface SearchResponse {
@@ -47,6 +56,7 @@ export interface RelatedDocument {
   document_id: string;
   title: string;
   tags: string[];
+  kind: string;
   score: number;
 }
 
