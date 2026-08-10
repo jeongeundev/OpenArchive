@@ -8,7 +8,10 @@
       "type": "feat",
       "scope": "db",
       "desc": "users·sessions 테이블과 본문 길이 제한",
-      "status": "pending"
+      "status": "completed",
+      "summary": "users·sessions 인증 테이블과 사용자명 유일성·세션 CASCADE·추출 텍스트 500KB 상한을 DB 제약으로 추가",
+      "started_at": "2026-08-11T08:40:33+0900",
+      "completed_at": "2026-08-11T08:44:08+0900"
     },
     {
       "step": 1,
@@ -74,5 +77,6 @@
       "desc": "좀비 잡 상태 표시를 상태 API와 화면 양쪽에서 정정",
       "status": "pending"
     }
-  ]
+  ],
+  "created_at": "2026-08-11T08:40:33+0900"
 }
