@@ -28,7 +28,10 @@
       "type": "docs",
       "scope": "adr",
       "desc": "ADR-006 OpenProxy 서술 정정과 ADR-020의 HA/DR 분리 개정",
-      "status": "pending"
+      "status": "completed",
+      "summary": "ADR-006에 OpenProxy 실측 구성을 정정하고 ADR-020에서 HA·DR 및 OpenSQL·앱 복구 책임과 검증 한계를 분리",
+      "started_at": "2026-08-10T16:54:16+0900",
+      "completed_at": "2026-08-10T16:56:41+0900"
     },
     {
       "step": 3,
