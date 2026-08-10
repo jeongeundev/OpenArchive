@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-DB_STOP_CMD="${DB_STOP_CMD:-docker compose stop db}"
-DB_START_CMD="${DB_START_CMD:-docker compose start db}"
-DATABASE_URL="${DATABASE_URL:-postgresql://openarchive:openarchive@localhost:5433/openarchive}"
+OPENSQL_HOST="${OPENSQL_HOST:-192.168.64.4}"
+OPENSQL_SSH="${OPENSQL_SSH:-$OPENSQL_HOST}"
+DATABASE_URL="${DATABASE_URL:-postgresql://postgres:pg_password@$OPENSQL_HOST:6432/opensql}"
+PATRONI_URL="${PATRONI_URL:-http://$OPENSQL_HOST:8008}"
+PATRONI_LOG="${PATRONI_LOG:-/home/opensql/logs/patroni.log}"
 API_PORT="${API_PORT:-18000}"
 API_URL="http://127.0.0.1:${API_PORT}"
 PYTHON="backend/.venv/bin/python"
@@ -11,23 +13,33 @@ DEMO_USER="recovery-demo"
 
 API_PID=""
 WORKER_PID=""
-DB_WAS_STOPPED=0
+APP_PROBE_PID=""
+PATRONI_LOG_LINE=0
+T0_REMOTE=""
 DOCUMENT_IDS=()
 LAST_DOCUMENT_ID=""
+LAST_STAGE="스크립트 시작"
+LAST_STAGE_AT="$(date '+%Y-%m-%d %H:%M:%S')"
 TMP_DIR="$(mktemp -d)"
 API_LOG="$TMP_DIR/api.log"
 WORKER_LOG="$TMP_DIR/worker.log"
 
+mark_stage() {
+  LAST_STAGE="$1"
+  LAST_STAGE_AT="$(date '+%Y-%m-%d %H:%M:%S')"
+  echo "단계: $LAST_STAGE ($LAST_STAGE_AT)"
+}
+
 fail() {
   echo "실패: $*" >&2
+  echo "마지막 성공 단계: $LAST_STAGE ($LAST_STAGE_AT)" >&2
   echo "API 로그: $API_LOG" >&2
   echo "워커 로그: $WORKER_LOG" >&2
   exit 1
 }
 
-run_db_command() {
-  local command="$1"
-  bash -c "$command"
+elapsed() {
+  "$PYTHON" -c 'import sys, time; print(f"{time.time() - float(sys.argv[1]):.2f}s")' "$1"
 }
 
 db_value() {
@@ -38,13 +50,32 @@ import psycopg
 
 queries = {
     "ready": "SELECT 1",
+    "schema": "SELECT to_regclass(%s) IS NOT NULL",
     "documents": "SELECT count(*) FROM documents",
-    "chunks": "SELECT count(*) FROM document_chunks",
+    "active_jobs": "SELECT count(*) FROM embedding_jobs WHERE status = ANY(%s)",
+    "inconsistent": "SELECT count(DISTINCT c.document_id) FROM document_chunks c JOIN documents d ON d.id = c.document_id WHERE c.version <> d.version",
 }
 query = queries[sys.argv[1]]
-with psycopg.connect(os.environ["DATABASE_URL"]) as conn:
-    print(conn.execute(query).fetchone()[0])
+params = {
+    "schema": ("documents",),
+    "active_jobs": (["pending", "processing"],),
+}.get(sys.argv[1])
+with psycopg.connect(os.environ["DATABASE_URL"], connect_timeout=3) as conn:
+    print(conn.execute(query, params).fetchone()[0])
 ' "$metric"
+}
+
+patroni_value() {
+  local path="$1"
+  curl -fsS --max-time 3 "$PATRONI_URL" |
+    "$PYTHON" -c '
+import json, sys
+
+value = json.load(sys.stdin)
+for part in sys.argv[1].split("."):
+    value = value[part]
+print(value)
+' "$path"
 }
 
 status_value() {
@@ -72,7 +103,6 @@ wait_until() {
     sleep 0.1
   done
   echo "타임아웃: $description" >&2
-  curl -sS --max-time 2 "$API_URL/api/system/status" >&2 || true
   return 1
 }
 
@@ -93,43 +123,74 @@ consistent() {
   [[ "$(status_value inconsistent_documents 2>/dev/null)" == "0" ]]
 }
 
-worker_logged_db_failure() {
-  grep -q "처리 루프 실패" "$WORKER_LOG"
+app_exception_seen() {
+  [[ -s "$TMP_DIR/app-exception.txt" ]]
 }
 
-worker_logged_zombie_recovery() {
-  grep -Eq "좀비 잡 [0-9]+건을 pending으로 회수" "$WORKER_LOG"
+# 로그 사건의 경과는 로그가 스스로 적어둔 시각에서 뺀다. ssh 폴링이 성공한 시각을 쓰면
+# 폴링 주기·왕복 지연이 그대로 값이 되어 46 ms 급 사건을 초 단위로 부풀린다.
+# 소급 계산이므로 언제 읽어도 값이 같다 — 그래서 t4 뒤로 미뤄 읽어도 t2·t3이 왜곡되지 않는다.
+# t0를 VM 시계로 따로 받아두는 이유: 로그 시각과 뺄셈하려면 같은 시계여야 한다.
+patroni_log_event_offset() {
+  local pattern="$1"
+  ssh -o BatchMode=yes -o ConnectTimeout=4 "$OPENSQL_SSH" \
+    "sudo -n tail -n +$((PATRONI_LOG_LINE + 1)) '$PATRONI_LOG' 2>/dev/null" |
+    T0_REMOTE="$T0_REMOTE" "$PYTHON" -c '
+import os, sys
+from datetime import datetime
+
+pattern = sys.argv[1]
+t0 = datetime.strptime(os.environ["T0_REMOTE"], "%Y-%m-%d %H:%M:%S.%f")
+for line in sys.stdin:
+    if pattern not in line:
+        continue
+    try:
+        # Patroni 기본 포맷: "2026-08-10 17:05:12,345 WARNING: ..."
+        stamp = datetime.strptime(line[:23], "%Y-%m-%d %H:%M:%S,%f")
+    except ValueError:
+        continue
+    print(f"{(stamp - t0).total_seconds():.3f}s")
+    break
+else:
+    sys.exit(1)
+' "$pattern"
 }
 
-processing_visible() {
-  local count
-  count="$(status_value jobs.processing 2>/dev/null || echo 0)"
-  (( count >= 1 ))
+wait_log_offset() {
+  local pattern="$1"
+  local timeout="$2"
+  local deadline=$((SECONDS + timeout))
+  local offset
+  while (( SECONDS < deadline )); do
+    if offset="$(patroni_log_event_offset "$pattern")"; then
+      printf '%s' "$offset"
+      return 0
+    fi
+    sleep 0.5
+  done
+  echo "타임아웃: Patroni 로그에서 '$pattern'을 찾지 못했습니다" >&2
+  return 1
 }
 
 cleanup() {
   local exit_code=$?
   trap - EXIT INT TERM
 
-  if (( DB_WAS_STOPPED )); then
-    run_db_command "$DB_START_CMD" >/dev/null 2>&1 || true
-    wait_until 30 "정리 중 DB 재기동" db_ready >/dev/null 2>&1 || true
-    DB_WAS_STOPPED=0
+  if [[ -n "$WORKER_PID" ]] && kill -0 "$WORKER_PID" 2>/dev/null; then
+    kill -CONT "$WORKER_PID" 2>/dev/null || true
   fi
-
+  if [[ -n "$APP_PROBE_PID" ]] && kill -0 "$APP_PROBE_PID" 2>/dev/null; then
+    kill "$APP_PROBE_PID" 2>/dev/null || true
+    wait "$APP_PROBE_PID" 2>/dev/null || true
+  fi
   if [[ -n "$API_PID" ]] && kill -0 "$API_PID" 2>/dev/null; then
-    # 배열이 비어 있을 수 있다 — 업로드 전에 실패하면 그렇다. macOS 기본 bash 3.2는
-    # set -u에서 빈 배열 전개를 unbound variable로 죽이고, 그러면 아래 프로세스 정리가
-    # 통째로 건너뛰어져 API·워커가 고아로 남는다.
     for document_id in ${DOCUMENT_IDS[@]+"${DOCUMENT_IDS[@]}"}; do
       curl -fsS --max-time 5 -X DELETE \
         -H "X-User-Id: $DEMO_USER" \
         "$API_URL/api/documents/$document_id" >/dev/null 2>&1 || true
     done
   fi
-
   if [[ -n "$WORKER_PID" ]] && kill -0 "$WORKER_PID" 2>/dev/null; then
-    kill -CONT "$WORKER_PID" 2>/dev/null || true
     kill "$WORKER_PID" 2>/dev/null || true
     wait "$WORKER_PID" 2>/dev/null || true
   fi
@@ -137,7 +198,11 @@ cleanup() {
     kill "$API_PID" 2>/dev/null || true
     wait "$API_PID" 2>/dev/null || true
   fi
-  rm -rf "$TMP_DIR"
+  if (( exit_code == 0 )); then
+    rm -rf "$TMP_DIR"
+  else
+    echo "진단 파일을 보존했습니다: $TMP_DIR" >&2
+  fi
   exit "$exit_code"
 }
 trap cleanup EXIT INT TERM
@@ -164,9 +229,24 @@ edit_document() {
     "$API_URL/api/documents/$document_id" >/dev/null
 }
 
-[[ -x "$PYTHON" ]] || fail "$PYTHON 실행 파일이 필요합니다"
+echo "복구 데모 시작: 실 OpenSQL의 DB 프로세스 장애 자동 복구를 관측합니다."
 
-echo "복구 데모 시작: 애플리케이션 재연결, 잡 재개, 좀비 회수, 정합성 수렴을 검증합니다."
+[[ -x "$PYTHON" ]] || fail "$PYTHON 실행 파일이 필요합니다"
+"$PYTHON" -c 'import socket,sys; socket.create_connection((sys.argv[1], int(sys.argv[2])), timeout=3).close()' \
+  "$OPENSQL_HOST" 6432 >/dev/null 2>&1 || fail "OpenSQL OpenProxy($OPENSQL_HOST:6432)에 접속할 수 없습니다"
+curl -fsS --max-time 3 "$PATRONI_URL" >/dev/null || fail "Patroni REST($PATRONI_URL)에 접속할 수 없습니다"
+ssh -o BatchMode=yes -o ConnectTimeout=4 "$OPENSQL_SSH" 'sudo -n true' >/dev/null || fail "SSH 또는 비밀번호 없는 sudo를 사용할 수 없습니다: $OPENSQL_SSH"
+[[ "$(db_value schema 2>/dev/null)" == "True" ]] || fail "OpenProxy pool 대상 DB에 documents 테이블이 없습니다"
+mark_stage "0. 사전 점검 완료"
+
+BASE_ROLE="$(patroni_value role)"
+BASE_TL="$(patroni_value timeline)"
+BASE_DOCUMENTS="$(db_value documents)"
+[[ "$(db_value ready)" == "1" ]] || fail "기준선 DB 쿼리가 실패했습니다"
+[[ "$BASE_ROLE" == "primary" ]] || fail "기준선 Patroni role이 primary가 아닙니다: $BASE_ROLE"
+[[ "$(db_value active_jobs)" == "0" ]] || fail "기준선에 미처리 잡이 남아 있습니다"
+[[ "$(db_value inconsistent)" == "0" ]] || fail "기준선 정합성 카운터가 0이 아닙니다"
+mark_stage "1. 기준선 확인: role=$BASE_ROLE, TL=$BASE_TL, inconsistent=0"
 
 (
   cd backend
@@ -183,82 +263,121 @@ wait_until 30 "API 기동" api_ready || fail "API가 기동하지 않았습니�
 ) >"$WORKER_LOG" 2>&1 &
 WORKER_PID=$!
 
-printf '%s\n' "복구 데모 기준 문서 1" >"$TMP_DIR/a.txt"
-printf '%s\n' "복구 데모 기준 문서 2" >"$TMP_DIR/b.txt"
-upload_document "$TMP_DIR/a.txt"
-DOC_A="$LAST_DOCUMENT_ID"
-upload_document "$TMP_DIR/b.txt"
+printf '%s\n' "OpenSQL DB 프로세스 장애 복구 데모 문서" >"$TMP_DIR/document.txt"
+upload_document "$TMP_DIR/document.txt"
+DOC_ID="$LAST_DOCUMENT_ID"
 wait_until 30 "기준 문서 임베딩" jobs_drained || fail "기준 문서의 잡이 완료되지 않았습니다"
-wait_until 10 "기준 정합성" consistent || fail "기준 상태의 정합성 카운터가 0이 아닙니다"
+wait_until 10 "기준 정합성" consistent || fail "기준 문서의 정합성 카운터가 0이 아닙니다"
 
-BASE_DOCUMENTS="$(db_value documents)"
-BASE_CHUNKS="$(db_value chunks)"
-echo "A-1 기준 상태: documents=$BASE_DOCUMENTS, chunks=$BASE_CHUNKS, inconsistent=0"
-
+# 워커를 잠깐 세워 장애 시점에 미처리 잡이 남아 있는 상태를 만든다. 시나리오를 만드는
+# 장치이며 복구 경로에 개입하는 것이 아니다 — 재개(kill -CONT)는 SIGKILL과 같은 순간이다.
 kill -STOP "$WORKER_PID"
-"$PYTHON" -c 'import json,sys; json.dump({"content":"복구 데모 기준 문서 1 수정", "version":1}, open(sys.argv[1], "w"))' "$TMP_DIR/edit-a.json"
-edit_document "$DOC_A" "$TMP_DIR/edit-a.json"
-[[ "$(status_value jobs.pending)" == "1" ]] || fail "A-3 pending 잡이 1건이 아닙니다"
-[[ "$(status_value inconsistent_documents)" == "1" ]] || fail "A-3 정합성 어긋남이 1건이 아닙니다"
-echo "A-3 DB 정지 전: pending=1, inconsistent=1"
+"$PYTHON" -c 'import json,sys; json.dump({"content":"OpenSQL DB 프로세스 장애 중 재개할 수정 텍스트", "version":1}, open(sys.argv[1], "w"))' "$TMP_DIR/edit.json"
+edit_document "$DOC_ID" "$TMP_DIR/edit.json"
+[[ "$(status_value jobs.pending)" == "1" ]] || fail "장애 직전 pending 잡이 1건이 아닙니다"
+[[ "$(status_value inconsistent_documents)" == "1" ]] || fail "장애 직전 정합성 어긋남이 1건이 아닙니다"
+mark_stage "2. 파이프라인 가동: pending=1, inconsistent=1"
 
-DB_WAS_STOPPED=1
-run_db_command "$DB_STOP_CMD" || fail "DB 정지 명령이 실패했습니다"
+DATABASE_URL="$DATABASE_URL" PROBE_DIR="$TMP_DIR" "$PYTHON" -c '
+import os, pathlib, time
+import psycopg
+
+root = pathlib.Path(os.environ["PROBE_DIR"])
+with psycopg.connect(os.environ["DATABASE_URL"], connect_timeout=3) as conn:
+    root.joinpath("app-probe-ready").touch()
+    while not root.joinpath("app-probe-trigger").exists():
+        time.sleep(0.01)
+    try:
+        conn.execute("SELECT 1").fetchone()
+    except psycopg.OperationalError as exc:
+        name = f"{type(exc).__module__}.{type(exc).__name__}"
+        root.joinpath("app-exception.txt").write_text(f"{time.time()}|{name}")
+' >"$TMP_DIR/app-probe.log" 2>&1 &
+APP_PROBE_PID=$!
+wait_until 5 "앱 DB 프로브 연결" test -f "$TMP_DIR/app-probe-ready" || fail "장애 전 앱 DB 연결을 준비하지 못했습니다"
+
+if ssh -o BatchMode=yes -o ConnectTimeout=4 "$OPENSQL_SSH" "sudo -n test -r '$PATRONI_LOG'"; then
+  # 리다이렉션은 sudo가 아니라 원격 셸이 수행한다. /home/opensql이 drwx------이라
+  # `sudo -n wc -l < file`은 허가 거부로 떨어지고 t2·t3이 영영 미관측이 된다.
+  PATRONI_LOG_LINE="$(ssh -o BatchMode=yes -o ConnectTimeout=4 "$OPENSQL_SSH" "sudo -n wc -l '$PATRONI_LOG'" 2>/dev/null | awk '{print $1+0}')"
+  [[ -n "$PATRONI_LOG_LINE" ]] || PATRONI_LOG_LINE=0
+else
+  echo "참고: Patroni 로그를 찾거나 읽을 수 없습니다: $PATRONI_LOG (로그 사건은 미관측으로 계속합니다)"
+fi
+
+T0_EPOCH="$($PYTHON -c 'import time; print(time.time())')"
+# 원격 셸에는 이쪽의 `set -e`가 전파되지 않는다. `;`로 이으면 postgres 확인이 실패해도
+# kill -9이 그대로 실행되고, 종료 코드는 마지막 printf의 0이라 `|| fail`이 죽은 코드가 된다.
+# `&&`로 이어 어느 단계가 실패하든 kill 전에 멈추고 실패 코드가 그대로 올라오게 한다.
+KILL_RESULT="$(ssh -o BatchMode=yes -o ConnectTimeout=4 "$OPENSQL_SSH" \
+  "pid=\$(sudo -n head -1 /home/opensql/data/pgsql/postmaster.pid) &&
+   test \"\$(sudo -n ps -o comm= -p \"\$pid\" | tr -d ' ')\" = postgres &&
+   t0=\$(date '+%Y-%m-%d %H:%M:%S.%6N') &&
+   sudo -n kill -9 \"\$pid\" &&
+   printf '%s|%s' \"\$pid\" \"\$t0\"")" || fail "postmaster 부모 프로세스 SIGKILL에 실패했습니다"
+POSTMASTER_PID="${KILL_RESULT%%|*}"
+T0_REMOTE="${KILL_RESULT#*|}"
+[[ "$POSTMASTER_PID" =~ ^[0-9]+$ ]] || fail "postmaster PID를 확인하지 못했습니다: $KILL_RESULT"
+# `%6N`은 GNU date의 확장이다. VM이 아닌 곳에서 돌리면 리터럴로 남아 t2·t3 계산에서
+# 알아보기 어려운 예외가 되므로 여기서 형식을 확인하고 끊는다.
+[[ "$T0_REMOTE" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}\ [0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{6}$ ]] ||
+  fail "VM 시계를 읽지 못했습니다 (GNU date가 필요합니다): $T0_REMOTE"
+touch "$TMP_DIR/app-probe-trigger"
 kill -CONT "$WORKER_PID"
-wait_until 45 "워커의 DB 연결 실패 로그" worker_logged_db_failure || fail "워커에서 DB 연결 실패를 관측하지 못했습니다"
-kill -0 "$WORKER_PID" 2>/dev/null || fail "DB 정지 중 워커 프로세스가 종료됐습니다"
+echo "★ 장애 주입 1회: t0 +0.00s postmaster PID $POSTMASTER_PID SIGKILL"
+mark_stage "3. postmaster SIGKILL 완료"
 
-SEARCH_CODE="$(curl -sS --max-time 8 -o /dev/null -w '%{http_code}' \
-  -X POST -H "Content-Type: application/json" \
-  --data '{"query":"복구"}' "$API_URL/api/search" || true)"
-[[ "$SEARCH_CODE" != 2* ]] || fail "DB 정지 중 검색이 성공했습니다"
-echo "A-5 중단 구간: worker_alive=yes, search_http=$SEARCH_CODE, failure_log=observed"
+wait_until 15 "애플리케이션 OperationalError 계열 예외" app_exception_seen || fail "앱 DB 클라이언트에서 연결 예외를 관측하지 못했습니다"
+T1_EPOCH="$(cut -d '|' -f 1 "$TMP_DIR/app-exception.txt")"
+T1_CLASS="$(cut -d '|' -f 2 "$TMP_DIR/app-exception.txt")"
+T1="$($PYTHON -c 'import sys; print(f"{float(sys.argv[1]) - float(sys.argv[2]):.2f}s")' "$T1_EPOCH" "$T0_EPOCH")"
 
-run_db_command "$DB_START_CMD" || fail "DB 재기동 명령이 실패했습니다"
-DB_WAS_STOPPED=0
-wait_until 30 "DB 접속 복구" db_ready || fail "DB 접속이 복구되지 않았습니다"
-wait_until 45 "A 시나리오 잡 재개" jobs_drained || fail "A 시나리오 잡이 0으로 수렴하지 않았습니다"
-wait_until 10 "A 시나리오 정합성 수렴" consistent || fail "A 시나리오 정합성이 0으로 수렴하지 않았습니다"
-[[ "$(db_value documents)" == "$BASE_DOCUMENTS" ]] || fail "A 시나리오에서 문서 수가 달라졌습니다"
-echo "A-7 복구 후: pending 1 -> 0, inconsistent 1 -> 0, documents=$BASE_DOCUMENTS"
+# 아래 세 값은 폴링으로 재는 것이므로 반드시 사건 순서대로 즉시 관측해야 한다.
+# Patroni 로그 사건(t2·t3)을 여기 앞에 두면 그 대기 시간이 t4에 그대로 더해져
+# t4 >= t3이 구조적으로 보장돼 버린다. 로그는 소급 계산이 가능하니 뒤로 미룬다.
+wait_until 30 "OpenProxy 6432 재접속" db_ready || fail "OpenProxy 6432를 통한 DB 접속이 복구되지 않았습니다"
+T4="$(elapsed "$T0_EPOCH")"
+wait_until 45 "pending 잡 재개" jobs_drained || fail "pending 잡이 0으로 수렴하지 않았습니다"
+T5="$(elapsed "$T0_EPOCH")"
+wait_until 10 "정합성 수렴" consistent || fail "inconsistent_documents가 0으로 수렴하지 않았습니다"
+T6="$(elapsed "$T0_EPOCH")"
 
-LONG_TEXT_FILE="$TMP_DIR/long.txt"
-"$PYTHON" -c 'import sys; open(sys.argv[1], "w").write(("좀비 회수 검증용 긴 추출 텍스트 문단입니다. " * 5000) + "\n")' "$LONG_TEXT_FILE"
-LONG_DOCUMENT_IDS=()
-for index in 1 2 3 4 5 6; do
-  printf '복구 데모 추가 문서 %s\n' "$index" >"$TMP_DIR/short-$index.txt"
-  upload_document "$TMP_DIR/short-$index.txt"
-  LONG_DOCUMENT_IDS+=("$LAST_DOCUMENT_ID")
-done
-wait_until 45 "B 시나리오 기준 문서 임베딩" jobs_drained || fail "B 시나리오 기준 잡이 완료되지 않았습니다"
-kill -STOP "$WORKER_PID"
-"$PYTHON" -c 'import json,sys; json.dump({"content":open(sys.argv[1]).read(), "version":1}, open(sys.argv[2], "w"))' "$LONG_TEXT_FILE" "$TMP_DIR/edit-long.json"
-for document_id in "${LONG_DOCUMENT_IDS[@]}"; do
-  edit_document "$document_id" "$TMP_DIR/edit-long.json"
-done
-[[ "$(status_value jobs.pending)" == "6" ]] || fail "B-1 pending 잡이 6건이 아닙니다"
-echo "B-1 워커 정지 상태: pending=6"
+T2="미관측"
+T3="미관측"
+if (( PATRONI_LOG_LINE > 0 )); then
+  T2="$(wait_log_offset "Postgresql is not running" 15)" || T2="미관측"
+  T3="$(wait_log_offset "starting primary after failure" 15)" || T3="미관측"
+fi
+mark_stage "4. 자동 복구 관측 완료"
 
-kill -CONT "$WORKER_PID"
-wait_until 15 "processing 잡 관측" processing_visible || fail "실제 워커가 선점한 processing 잡을 포착하지 못했습니다"
-kill -KILL "$WORKER_PID"
-wait "$WORKER_PID" 2>/dev/null || true
-WORKER_PID=""
-PROCESSING_AFTER_KILL="$(status_value jobs.processing)"
-(( PROCESSING_AFTER_KILL >= 1 )) || fail "워커 종료 후 processing 잡이 남지 않았습니다"
-echo "B-3 워커 강제 종료 후: processing=$PROCESSING_AFTER_KILL"
+FINAL_TL="$(patroni_value timeline)"
+FINAL_ROLE="$(patroni_value role)"
+[[ "$FINAL_ROLE" == "primary" ]] || fail "복구 후 Patroni role이 primary가 아닙니다: $FINAL_ROLE"
+[[ "$FINAL_TL" == "$BASE_TL" ]] || fail "Single 복구 중 timeline이 바뀌었습니다: TL $BASE_TL -> $FINAL_TL"
+curl -fsS --max-time 5 -X DELETE -H "X-User-Id: $DEMO_USER" \
+  "$API_URL/api/documents/$DOC_ID" >/dev/null || fail "데모 문서를 정리하지 못했습니다"
+DOCUMENT_IDS=()
+[[ "$(db_value documents)" == "$BASE_DOCUMENTS" ]] || fail "데모 문서 정리 후 기존 문서 수가 달라졌습니다"
+mark_stage "5. 승격 없음 확인: role=$FINAL_ROLE, TL=$FINAL_TL"
 
-: >"$WORKER_LOG"
-(
-  cd backend
-  exec env DATABASE_URL="$DATABASE_URL" EMBEDDING_PROVIDER=fake ZOMBIE_TIMEOUT_MINUTES=0 \
-    .venv/bin/python -m app.worker
-) >"$WORKER_LOG" 2>&1 &
-WORKER_PID=$!
-wait_until 15 "좀비 잡 회수 로그" worker_logged_zombie_recovery || fail "좀비 잡 회수 로그를 관측하지 못했습니다"
-wait_until 90 "B 시나리오 잡 완료" jobs_drained || fail "B 시나리오 잡이 0으로 수렴하지 않았습니다"
-wait_until 10 "B 시나리오 정합성 수렴" consistent || fail "B 시나리오 정합성이 0으로 수렴하지 않았습니다"
-echo "B-4 재기동 후: processing $PROCESSING_AFTER_KILL -> 0, pending 6 -> 0, inconsistent=0"
-
-echo "완료: Single 구성에서 애플리케이션 복구 경로와 버전 일관성·최신 수렴을 확인했습니다."
-echo "이 데모는 Patroni 리더 선출·승격과 그 소요 시간을 증명하지 않습니다."
+echo
+echo "복구 타임라인"
+echo "  t0  +0.00s  postmaster PID $POSTMASTER_PID SIGKILL"
+echo "  t1  +$T1  앱 첫 예외: $T1_CLASS"
+echo "  t2  +$T2  Patroni: Postgresql is not running        (로그 시각)"
+echo "  t3  +$T3  Patroni: starting primary after failure  (로그 시각)"
+echo "  t4  +$T4  OpenProxy 6432 재접속 성공  (앱 관측)"
+echo "  t5  +$T5  pending/processing 잡 0"
+echo "  t6  +$T6  inconsistent_documents=0"
+echo
+echo "  t2·t3은 Patroni 로그가 적은 시각이고, 나머지는 앱이 관측한 시각이다."
+echo "  t4는 PostgreSQL이 접속을 수락한 시점이 아니라 앱이 재접속에 성공한 시점이므로"
+echo "  PostgreSQL 기동 완료보다 폴링 주기만큼 뒤에 온다."
+echo
+echo "완료: DB 프로세스 장애로부터의 자동 복구를 확인했습니다."
+echo "      Patroni가 감지하고 스스로 재기동했습니다. 복구 과정에 사람의 개입은 없었고,"
+echo "      주입한 장애는 postmaster SIGKILL 1회입니다."
+echo
+echo "한계: 노드 사망은 복구되지 않습니다. 노드 2대 이상이 물리적 전제이며,"
+echo "      사무국 지시에 따른 Single 구성의 제약입니다."
+echo "      리더 선출·승격은 일어나지 않았습니다 (timeline 유지: TL $FINAL_TL)."

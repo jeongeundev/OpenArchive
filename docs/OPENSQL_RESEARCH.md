@@ -42,10 +42,10 @@ pg_repack 1.5.2
 |---|---|---|---|
 | **PostgreSQL** | 16.8 또는 14.13 ⚠️ | **17.8** — 둘 다 아니었다 | 로컬 컨테이너를 `pg17`로 (ADR-007). 문서 전반의 "PostgreSQL 16" 표기 수정 |
 | **pgvector** | **[미확인]** — 문서 어디에도 없음 | **0.8.1** | HNSW·`iterative_scan`·`avg(vector)` 전부 사용 가능 (ADR-002, ADR-011, ADR-018) |
-| pgvectorscale | 번들됨(버전 미확인) | 0.9.0 | ADR-002 대안 유지 |
+| pgvectorscale | 번들됨(버전 미확인) | `vectorscale` 0.9.0 | METADATA 이름을 그대로 SQL에 쓰면 실패 (§0 번들 확장 실측) |
 | etcd | 3.5.6 / 3.5.21 | 3.6.5 | 영향 없음 |
 | 패키지 예시 | `Tmax_OpenSQL_3.18.1.3` | `3.17.8.7` | 문서 예시 정정 |
-| 확장 목록 | 12종 | **13종** — `pg_repack 1.5.2` 추가 | 영향 없음 |
+| 확장 목록 | 12종 | **30종 이상** — METADATA 13종보다 많고 실제 SQL 이름도 다름 | 이름을 그대로 SQL에 쓰면 실패 (§0 번들 확장 실측) |
 
 > **교훈**: `PROJECT_CONTEXT.md`의 "PostgreSQL 메이저 버전 확인"이 M0 최우선 항목 중 하나였는데, 문서에는 16.8과 14.13이 함께 언급되어 있어 둘 중 하나로 추정했다. **실제는 17.8로 후보에 없던 값이었다.** 문서 추정으로 설계를 고정하지 않고 미확인으로 표기해둔 것이 맞았다.
 
@@ -61,7 +61,7 @@ pg_repack 1.5.2
 |---|---|---|
 | PostgreSQL | 17.8 | ✅ `17.8 on x86_64-pc-linux-gnu, gcc 11.5.0` |
 | pgvector | 0.8.1 | ✅ `0.8.1` |
-| pgvectorscale | 0.9.0 | ✅ `0.9.0` |
+| vectorscale | 0.9.0 | ✅ `0.9.0` (METADATA 이름은 `pgvectorscale`) |
 | `max_connections` | 100 | ✅ `100` |
 
 **미확인이었다가 해소된 항목**
@@ -83,7 +83,140 @@ pg_repack 1.5.2
 |---|---|
 | ~~LISTEN 연결의 `idle_timeout` 실동작~~ | ✅ **M1 이후 측정됨** (§12 6번) — 유휴 세션은 끊기지 않았으나 애초에 알림이 오지 않는다. **폴링 주기 상향은 철회됐다** (§7-3) |
 | ~~`avg`가 HNSW 인덱스를 타는지~~ | ✅ **M1 이후 측정됨** (§12 12·16·17번) — `avg`는 무죄. ~~문제는 벡터 정렬 서브쿼리 안의 JOIN이었다~~ → **17번 재측정에서 반증됨. JOIN은 막지 않는다.** 실제 변수는 `random_page_cost`였다 (16번) |
-| Failover | ⛔ Single 구성이라 **원리적으로 불가** (ADR-020) |
+| Failover | ⛔ replica가 없어 리더 선출·승격은 불가. 다만 **PostgreSQL 프로세스 장애 자동 복구는 실측 완료** (아래 Single 장애 주입 실측, ADR-020) |
+
+### Single 장애 주입 실측 [실측 2026-08-09]
+
+**측정 조건**: 2026-08-09 00:12~00:22 KST, `opensql-dev`(192.168.64.4). Patroni
+REST(8008)·etcd v3 HTTP(2379)·OpenProxy(6432)·PostgreSQL 직결(5432)을 0.5~1초 간격으로
+동시에 찌르는 프로버의 결과를 VM의 `patroni.log`·`openproxy.log`와 대조했다.
+
+**정지 상태에서 확인된 클러스터 파라미터**
+
+| 항목 | 값 |
+|---|---|
+| Patroni | 4.0.5 · scope `opensql` · member `postgresql1` · role `primary` · **timeline 1** |
+| 루프 파라미터 | `ttl=30` `loop_wait=10` `retry_timeout=10` **`failsafe_mode=true`** |
+| `patronictl history` | **`[]`** — 이 클러스터는 전환을 한 번도 겪은 적이 없다 |
+| etcd | 3.6.5 · 단일 멤버 · `leader`·`members/postgresql1`가 하나의 리스에 묶여 **TTL 30초** |
+
+**시나리오 ① PostgreSQL `SIGKILL` — 감지 46 ms, 접속 재개 5.85초**
+
+| 경과 | 사건 |
+|---|---|
+| 0 | postmaster `SIGKILL`. 백엔드 전멸 |
+| **+46 ms** | Patroni `WARNING: Postgresql is not running.` |
+| +233 ms | `INFO: starting primary after failure` |
+| **+4.83 s** | `INFO: postmaster pid=...` |
+| +5.78 s | crash recovery(redo) **3 ms** |
+| **+5.85 s** | `이제 데이터베이스 서버로 접속할 수 있습니다` |
+
+재기동 지연의 대부분은 감지가 아니라 옛 인스턴스 정리·재연결 확인 구간(+233 ms → +4.83 s)이다.
+
+etcd는 이 구간에 아무 일도 겪지 않았다. `leader` 값은 한 번도 변하지 않았고 TTL 갱신도
+끊기지 않았다. **PostgreSQL이 죽는 것과 리더가 바뀌는 것은 이 제품에서 완전히 분리된 사건이다.**
+
+앱이 받은 예외는 `psycopg.errors.SystemError`이고 MRO가
+`SystemError → OperationalError → DatabaseError → Error`라 **ADR-023의 재시도가 실제로 이
+경로를 탄다.** `backend/app/api/retry.py`가 `psycopg.OperationalError`를 잡으므로 코드와도
+일치한다. 5432 직결 쪽은 `OperationalError: connection failed: ... Connection refused`다.
+
+**시나리오 ② etcd 정지 99초 — `failsafe_mode`가 primary를 지켰다**
+
+| 경과 | 사건 |
+|---|---|
+| **+15.0 s** | `patroni_failsafe_mode_is_active` 0 → 1 |
+| **+27.1 s** | `patroni_cluster_unlocked` 0 → 1 (`ttl=30` 만료와 정합) |
+| 전 구간 | `patroni_primary=1`, **6432·5432 모두 쓰기 가능** |
+| +99 s → +2.6 s | etcd 재기동 후 `leader` 키 복원, 플래그 전부 0 복귀 |
+
+```text
+ERROR: Error communicating with DCS
+INFO: continue to run as a leader because failsafe mode is enabled and all members are accessible
+```
+
+`failsafe_mode`가 없었다면 Patroni는 `ttl` 만료 시점에 스스로를 강등해 읽기 전용으로
+떨어뜨린다. 스플릿 브레인 방지가 목적이지만 **Single에서는 그 강등이 순수한 손해**라 배포판이
+미리 막아 놨다. **DCS 장애가 곧 서비스 장애는 아니라는 실증이다.**
+
+**시나리오 ③ Patroni만 `SIGKILL` — PostgreSQL은 멀쩡하고, 되살릴 주체가 없다**
+
+| 경과 | 사건 |
+|---|---|
+| +0.9 s | Patroni REST(8008) 응답 없음 |
+| **+23.9 s** | etcd에서 `leader`·`members/postgresql1` 키 소멸(잔여 TTL과 정합) |
+| 전 구간 | **PostgreSQL은 6432·5432 모두 정상, 계속 쓰기 가능** |
+| **+106 s** | **아무것도 Patroni를 되살리지 않았다** |
+
+수동 재기동(`start_patroni.sh`) 시 락 재획득까지 10.1초이며 PostgreSQL은 재기동되지 않는다.
+돌던 postmaster를 그대로 인수하고 `timeline`은 1로 유지된다.
+
+**OpenProxy는 통보받지 않는다 — 실패해야 안다.** `openproxy.log`에서 확인된 동작은 셋이다.
+
+1. 백엔드 축출은 요청이 실패한 순간에 일어나며 축출까지 **278 ms**였다. 헬스체크 타이머가 아니라 에러가 방아쇠다.
+2. `pool_mode = "session"`이라 클라이언트 연결도 같이 끊긴다. 앱이 `OperationalError`를 보는 이유가 이것이다.
+3. 재연결도 클라이언트 요청에 이끌려 일어난다.
+
+> ⚠️ 로그의 재연결 성공 시각을 "OpenProxy의 복구 지연"으로 읽으면 안 된다. PostgreSQL이 접속을
+> 수락하기 시작한 뒤 요청이 없던 공백이 섞여 있다. **OpenProxy의 복구 지연은 별도 값이 아니다.**
+
+### 설치 실태 — 저장소 서술과 어긋나는 것 [실측 2026-08-09]
+
+1. **WAL 아카이빙은 켜진 것처럼 보이지만 실질적으로 꺼져 있다.** `archive_mode = on`인데
+   `archive_command = "/bin/true"`라 WAL을 보관하지 않는다. 따라서 DR(백업·PITR)은 동작하지
+   않으며, barman을 "채택 비용 0"으로 본 판정도 Patroni 관리 설정 변경이 필요하다는 점에서
+   전제가 흔들린다. 다만 #29가 barman을 기각했으므로 지금 고칠 대상은 아니며 사실만 기록한다.
+2. **이 설치의 OpenProxy에는 Patroni·etcd 연동이 없다.** `use_patroni`도 `[general.etcd]`도
+   없고 `servers`에 primary 하나가 하드코딩돼 있다. 노드가 하나인 Single 구성 자체와 모순되지는
+   않지만, ADR-006의 "새 프라이머리 발견·재연결은 OpenProxy가 수행한다"는 서술과 실물이
+   어긋나므로 **ADR-006 정정 대상**이다.
+3. **프로세스 감독도 일부만 구성돼 있다.** systemd 유닛은 `opensql-etcd.service` 하나뿐이고,
+   Patroni·PostgreSQL·OpenProxy는 `nohup`으로 띄운 맨 프로세스다. Patroni를 죽인 뒤 106초 동안
+   되살릴 주체가 없었고, Patroni watchdog도 `/dev/watchdog` 권한 부재로 비활성이다. 따라서
+   **"HA 구성이 완전히 살아 있다"고 말하면 틀린다.**
+
+배포판 `$OPENSQL_HOME/scripts/`에는 `finalize_single_to_ha.sh`가 있어 Single→HA 전환 경로 자체는
+남아 있다. 그러나 **그 존재는 사무국의 Single 구성 지시를 어길 근거가 아니다.**
+
+### 번들 확장 실측 — 이름과 개수가 METADATA와 다르다 [실측 2026-08-09]
+
+실 VM의 preload 전체 목록은 다음과 같다.
+
+```text
+opensql=> SHOW shared_preload_libraries;
+opensql_license, o2scheduler, pg_stat_statements, dbms_rls, pg_hint_plan,
+pgaudit, pg_cron, dbms_alert, dbms_pipe, dbms_assert, dbms_output, credcheck
+```
+
+**`pg_cron`·`pgaudit`·`pg_hint_plan`·`pg_stat_statements`·`credcheck`는 이미 올라가 있다.**
+이 5종은 preload 변경도 재시작도 필요 없다. 배포판이 미리 올려둔 것은 제품이 쓰라고 준 것이라는
+신호로 읽어야 한다.
+
+| METADATA (§0) | 실제 `pg_available_extensions` | 비고 |
+|---|---|---|
+| `pgvectorscale 0.9.0` | **`vectorscale` 0.9.0** | 이름이 다르다. `CREATE EXTENSION pgvectorscale`은 실패한다 |
+| `o2 1.4` | `o2functions` 1.2 · `o2scheduler` 1.0 · `o2types` 1.1 · `o2views` 1.1 | **`o2`라는 확장은 없다.** 4개로 쪼개져 있다 |
+| `system_stats 3.2` | `system_stats` **3.0** | 패키지 버전 ≠ 확장 SQL 버전 |
+| `tibero_fdw 0.6.4` | `tibero_fdw` **1.0** | 위와 동일 |
+| `postgis 3.5.4` | `postgis` + `postgis_raster` `postgis_sfcgal` `postgis_tiger_geocoder` `postgis_topology` `address_standardizer(_data_us)` | 6종으로 전개 |
+| (목록에 없음) | `dbms_alert` `dbms_assert` `dbms_job` `dbms_output` `dbms_pipe` `dbms_random` `dbms_rls` `dbms_scheduler` `dbms_sql` `utl_file` | METADATA에 없는 10종이 더 있다 |
+| (목록에 없음) | `opensql_license` 1.0 | 라이선스 검증 확장 |
+
+즉 번들은 13종이 아니라 **30종 이상**이며, `o2`는 단일 확장이 아니라 Oracle 호환 스위트다.
+실제 확장 이름은 [Tmax O2 Extensions 설치 문서](https://docs.tibero.com/tmaxopensql.en/tmax-o2-extensions/installation/o2-extension-installation)와
+`pg_available_extensions` 결과를 기준으로 사용해야 한다. `dbms_scheduler`는 `o2scheduler` 확장 모듈에
+의존하므로 설치할 때 `CASCADE`가 필요하다.
+
+`postgis`는 이 VM에서 설치 자체가 깨져 있다.
+
+```text
+ERROR: "/home/opensql/lib/postgis-3.so" 라이브러리를 불러 올 수 없음:
+       libSFCGAL.so.2: 그런 파일이나 디렉터리가 없습니다
+```
+
+이는 우연한 별도 장애가 아니다. `SETUP_OPENSQL.md`가 설치 중 SFCGAL 요구사항을 우회하는 절차를
+담고 있고 그 우회의 결과다. **`postgis`는 이 프로젝트에 접점이 없을 뿐 아니라 쓰려면 재설치부터
+해야 한다.** 이 실측은 확장 채택을 뜻하지 않으며, 현재 마이그레이션은 계속 `vector`만 생성한다.
 
 ### 대회용 구성 지시 **[배포판·메일 확정]**
 
@@ -119,7 +252,7 @@ $ grep OPENSQL_RUST_TOOLCHAIN scripts/install.sh
 ```
 
 - 검증은 **hostname과 CPU 상한**으로 이루어진다. 아키텍처·OS 필드는 없다
-- `patroni.yml`의 `shared_preload_libraries`에 **`opensql_license`가 포함**되어, 라이선스가 맞지 않으면 PostgreSQL이 기동하지 않는다
+- `patroni.yml`의 `shared_preload_libraries`에 **`opensql_license`가 포함**되어, 라이선스가 맞지 않으면 PostgreSQL이 기동하지 않는다. 이는 preload된 12개 중 하나이며 전체 목록은 위 「번들 확장 실측」에 기록했다
 - 배치 위치: `opensql-installer/licenses/`, 파일명은 `config/common.env`의 `LICENSE_NAME`으로 지정
 - **만료일(2026/09/10)이 대회 일정과 겹치는지 확인이 필요하다.** 이후에는 DB를 띄울 수 없다
 
@@ -155,10 +288,13 @@ $ grep OPENSQL_RUST_TOOLCHAIN scripts/install.sh
 | system_stats | 3.2 | | o2 | 1.4 |
 | opencrypto | 1.0.0 | | | |
 
+> ⚠️ **이 표는 `METADATA` 원문이며 `CREATE EXTENSION`에 쓸 이름이 아니다.** 실제 확장 이름과
+> 개수는 §0의 「번들 확장 실측」을 보라 — `pgvectorscale`이 아니라 `vectorscale`이고, `o2`는 없다.
+
 > **설계 영향 (중요)**
 > - **`pgvector 0.8.1`이 확정되어 미확인 리스크가 해소됐다.** HNSW(0.5.0+), `hnsw.iterative_scan`(0.8+), `avg(vector)`(0.5.0+)이 모두 사용 가능하다. `ADR-002`의 HNSW 리스크, `ADR-011`의 조건부 적용, `ADR-018`의 `avg` 가용성이 전부 확정으로 바뀐다.
-> - **`pgvectorscale 0.9.0`도 번들**이다. StreamingDiskANN 인덱스를 제공하며 HNSW와 다른 특성을 가진다. `ADR-002`에서 대안으로 검토했고 데모 규모에서는 HNSW를 유지한다.
-> - **`pg_cron`이 번들**이다. `ADR-001`은 "pg_cron 폴링은 쓰지 않는다"고 했는데, "쓸 수 없어서"가 아니라 "쓸 수 있지만 안 쓴다"이다.
+> - **`vectorscale` 0.9.0도 번들**이다(METADATA 표기는 `pgvectorscale`). StreamingDiskANN 인덱스를 제공하며 HNSW와 다른 특성을 가진다. `ADR-002`에서 대안으로 검토했고 데모 규모에서는 HNSW를 유지한다.
+> - **`pg_cron`은 기각한다.** 이미 preload되어 있어 쓸 수 있지만, #29의 판정대로 사용자 화면에 보이지 않는 내부 개선이며 이 프로젝트의 판단 기준인 *"외부 벡터 DB를 붙였다면 못 했을 일을 하고 있느냐"*를 충족하지 않는다. "좀비 회수가 죽는 프로세스 안에 있어 자기 잡을 살리지 못하므로 `pg_cron`이 필요하다"는 판정은 틀렸다. `sweep_zombies()`는 워커 신원과 무관한 전역 스윕이고 루프 머리에 있어 워커 재기동 첫 반복에서 즉시 회수한다. 따라서 기각 근거를 이 오해에 두지 않는다. 즉 "쓸 수 없어서"가 아니라 **"쓸 수 있지만 안 쓴다"**이다.
 > - `pg_repack`은 기존 문서 조사에서 누락됐던 항목이다. 이 프로젝트에서 쓰지 않는다.
 
 ### 설치 방식 **[배포판]**
@@ -350,6 +486,15 @@ bash $OPENSQL_HOME/scripts/reload_openproxy.sh   # SIGHUP, 무중단 설정 반�
 
 > **설계 영향 (치명적)**
 > "새 Primary 자동 발견 후 재연결"은 **OpenProxy가 이미 제공하는 기능**이다. 애플리케이션이 멀티호스트 DSN + `target_session_attrs=read-write`로 이를 직접 구현하는 것은 `PROJECT_CONTEXT.md`의 설계 원칙 **"OpenSQL 기능을 애플리케이션에서 중복 구현하지 않는다"**를 정면으로 위반한다. → `ADR-006` 폐기 및 재작성 필요.
+
+**실측 정정 (2026-08-09)**: 위 내용은 공식 제품 기능에 대한 설명이며, 현재 Single 설치의 실제
+구성과는 다르다. 이 설치의 `openproxy.toml`에는 `use_patroni`와 `[general.etcd]`가 없고,
+`servers`에 primary 한 대가 하드코딩돼 있다. 따라서 이 OpenProxy는 **정적 서버 목록을 가진 순수
+커넥션 풀러**이며 새 프라이머리를 발견하는 경로가 구성되어 있지 않다. PostgreSQL `SIGKILL`
+실측에서도 백엔드 축출은 헬스체크 통보가 아니라 **클라이언트 요청이 실패한 순간** 일어났고,
+재연결도 다음 클라이언트 요청에 이끌려 일어났다. 공식 기능을 삭제할 이유는 없지만, 이 설치에서
+구성하지 않은 기능을 사용 중이라고 서술해서는 안 된다. ADR-006 정정은 후속 step에서 이 근거를
+인용한다.
 
 ---
 
@@ -668,7 +813,7 @@ opensql=> SELECT 1;          -- 알림은 다음 쿼리 실행 시 표시된다
 | 항목 | 상태 |
 |---|---|
 | pgvector **버전** | **[배포판] 0.8.1** |
-| pgvectorscale 버전 | **[배포판] 0.9.0** (StreamingDiskANN 제공) |
+| `vectorscale` 버전 | **[실측] 0.9.0** (METADATA 표기는 `pgvectorscale`, StreamingDiskANN 제공) |
 | **HNSW 인덱스 지원** | ✅ 사용 가능 — 0.5.0+ 요구, 0.8.1이므로 충족 |
 | `hnsw.iterative_scan` | ✅ 사용 가능 — **0.8+ 요구, 0.8.1이므로 충족** |
 | `avg(vector)` 집계 | ✅ 사용 가능 — 0.5.0+ 요구 |
@@ -716,6 +861,14 @@ opensql=> SELECT 1;          -- 알림은 다음 쿼리 실행 시 표시된다
 | 공식 Docker 이미지 | ❌ 여전히 없음 (`opensql3-docker`는 빈 껍데기) |
 | 설치 바이너리 | ✅ 수령 (`Tmax_OpenSQL_3.17.8.7_rockylinux9.7`) |
 | 실행 환경 | **Rocky Linux 9.7 x86-64 전용.** Apple Silicon에서는 QEMU 전체 에뮬레이션 VM 필요 (§0) |
+
+### 로컬 컨테이너와 실 VM의 확장 차이 **[실측 2026-08-10]**
+
+- 로컬 `pgvector/pgvector:pg17` 컨테이너는 `vector` **0.8.6**이며 `pg_trgm` **1.6을 사용할 수
+  있다.** `pg_trgm`은 PostgreSQL contrib이므로 이를 위해 별도 이미지가 필요하지 않다.
+- 실 VM의 `vector`는 **0.8.1**이다.
+- 로컬 컨테이너에는 `pg_cron`과 `vectorscale`이 없다. 따라서 이 둘의 OpenSQL 고유 동작은 로컬
+  환경에서 검증할 수 없다.
 
 **개발 환경은 두 갈래로 유지한다.**
 
@@ -930,6 +1083,17 @@ M4 코드가 배수를 상수로 박지 않고 예산에서 역산하는 이유�
 **태그 추천 쿼리(`TAG_SUGGESTION_SQL`)는 별도로 측정하지 않았다.** 후보 `LIMIT`이 같은 형태이고
 `ef_search` 아래에 있으므로 같은 결론이 적용된다고 보았다.
 
+### ✅ #27 장애 주입 측정 완료 (2026-08-09)
+
+| 시나리오 | 결과 |
+|---|---|
+| PostgreSQL postmaster `SIGKILL` | Patroni가 46 ms에 감지하고 5.85초에 접속을 복구했다. 리더·timeline은 바뀌지 않았다 |
+| etcd 99초 정지 | `failsafe_mode`가 primary를 유지해 6432·5432 쓰기가 전 구간 가능했고, 재기동 2.6초 뒤 DCS 상태가 복원됐다 |
+| Patroni `SIGKILL` | PostgreSQL 쓰기는 계속 가능했지만 106초 동안 Patroni를 되살릴 주체가 없었다. 수동 기동 후 기존 postmaster를 인수했다 |
+
+이 측정은 **DB 프로세스 장애 자동 복구**와 DCS 장애 내성을 확인한 것이지, replica 승격을 수반하는
+failover를 시연한 것이 아니다. 상세 조건과 타임라인은 §0 "Single 장애 주입 실측"에 있다.
+
 ### 🔴 아직 남은 실측
 
 | # | 검증 항목 | 방법 | 실패 시 영향 |
@@ -940,10 +1104,15 @@ M4 코드가 배수를 상수로 박지 않고 예산에서 역산하는 이유�
 
 | # | 항목 | 사유 |
 |---|---|---|
-| 7 | Failover 실측 소요 시간 | 노드가 1대라 승격할 replica가 없다 |
-| 8 | Failover 중 in-flight 커넥션 처리 | 위와 동일 |
+| 7 | 리더 선출·승격·`timeline` 증가 | 승격 대상 replica가 없고 `patronictl history`도 `[]`다 |
+| 8 | OpenProxy의 새 프라이머리 자동 발견 | 기능 검증 이전에 `use_patroni`·`[general.etcd]` 설정 자체가 없다 |
+| 23 | watchdog 펜싱 | `/dev/watchdog` 권한이 없어 Patroni watchdog이 비활성이다 |
+| 24 | VIP failover | Single 구성에는 이중화된 OpenProxy와 VRRP VIP가 없다 |
 
-사무국이 Single 구성을 지시했으므로(§0) 이 둘은 **원리적으로 수행할 수 없다.** 고가용성 요건을 어떻게 다룰지는 **ADR-020**에 기록한다. `patroni.yml`의 파라미터(`ttl` 등)와 `finalize_single_to_ha.sh`의 존재로 HA 전환 경로가 설계에 남아 있음은 문서로 제시할 수 있다.
+사무국이 Single 구성을 지시했으므로(§0) 이 네 항목은 현재 구성에서 검증할 수 없다. 반면
+PostgreSQL 프로세스 장애 자동 복구와 etcd 장애 중 primary 유지는 #27에서 실측했다. `patroni.yml`의
+파라미터와 `finalize_single_to_ha.sh`는 HA 전환 경로가 제품에 남아 있다는 근거일 뿐, 사무국의
+Single 지시를 어길 근거는 아니다. 고가용성 요건의 결정 정정은 후속 step에서 ADR-020에 기록한다.
 
 > **11·12번 배경**: 관련 문서·태그 추천(ADR-018·019)이 문서 대표 벡터를 저장하지 않고 **질의 시점 `avg(embedding)`**으로 구한다. 저장 컬럼을 만들지 않아 동기화 대상이 늘지 않는 대신, 플래너가 `(SELECT avg(...) FROM ...)`을 상수로 접지 못하면 HNSW 인덱스 정렬을 활용하지 못하고 풀스캔이 된다. **기능 가부(11)는 ✅ 확인됐고, 성능(12)이 남았다.**
 >

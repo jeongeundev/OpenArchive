@@ -29,6 +29,11 @@
       "dir": "m5-recovery-demo",
       "status": "completed",
       "completed_at": "2026-08-06T13:55:05+0900"
+    },
+    {
+      "dir": "m6-docs-recovery",
+      "status": "completed",
+      "completed_at": "2026-08-10T17:16:47+0900"
     }
   ]
 }
