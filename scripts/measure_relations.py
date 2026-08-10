@@ -5,12 +5,19 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
+import sys
+from pathlib import Path
 from typing import Any
 
 import psycopg
 
-DEFAULT_DATABASE_URL = "postgresql://openarchive:openarchive@localhost:5433/openarchive"
+ROOT = Path(__file__).resolve().parents[1]
+BACKEND = ROOT / "backend"
+if str(BACKEND) not in sys.path:
+    sys.path.insert(0, str(BACKEND))
+
+from app.config import get_settings
+
 NEIGHBOR_COUNTS = (5, 10, 20, 40)
 
 
@@ -41,7 +48,6 @@ def fetch_vector_query(
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--database-url", default=os.getenv("DATABASE_URL", DEFAULT_DATABASE_URL))
     parser.add_argument("--ratio-neighbors", type=int, default=10)
     args = parser.parse_args()
     if args.ratio_neighbors not in NEIGHBOR_COUNTS:
@@ -62,8 +68,9 @@ def main() -> int:
     WHERE (%s::uuid IS NULL OR me.document_id = %s::uuid)
     """
 
-    with psycopg.connect(args.database_url) as conn:
-        conn.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm")
+    # pg_trgm은 005 마이그레이션이 설치한다. 스크립트가 다시 만들면 스키마 변경이
+    # 마이그레이션 밖으로 새고, 확장이 없는 환경을 조용히 통과시켜 005의 의도도 깨진다.
+    with psycopg.connect(get_settings().database_url) as conn:
         environment = conn.execute(
             """
             SELECT count(DISTINCT d.id), count(c.id), count(DISTINCT c.embedding::text)
