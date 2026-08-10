@@ -50,7 +50,10 @@
       "type": "docs",
       "scope": "adr",
       "desc": "후속 결정으로 바뀐 ADR-026 신설과 002·016·018 상태 정리",
-      "status": "pending"
+      "status": "completed",
+      "summary": "기본 pgvector 이미지 유지 결정을 ADR-026으로 신설하고 HNSW·pg_trgm RRF·관련 문서 ADR의 후속 상태를 정리",
+      "started_at": "2026-08-10T16:58:43+0900",
+      "completed_at": "2026-08-10T17:00:51+0900"
     },
     {
       "step": 5,
