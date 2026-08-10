@@ -61,7 +61,10 @@
       "type": "feat",
       "scope": "db",
       "desc": "document_edges 테이블과 순회 인덱스",
-      "status": "pending"
+      "status": "completed",
+      "summary": "pg_trgm과 문서 관계 테이블의 무결성 제약·NULL 안전 중복 방지·양방향 순회 인덱스를 추가하고 실제 계획으로 검증",
+      "started_at": "2026-08-11T01:47:03+0900",
+      "completed_at": "2026-08-11T01:50:40+0900"
     },
     {
       "step": 6,
