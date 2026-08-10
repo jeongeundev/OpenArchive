@@ -1,0 +1,84 @@
+{
+  "project": "OpenArchive",
+  "phase": "m7-graph-relations",
+  "steps": [
+    {
+      "step": 0,
+      "name": "research-opencrypto",
+      "type": "docs",
+      "desc": "opencrypto 확장 실측과 기각 근거를 조사 문서에 반영",
+      "status": "pending"
+    },
+    {
+      "step": 1,
+      "name": "seed-repo-docs",
+      "type": "feat",
+      "scope": "db",
+      "desc": "저장소 문서를 플랫폼에 적재하는 시연 데이터 스크립트",
+      "status": "pending"
+    },
+    {
+      "step": 2,
+      "name": "measure-relation-signals",
+      "type": "docs",
+      "desc": "관계 판정 신호를 실데이터로 측정해 상수를 확정",
+      "status": "pending"
+    },
+    {
+      "step": 3,
+      "name": "adr-graph-design",
+      "type": "docs",
+      "scope": "adr",
+      "desc": "관계 그래프 설계를 ADR-029로 신설하고 ADR-018을 개정",
+      "status": "pending"
+    },
+    {
+      "step": 4,
+      "name": "visibility-predicate-constant",
+      "type": "refactor",
+      "scope": "api",
+      "desc": "열람 범위 술어를 SQL 조각 상수로 묶고 기존 세 쿼리에 소급",
+      "status": "pending"
+    },
+    {
+      "step": 5,
+      "name": "edges-table",
+      "type": "feat",
+      "scope": "db",
+      "desc": "document_edges 테이블과 순회 인덱스",
+      "status": "pending"
+    },
+    {
+      "step": 6,
+      "name": "edges-trigger",
+      "type": "feat",
+      "scope": "db",
+      "desc": "청크 준비 완료 시 관계 3종을 생성하는 트리거",
+      "status": "pending"
+    },
+    {
+      "step": 7,
+      "name": "related-on-edges",
+      "type": "feat",
+      "scope": "api",
+      "desc": "관련 문서와 태그 추천을 저장된 관계 기반으로 교체 — API·MCP 응답까지",
+      "status": "pending"
+    },
+    {
+      "step": 8,
+      "name": "graph-search",
+      "type": "feat",
+      "scope": "search",
+      "desc": "진입점에서 관계를 타고 확장하는 그래프 검색",
+      "status": "pending"
+    },
+    {
+      "step": 9,
+      "name": "frontend-relations",
+      "type": "feat",
+      "scope": "frontend",
+      "desc": "검색 결과와 문서 상세에 관계 종류를 노출",
+      "status": "pending"
+    }
+  ]
+}

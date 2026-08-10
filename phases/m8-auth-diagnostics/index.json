@@ -1,0 +1,78 @@
+{
+  "project": "OpenArchive",
+  "phase": "m8-auth-diagnostics",
+  "steps": [
+    {
+      "step": 0,
+      "name": "auth-tables",
+      "type": "feat",
+      "scope": "db",
+      "desc": "users·sessions 테이블과 본문 길이 제한",
+      "status": "pending"
+    },
+    {
+      "step": 1,
+      "name": "auth-service",
+      "type": "feat",
+      "scope": "api",
+      "desc": "scrypt 비밀번호 해시와 세션 발급·검증 서비스",
+      "status": "pending"
+    },
+    {
+      "step": 2,
+      "name": "auth-api",
+      "type": "feat",
+      "scope": "api",
+      "desc": "로그인·로그아웃 API와 X-User-Id 제거",
+      "status": "pending"
+    },
+    {
+      "step": 3,
+      "name": "admin-accounts",
+      "type": "feat",
+      "scope": "api",
+      "desc": "관리자 전용 계정 관리 API와 업로드 크기 제한",
+      "status": "pending"
+    },
+    {
+      "step": 4,
+      "name": "auth-frontend",
+      "type": "feat",
+      "scope": "frontend",
+      "desc": "로그인 화면과 사용자 관리 화면",
+      "status": "pending"
+    },
+    {
+      "step": 5,
+      "name": "adr-auth",
+      "type": "docs",
+      "scope": "adr",
+      "desc": "최소 로그인 결정을 ADR-028로 신설하고 비범위를 정정",
+      "status": "pending"
+    },
+    {
+      "step": 6,
+      "name": "diagnostics",
+      "type": "feat",
+      "scope": "api",
+      "desc": "관계 기반 진단 목록과 화면 — 고아·중복·미분류",
+      "status": "pending"
+    },
+    {
+      "step": 7,
+      "name": "cluster-graph",
+      "type": "feat",
+      "scope": "frontend",
+      "desc": "주제 덩어리 그래프 — 집계 API와 SVG 화면",
+      "status": "pending"
+    },
+    {
+      "step": 8,
+      "name": "admin-zombie-display",
+      "type": "fix",
+      "scope": "frontend",
+      "desc": "좀비 잡 상태 표시를 상태 API와 화면 양쪽에서 정정",
+      "status": "pending"
+    }
+  ]
+}

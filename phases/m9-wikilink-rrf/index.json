@@ -1,0 +1,54 @@
+{
+  "project": "OpenArchive",
+  "phase": "m9-wikilink-rrf",
+  "steps": [
+    {
+      "step": 0,
+      "name": "wikilink-storage",
+      "type": "feat",
+      "scope": "db",
+      "desc": "위키링크 저장 테이블과 본문 파싱 트리거",
+      "status": "pending"
+    },
+    {
+      "step": 1,
+      "name": "wikilink-resolve",
+      "type": "feat",
+      "scope": "api",
+      "desc": "조회 시점 링크 해석과 백링크·깨진 링크 진단",
+      "status": "pending"
+    },
+    {
+      "step": 2,
+      "name": "wikilink-frontend",
+      "type": "feat",
+      "scope": "frontend",
+      "desc": "본문의 위키링크 렌더와 백링크 표시",
+      "status": "pending"
+    },
+    {
+      "step": 3,
+      "name": "rrf-search",
+      "type": "feat",
+      "scope": "search",
+      "desc": "pg_trgm 키워드 랭킹과 벡터 랭킹의 RRF 융합",
+      "status": "pending"
+    },
+    {
+      "step": 4,
+      "name": "rrf-frontend",
+      "type": "feat",
+      "scope": "frontend",
+      "desc": "융합 검색 결과 표시와 근거 노출",
+      "status": "pending"
+    },
+    {
+      "step": 5,
+      "name": "adr-wikilink-rrf",
+      "type": "docs",
+      "scope": "adr",
+      "desc": "위키링크 결정을 ADR-030으로 신설하고 ADR-016을 정정",
+      "status": "pending"
+    }
+  ]
+}
