@@ -1400,3 +1400,26 @@ CLAUDE.md에서 개별 ADR로 향하는 방향은 0.200이다. 0.8 아래 버킷
 | `WITH RECURSIVE`에서 HNSW·인덱스를 타는가 | `document_edges`가 아직 없음 | **step 8** |
 | 권한 필터를 재귀항에 넣었을 때의 계획 변화 | 같은 이유 | **step 8** |
 | 조회 시점 제목 resolve 조인 비용 | 위키링크가 m7 범위 밖 | **m9** |
+
+### Step 8 — 재귀 순회와 권한 필터 계획
+
+Step 6이 만든 seed 상태(문서 62건, 청크 274행, `document_edges` 1,462행)에서
+`WITH RECURSIVE` 깊이 2 순회를 `EXPLAIN (ANALYZE, BUFFERS)`로 측정했다. 두 형태 모두 plain
+트랜잭션 안에서 `hnsw.ef_search=200`, `random_page_cost=1.1`을 적용했고 같은 공개 문서를
+진입점으로 사용했다.
+
+| 권한 필터 위치 | 실행 시간 | 재귀 결과 | shared hit | edge 접근 |
+|---|---:|---:|---:|---|
+| **재귀항 안** | **2.65 ms** | 926행 | 2,042 | Index Only Scan |
+| 재귀 바깥 | 1.82 ms | 1,030행 생성 후 972행 노출 | 99 | Index Only Scan |
+
+재귀항은 edge를 순차 스캔하지 않았다. `src_document_id`로 인덱스 프로브했지만 플래너는
+`idx_document_edges_src_kind` 대신 같은 선두 키를 가지면서 목적지와 kind까지 덮는
+`uq_document_edges_relation`을 골랐다. 전용 `(src_document_id, kind)` 인덱스는 진입점의
+`EXISTS`에서 실제 사용됐다. 즉 `random_page_cost=1.1`이 적용된 계획에서 재귀 edge 조회는
+인덱스를 타며, 현재 seed에서 깊이 2는 3 ms 미만이라 **깊이를 2로 유지한다.**
+
+외부 필터 형태가 작은 seed에서는 0.83 ms 빨랐지만 private 노드까지 순회해 재귀 결과를
+104행 더 만든 뒤 마지막에 버렸다. 이 형태는 private 노드를 경유해 그 너머 공개 문서에 닿을
+수 있으므로 성능과 무관하게 ADR-027을 위반한다. 구현은 비용을 감수하고 권한 조인을 재귀항
+안에 둔다. 이 측정은 62문서의 계획 검증이며 대규모 그래프의 지연 근거로 확대 해석하지 않는다.

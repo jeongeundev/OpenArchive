@@ -52,6 +52,14 @@ class SearchRequest(BaseModel):
     k: int = Field(default=10, ge=1, le=MAX_K)
 
 
+class SearchVia(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    from_document_id: UUID
+    kind: str
+    depth: int
+
+
 class SearchResult(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -64,6 +72,7 @@ class SearchResult(BaseModel):
     content: str
     score: float
     based_on_version: int
+    via: SearchVia | None
 
 
 class SearchResponse(BaseModel):

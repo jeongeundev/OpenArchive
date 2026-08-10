@@ -68,6 +68,126 @@ async def test_matching_document_is_ranked_first(worker_conn, search_conn):
     assert hits[0].document_id == matching_id
 
 
+async def test_relation_expands_search_to_a_document_outside_vector_candidates(
+    worker_conn, search_conn
+):
+    provider = FakeProvider()
+    entry_id = await insert_test_document(
+        worker_conn,
+        title="직접 진입점",
+        content=("정합성 직접 일치 문장 " * 900),
+    )
+    related_id = await insert_test_document(
+        worker_conn,
+        title="관계로만 도달",
+        content="질의 어휘가 전혀 없는 별도 문서",
+    )
+    await process_all_embedding_jobs(worker_conn, provider)
+    await worker_conn.execute("DELETE FROM document_edges")
+    await worker_conn.execute(
+        """
+        INSERT INTO document_edges
+            (src_document_id, dst_document_id, kind,
+             src_chunk_index, dst_chunk_index, score)
+        VALUES (%s, %s, 'related', 0, 0, 0.9)
+        """,
+        (entry_id, related_id),
+    )
+
+    hits = await search_documents(search_conn, provider, query="정합성 직접 일치 문장", k=2)
+
+    assert [hit.document_id for hit in hits] == [entry_id, related_id]
+    assert hits[0].via is None
+    assert hits[1].via is not None
+    assert hits[1].via.from_document_id == entry_id
+    assert hits[1].via.kind == "related"
+    assert hits[1].via.depth == 1
+
+
+async def test_graph_search_stops_at_depth_two_and_does_not_repeat_a_cycle(
+    worker_conn, search_conn
+):
+    provider = FakeProvider()
+    ids = [
+        await insert_test_document(
+            worker_conn,
+            title="진입점" if index == 0 else f"관계 문서 {index}",
+            content=("깊이 제한 순환 질의 " * 2000) if index == 0 else f"별도 내용 {index}",
+        )
+        for index in range(4)
+    ]
+    await process_all_embedding_jobs(worker_conn, provider)
+    await worker_conn.execute("DELETE FROM document_edges")
+    await worker_conn.execute(
+        """
+        INSERT INTO document_edges
+            (src_document_id, dst_document_id, kind,
+             src_chunk_index, dst_chunk_index, score)
+        VALUES (%s, %s, 'related', 0, 0, 0.9),
+               (%s, %s, 'related', 0, 0, 0.8),
+               (%s, %s, 'related', 0, 0, 0.7),
+               (%s, %s, 'related', 0, 0, 0.6)
+        """,
+        (ids[0], ids[1], ids[1], ids[2], ids[2], ids[3], ids[2], ids[0]),
+    )
+
+    hits = await search_documents(search_conn, provider, query="깊이 제한 순환 질의", k=4)
+
+    assert [hit.document_id for hit in hits[:3]] == ids[:3]
+    assert ids[3] not in {hit.document_id for hit in hits}
+    assert not any(
+        hit.document_id == ids[0] and hit.via is not None and hit.via.kind == "related"
+        for hit in hits
+    )
+    assert max(hit.via.depth for hit in hits if hit.via is not None) == 2
+
+
+async def test_search_adds_adjacent_context_for_an_entry_chunk(worker_conn, search_conn):
+    provider = FakeProvider()
+    document_id = await insert_test_document(
+        worker_conn,
+        title="이어짐 문서",
+        content=("이어짐 맥락 복원 질의 " * 400),
+    )
+    await process_all_embedding_jobs(worker_conn, provider)
+    await worker_conn.execute("DELETE FROM document_edges")
+
+    hits = await search_documents(search_conn, provider, query="이어짐 맥락 복원 질의", k=2)
+
+    assert hits[0].document_id == document_id and hits[0].via is None
+    assert len(hits[0].content) > 1000
+
+
+async def test_search_adds_the_previous_text_version_at_query_time(worker_conn, search_conn):
+    provider = FakeProvider()
+    previous_content = "개정 전 정합성 설명 " * 300
+    current_content = "개정 후 정합성 설명 " * 300
+    document_id = await insert_test_document(
+        worker_conn,
+        title="개정 문서",
+        content=previous_content,
+    )
+    await process_all_embedding_jobs(worker_conn, provider)
+    await worker_conn.execute(
+        """
+        UPDATE documents
+           SET version = 2, content = %s, content_hash = %s
+         WHERE id = %s
+        """,
+        (current_content, "version-two", document_id),
+    )
+    await process_all_embedding_jobs(worker_conn, provider)
+    await worker_conn.execute("DELETE FROM document_edges")
+
+    hits = await search_documents(search_conn, provider, query="개정 후 정합성 설명", k=2)
+
+    assert hits[0].via is None and hits[0].based_on_version == 2
+    assert hits[1].content == previous_content
+    assert hits[1].based_on_version == 1
+    assert hits[1].via is not None and hits[1].via.kind == "revision"
+    assert sum(hit.via is not None and hit.via.kind == "revision" for hit in hits) == 1
+
+
 async def test_search_hit_contains_source_and_chunk_version(worker_conn, search_conn):
     provider = FakeProvider()
     document_id = await insert_test_document(

@@ -76,6 +76,15 @@ async def search_documents(
                 "chunk_index": hit.chunk_index,
                 "score": hit.score,
                 "based_on_version": hit.based_on_version,
+                "via": (
+                    {
+                        "from_document_id": str(hit.via.from_document_id),
+                        "kind": hit.via.kind,
+                        "depth": hit.via.depth,
+                    }
+                    if hit.via is not None
+                    else None
+                ),
             }
             for hit in hits
         ]

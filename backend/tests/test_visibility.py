@@ -89,6 +89,57 @@ async def test_owner_search_includes_own_private_document(
     assert len(hits) == 2
 
 
+@pytest.mark.parametrize(
+    ("user_id", "can_traverse_through_private"),
+    [(None, False), ("bob", False), ("alice", True)],
+)
+async def test_graph_search_cannot_traverse_through_an_invisible_private_document(
+    worker_conn, visibility_conn, user_id, can_traverse_through_private
+):
+    provider = FakeProvider()
+    entry_id = await insert_test_document(
+        worker_conn,
+        title="공개 진입점",
+        content=("그래프 경유 차단 질의 " * 2000),
+    )
+    private_id = await insert_test_document(
+        worker_conn,
+        title="비공개 중간 노드",
+        content="중간 비공개 문서",
+        owner_id="alice",
+        visibility="private",
+    )
+    beyond_id = await insert_test_document(
+        worker_conn,
+        title="비공개 너머 공개 노드",
+        content="너머 공개 문서",
+    )
+    await process_all_embedding_jobs(worker_conn, provider)
+    await worker_conn.execute("DELETE FROM document_edges")
+    await worker_conn.execute(
+        """
+        INSERT INTO document_edges
+            (src_document_id, dst_document_id, kind,
+             src_chunk_index, dst_chunk_index, score)
+        VALUES (%s, %s, 'related', 0, 0, 0.9),
+               (%s, %s, 'related', 0, 0, 0.8)
+        """,
+        (entry_id, private_id, private_id, beyond_id),
+    )
+
+    hits = await search_documents(
+        visibility_conn,
+        provider,
+        query="그래프 경유 차단 질의",
+        user_id=user_id,
+        k=3,
+    )
+    ids = {hit.document_id for hit in hits}
+
+    assert (private_id in ids) is can_traverse_through_private
+    assert (beyond_id in ids) is can_traverse_through_private
+
+
 async def test_anonymous_related_hides_private_documents(
     visibility_conn, visible_documents
 ):
