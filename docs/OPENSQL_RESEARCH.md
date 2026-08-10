@@ -42,10 +42,10 @@ pg_repack 1.5.2
 |---|---|---|---|
 | **PostgreSQL** | 16.8 또는 14.13 ⚠️ | **17.8** — 둘 다 아니었다 | 로컬 컨테이너를 `pg17`로 (ADR-007). 문서 전반의 "PostgreSQL 16" 표기 수정 |
 | **pgvector** | **[미확인]** — 문서 어디에도 없음 | **0.8.1** | HNSW·`iterative_scan`·`avg(vector)` 전부 사용 가능 (ADR-002, ADR-011, ADR-018) |
-| pgvectorscale | 번들됨(버전 미확인) | 0.9.0 | ADR-002 대안 유지 |
+| pgvectorscale | 번들됨(버전 미확인) | `vectorscale` 0.9.0 | METADATA 이름을 그대로 SQL에 쓰면 실패 (§0 번들 확장 실측) |
 | etcd | 3.5.6 / 3.5.21 | 3.6.5 | 영향 없음 |
 | 패키지 예시 | `Tmax_OpenSQL_3.18.1.3` | `3.17.8.7` | 문서 예시 정정 |
-| 확장 목록 | 12종 | **13종** — `pg_repack 1.5.2` 추가 | 영향 없음 |
+| 확장 목록 | 12종 | **30종 이상** — METADATA 13종보다 많고 실제 SQL 이름도 다름 | 이름을 그대로 SQL에 쓰면 실패 (§0 번들 확장 실측) |
 
 > **교훈**: `PROJECT_CONTEXT.md`의 "PostgreSQL 메이저 버전 확인"이 M0 최우선 항목 중 하나였는데, 문서에는 16.8과 14.13이 함께 언급되어 있어 둘 중 하나로 추정했다. **실제는 17.8로 후보에 없던 값이었다.** 문서 추정으로 설계를 고정하지 않고 미확인으로 표기해둔 것이 맞았다.
 
@@ -61,7 +61,7 @@ pg_repack 1.5.2
 |---|---|---|
 | PostgreSQL | 17.8 | ✅ `17.8 on x86_64-pc-linux-gnu, gcc 11.5.0` |
 | pgvector | 0.8.1 | ✅ `0.8.1` |
-| pgvectorscale | 0.9.0 | ✅ `0.9.0` |
+| vectorscale | 0.9.0 | ✅ `0.9.0` (METADATA 이름은 `pgvectorscale`) |
 | `max_connections` | 100 | ✅ `100` |
 
 **미확인이었다가 해소된 항목**
@@ -84,6 +84,46 @@ pg_repack 1.5.2
 | ~~LISTEN 연결의 `idle_timeout` 실동작~~ | ✅ **M1 이후 측정됨** (§12 6번) — 유휴 세션은 끊기지 않았으나 애초에 알림이 오지 않는다. **폴링 주기 상향은 철회됐다** (§7-3) |
 | ~~`avg`가 HNSW 인덱스를 타는지~~ | ✅ **M1 이후 측정됨** (§12 12·16·17번) — `avg`는 무죄. ~~문제는 벡터 정렬 서브쿼리 안의 JOIN이었다~~ → **17번 재측정에서 반증됨. JOIN은 막지 않는다.** 실제 변수는 `random_page_cost`였다 (16번) |
 | Failover | ⛔ Single 구성이라 **원리적으로 불가** (ADR-020) |
+
+### 번들 확장 실측 — 이름과 개수가 METADATA와 다르다 [실측 2026-08-09]
+
+실 VM의 preload 전체 목록은 다음과 같다.
+
+```text
+opensql=> SHOW shared_preload_libraries;
+opensql_license, o2scheduler, pg_stat_statements, dbms_rls, pg_hint_plan,
+pgaudit, pg_cron, dbms_alert, dbms_pipe, dbms_assert, dbms_output, credcheck
+```
+
+**`pg_cron`·`pgaudit`·`pg_hint_plan`·`pg_stat_statements`·`credcheck`는 이미 올라가 있다.**
+이 5종은 preload 변경도 재시작도 필요 없다. 배포판이 미리 올려둔 것은 제품이 쓰라고 준 것이라는
+신호로 읽어야 한다.
+
+| METADATA (§0) | 실제 `pg_available_extensions` | 비고 |
+|---|---|---|
+| `pgvectorscale 0.9.0` | **`vectorscale` 0.9.0** | 이름이 다르다. `CREATE EXTENSION pgvectorscale`은 실패한다 |
+| `o2 1.4` | `o2functions` 1.2 · `o2scheduler` 1.0 · `o2types` 1.1 · `o2views` 1.1 | **`o2`라는 확장은 없다.** 4개로 쪼개져 있다 |
+| `system_stats 3.2` | `system_stats` **3.0** | 패키지 버전 ≠ 확장 SQL 버전 |
+| `tibero_fdw 0.6.4` | `tibero_fdw` **1.0** | 위와 동일 |
+| `postgis 3.5.4` | `postgis` + `postgis_raster` `postgis_sfcgal` `postgis_tiger_geocoder` `postgis_topology` `address_standardizer(_data_us)` | 6종으로 전개 |
+| (목록에 없음) | `dbms_alert` `dbms_assert` `dbms_job` `dbms_output` `dbms_pipe` `dbms_random` `dbms_rls` `dbms_scheduler` `dbms_sql` `utl_file` | METADATA에 없는 10종이 더 있다 |
+| (목록에 없음) | `opensql_license` 1.0 | 라이선스 검증 확장 |
+
+즉 번들은 13종이 아니라 **30종 이상**이며, `o2`는 단일 확장이 아니라 Oracle 호환 스위트다.
+실제 확장 이름은 [Tmax O2 Extensions 설치 문서](https://docs.tibero.com/tmaxopensql.en/tmax-o2-extensions/installation/o2-extension-installation)와
+`pg_available_extensions` 결과를 기준으로 사용해야 한다. `dbms_scheduler`는 `o2scheduler` 확장 모듈에
+의존하므로 설치할 때 `CASCADE`가 필요하다.
+
+`postgis`는 이 VM에서 설치 자체가 깨져 있다.
+
+```text
+ERROR: "/home/opensql/lib/postgis-3.so" 라이브러리를 불러 올 수 없음:
+       libSFCGAL.so.2: 그런 파일이나 디렉터리가 없습니다
+```
+
+이는 우연한 별도 장애가 아니다. `SETUP_OPENSQL.md`가 설치 중 SFCGAL 요구사항을 우회하는 절차를
+담고 있고 그 우회의 결과다. **`postgis`는 이 프로젝트에 접점이 없을 뿐 아니라 쓰려면 재설치부터
+해야 한다.** 이 실측은 확장 채택을 뜻하지 않으며, 현재 마이그레이션은 계속 `vector`만 생성한다.
 
 ### 대회용 구성 지시 **[배포판·메일 확정]**
 
@@ -119,7 +159,7 @@ $ grep OPENSQL_RUST_TOOLCHAIN scripts/install.sh
 ```
 
 - 검증은 **hostname과 CPU 상한**으로 이루어진다. 아키텍처·OS 필드는 없다
-- `patroni.yml`의 `shared_preload_libraries`에 **`opensql_license`가 포함**되어, 라이선스가 맞지 않으면 PostgreSQL이 기동하지 않는다
+- `patroni.yml`의 `shared_preload_libraries`에 **`opensql_license`가 포함**되어, 라이선스가 맞지 않으면 PostgreSQL이 기동하지 않는다. 이는 preload된 12개 중 하나이며 전체 목록은 위 「번들 확장 실측」에 기록했다
 - 배치 위치: `opensql-installer/licenses/`, 파일명은 `config/common.env`의 `LICENSE_NAME`으로 지정
 - **만료일(2026/09/10)이 대회 일정과 겹치는지 확인이 필요하다.** 이후에는 DB를 띄울 수 없다
 
@@ -155,9 +195,12 @@ $ grep OPENSQL_RUST_TOOLCHAIN scripts/install.sh
 | system_stats | 3.2 | | o2 | 1.4 |
 | opencrypto | 1.0.0 | | | |
 
+> ⚠️ **이 표는 `METADATA` 원문이며 `CREATE EXTENSION`에 쓸 이름이 아니다.** 실제 확장 이름과
+> 개수는 §0의 「번들 확장 실측」을 보라 — `pgvectorscale`이 아니라 `vectorscale`이고, `o2`는 없다.
+
 > **설계 영향 (중요)**
 > - **`pgvector 0.8.1`이 확정되어 미확인 리스크가 해소됐다.** HNSW(0.5.0+), `hnsw.iterative_scan`(0.8+), `avg(vector)`(0.5.0+)이 모두 사용 가능하다. `ADR-002`의 HNSW 리스크, `ADR-011`의 조건부 적용, `ADR-018`의 `avg` 가용성이 전부 확정으로 바뀐다.
-> - **`pgvectorscale 0.9.0`도 번들**이다. StreamingDiskANN 인덱스를 제공하며 HNSW와 다른 특성을 가진다. `ADR-002`에서 대안으로 검토했고 데모 규모에서는 HNSW를 유지한다.
+> - **`vectorscale` 0.9.0도 번들**이다(METADATA 표기는 `pgvectorscale`). StreamingDiskANN 인덱스를 제공하며 HNSW와 다른 특성을 가진다. `ADR-002`에서 대안으로 검토했고 데모 규모에서는 HNSW를 유지한다.
 > - **`pg_cron`이 번들**이다. `ADR-001`은 "pg_cron 폴링은 쓰지 않는다"고 했는데, "쓸 수 없어서"가 아니라 "쓸 수 있지만 안 쓴다"이다.
 > - `pg_repack`은 기존 문서 조사에서 누락됐던 항목이다. 이 프로젝트에서 쓰지 않는다.
 
@@ -668,7 +711,7 @@ opensql=> SELECT 1;          -- 알림은 다음 쿼리 실행 시 표시된다
 | 항목 | 상태 |
 |---|---|
 | pgvector **버전** | **[배포판] 0.8.1** |
-| pgvectorscale 버전 | **[배포판] 0.9.0** (StreamingDiskANN 제공) |
+| `vectorscale` 버전 | **[실측] 0.9.0** (METADATA 표기는 `pgvectorscale`, StreamingDiskANN 제공) |
 | **HNSW 인덱스 지원** | ✅ 사용 가능 — 0.5.0+ 요구, 0.8.1이므로 충족 |
 | `hnsw.iterative_scan` | ✅ 사용 가능 — **0.8+ 요구, 0.8.1이므로 충족** |
 | `avg(vector)` 집계 | ✅ 사용 가능 — 0.5.0+ 요구 |
@@ -716,6 +759,14 @@ opensql=> SELECT 1;          -- 알림은 다음 쿼리 실행 시 표시된다
 | 공식 Docker 이미지 | ❌ 여전히 없음 (`opensql3-docker`는 빈 껍데기) |
 | 설치 바이너리 | ✅ 수령 (`Tmax_OpenSQL_3.17.8.7_rockylinux9.7`) |
 | 실행 환경 | **Rocky Linux 9.7 x86-64 전용.** Apple Silicon에서는 QEMU 전체 에뮬레이션 VM 필요 (§0) |
+
+### 로컬 컨테이너와 실 VM의 확장 차이 **[실측 2026-08-10]**
+
+- 로컬 `pgvector/pgvector:pg17` 컨테이너는 `vector` **0.8.6**이며 `pg_trgm` **1.6을 사용할 수
+  있다.** `pg_trgm`은 PostgreSQL contrib이므로 이를 위해 별도 이미지가 필요하지 않다.
+- 실 VM의 `vector`는 **0.8.1**이다.
+- 로컬 컨테이너에는 `pg_cron`과 `vectorscale`이 없다. 따라서 이 둘의 OpenSQL 고유 동작은 로컬
+  환경에서 검증할 수 없다.
 
 **개발 환경은 두 갈래로 유지한다.**
 
