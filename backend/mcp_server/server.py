@@ -74,7 +74,10 @@ async def search_documents(
                 "tags": hit.tags,
                 "excerpt": hit.content,
                 "chunk_index": hit.chunk_index,
-                "score": hit.score,
+                # 확장 결과의 dist는 진입점 거리 + GRAPH_DISTANCE_PENALTY라 `1 - dist`가
+                # 음수이고, 같은 진입점에서 나온 확장은 전부 동점이다. 정렬용 값이지
+                # 유사도가 아니므로 싣지 않는다 — 어떻게 도달했는지는 via가 말한다.
+                "score": hit.score if hit.via is None else None,
                 "based_on_version": hit.based_on_version,
                 "via": (
                     {
