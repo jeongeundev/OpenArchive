@@ -77,6 +77,7 @@ class RelatedDocumentItem(BaseModel):
     document_id: UUID
     title: str
     tags: list[str]
+    kind: str
     score: float
 
 

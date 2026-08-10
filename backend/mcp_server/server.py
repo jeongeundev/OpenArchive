@@ -1,6 +1,7 @@
 """AI 에이전트에 문서 근거를 공급하는 FastMCP stdio 서버."""
 
 from contextlib import asynccontextmanager
+from dataclasses import asdict
 from datetime import datetime
 from typing import Any
 from uuid import UUID
@@ -12,6 +13,7 @@ from app.db import close_pool, get_pool
 from app.embeddings import get_provider
 from app.services.documents import get_document as get_document_service
 from app.services.documents import list_documents as list_documents_service
+from app.services.related import find_related
 from app.services.search import search_documents as search_documents_service
 
 provider = get_provider()
@@ -93,10 +95,16 @@ async def get_document(document_id: str) -> dict:
     검색 결과의 문서 전체 내용과 색인 기준 버전을 확인할 때 사용합니다.
     """
     async with get_pool().connection() as conn:
+        parsed_id = UUID(document_id)
         document = await get_document_service(
-            conn, UUID(document_id), user_id=get_settings().mcp_user_id
+            conn, parsed_id, user_id=get_settings().mcp_user_id
         )
-    return _document_payload(document)
+        related = await find_related(
+            conn, document_id=parsed_id, user_id=get_settings().mcp_user_id
+        )
+    payload = _document_payload(document)
+    payload["related"] = _json_value(asdict(related))
+    return payload
 
 
 async def list_documents(tag: str | None = None, status: str | None = None) -> dict:

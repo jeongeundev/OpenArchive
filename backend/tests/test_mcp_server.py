@@ -147,3 +147,15 @@ async def test_get_document_rejects_missing_document(mcp_database):
 
     with pytest.raises(DocumentNotFound):
         await get_document(str(uuid4()))
+
+
+async def test_get_document_returns_related_kind(monkeypatch, mcp_database):
+    from mcp_server.server import get_document
+
+    public_id, _ = await _seed_documents(mcp_database)
+    monkeypatch.setenv("MCP_USER_ID", "alice")
+    get_settings.cache_clear()
+    document = await get_document(str(public_id))
+
+    assert document["related"]["items"]
+    assert document["related"]["items"][0]["kind"] in {"overlaps", "related"}
