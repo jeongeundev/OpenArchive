@@ -94,7 +94,10 @@
       "type": "feat",
       "scope": "search",
       "desc": "진입점에서 관계를 타고 확장하는 그래프 검색",
-      "status": "pending"
+      "status": "completed",
+      "summary": "벡터 진입점에서 권한 필터된 관계를 깊이 2까지 순회하고 인접 맥락·직전 텍스트 버전·도달 경로를 단일 SQL 응답에 결합",
+      "started_at": "2026-08-11T02:09:51+0900",
+      "completed_at": "2026-08-11T02:22:51+0900"
     },
     {
       "step": 9,
