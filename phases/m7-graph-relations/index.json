@@ -50,7 +50,10 @@
       "type": "refactor",
       "scope": "api",
       "desc": "열람 범위 술어를 SQL 조각 상수로 묶고 기존 세 쿼리에 소급",
-      "status": "pending"
+      "status": "completed",
+      "summary": "열람 범위 SQL 술어를 단일 상수로 통합하고 세 시선의 검색·관련 문서·태그 추천·동일 텍스트 노출을 행동 테스트 8개로 고정",
+      "started_at": "2026-08-11T01:44:17+0900",
+      "completed_at": "2026-08-11T01:47:03+0900"
     },
     {
       "step": 5,
