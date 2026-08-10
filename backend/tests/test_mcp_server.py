@@ -141,6 +141,35 @@ async def test_mcp_user_setting_controls_private_access_for_all_tools(
     assert owner_detail["chunk_version"] == 1
 
 
+async def test_expanded_search_hits_carry_no_similarity_score(mcp_database):
+    """확장 결과의 dist는 진입점 거리 + GRAPH_DISTANCE_PENALTY라 `1 - dist`가 음수다.
+
+    같은 진입점에서 나온 확장은 전부 동점이기도 해서 이 값은 유사도가 아니다. 화면과
+    같은 결정을 MCP에도 적용해 확장 결과에는 score를 싣지 않고 via만 남긴다. 직접
+    매칭의 score는 그대로다.
+    """
+    from mcp_server.server import search_documents
+
+    async with await psycopg.AsyncConnection.connect(
+        mcp_database, autocommit=True
+    ) as conn:
+        await insert_test_document(
+            conn, title="직접 진입점", content="정합성 직접 일치 문장 " * 900
+        )
+        await insert_test_document(
+            conn, title="관계로만 도달", content="질의 어휘가 전혀 없는 별도 문서"
+        )
+        await process_all_embedding_jobs(conn, FakeProvider())
+
+    items = (await search_documents("정합성 직접 일치 문장", k=2))["items"]
+
+    direct = [item for item in items if item["via"] is None]
+    expanded = [item for item in items if item["via"] is not None]
+    assert direct and expanded
+    assert all(item["score"] is None for item in expanded)
+    assert all(isinstance(item["score"], float) for item in direct)
+
+
 async def test_get_document_rejects_missing_document(mcp_database):
     from app.services.documents import DocumentNotFound
     from mcp_server.server import get_document
@@ -153,9 +182,27 @@ async def test_get_document_returns_related_kind(monkeypatch, mcp_database):
     from mcp_server.server import get_document
 
     public_id, _ = await _seed_documents(mcp_database)
+    # _seed_documents는 문서 2건만 만들어 관련 문서가 1건뿐이다. 그러면 아래 정렬
+    # 단언이 원소 하나라 항상 참이 된다. 점수가 다른 이웃을 하나 더 넣어 물게 한다.
+    async with await psycopg.AsyncConnection.connect(
+        mcp_database, autocommit=True
+    ) as conn:
+        await insert_test_document(
+            conn, title="먼 근거", content="휴가 식대 복지 안내", tags=["무관"]
+        )
+        await process_all_embedding_jobs(conn, FakeProvider())
+
     monkeypatch.setenv("MCP_USER_ID", "alice")
     get_settings.cache_clear()
     document = await get_document(str(public_id))
 
-    assert document["related"]["items"]
-    assert document["related"]["items"][0]["kind"] in {"overlaps", "related"}
+    items = document["related"]["items"]
+    assert len(items) >= 2
+    # kind 값이 CHECK 제약이 보장하는 집합에 드는지는 항상 참이라 아무것도 검증하지
+    # 않는다. kind별 묶음과 그 안의 점수 내림차순이 MCP 직렬화까지 살아 오는지를
+    # 단언한다 (ADR-029 — score의 척도가 kind마다 달라 전체 정렬은 성립하지 않는다).
+    kinds = [item["kind"] for item in items]
+    assert kinds == sorted(kinds, key=kinds.index)
+    for kind in set(kinds):
+        scores = [item["score"] for item in items if item["kind"] == kind]
+        assert scores == sorted(scores, reverse=True)

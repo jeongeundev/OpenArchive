@@ -104,6 +104,43 @@ async def test_relation_expands_search_to_a_document_outside_vector_candidates(
     assert hits[1].via.depth == 1
 
 
+async def test_trigger_built_edges_drive_search_expansion(worker_conn, search_conn):
+    """008 트리거가 만든 edge만으로 검색이 확장되는지 — step6과 step8의 결합을 본다.
+
+    다른 그래프 테스트는 전부 `DELETE FROM document_edges` 후 손으로 INSERT한다. 그러면
+    트리거가 실제로 내놓는 행의 형태(kind·청크 인덱스·방향)가 SEARCH_SQL이 소비하는
+    형태와 맞는지는 어느 쪽 테스트도 보지 않는다. 여기서는 edge를 한 줄도 만들지 않는다.
+    """
+    provider = FakeProvider()
+    entry_id = await insert_test_document(
+        worker_conn,
+        title="직접 진입점",
+        content=("정합성 직접 일치 문장 " * 900),
+    )
+    neighbor_id = await insert_test_document(
+        worker_conn,
+        title="관계로만 도달",
+        content="질의 어휘가 전혀 없는 별도 문서",
+    )
+    await process_all_embedding_jobs(worker_conn, provider)
+
+    # document_edges를 손대지 않는다 — 남아 있는 행은 전부 트리거가 만든 것이다.
+    edge_cur = await worker_conn.execute(
+        "SELECT count(*) FROM document_edges WHERE src_document_id = %s", (entry_id,)
+    )
+    assert (await edge_cur.fetchone())[0] > 0
+
+    hits = await search_documents(search_conn, provider, query="정합성 직접 일치 문장", k=2)
+
+    assert hits[0].document_id == entry_id
+    assert hits[0].via is None
+    expanded = [hit for hit in hits if hit.via is not None]
+    assert [hit.document_id for hit in expanded] == [neighbor_id]
+    assert expanded[0].via.from_document_id == entry_id
+    assert expanded[0].via.kind in {"overlaps", "related"}
+    assert expanded[0].via.depth == 1
+
+
 async def test_graph_search_stops_at_depth_two_and_does_not_repeat_a_cycle(
     worker_conn, search_conn
 ):
