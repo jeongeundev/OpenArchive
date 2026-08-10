@@ -1,0 +1,69 @@
+{
+  "project": "OpenArchive",
+  "phase": "m6-docs-recovery",
+  "steps": [
+    {
+      "step": 0,
+      "name": "research-extensions",
+      "type": "docs",
+      "desc": "번들 확장 실명·preload 실측을 조사 문서에 반영",
+      "status": "completed",
+      "summary": "OpenSQL 번들 확장의 실제 이름·preload 목록·PostGIS 파손과 로컬/VM 버전 차이를 조사 문서에 반영",
+      "started_at": "2026-08-10T16:48:59+0900",
+      "completed_at": "2026-08-10T16:50:56+0900"
+    },
+    {
+      "step": 1,
+      "name": "research-failure-injection",
+      "type": "docs",
+      "desc": "Single 장애 주입 실측과 HA 컴포넌트 구성 실태를 조사 문서에 반영",
+      "status": "pending"
+    },
+    {
+      "step": 2,
+      "name": "adr-openproxy-recovery",
+      "type": "docs",
+      "scope": "adr",
+      "desc": "ADR-006 OpenProxy 서술 정정과 ADR-020의 HA/DR 분리 개정",
+      "status": "pending"
+    },
+    {
+      "step": 3,
+      "name": "adr-visibility-principle",
+      "type": "docs",
+      "scope": "adr",
+      "desc": "관계 그래프 권한 원칙을 ADR-027로 신설하고 CLAUDE.md 규칙을 넓힌다",
+      "status": "pending"
+    },
+    {
+      "step": 4,
+      "name": "adr-status-sweep",
+      "type": "docs",
+      "scope": "adr",
+      "desc": "후속 결정으로 바뀐 ADR-026 신설과 002·016·018 상태 정리",
+      "status": "pending"
+    },
+    {
+      "step": 5,
+      "name": "narrative-fixes",
+      "type": "docs",
+      "desc": "좀비 회수 서술 정정과 제출 요건 절 신설",
+      "status": "pending"
+    },
+    {
+      "step": 6,
+      "name": "demo-recovery-rewrite",
+      "type": "feat",
+      "desc": "실 OpenSQL에서 PG 프로세스 장애 자동 복구를 한 타임라인으로 보이는 데모",
+      "status": "pending"
+    },
+    {
+      "step": 7,
+      "name": "demo-docs-sync",
+      "type": "docs",
+      "desc": "복구 데모 재작성을 문서에 반영하고 셸 구문 검사를 추가",
+      "status": "pending"
+    }
+  ],
+  "created_at": "2026-08-10T16:48:59+0900"
+}
