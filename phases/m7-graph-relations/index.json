@@ -18,7 +18,10 @@
       "type": "feat",
       "scope": "db",
       "desc": "저장소 문서를 플랫폼에 적재하는 시연 데이터 스크립트",
-      "status": "pending"
+      "status": "completed",
+      "summary": "저장소 문서 60개를 태그·권한과 함께 재실행 안전하게 적재하고 BGE-M3 청크 262개의 고유성을 검증",
+      "started_at": "2026-08-11T01:28:28+0900",
+      "completed_at": "2026-08-11T01:35:26+0900"
     },
     {
       "step": 2,
