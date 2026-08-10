@@ -70,7 +70,10 @@
       "name": "demo-recovery-rewrite",
       "type": "feat",
       "desc": "실 OpenSQL에서 PG 프로세스 장애 자동 복구를 한 타임라인으로 보이는 데모",
-      "status": "pending"
+      "status": "completed",
+      "summary": "실 OpenSQL postmaster SIGKILL부터 Patroni 자동 재기동·앱 예외·OpenProxy 재접속·잡 및 정합성 수렴까지 단일 타임라인으로 검증",
+      "started_at": "2026-08-10T17:02:45+0900",
+      "completed_at": "2026-08-10T17:11:01+0900"
     },
     {
       "step": 7,
