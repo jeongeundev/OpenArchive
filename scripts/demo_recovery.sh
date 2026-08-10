@@ -256,7 +256,10 @@ wait_until 5 "앱 DB 프로브 연결" test -f "$TMP_DIR/app-probe-ready" || fai
 
 PATRONI_LOG_LINE=0
 if ssh -o BatchMode=yes -o ConnectTimeout=4 "$OPENSQL_SSH" "sudo -n test -r '$PATRONI_LOG'"; then
-  PATRONI_LOG_LINE="$(ssh -o BatchMode=yes -o ConnectTimeout=4 "$OPENSQL_SSH" "sudo -n wc -l < '$PATRONI_LOG'" 2>/dev/null || echo 0)"
+  # 리다이렉션은 sudo가 아니라 원격 셸이 수행한다. /home/opensql이 drwx------이라
+  # `sudo -n wc -l < file`은 허가 거부로 떨어지고 t2·t3이 영영 미관측이 된다.
+  PATRONI_LOG_LINE="$(ssh -o BatchMode=yes -o ConnectTimeout=4 "$OPENSQL_SSH" "sudo -n wc -l '$PATRONI_LOG'" 2>/dev/null | awk '{print $1+0}')"
+  [[ -n "$PATRONI_LOG_LINE" ]] || PATRONI_LOG_LINE=0
 else
   echo "참고: Patroni 로그를 찾거나 읽을 수 없습니다: $PATRONI_LOG (로그 사건은 미관측으로 계속합니다)"
 fi
