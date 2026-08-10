@@ -41,6 +41,12 @@ else
   echo "== frontend: 건너뜀 (frontend/package.json 없음) =="
 fi
 
+echo "== scripts: 셸 구문 검사 =="
+for f in "$ROOT"/scripts/*.sh "$ROOT"/scripts/hooks/*.sh; do
+  [ -f "$f" ] || continue
+  bash -n "$f" || FAILED=1
+done
+
 if [ "$FAILED" -ne 0 ]; then
   echo "검증 실패 — 위 출력에서 실패한 단계를 확인하세요."
 fi

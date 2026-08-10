@@ -42,7 +42,7 @@ SELECT count(*) FROM documents d
  WHERE c.version <> d.version;
 ```
 
-문서를 고치면 이 값이 잠깐 올랐다가 워커 처리 후 0으로 돌아옵니다. 장애를 일으켜도 결국 0으로 수렴합니다. `scripts/demo_recovery.sh`는 DB 정지와 워커 강제 종료 뒤에도 이 보장 범위가 유지되는지 실제로 검증합니다. **증명할 수 있는 주장을 하는 것**이 과장된 최신성 표현보다 낫다고 판단했습니다 ([ADR-015](docs/ADR.md)).
+문서를 고치면 이 값이 잠깐 올랐다가 워커 처리 후 0으로 돌아옵니다. 장애를 일으켜도 결국 0으로 수렴합니다. `scripts/demo_recovery.sh`는 DB 프로세스가 죽어도 Patroni가 스스로 재기동하고, 앱이 재연결해 미처리 잡을 이어 처리하며, 정합성 카운터가 0으로 수렴하는지 실제로 검증합니다. **증명할 수 있는 주장을 하는 것**이 과장된 최신성 표현보다 낫다고 판단했습니다 ([ADR-015](docs/ADR.md)).
 
 ---
 
@@ -174,20 +174,24 @@ http://localhost:8000/docs
 bash scripts/check.sh    # 백엔드 lint+test, 프론트엔드 lint+test+build
 ```
 
-복구 데모는 로컬 DB가 기동 중이고 `backend/.venv`에 개발 의존성이 설치된 상태에서 실행합니다. 스크립트가 API와 워커를 직접 띄우므로 별도로 실행해 둘 필요는 없습니다.
+복구 데모에는 마이그레이션이 적용된 **실 OpenSQL VM**과 `backend/.venv`의 개발 의존성이 필요합니다. 로컬 Docker DB에서는 실행할 수 없습니다. 스크립트가 API와 워커를 직접 띄우므로 별도로 실행해 둘 필요는 없습니다.
 
 ```bash
-docker compose up -d
-bash scripts/demo_recovery.sh
-
-# 실 OpenSQL VM: 설치 환경의 DB 운영 명령과 OpenProxy DSN을 주입한다.
-DB_STOP_CMD="ssh <vm> '<db-stop-command>'" \
-DB_START_CMD="ssh <vm> '<db-start-command>'" \
+# 기본값은 OPENSQL_HOST=192.168.64.4, OPENSQL_SSH=$OPENSQL_HOST,
+# PATRONI_URL=http://$OPENSQL_HOST:8008,
+# PATRONI_LOG=/home/opensql/logs/patroni.log, API_PORT=18000이다.
+OPENSQL_HOST=<vm-ip> \
+OPENSQL_SSH=<ssh-host> \
 DATABASE_URL="postgresql://postgres:pg_password@<vm-ip>:6432/opensql" \
+PATRONI_URL="http://<vm-ip>:8008" \
+PATRONI_LOG="/home/opensql/logs/patroni.log" \
+API_PORT=18000 \
 bash scripts/demo_recovery.sh
 ```
 
-로컬 기본값은 `docker compose stop db`와 `docker compose start db`다. VM 예시의 `<db-stop-command>`·`<db-start-command>`는 해당 설치의 검증된 운영 명령으로 바꾼다. 이 데모는 애플리케이션 재연결·잡 재개·좀비 회수·정합성 수렴을 검증하며, Single 구성에서 불가능한 Patroni 리더 승격은 검증하지 않는다.
+SSH 공개키 인증과 원격 호스트의 비밀번호 없는 `sudo`가 필요합니다. 데모는 postmaster 부모 프로세스에 `SIGKILL`을 한 번 보내고 Patroni의 자동 재기동, 앱 연결 예외와 재접속, 미처리 잡 재개, 정합성 수렴을 단일 타임라인으로 확인합니다.
+
+**DB 프로세스 장애 자동 복구를 검증했다. 노드 사망은 복구되지 않으며, 이는 사무국 지시에 따른 Single 구성의 제약이다. HA 설계는 유지하되 노드 승격은 검증하지 못했고, 애플리케이션 측 재연결·잡 재개·정합성 수렴을 함께 검증했다.**
 
 ### 실 OpenSQL 클러스터에 연결
 
