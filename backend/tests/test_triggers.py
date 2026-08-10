@@ -406,6 +406,57 @@ def test_edge_kind_distinguishes_overlaps_from_related_and_never_emits_points_to
     assert "points_to" not in kinds.values()
 
 
+def test_a_single_chunk_document_never_claims_overlaps(conn: psycopg.Connection):
+    """청크가 하나인 문서는 비율만으로는 항상 1.0이라 무조건 overlaps가 된다.
+
+    분모가 자기 청크 수이므로 이웃에 걸리기만 하면 1/1 = 1.0 >= 0.8이다. 내용이 전혀
+    달라도 "전반적으로 같은 내용"으로 단정되므로 겹친 청크의 절대 수 하한이 필요하다.
+    """
+    long_id = insert_document(conn, "long", "sha256:min-chunks-long")
+    single_id = insert_document(conn, "single", "sha256:min-chunks-single")
+    mark_document_ready(
+        conn,
+        long_id,
+        ["zero", "one", "two"],
+        vectors=[unit_vector(0), unit_vector(1), unit_vector(2)],
+    )
+    # single이 나중에 ready가 되어야 single 기준으로 비율이 계산된다.
+    mark_document_ready(conn, single_id, ["zero"], vectors=[unit_vector(0)])
+
+    kind = conn.execute(
+        "SELECT kind FROM document_edges WHERE src_document_id = %s AND dst_document_id = %s",
+        (single_id, long_id),
+    ).fetchone()
+
+    assert kind is not None, "이웃이므로 관계 자체는 남아야 한다"
+    assert kind[0] == "related"
+
+
+def test_two_matching_chunks_still_qualify_as_overlaps(conn: psycopg.Connection):
+    """하한은 2다. 청크 두 개가 모두 겹치면 overlaps 판정이 유지되어야 한다."""
+    twin_id = insert_document(conn, "twin", "sha256:min-chunks-twin")
+    source_id = insert_document(conn, "source", "sha256:min-chunks-source")
+    mark_document_ready(
+        conn,
+        twin_id,
+        ["zero", "one"],
+        vectors=[unit_vector(0), unit_vector(1)],
+    )
+    mark_document_ready(
+        conn,
+        source_id,
+        ["zero", "one"],
+        vectors=[unit_vector(0), unit_vector(1)],
+    )
+
+    kind = conn.execute(
+        "SELECT kind FROM document_edges WHERE src_document_id = %s AND dst_document_id = %s",
+        (source_id, twin_id),
+    ).fetchone()
+
+    assert kind is not None and kind[0] == "overlaps"
+
+
 def test_deleting_a_document_cascades_trigger_generated_edges(conn: psycopg.Connection):
     first_id = insert_document(conn, "first", "sha256:edge-delete-first")
     second_id = insert_document(conn, "second", "sha256:edge-delete-second")

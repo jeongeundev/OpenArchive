@@ -79,6 +79,7 @@ BEGIN
   ),
   pair_stats AS (
     SELECT dst_document_id,
+           count(DISTINCT src_chunk_index) AS matched_chunks,
            count(DISTINCT src_chunk_index)::real / source_size.chunk_count AS overlap_ratio,
            min(dist) AS min_dist
     FROM nearest_chunks
@@ -93,19 +94,25 @@ BEGIN
   ),
   document_pairs AS (
     SELECT stats.dst_document_id, stats.overlap_ratio,
-           closest.src_chunk_index, closest.dst_chunk_index, stats.min_dist
+           closest.src_chunk_index, closest.dst_chunk_index, stats.min_dist,
+           -- OVERLAP_RATIO = 0.8 (OPENSQL_RESEARCH §14)에 겹친 청크의 절대 수 하한을
+           -- 더한다. 비율의 분모가 자기 청크 수여서, 청크가 하나뿐인 문서는 이웃에
+           -- 걸리기만 해도 1/1 = 1.0이 되어 내용과 무관하게 "전반적으로 같은 내용"으로
+           -- 단정된다. 실측: 청크 1개 문서 19개가 각각 평균 9.6건의 overlaps를 만들었다.
+           -- 하한 2는 "두 대목 이상에서 만난다"를 요구해 그 자리를 막는다.
+           (stats.overlap_ratio >= 0.8 AND stats.matched_chunks >= 2) AS is_overlaps
     FROM pair_stats stats
     JOIN closest_chunks closest USING (dst_document_id)
   ),
   classified AS (
     SELECT NEW.id AS src_document_id,
            dst_document_id,
-           -- OVERLAP_RATIO = 0.8 (OPENSQL_RESEARCH §14). points_to 초기안과
-           -- BROADER_MARGIN=0.10 방향 판정은 실측에서 기각되어 related로 보존한다.
-           CASE WHEN overlap_ratio >= 0.8 THEN 'overlaps' ELSE 'related' END AS kind,
-           CASE WHEN overlap_ratio >= 0.8 THEN NULL ELSE src_chunk_index END AS src_chunk_index,
-           CASE WHEN overlap_ratio >= 0.8 THEN NULL ELSE dst_chunk_index END AS dst_chunk_index,
-           CASE WHEN overlap_ratio >= 0.8 THEN overlap_ratio ELSE 1.0 - min_dist END AS score
+           -- points_to 초기안과 BROADER_MARGIN=0.10 방향 판정은 실측에서 기각되어
+           -- related로 보존한다.
+           CASE WHEN is_overlaps THEN 'overlaps' ELSE 'related' END AS kind,
+           CASE WHEN is_overlaps THEN NULL ELSE src_chunk_index END AS src_chunk_index,
+           CASE WHEN is_overlaps THEN NULL ELSE dst_chunk_index END AS dst_chunk_index,
+           CASE WHEN is_overlaps THEN overlap_ratio ELSE 1.0 - min_dist END AS score
     FROM document_pairs
   ),
   both_directions AS (
