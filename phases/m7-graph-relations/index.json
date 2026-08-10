@@ -28,7 +28,10 @@
       "name": "measure-relation-signals",
       "type": "docs",
       "desc": "관계 판정 신호를 실데이터로 측정해 상수를 확정",
-      "status": "pending"
+      "status": "completed",
+      "summary": "실데이터로 이웃·겹침·trigram 신호를 측정해 N=10·겹침비 0.8을 확정하고 broader 판정과 상관 LATERAL HNSW의 실패를 기록",
+      "started_at": "2026-08-11T01:35:26+0900",
+      "completed_at": "2026-08-11T01:41:29+0900"
     },
     {
       "step": 3,
