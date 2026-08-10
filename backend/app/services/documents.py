@@ -12,6 +12,7 @@ import psycopg
 from psycopg.rows import dict_row
 
 from app.services.parsing import detect_content_type, extract_text
+from app.services.visibility import VISIBLE_TO_USER
 
 # 목록·요약 응답이 쓰는 컬럼. 네 곳에서 같은 나열을 반복하지 않도록 한 곳에 둔다.
 SUMMARY_COLUMNS = """id, title, filename, content_type, version, owner_id, visibility, tags,
@@ -114,8 +115,8 @@ async def list_documents(
     await cur.execute(
         f"""
         SELECT {SUMMARY_COLUMNS}
-        FROM documents
-        WHERE (visibility = 'public' OR owner_id = %(user)s)
+        FROM documents d
+        WHERE {VISIBLE_TO_USER}
           AND (%(status)s::text IS NULL OR embedding_status = %(status)s)
           AND (%(tag)s::text IS NULL OR %(tag)s = ANY(tags))
         ORDER BY created_at DESC, id
@@ -138,7 +139,7 @@ async def get_document(
                    AS chunk_version
         FROM documents d
         WHERE id = %(id)s
-          AND (visibility = 'public' OR owner_id = %(user)s)
+          AND {VISIBLE_TO_USER}
         """,
         {"id": document_id, "user": user_id},
     )

@@ -14,7 +14,7 @@ def test_related_response_accepts_service_dataclasses():
     related_id = uuid4()
     identical_id = uuid4()
     result = RelatedResult(
-        items=[RelatedDocument(related_id, "관련", ["opensql"], 0.75)],
+        items=[RelatedDocument(related_id, "관련", ["opensql"], "related", 0.75)],
         identical=[IdenticalDocument(identical_id, "동일")],
         based_on_version=2,
         reason=None,
@@ -23,6 +23,7 @@ def test_related_response_accepts_service_dataclasses():
     response = RelatedResponse.model_validate(result)
 
     assert response.items[0].document_id == related_id
+    assert response.items[0].kind == "related"
     assert response.identical[0].document_id == identical_id
     assert response.based_on_version == 2
 

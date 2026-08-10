@@ -37,6 +37,36 @@ def test_search_returns_a_matching_document(db_client: TestClient, migrated_db: 
     assert response.json()["items"][0]["document_id"] == matching_id
 
 
+def test_search_response_exposes_the_relation_it_arrived_through(
+    db_client: TestClient, migrated_db: str
+):
+    """step8 AC 9번이 GET/POST 착오로 검증하지 못한 자리 — via가 응답까지 오는가.
+
+    edge는 손으로 만들지 않는다. 적재 → 임베딩 완료 → 트리거 → 검색 확장 → 직렬화가
+    한 줄로 이어지는지를 API 경계에서 본다.
+    """
+    entry_id, neighbor_id = seed_documents(
+        migrated_db,
+        [
+            {"title": "직접 진입점", "content": "정합성 직접 일치 문장 " * 900},
+            {"title": "관계로만 도달", "content": "질의 어휘가 전혀 없는 별도 문서"},
+        ],
+    )
+
+    body = db_client.post(
+        "/api/search", json={"query": "정합성 직접 일치 문장", "k": 2}
+    ).json()
+
+    items = body["items"]
+    assert items[0]["document_id"] == entry_id
+    assert items[0]["via"] is None
+    expanded = [item for item in items if item["via"] is not None]
+    assert [item["document_id"] for item in expanded] == [neighbor_id]
+    assert expanded[0]["via"]["from_document_id"] == entry_id
+    assert expanded[0]["via"]["kind"] in {"overlaps", "related"}
+    assert expanded[0]["via"]["depth"] == 1
+
+
 def test_search_exposes_the_service_sql_without_bound_vector(
     db_client: TestClient, migrated_db: str
 ):

@@ -15,6 +15,9 @@
 import psycopg
 import pytest
 
+from app.embeddings.fake import FakeProvider
+from app.vectors import to_pgvector_literal
+
 CHANNEL = "embedding_jobs"
 
 
@@ -64,6 +67,47 @@ def history(conn: psycopg.Connection, doc_id) -> list[tuple]:
         WHERE document_id = %s ORDER BY version
         """,
         (doc_id,),
+    ).fetchall()
+
+
+def mark_document_ready(
+    conn: psycopg.Connection,
+    doc_id,
+    chunks: list[str],
+    *,
+    version: int = 1,
+    vectors: list[list[float]] | None = None,
+) -> None:
+    """워커 finalize의 청크 INSERT → ready 전환 순서를 DB 공개 인터페이스로 재현한다."""
+    vectors = vectors or FakeProvider().embed(chunks)
+    for index, (chunk, vector) in enumerate(zip(chunks, vectors, strict=True)):
+        conn.execute(
+            """
+            INSERT INTO document_chunks (document_id, version, chunk_index, content, embedding)
+            VALUES (%s, %s, %s, %s, %s::vector)
+            """,
+            (doc_id, version, index, chunk, to_pgvector_literal(vector)),
+        )
+    conn.execute("UPDATE documents SET embedding_status = 'ready' WHERE id = %s", (doc_id,))
+
+
+def unit_vector(coordinate_index: int) -> list[float]:
+    vector = [0.0] * 1024
+    vector[coordinate_index] = 1.0
+    return vector
+
+
+def edges_for(conn: psycopg.Connection, doc_id) -> list[tuple]:
+    return conn.execute(
+        """
+        SELECT src_document_id, dst_document_id, kind,
+               src_chunk_index, dst_chunk_index, score
+        FROM document_edges
+        WHERE src_document_id = %s OR dst_document_id = %s
+        ORDER BY src_document_id, dst_document_id, kind,
+                 src_chunk_index NULLS FIRST, dst_chunk_index NULLS FIRST
+        """,
+        (doc_id, doc_id),
     ).fetchall()
 
 
@@ -262,3 +306,263 @@ def test_trigger_definition_keeps_its_three_safety_conditions(conn: psycopg.Conn
     assert "AFTER INSERT OR UPDATE OF content_hash" in definition
     assert "FOR EACH ROW" in definition
     assert "pg_trigger_depth() = 0" in definition
+
+
+def test_ready_document_builds_edges_inside_the_database(conn: psycopg.Connection):
+    """워커가 청크를 확정하고 ready로 바꾸면 애플리케이션 INSERT 없이 관계가 생긴다."""
+    first_id = insert_document(conn, "공통 토큰 alpha beta", "sha256:edge-first")
+    second_id = insert_document(conn, "공통 토큰 alpha gamma", "sha256:edge-second")
+    mark_document_ready(conn, first_id, ["공통 토큰 alpha beta"])
+
+    mark_document_ready(conn, second_id, ["공통 토큰 alpha gamma"])
+
+    (count,) = conn.execute(
+        """
+        SELECT count(*) FROM document_edges
+        WHERE src_document_id = %s OR dst_document_id = %s
+        """,
+        (second_id, second_id),
+    ).fetchone()
+    assert count > 0
+
+
+def test_non_directional_edges_are_inserted_in_both_directions_without_self_edges(
+    conn: psycopg.Connection,
+):
+    first_id = insert_document(conn, "first", "sha256:edge-direction-first")
+    second_id = insert_document(conn, "second", "sha256:edge-direction-second")
+    mark_document_ready(conn, first_id, ["first"], vectors=[unit_vector(0)])
+    mark_document_ready(conn, second_id, ["second"], vectors=[unit_vector(0)])
+
+    rows = edges_for(conn, second_id)
+
+    assert {(row[0], row[1]) for row in rows} == {
+        (first_id, second_id),
+        (second_id, first_id),
+    }
+    assert all(row[0] != row[1] for row in rows)
+
+
+def test_reembedding_replaces_all_edges_touching_the_document(conn: psycopg.Connection):
+    first_id = insert_document(conn, "first", "sha256:edge-reembed-first")
+    second_id = insert_document(conn, "second", "sha256:edge-reembed-second")
+    mark_document_ready(conn, first_id, ["first"], vectors=[unit_vector(0)])
+    mark_document_ready(conn, second_id, ["second"], vectors=[unit_vector(0)])
+    first_edges = edges_for(conn, second_id)
+    conn.execute(
+        "UPDATE document_edges SET score = 0.123 WHERE src_document_id = %s OR dst_document_id = %s",
+        (second_id, second_id),
+    )
+
+    conn.execute("DELETE FROM document_chunks WHERE document_id = %s", (second_id,))
+    conn.execute("UPDATE documents SET embedding_status = 'processing' WHERE id = %s", (second_id,))
+    mark_document_ready(conn, second_id, ["second changed"], vectors=[unit_vector(1)])
+
+    replaced_edges = edges_for(conn, second_id)
+    assert len(replaced_edges) == len(first_edges)
+    assert all(row[5] != pytest.approx(0.123) for row in replaced_edges)
+
+
+def test_edge_kind_distinguishes_overlaps_from_related_and_never_emits_points_to(
+    conn: psycopg.Connection,
+):
+    """낮은 매칭 비율은 폐기된 points_to가 아니라 related로 폴백한다 (ADR-029)."""
+    overlap_id = insert_document(conn, "overlap", "sha256:kind-overlap")
+    partial_id = insert_document(conn, "partial", "sha256:kind-partial")
+    source_id = insert_document(conn, "source", "sha256:kind-source")
+    mark_document_ready(
+        conn,
+        overlap_id,
+        ["same zero", "same one"],
+        vectors=[unit_vector(0), unit_vector(1)],
+    )
+    mark_document_ready(conn, partial_id, ["only zero"], vectors=[unit_vector(0)])
+    # source의 두 번째 청크에서 partial을 top-10 밖으로 밀어 매칭 비율을 1/2로 만든다.
+    near_one = unit_vector(1)
+    near_one[2] = 0.1
+    for index in range(10):
+        decoy_id = insert_document(conn, f"decoy {index}", f"sha256:kind-decoy:{index}")
+        mark_document_ready(conn, decoy_id, [f"decoy {index}"], vectors=[near_one])
+    mark_document_ready(
+        conn,
+        source_id,
+        ["source zero", "source one"],
+        vectors=[unit_vector(0), unit_vector(1)],
+    )
+
+    kinds = {
+        dst_id: kind
+        for dst_id, kind in conn.execute(
+            """
+            SELECT dst_document_id, kind FROM document_edges
+            WHERE src_document_id = %s
+            """,
+            (source_id,),
+        ).fetchall()
+    }
+
+    assert kinds[overlap_id] == "overlaps"
+    assert kinds[partial_id] == "related"
+    assert "points_to" not in kinds.values()
+
+
+def test_a_single_chunk_document_never_claims_overlaps(conn: psycopg.Connection):
+    """청크가 하나인 문서는 비율만으로는 항상 1.0이라 무조건 overlaps가 된다.
+
+    분모가 자기 청크 수이므로 이웃에 걸리기만 하면 1/1 = 1.0 >= 0.8이다. 내용이 전혀
+    달라도 "전반적으로 같은 내용"으로 단정되므로 겹친 청크의 절대 수 하한이 필요하다.
+    """
+    long_id = insert_document(conn, "long", "sha256:min-chunks-long")
+    single_id = insert_document(conn, "single", "sha256:min-chunks-single")
+    mark_document_ready(
+        conn,
+        long_id,
+        ["zero", "one", "two"],
+        vectors=[unit_vector(0), unit_vector(1), unit_vector(2)],
+    )
+    # single이 나중에 ready가 되어야 single 기준으로 비율이 계산된다.
+    mark_document_ready(conn, single_id, ["zero"], vectors=[unit_vector(0)])
+
+    kind = conn.execute(
+        "SELECT kind FROM document_edges WHERE src_document_id = %s AND dst_document_id = %s",
+        (single_id, long_id),
+    ).fetchone()
+
+    assert kind is not None, "이웃이므로 관계 자체는 남아야 한다"
+    assert kind[0] == "related"
+
+
+def test_two_matching_chunks_still_qualify_as_overlaps(conn: psycopg.Connection):
+    """하한은 2다. 청크 두 개가 모두 겹치면 overlaps 판정이 유지되어야 한다."""
+    twin_id = insert_document(conn, "twin", "sha256:min-chunks-twin")
+    source_id = insert_document(conn, "source", "sha256:min-chunks-source")
+    mark_document_ready(
+        conn,
+        twin_id,
+        ["zero", "one"],
+        vectors=[unit_vector(0), unit_vector(1)],
+    )
+    mark_document_ready(
+        conn,
+        source_id,
+        ["zero", "one"],
+        vectors=[unit_vector(0), unit_vector(1)],
+    )
+
+    kind = conn.execute(
+        "SELECT kind FROM document_edges WHERE src_document_id = %s AND dst_document_id = %s",
+        (source_id, twin_id),
+    ).fetchone()
+
+    assert kind is not None and kind[0] == "overlaps"
+
+
+def test_deleting_a_document_cascades_trigger_generated_edges(conn: psycopg.Connection):
+    first_id = insert_document(conn, "first", "sha256:edge-delete-first")
+    second_id = insert_document(conn, "second", "sha256:edge-delete-second")
+    mark_document_ready(conn, first_id, ["first"], vectors=[unit_vector(0)])
+    mark_document_ready(conn, second_id, ["second"], vectors=[unit_vector(0)])
+
+    conn.execute("DELETE FROM documents WHERE id = %s", (second_id,))
+
+    assert edges_for(conn, second_id) == []
+
+
+def test_metadata_update_does_not_rebuild_edges(conn: psycopg.Connection):
+    first_id = insert_document(conn, "first", "sha256:edge-metadata-first")
+    second_id = insert_document(conn, "second", "sha256:edge-metadata-second")
+    mark_document_ready(conn, first_id, ["first"], vectors=[unit_vector(0)])
+    mark_document_ready(conn, second_id, ["second"], vectors=[unit_vector(0)])
+    conn.execute(
+        "UPDATE document_edges SET score = 0.123 WHERE src_document_id = %s OR dst_document_id = %s",
+        (second_id, second_id),
+    )
+    before = edges_for(conn, second_id)
+
+    conn.execute(
+        "UPDATE documents SET title = 'renamed', tags = ARRAY['changed'] WHERE id = %s",
+        (second_id,),
+    )
+
+    assert edges_for(conn, second_id) == before
+
+
+def test_ready_to_ready_update_does_not_reenter_the_trigger(conn: psycopg.Connection):
+    first_id = insert_document(conn, "first", "sha256:edge-reentry-first")
+    second_id = insert_document(conn, "second", "sha256:edge-reentry-second")
+    mark_document_ready(conn, first_id, ["first"], vectors=[unit_vector(0)])
+    mark_document_ready(conn, second_id, ["second"], vectors=[unit_vector(0)])
+    conn.execute(
+        "UPDATE document_edges SET score = 0.123 WHERE src_document_id = %s OR dst_document_id = %s",
+        (second_id, second_id),
+    )
+
+    conn.execute("UPDATE documents SET embedding_status = 'ready' WHERE id = %s", (second_id,))
+
+    assert all(row[5] == pytest.approx(0.123) for row in edges_for(conn, second_id))
+
+
+@pytest.mark.parametrize("deprecated_kind", ["points_to", "broader"])
+def test_edges_reject_kinds_removed_by_adr_029(
+    conn: psycopg.Connection, deprecated_kind: str
+):
+    first_id = insert_document(conn, "first", f"sha256:removed-kind-first:{deprecated_kind}")
+    second_id = insert_document(conn, "second", f"sha256:removed-kind-second:{deprecated_kind}")
+
+    with pytest.raises(psycopg.errors.CheckViolation):
+        conn.execute(
+            """
+            INSERT INTO document_edges
+                (src_document_id, dst_document_id, kind, score)
+            VALUES (%s, %s, %s, 0.5)
+            """,
+            (first_id, second_id, deprecated_kind),
+        )
+
+
+def test_edges_trigger_definition_and_function_settings_are_scoped(conn: psycopg.Connection):
+    definition, config = conn.execute(
+        """
+        SELECT pg_get_triggerdef(t.oid), p.proconfig
+        FROM pg_trigger t
+        JOIN pg_class c ON c.oid = t.tgrelid
+        JOIN pg_proc p ON p.oid = t.tgfoid
+        WHERE c.relname = 'documents' AND t.tgname = 'trg_build_document_edges'
+        """
+    ).fetchone()
+
+    assert "AFTER UPDATE OF embedding_status" in definition
+    assert "new.embedding_status = 'ready'" in definition.lower()
+    assert "old.embedding_status IS DISTINCT FROM 'ready'".lower() in definition.lower()
+    assert set(config) == {"hnsw.ef_search=200", "random_page_cost=1.1"}
+
+
+def test_edge_neighbor_constant_probe_can_use_the_hnsw_index(conn: psycopg.Connection):
+    """§14의 상관 LATERAL과 달리 함수의 청크별 상수 프로브는 HNSW가 가능한 형태다."""
+    first_id = insert_document(conn, "first", "sha256:edge-plan-first")
+    second_id = insert_document(conn, "second", "sha256:edge-plan-second")
+    mark_document_ready(conn, first_id, ["first"], vectors=[unit_vector(0)])
+    mark_document_ready(conn, second_id, ["second"], vectors=[unit_vector(1)])
+    probe = to_pgvector_literal(unit_vector(0))
+
+    with conn.transaction():
+        conn.execute("SET LOCAL hnsw.ef_search = 200")
+        conn.execute("SET LOCAL random_page_cost = 1.1")
+        # 작은 테스트 테이블에서 비용 선택이 아니라 쿼리 형태의 인덱스 사용 능력을 본다.
+        conn.execute("SET LOCAL enable_seqscan = off")
+        plan = "\n".join(
+            row[0]
+            for row in conn.execute(
+                """
+                EXPLAIN (COSTS OFF)
+                SELECT candidate.document_id
+                FROM document_chunks candidate
+                WHERE candidate.document_id <> %s
+                ORDER BY candidate.embedding <=> %s::vector
+                LIMIT 10
+                """,
+                (second_id, probe),
+            ).fetchall()
+        )
+
+    assert "Index Scan using idx_chunks_embedding" in plan

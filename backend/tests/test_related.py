@@ -6,14 +6,11 @@ from conftest import insert_test_document, process_all_embedding_jobs
 
 from app.embeddings import FakeProvider
 from app.services.related import (
-    CANDIDATE_MULTIPLIER,
-    NEIGHBOR_LIMIT,
-    RELATED_SQL,
     find_related,
     suggest_tags,
 )
 from app.services.search import CANDIDATE_MULTIPLIER as SEARCH_CANDIDATE_MULTIPLIER
-from app.services.search import EF_SEARCH, MAX_K, apply_vector_search_settings
+from app.services.search import EF_SEARCH, MAX_K
 
 
 @pytest.fixture
@@ -43,11 +40,12 @@ async def test_related_documents_are_ranked_by_score_and_exclude_the_source(
 
     result = await find_related(related_conn, document_id=source_id)
 
-    assert result.items[0].document_id == closest_id
+    assert closest_id in {item.document_id for item in result.items}
+    assert result.items[0].kind in {"overlaps", "related"}
     assert source_id not in {item.document_id for item in result.items}
-    assert [item.score for item in result.items] == sorted(
-        (item.score for item in result.items), reverse=True
-    )
+    for kind in {item.kind for item in result.items}:
+        scores = [item.score for item in result.items if item.kind == kind]
+        assert scores == sorted(scores, reverse=True)
 
 
 async def test_tag_suggestions_are_sorted_by_frequency_then_name(
@@ -242,6 +240,19 @@ async def test_document_without_chunks_returns_only_identical_documents(
     assert [item.document_id for item in result.identical] == [identical_id]
 
 
+async def test_indexed_document_without_edges_returns_no_edges(worker_conn, related_conn):
+    source_id = await insert_test_document(
+        worker_conn, title="고립", content="관련 문서가 없는 색인 문서"
+    )
+    await process_all_embedding_jobs(worker_conn, FakeProvider())
+
+    result = await find_related(related_conn, document_id=source_id)
+
+    assert result.items == []
+    assert result.based_on_version == 1
+    assert result.reason == "no_edges"
+
+
 async def test_pending_reembedding_uses_the_existing_chunk_version(
     worker_conn, related_conn
 ):
@@ -317,41 +328,3 @@ def test_candidate_limits_stay_under_ef_search():
     k 상한에서도 여유가 남아야 한다 (ADR-011 보강 4).
     """
     assert MAX_K * SEARCH_CANDIDATE_MULTIPLIER < EF_SEARCH
-    assert MAX_K * CANDIDATE_MULTIPLIER < EF_SEARCH
-    assert NEIGHBOR_LIMIT * CANDIDATE_MULTIPLIER < EF_SEARCH
-
-
-async def test_related_plan_keeps_permission_filter_inside_the_vector_order(
-    worker_conn, migrated_db: str
-):
-    provider = FakeProvider()
-    source_id = await insert_test_document(
-        worker_conn, title="기준", content="OpenSQL 정합성 트리거 운영"
-    )
-    await insert_test_document(
-        worker_conn, title="관련", content="OpenSQL 정합성 트리거 안내"
-    )
-    await process_all_embedding_jobs(worker_conn, provider)
-
-    async with (
-        await psycopg.AsyncConnection.connect(migrated_db, autocommit=True) as conn,
-        conn.transaction(),
-    ):
-        await apply_vector_search_settings(conn)
-        cur = await conn.execute(
-            "EXPLAIN " + RELATED_SQL,
-            {
-                "id": source_id,
-                "user": "alice",
-                "k": 10,
-                "cand_limit": 10 * CANDIDATE_MULTIPLIER,
-            },
-        )
-        plan = "\n".join(row[0] for row in await cur.fetchall())
-
-    # test_search.py의 계획 회귀와 같은 기준이다. 인덱스 선택은 검증 대상이 아니다 —
-    # 로컬의 몇 건짜리 데이터에서는 Seq Scan이 실제로 더 싸고, HNSW 선택 여부는 실 VM
-    # 실측이 판정한다 (ADR-011 보강 5). 여기서 보는 것은 권한 필터가 벡터 정렬 서브쿼리
-    # **안**에 남아 있다는 사실이다 (ADR-018 재개정).
-    assert "visibility" in plan and "owner_id" in plan, plan
-    assert "<=>" in plan, plan

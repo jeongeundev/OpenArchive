@@ -7,6 +7,7 @@ from uuid import UUID
 import psycopg
 
 from app.embeddings.base import EmbeddingProvider
+from app.services.visibility import VISIBLE_TO_USER
 from app.vectors import to_pgvector_literal
 
 EF_SEARCH = 200
@@ -14,33 +15,128 @@ CANDIDATE_MULTIPLIER = 5
 # ADR-011 보강 4: 과다 조회 LIMIT(k * CANDIDATE_MULTIPLIER)이 ef_search에 닿으면
 # HNSW가 에러 없이 행을 덜 돌려준다(실측: ef_search=200에서 LIMIT 200 → 193행).
 # 등호에서도 모자라므로 상한에서 여유가 남아야 한다 — 여기서는 20 * 5 = 100이다.
-# 배수가 다른 호출부(관련 문서·태그 추천)는 자기 배수를 EF_SEARCH에서 역산한다
-# (app/services/related.py). 이 불변식은 test_related.py가 지킨다.
+# 관련 문서·태그 추천은 저장된 edge를 읽으므로 더 이상 벡터 정렬을 하지 않는다
+# (ADR-029). 남은 벡터 정렬 호출부는 이 모듈과 008 트리거뿐이며, 트리거는 자기
+# 함수 정의의 SET으로 같은 ef_search를 건다. 이 불변식은
+# test_search.py·test_related.py가 지킨다.
 MAX_K = 20
+GRAPH_MAX_DEPTH = 2
+# 코사인 거리는 최대 2다. 한 단계마다 그 범위만큼 벌려 직접 결과가 관계 확장보다
+# 항상 앞서게 하고, 동시에 기존 `score = 1 - dist` 정렬 의미를 유지한다.
+GRAPH_DISTANCE_PENALTY = 2.0
 
 SEARCH_SQL = f"""
-WITH candidates AS (
-    SELECT c.document_id, c.chunk_index, c.content, c.version,
+WITH RECURSIVE candidates AS (
+    SELECT c.document_id, c.chunk_index,
+           (
+               SELECT string_agg(context.content, E'\n\n' ORDER BY context.chunk_index)
+               FROM document_chunks context
+               WHERE context.document_id = c.document_id
+                 AND context.chunk_index BETWEEN c.chunk_index - 1 AND c.chunk_index + 1
+           ) AS content,
+           c.version,
            c.embedding <=> %(qvec)s::vector AS dist
     FROM document_chunks c
     JOIN documents d ON d.id = c.document_id
     WHERE (%(tags)s::text[] IS NULL OR d.tags && %(tags)s)
       AND (%(ctype)s::text IS NULL OR d.content_type = %(ctype)s)
-      AND (d.visibility = 'public' OR d.owner_id = %(user)s)
+      AND {VISIBLE_TO_USER}
     ORDER BY c.embedding <=> %(qvec)s::vector
     LIMIT %(k)s * {CANDIDATE_MULTIPLIER}
 ),
-best_per_doc AS (
-    SELECT DISTINCT ON (document_id) *
-    FROM candidates
-    ORDER BY document_id, dist
+direct_documents AS (
+    SELECT DISTINCT document_id FROM candidates
+),
+walk AS (
+    SELECT c.document_id, c.chunk_index, c.content, c.version, c.dist,
+           NULL::uuid AS via_document_id, NULL::text AS via_kind, 0 AS depth,
+           ARRAY[c.document_id] AS path
+    FROM candidates c
+
+    UNION ALL
+
+    SELECT e.dst_document_id, target.chunk_index, target.content, target.version,
+           w.dist + {GRAPH_DISTANCE_PENALTY},
+           w.document_id, e.kind, w.depth + 1, w.path || e.dst_document_id
+    FROM walk w
+    JOIN document_edges e ON e.src_document_id = w.document_id
+    JOIN documents d ON d.id = e.dst_document_id
+    JOIN LATERAL (
+        SELECT target.chunk_index, target.content, target.version
+        FROM document_chunks target
+        WHERE target.document_id = e.dst_document_id
+          AND (e.dst_chunk_index IS NULL OR target.chunk_index = e.dst_chunk_index)
+        ORDER BY target.embedding <=> %(qvec)s::vector
+        LIMIT 1
+    ) target ON true
+    WHERE w.depth < {GRAPH_MAX_DEPTH}
+      AND NOT e.dst_document_id = ANY(w.path)
+      AND NOT EXISTS (
+          SELECT 1 FROM direct_documents direct
+          WHERE direct.document_id = e.dst_document_id
+      )
+      AND (%(tags)s::text[] IS NULL OR d.tags && %(tags)s)
+      AND (%(ctype)s::text IS NULL OR d.content_type = %(ctype)s)
+      AND {VISIBLE_TO_USER}
+),
+expanded AS (
+    SELECT document_id, chunk_index, content, version, dist,
+           via_document_id, via_kind, depth
+    FROM walk
+
+    UNION ALL
+
+    SELECT c.document_id, c.chunk_index, previous.content, previous.version,
+           c.dist + {GRAPH_DISTANCE_PENALTY}, c.document_id, 'revision', 1
+    FROM candidates c
+    JOIN document_versions previous
+      ON previous.document_id = c.document_id
+     AND previous.version = c.version - 1
+),
+deduplicated AS (
+    SELECT DISTINCT ON (
+        document_id,
+        CASE WHEN depth = 0 THEN -1 ELSE version END,
+        CASE WHEN depth = 0 OR via_kind = 'revision' THEN -1 ELSE chunk_index END
+    ) *
+    FROM expanded
+    ORDER BY document_id,
+             CASE WHEN depth = 0 THEN -1 ELSE version END,
+             CASE WHEN depth = 0 OR via_kind = 'revision' THEN -1 ELSE chunk_index END,
+             CASE WHEN depth = 0 THEN 0 ELSE 1 END,
+             dist, depth
+),
+selected AS (
+    (SELECT * FROM deduplicated
+     WHERE depth = 0
+     ORDER BY dist, document_id, chunk_index
+     LIMIT %(k)s)
+
+    UNION ALL
+
+    (SELECT * FROM deduplicated
+     WHERE depth > 0
+     ORDER BY dist,
+              CASE via_kind
+                  WHEN 'overlaps' THEN 0 WHEN 'related' THEN 1
+                  WHEN 'revision' THEN 2 ELSE 3
+              END,
+              depth, document_id, chunk_index
+     LIMIT %(k)s)
 )
 SELECT d.id, d.title, d.filename, d.tags, d.content_type,
-       b.chunk_index, b.content, 1 - b.dist AS score, b.version
-FROM best_per_doc b
-JOIN documents d ON d.id = b.document_id
-ORDER BY b.dist
-LIMIT %(k)s
+       hit.chunk_index, hit.content, 1 - hit.dist AS score, hit.version,
+       hit.via_document_id, hit.via_kind, hit.depth
+FROM selected hit
+JOIN documents d ON d.id = hit.document_id
+ORDER BY CASE WHEN hit.depth = 0 THEN 0 ELSE 1 END,
+         hit.dist,
+         CASE hit.via_kind
+             WHEN 'overlaps' THEN 0 WHEN 'related' THEN 1
+             WHEN 'revision' THEN 2 ELSE 3
+         END,
+         hit.depth,
+         hit.document_id, hit.chunk_index
 """
 
 
@@ -56,6 +152,13 @@ async def apply_vector_search_settings(conn: psycopg.AsyncConnection) -> None:
 
 
 @dataclass(frozen=True)
+class SearchVia:
+    from_document_id: UUID
+    kind: str
+    depth: int
+
+
+@dataclass(frozen=True)
 class SearchHit:
     document_id: UUID
     title: str
@@ -66,6 +169,7 @@ class SearchHit:
     content: str
     score: float
     based_on_version: int
+    via: SearchVia | None
 
 
 async def search_documents(
@@ -110,6 +214,11 @@ async def search_documents(
             content=row[6],
             score=float(row[7]),
             based_on_version=row[8],
+            via=(
+                SearchVia(from_document_id=row[9], kind=row[10], depth=row[11])
+                if row[9] is not None
+                else None
+            ),
         )
         for row in rows
     ]

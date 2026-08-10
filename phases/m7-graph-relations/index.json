@@ -7,7 +7,10 @@
       "name": "research-opencrypto",
       "type": "docs",
       "desc": "opencrypto 확장 실측과 기각 근거를 조사 문서에 반영",
-      "status": "pending"
+      "status": "completed",
+      "summary": "opencrypto의 ARIA·SEED 실측, 제약, 기각 근거와 확장 조사 누락 방지 축을 문서화",
+      "started_at": "2026-08-11T01:25:29+0900",
+      "completed_at": "2026-08-11T01:28:28+0900"
     },
     {
       "step": 1,
@@ -15,14 +18,20 @@
       "type": "feat",
       "scope": "db",
       "desc": "저장소 문서를 플랫폼에 적재하는 시연 데이터 스크립트",
-      "status": "pending"
+      "status": "completed",
+      "summary": "저장소 문서 60개를 태그·권한과 함께 재실행 안전하게 적재하고 BGE-M3 청크 262개의 고유성을 검증",
+      "started_at": "2026-08-11T01:28:28+0900",
+      "completed_at": "2026-08-11T01:35:26+0900"
     },
     {
       "step": 2,
       "name": "measure-relation-signals",
       "type": "docs",
       "desc": "관계 판정 신호를 실데이터로 측정해 상수를 확정",
-      "status": "pending"
+      "status": "completed",
+      "summary": "실데이터로 이웃·겹침·trigram 신호를 측정해 N=10·겹침비 0.8을 확정하고 broader 판정과 상관 LATERAL HNSW의 실패를 기록",
+      "started_at": "2026-08-11T01:35:26+0900",
+      "completed_at": "2026-08-11T01:41:29+0900"
     },
     {
       "step": 3,
@@ -30,7 +39,10 @@
       "type": "docs",
       "scope": "adr",
       "desc": "관계 그래프 설계를 ADR-029로 신설하고 ADR-018을 개정",
-      "status": "pending"
+      "status": "completed",
+      "summary": "관계 저장 시점·문서 노드·순위 컷오프·권한 원칙을 ADR-029로 확정하고 ADR-018의 관련 문서 방식을 저장 edge 기반으로 개정",
+      "started_at": "2026-08-11T01:41:29+0900",
+      "completed_at": "2026-08-11T01:44:16+0900"
     },
     {
       "step": 4,
@@ -38,7 +50,10 @@
       "type": "refactor",
       "scope": "api",
       "desc": "열람 범위 술어를 SQL 조각 상수로 묶고 기존 세 쿼리에 소급",
-      "status": "pending"
+      "status": "completed",
+      "summary": "열람 범위 SQL 술어를 단일 상수로 통합하고 세 시선의 검색·관련 문서·태그 추천·동일 텍스트 노출을 행동 테스트 8개로 고정",
+      "started_at": "2026-08-11T01:44:17+0900",
+      "completed_at": "2026-08-11T01:47:03+0900"
     },
     {
       "step": 5,
@@ -46,7 +61,10 @@
       "type": "feat",
       "scope": "db",
       "desc": "document_edges 테이블과 순회 인덱스",
-      "status": "pending"
+      "status": "completed",
+      "summary": "pg_trgm과 문서 관계 테이블의 무결성 제약·NULL 안전 중복 방지·양방향 순회 인덱스를 추가하고 실제 계획으로 검증",
+      "started_at": "2026-08-11T01:47:03+0900",
+      "completed_at": "2026-08-11T01:50:40+0900"
     },
     {
       "step": 6,
@@ -54,7 +72,10 @@
       "type": "feat",
       "scope": "db",
       "desc": "청크 준비 완료 시 관계 3종을 생성하는 트리거",
-      "status": "pending"
+      "status": "completed",
+      "summary": "ready 전이 트리거가 HNSW 가능한 청크별 상수 프로브로 overlaps·related 양방향 관계를 교체 생성하도록 구현하고 실 seed에서 두 kind와 무결성을 검증",
+      "started_at": "2026-08-11T01:50:40+0900",
+      "completed_at": "2026-08-11T02:03:56+0900"
     },
     {
       "step": 7,
@@ -62,7 +83,10 @@
       "type": "feat",
       "scope": "api",
       "desc": "관련 문서와 태그 추천을 저장된 관계 기반으로 교체 — API·MCP 응답까지",
-      "status": "pending"
+      "status": "completed",
+      "summary": "관련 문서·태그 추천을 권한 필터된 저장 edge로 전환하고 kind·no_edges를 REST와 MCP 문서 상세 응답까지 전달",
+      "started_at": "2026-08-11T02:03:56+0900",
+      "completed_at": "2026-08-11T02:09:51+0900"
     },
     {
       "step": 8,
@@ -70,7 +94,10 @@
       "type": "feat",
       "scope": "search",
       "desc": "진입점에서 관계를 타고 확장하는 그래프 검색",
-      "status": "pending"
+      "status": "completed",
+      "summary": "벡터 진입점에서 권한 필터된 관계를 깊이 2까지 순회하고 인접 맥락·직전 텍스트 버전·도달 경로를 단일 SQL 응답에 결합",
+      "started_at": "2026-08-11T02:09:51+0900",
+      "completed_at": "2026-08-11T02:22:51+0900"
     },
     {
       "step": 9,
@@ -78,7 +105,11 @@
       "type": "feat",
       "scope": "frontend",
       "desc": "검색 결과와 문서 상세에 관계 종류를 노출",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-08-11T02:22:51+0900",
+      "completed_at": "2026-08-11T03:10:00+0900",
+      "summary": "검색 결과·문서 상세에 관계 어휘를 노출하고, 육안 검증에서 드러난 두 결함을 고쳤다 — 겹침 판정에 매칭 청크 하한 2를 더해 1청크 문서의 overlaps 오판정 제거(502→262건), 확장 결과의 진입점 기반 음수 score를 화면에서 제외"
     }
-  ]
+  ],
+  "created_at": "2026-08-11T01:25:29+0900"
 }

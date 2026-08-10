@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useState } from "react";
 
+import { relationLabel } from "@/lib/relations";
 import type { SearchResponse } from "@/lib/types";
 
 const EXCERPT_LENGTH = 300;
@@ -30,6 +31,10 @@ export function SearchResults({
     );
   }
 
+  const titlesById = new Map(
+    response.items.map((item) => [item.document_id, item.title]),
+  );
+
   return (
     <section className="space-y-4">
       {loading ? <p className="text-sm text-neutral-500">검색 중…</p> : null}
@@ -43,8 +48,14 @@ export function SearchResults({
             const excerpt = item.content.length > EXCERPT_LENGTH
               ? `${item.content.slice(0, EXCERPT_LENGTH)}…`
               : item.content;
+            const sourceTitle = item.via === null
+              ? null
+              : titlesById.get(item.via.from_document_id) ?? "연결된 문서";
             return (
-              <article key={item.document_id} className="rounded-lg border border-neutral-800 bg-[#141414] p-6">
+              <article
+                key={`${item.document_id}:${item.based_on_version}:${item.chunk_index}`}
+                className="rounded-lg border border-neutral-800 bg-[#141414] p-6"
+              >
                 <div className="flex items-start justify-between gap-4">
                   <div>
                     <Link href={`/documents/${item.document_id}`} className="font-medium text-white hover:text-[#0ea5e9]">
@@ -55,10 +66,19 @@ export function SearchResults({
                       {item.tags.length > 0 ? ` · ${item.tags.join(", ")}` : ""}
                     </p>
                   </div>
-                  <span className="shrink-0 text-sm font-medium text-[#0ea5e9]">
-                    유사도 {item.score.toFixed(3)}
-                  </span>
+                  {/* 확장 결과의 score는 진입점까지의 거리에 단계 페널티를 더한 값이라
+                      질의와의 유사도가 아니다. 직접 매칭과 같은 축에 세우면 안 된다. */}
+                  {item.via === null ? (
+                    <span className="shrink-0 text-sm font-medium text-[#0ea5e9]">
+                      유사도 {item.score.toFixed(3)}
+                    </span>
+                  ) : null}
                 </div>
+                {item.via !== null ? (
+                  <p className="mt-3 text-xs text-neutral-400">
+                    {sourceTitle}에서 「{relationLabel(item.via.kind)}」로 이어짐
+                  </p>
+                ) : null}
                 <p className="mt-4 text-sm leading-relaxed text-neutral-300">{excerpt}</p>
               </article>
             );
