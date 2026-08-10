@@ -107,8 +107,12 @@ BEGIN
   classified AS (
     SELECT NEW.id AS src_document_id,
            dst_document_id,
-           -- points_to 초기안과 BROADER_MARGIN=0.10 방향 판정은 실측에서 기각되어
-           -- related로 보존한다.
+           -- 하위 버킷의 이름이다. 둘은 이유가 다르다. BROADER_MARGIN=0.10 방향 판정은
+           -- §14 (c)에서 기각됐고(정답쌍에서도 trigram 방향 차가 벌어지지 않았다) 그
+           -- 후보가 여기로 폴백한다. points_to는 기각된 것이 아니라 표현을 related로
+           -- 합친 것이다 — 겹침비 구분 자체는 §14 (b)에서 0.8 경계로 갈렸다. 그래서
+           -- 아래 두 줄이 청크쌍을 계속 기록한다: 이름은 related지만 어느 대목에서
+           -- 만났는지는 남는다 (ADR-029).
            CASE WHEN is_overlaps THEN 'overlaps' ELSE 'related' END AS kind,
            CASE WHEN is_overlaps THEN NULL ELSE src_chunk_index END AS src_chunk_index,
            CASE WHEN is_overlaps THEN NULL ELSE dst_chunk_index END AS dst_chunk_index,
@@ -138,9 +142,9 @@ BEGIN
   RETURN NEW;
 END; $$;
 
--- ADR-029 §결정 2에서 실측 실패한 points_to·broader를 제거했다. 이전 마이그레이션은
--- 관계 후보를 열어 두었지만, 트리거가 실제 판정을 시작하는 이 시점부터 DB 불변식도
--- 저장 kind 두 종류와 맞춘다.
+-- 저장 kind는 broader(§14에서 판정 실패)와 points_to(related로 표현을 합침)를 빼고 둘만
+-- 남는다. 이전 마이그레이션은 관계 후보를 열어 두었지만, 트리거가 실제 판정을 시작하는
+-- 이 시점부터 DB 불변식도 저장 kind 두 종류와 맞춘다.
 ALTER TABLE document_edges DROP CONSTRAINT document_edges_kind_valid;
 ALTER TABLE document_edges ADD CONSTRAINT document_edges_kind_valid
   CHECK (kind IN ('overlaps', 'related'));

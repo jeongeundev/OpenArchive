@@ -15,8 +15,10 @@ CANDIDATE_MULTIPLIER = 5
 # ADR-011 보강 4: 과다 조회 LIMIT(k * CANDIDATE_MULTIPLIER)이 ef_search에 닿으면
 # HNSW가 에러 없이 행을 덜 돌려준다(실측: ef_search=200에서 LIMIT 200 → 193행).
 # 등호에서도 모자라므로 상한에서 여유가 남아야 한다 — 여기서는 20 * 5 = 100이다.
-# 배수가 다른 호출부(관련 문서·태그 추천)는 자기 배수를 EF_SEARCH에서 역산한다
-# (app/services/related.py). 이 불변식은 test_related.py가 지킨다.
+# 관련 문서·태그 추천은 저장된 edge를 읽으므로 더 이상 벡터 정렬을 하지 않는다
+# (ADR-029). 남은 벡터 정렬 호출부는 이 모듈과 008 트리거뿐이며, 트리거는 자기
+# 함수 정의의 SET으로 같은 ef_search를 건다. 이 불변식은
+# test_search.py·test_related.py가 지킨다.
 MAX_K = 20
 GRAPH_MAX_DEPTH = 2
 # 코사인 거리는 최대 2다. 한 단계마다 그 범위만큼 벌려 직접 결과가 관계 확장보다
