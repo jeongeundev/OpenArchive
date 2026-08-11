@@ -95,7 +95,10 @@
       "type": "fix",
       "scope": "frontend",
       "desc": "좀비 잡 상태 표시를 상태 API와 화면 양쪽에서 정정",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-08-11T10:15:39+0900",
+      "summary": "상태 API에 좀비 임계·회수 대기 수·최근 잡 완료 시각을 추가하고 관리자 화면이 워커 다음 폴링의 회수 동작을 정확히 표시하도록 정정",
+      "completed_at": "2026-08-11T10:22:09+0900"
     }
   ],
   "created_at": "2026-08-11T08:40:33+0900"
