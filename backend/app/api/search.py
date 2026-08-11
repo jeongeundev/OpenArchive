@@ -2,7 +2,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from app.api.deps import Connection, get_embedding_provider, optional_user_id
+from app.api.deps import Connection, get_embedding_provider, require_user_id
 from app.api.schemas import SearchRequest, SearchResponse
 from app.embeddings.base import EmbeddingProvider
 from app.services.search import SEARCH_SQL, search_documents
@@ -15,7 +15,7 @@ async def search(
     body: SearchRequest,
     conn: Connection,
     provider: Annotated[EmbeddingProvider, Depends(get_embedding_provider)],
-    user_id: Annotated[str | None, Depends(optional_user_id)],
+    user_id: Annotated[str, Depends(require_user_id)],
 ) -> SearchResponse:
     if not body.query.strip():
         raise HTTPException(status_code=400, detail="검색어는 비어 있을 수 없습니다.")

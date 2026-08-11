@@ -21,6 +21,8 @@ CORE_TABLES = {
     "document_chunks",
     "embedding_jobs",
     "document_edges",
+    "users",
+    "sessions",
 }
 
 # 임베딩 차원은 vector(1024) 고정이다 (ADR-003).
@@ -237,6 +239,91 @@ def test_job_defaults_are_filled_in(conn: psycopg.Connection):
     assert attempts == 0
     assert claimable is True
     assert (last_error, started_at, finished_at) == (None, None, None)
+
+
+def test_auth_table_columns_and_constraints_match_the_account_model(
+    conn: psycopg.Connection,
+):
+    rows = conn.execute(
+        """
+        SELECT table_name, column_name, data_type, is_nullable, column_default
+        FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name IN ('users', 'sessions')
+        ORDER BY table_name, ordinal_position
+        """
+    ).fetchall()
+
+    assert rows == [
+        ("sessions", "token", "text", "NO", None),
+        ("sessions", "user_id", "uuid", "NO", None),
+        ("sessions", "created_at", "timestamp with time zone", "NO", "now()"),
+        ("sessions", "expires_at", "timestamp with time zone", "NO", None),
+        ("users", "id", "uuid", "NO", "gen_random_uuid()"),
+        ("users", "username", "text", "NO", None),
+        ("users", "password_hash", "text", "NO", None),
+        ("users", "is_admin", "boolean", "NO", "false"),
+        ("users", "created_at", "timestamp with time zone", "NO", "now()"),
+    ]
+
+    constraints = conn.execute(
+        """
+        SELECT tc.table_name, tc.constraint_type,
+               array_agg(kcu.column_name::text ORDER BY kcu.ordinal_position)
+        FROM information_schema.table_constraints tc
+        JOIN information_schema.key_column_usage kcu
+          ON kcu.constraint_schema = tc.constraint_schema
+         AND kcu.constraint_name = tc.constraint_name
+        WHERE tc.table_schema = 'public'
+          AND tc.table_name IN ('users', 'sessions')
+          AND tc.constraint_type IN ('PRIMARY KEY', 'UNIQUE', 'FOREIGN KEY')
+        GROUP BY tc.table_name, tc.constraint_name, tc.constraint_type
+        ORDER BY tc.table_name, tc.constraint_type, tc.constraint_name
+        """
+    ).fetchall()
+
+    assert constraints == [
+        ("sessions", "FOREIGN KEY", ["user_id"]),
+        ("sessions", "PRIMARY KEY", ["token"]),
+        ("users", "PRIMARY KEY", ["id"]),
+        ("users", "UNIQUE", ["username"]),
+    ]
+
+
+def test_username_is_unique(conn: psycopg.Connection):
+    insert_user = "INSERT INTO users (username, password_hash) VALUES (%s, 'scrypt-hash')"
+    conn.execute(insert_user, ("alice",))
+
+    with pytest.raises(psycopg.errors.UniqueViolation):
+        conn.execute(insert_user, ("alice",))
+
+
+def test_deleting_a_user_cascades_to_sessions(conn: psycopg.Connection):
+    (user_id,) = conn.execute(
+        """
+        INSERT INTO users (username, password_hash)
+        VALUES ('alice', 'scrypt-hash')
+        RETURNING id
+        """
+    ).fetchone()
+    conn.execute(
+        """
+        INSERT INTO sessions (token, user_id, expires_at)
+        VALUES ('session-token', %s, now() + interval '1 hour')
+        """,
+        (user_id,),
+    )
+
+    conn.execute("DELETE FROM users WHERE id = %s", (user_id,))
+
+    (remaining,) = conn.execute("SELECT count(*) FROM sessions").fetchone()
+    assert remaining == 0
+
+
+def test_document_content_over_500kb_is_rejected(conn: psycopg.Connection):
+    with pytest.raises(psycopg.errors.CheckViolation) as exc:
+        insert_document(conn, content="가" * 500_001)
+
+    assert "documents_content_length" in str(exc.value)
 
 
 def insert_edge(

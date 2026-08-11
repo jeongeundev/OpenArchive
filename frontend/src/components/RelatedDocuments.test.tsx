@@ -102,9 +102,9 @@ describe("RelatedDocuments", () => {
       />,
     );
 
-    expect(screen.getByRole("heading", { name: "전반적으로 같은 내용" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "여러 대목에서 만난다" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "관련 있음" })).toBeInTheDocument();
-    const overlapGroup = screen.getByRole("heading", { name: "전반적으로 같은 내용" })
+    const overlapGroup = screen.getByRole("heading", { name: "여러 대목에서 만난다" })
       .parentElement;
     const relatedGroup = screen.getByRole("heading", { name: "관련 있음" }).parentElement;
     expect(overlapGroup).not.toBeNull();

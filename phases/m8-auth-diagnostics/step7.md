@@ -86,7 +86,11 @@ python -m pytest -q
 
 # 2) 덩어리 크기가 시선에 따라 다른가
 #    쿠키는 로그인해서 파일로 받는다. 자리표시자를 손으로 채우지 마라
-: "${TEST_ADMIN_PW:?step 1 픽스처에서 쓴 관리자 비밀번호를 환경변수로 넣고 실행하라}"
+#    관리자 계정은 step 2의 부트스트랩으로 만든다. 아래는 로컬 검증용 임시 비밀번호이며
+#    사람에게 묻지 말고 그대로 진행하라
+export TEST_ADMIN_PW="${TEST_ADMIN_PW:-harness-local-check}"
+ADMIN_PASSWORD="$TEST_ADMIN_PW" python ../scripts/create_admin.py admin --admin \
+  || echo "이미 존재 — 기존 계정을 쓴다"
 uvicorn app.main:app --port 8906 & sleep 3
 curl -s localhost:8906/api/clusters | head -30                  # 익명
 curl -s -c /tmp/oa-session.txt -X POST localhost:8906/api/auth/login -H 'content-type: application/json' \

@@ -1,0 +1,61 @@
+import { fireEvent, render, screen } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
+
+import { AuthProvider } from "@/components/AuthProvider";
+import LoginPage from "./page";
+
+const replace = vi.fn();
+vi.mock("next/navigation", () => ({ useRouter: () => ({ replace }) }));
+
+function response(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+describe("로그인 화면", () => {
+  it("사용자명과 비밀번호 입력 및 제출 버튼을 렌더한다", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response({
+      authenticated: false,
+      username: null,
+      is_admin: false,
+    })));
+
+    render(<AuthProvider><LoginPage /></AuthProvider>);
+
+    expect(await screen.findByRole("textbox", { name: "사용자명" })).toBeInTheDocument();
+    expect(screen.getByLabelText("비밀번호")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "로그인" })).toBeInTheDocument();
+  });
+
+  it("로그인 성공 후 문서 화면으로 이동한다", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(response({ authenticated: false, username: null, is_admin: false }))
+      .mockResolvedValueOnce(response({ authenticated: true, username: "alice", is_admin: false }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<AuthProvider><LoginPage /></AuthProvider>);
+    fireEvent.change(await screen.findByRole("textbox", { name: "사용자명" }), { target: { value: "alice" } });
+    fireEvent.change(screen.getByLabelText("비밀번호"), { target: { value: "secret" } });
+    fireEvent.click(screen.getByRole("button", { name: "로그인" }));
+
+    await vi.waitFor(() => expect(replace).toHaveBeenCalledWith("/"));
+  });
+
+  it.each([401, 500])("실패 사유와 무관하게 같은 메시지를 표시한다 (%s)", async (status) => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(response({ authenticated: false, username: null, is_admin: false }))
+      .mockResolvedValueOnce(response({ detail: status === 401 ? "인증 실패" : "서버 오류" }, status));
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<AuthProvider><LoginPage /></AuthProvider>);
+    fireEvent.change(await screen.findByRole("textbox", { name: "사용자명" }), {
+      target: { value: "alice" },
+    });
+    fireEvent.change(screen.getByLabelText("비밀번호"), { target: { value: "wrong" } });
+    fireEvent.click(screen.getByRole("button", { name: "로그인" }));
+
+    expect(await screen.findByText("사용자명 또는 비밀번호를 확인하세요.")).toBeInTheDocument();
+  });
+});

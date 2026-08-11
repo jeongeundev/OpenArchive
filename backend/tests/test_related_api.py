@@ -1,5 +1,5 @@
 import pytest
-from conftest import run_embedding_worker, upload_document
+from conftest import login_as, run_embedding_worker, upload_document
 from fastapi.testclient import TestClient
 
 from app.services.search import MAX_K
@@ -92,9 +92,8 @@ def test_related_endpoints_hide_another_users_private_source(
         visibility="private",
     )
 
-    response = db_client.get(
-        f"/api/documents/{private_id}/{path}", headers={"X-User-Id": "bob"}
-    )
+    login_as(db_client, "bob")
+    response = db_client.get(f"/api/documents/{private_id}/{path}")
 
     assert response.status_code == 404
 
@@ -114,9 +113,15 @@ def test_related_does_not_leak_another_users_private_candidates(
     )
     run_embedding_worker(migrated_db)
 
-    body = db_client.get(
+    db_client.post("/api/auth/logout")
+    # ADR-028: 익명은 아무 문서도 보지 못한다. 제거된 헤더로도 열리지 않는다.
+    anonymous = db_client.get(
         f"/api/documents/{source_id}/related", headers={"X-User-Id": "alice"}
-    ).json()
+    )
+    assert anonymous.status_code == 401
+
+    login_as(db_client, "alice")
+    body = db_client.get(f"/api/documents/{source_id}/related").json()
 
     assert {item["document_id"] for item in body["items"]} == {public_id}
     assert {item["document_id"] for item in body["identical"]} == {public_id}

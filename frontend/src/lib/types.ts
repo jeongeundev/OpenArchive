@@ -86,6 +86,7 @@ export interface TagSuggestionsResponse {
 export interface JobCounts {
   pending: number;
   processing: number;
+  recovery_pending: number;
   error: number;
 }
 
@@ -93,8 +94,75 @@ export interface SystemStatus {
   node_address: string | null;
   node_port: number;
   jobs: JobCounts;
+  zombie_timeout_minutes: number;
+  last_job_finished_at: string | null;
   inconsistent_documents: number;
   embedding_provider: string;
+}
+
+export interface AuthStatus {
+  authenticated: boolean;
+  username: string | null;
+  is_admin: boolean;
+}
+
+export interface UserSummary {
+  id: string;
+  username: string;
+  is_admin: boolean;
+  created_at: string;
+}
+
+export interface DiagnosticDocument {
+  document_id: string;
+  title: string;
+}
+
+export interface DiagnosticDocumentList {
+  count: number;
+  items: DiagnosticDocument[];
+}
+
+export interface DuplicatePair {
+  first: DiagnosticDocument;
+  second: DiagnosticDocument;
+  score: number | null;
+}
+
+export interface DuplicateList {
+  count: number;
+  items: DuplicatePair[];
+}
+
+export interface DiagnosticsResponse {
+  orphans: DiagnosticDocumentList;
+  duplicates: {
+    identical: DuplicateList;
+    overlaps: DuplicateList;
+  };
+  uncategorized: DiagnosticDocumentList;
+}
+
+export interface ClusterDocument {
+  document_id: string;
+  title: string;
+}
+
+export interface Cluster {
+  name: string;
+  size: number;
+  documents: ClusterDocument[];
+}
+
+export interface ClusterConnection {
+  source: string;
+  target: string;
+  count: number;
+}
+
+export interface ClustersResponse {
+  clusters: Cluster[];
+  connections: ClusterConnection[];
 }
 
 export const SUPPORTED_CONTENT_TYPES = ["pdf", "docx", "txt", "md"] as const;

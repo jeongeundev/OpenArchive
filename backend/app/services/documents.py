@@ -18,6 +18,9 @@ from app.services.visibility import VISIBLE_TO_USER
 SUMMARY_COLUMNS = """id, title, filename, content_type, version, owner_id, visibility, tags,
                      embedding_status, created_at, updated_at"""
 
+# 시연 데이터 최대 추출 텍스트(약 90KB)의 5배보다 크고 DB CHECK와 같은 경계다.
+MAX_EXTRACTED_TEXT_LENGTH = 500_000
+
 
 class DocumentNotFound(Exception):
     """문서가 없거나, 볼 권한이 없어 존재를 알려주지 않는 경우."""
@@ -32,6 +35,10 @@ class EmptyExtractedText(Exception):
 
     업로드(추출 실패)와 편집(빈 입력)은 원인이 달라 메시지도 다르므로 예외가 문구를 나른다.
     """
+
+
+class ExtractedTextTooLarge(Exception):
+    """추출 텍스트가 서비스와 DB가 허용하는 500KB 경계를 넘은 경우."""
 
 
 class VersionConflict(Exception):
@@ -80,6 +87,8 @@ async def create_document(
         raise EmptyExtractedText(
             "문서에서 텍스트를 추출하지 못했습니다. 스캔 이미지 PDF는 지원하지 않습니다."
         )
+    if len(content) > MAX_EXTRACTED_TEXT_LENGTH:
+        raise ExtractedTextTooLarge("추출 텍스트는 500KB를 넘을 수 없습니다.")
 
     cur = conn.cursor(row_factory=dict_row)
     await cur.execute(
@@ -175,6 +184,8 @@ async def update_extracted_text(
     current_version = await _load_for_write(conn, document_id, user_id)
     if not content.strip():
         raise EmptyExtractedText("추출 텍스트는 비어 있을 수 없습니다.")
+    if len(content) > MAX_EXTRACTED_TEXT_LENGTH:
+        raise ExtractedTextTooLarge("추출 텍스트는 500KB를 넘을 수 없습니다.")
     if current_version != client_version:
         raise VersionConflict(current_version)
 

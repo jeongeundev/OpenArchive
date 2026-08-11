@@ -8,7 +8,10 @@
       "type": "feat",
       "scope": "db",
       "desc": "users·sessions 테이블과 본문 길이 제한",
-      "status": "pending"
+      "status": "completed",
+      "summary": "users·sessions 인증 테이블과 사용자명 유일성·세션 CASCADE·추출 텍스트 500KB 상한을 DB 제약으로 추가",
+      "started_at": "2026-08-11T08:40:33+0900",
+      "completed_at": "2026-08-11T08:44:08+0900"
     },
     {
       "step": 1,
@@ -16,15 +19,21 @@
       "type": "feat",
       "scope": "api",
       "desc": "scrypt 비밀번호 해시와 세션 발급·검증 서비스",
-      "status": "pending"
+      "status": "completed",
+      "summary": "표준 라이브러리 scrypt 비밀번호 해시와 만료·로그아웃·CASCADE 무효화를 지원하는 서버 측 세션 서비스를 추가",
+      "started_at": "2026-08-11T08:44:08+0900",
+      "completed_at": "2026-08-11T08:48:30+0900"
     },
     {
       "step": 2,
       "name": "auth-api",
       "type": "feat",
       "scope": "api",
-      "desc": "로그인·로그아웃 API와 X-User-Id 제거",
-      "status": "pending"
+      "desc": "로그인·로그아웃 API, X-User-Id 제거와 초기 관리자 부트스트랩",
+      "status": "completed",
+      "summary": "HttpOnly 쿠키 기반 로그인·로그아웃·신원 API와 세션 의존성, 초기 관리자 부트스트랩을 추가하고 X-User-Id 우회 경로를 제거",
+      "started_at": "2026-08-11T09:14:52+0900",
+      "completed_at": "2026-08-11T09:25:05+0900"
     },
     {
       "step": 3,
@@ -32,7 +41,10 @@
       "type": "feat",
       "scope": "api",
       "desc": "관리자 전용 계정 관리 API와 업로드 크기 제한",
-      "status": "pending"
+      "status": "completed",
+      "summary": "관리자 전용 계정 CRUD와 문서 소유 사용자 삭제 방지, 파일 10MB·추출 텍스트 500KB 상한을 추가",
+      "started_at": "2026-08-11T09:25:05+0900",
+      "completed_at": "2026-08-11T09:30:57+0900"
     },
     {
       "step": 4,
@@ -40,7 +52,9 @@
       "type": "feat",
       "scope": "frontend",
       "desc": "로그인 화면과 사용자 관리 화면",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-08-11T09:30:57+0900",
+      "summary": "HttpOnly 쿠키 기반 로그인·사용자 관리 화면과 AuthProvider를 추가하고 userHeaders(X-User-Id)를 제거 — 익명은 public만, 로그인 시 소유 private 노출, 관리자도 타인 private 불가를 브라우저로 실측 확인"
     },
     {
       "step": 5,
@@ -48,7 +62,10 @@
       "type": "docs",
       "scope": "adr",
       "desc": "최소 로그인 결정을 ADR-028로 신설하고 비범위를 정정",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-08-11T09:49:24+0900",
+      "summary": "한 설치를 한 조직으로 보는 최소 로그인 결정을 ADR-028에 기록하고 PRD 비범위와 README 인증 설정·초기 관리자 절차를 정정",
+      "completed_at": "2026-08-11T09:53:05+0900"
     },
     {
       "step": 6,
@@ -56,7 +73,10 @@
       "type": "feat",
       "scope": "api",
       "desc": "관계 기반 진단 목록과 화면 — 고아·중복·미분류",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-08-11T09:53:05+0900",
+      "summary": "열람 범위 기준 고아·동일 텍스트/고겹침 중복·미분류 진단 API와 프론트 화면을 추가하고, 순위 컷오프에서 성립하지 않는 빠진 연결은 제외했으며 깨진 링크는 m9로 남김",
+      "completed_at": "2026-08-11T10:03:45+0900"
     },
     {
       "step": 7,
@@ -64,7 +84,10 @@
       "type": "feat",
       "scope": "frontend",
       "desc": "주제 덩어리 그래프 — 집계 API와 SVG 화면",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-08-11T10:03:45+0900",
+      "summary": "열람 범위별 대표 태그 기반 주제 덩어리·관계 집계 API와 의존성 없는 SVG 그래프, 클릭 문서 목록을 추가",
+      "completed_at": "2026-08-11T10:15:39+0900"
     },
     {
       "step": 8,
@@ -72,7 +95,12 @@
       "type": "fix",
       "scope": "frontend",
       "desc": "좀비 잡 상태 표시를 상태 API와 화면 양쪽에서 정정",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-08-11T10:15:39+0900",
+      "summary": "상태 API에 좀비 임계·회수 대기 수·최근 잡 완료 시각을 추가하고 관리자 화면이 워커 다음 폴링의 회수 동작을 정확히 표시하도록 정정",
+      "completed_at": "2026-08-11T10:22:09+0900"
     }
-  ]
+  ],
+  "created_at": "2026-08-11T08:40:33+0900",
+  "completed_at": "2026-08-11T10:22:09+0900"
 }

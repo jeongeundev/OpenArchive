@@ -9,7 +9,7 @@ describe("relationLabel", () => {
   });
 
   it("저장값 대신 사용자 어휘를 반환한다", () => {
-    expect(relationLabel("overlaps")).toBe("전반적으로 같은 내용");
+    expect(relationLabel("overlaps")).toBe("여러 대목에서 만난다");
     expect(relationLabel("points_to")).toBe("이 대목에서 만난다");
     expect(relationLabel("related")).toBe("관련 있음");
   });

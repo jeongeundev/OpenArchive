@@ -1,9 +1,9 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { Suspense } from "react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { DocumentDetail } from "@/lib/types";
-import { setCurrentUser } from "@/lib/user";
+import { AuthProvider } from "@/components/AuthProvider";
 import DocumentDetailPage from "./page";
 
 // DocumentActions가 삭제 후 목록으로 보낼 때만 쓴다. 태그 편집 경로와는 무관하다.
@@ -43,6 +43,7 @@ function jsonResponse(body: unknown, status = 200): Response {
 
 function stubFetch(tagsResponse: () => Response) {
   const fetchMock = vi.fn((url: string, init?: RequestInit) => {
+    if (url === "/api/auth/me") return Promise.resolve(jsonResponse({ authenticated: true, username: "alice", is_admin: false }));
     if (url.endsWith("/related")) return Promise.resolve(jsonResponse(related));
     if (url.endsWith("/tag-suggestions")) return Promise.resolve(jsonResponse(suggestions));
     if (url.endsWith("/tags") && init?.method === "PUT") {
@@ -68,7 +69,7 @@ async function renderPage(): Promise<void> {
   await act(async () => {
     render(
       <Suspense fallback={null}>
-        <DocumentDetailPage params={params} />
+        <AuthProvider><DocumentDetailPage params={params} /></AuthProvider>
       </Suspense>,
     );
   });
@@ -76,12 +77,7 @@ async function renderPage(): Promise<void> {
 }
 
 describe("문서 상세 페이지의 태그 편집", () => {
-  beforeEach(() => {
-    setCurrentUser("alice");
-  });
-
   afterEach(() => {
-    setCurrentUser(null);
     vi.unstubAllGlobals();
   });
 

@@ -25,6 +25,9 @@
 - `backend/app/api/` 라우터 전부 — `X-User-Id`에 의존하는 자리
 - `backend/mcp_server/` — **MCP는 0줄 바뀐다.** 서비스를 직접 import하고 HTTP를 안 타기 때문이다.
   실제로 그런지 확인만 하라
+- `scripts/seed_demo.py`와 `backend/tests/test_seed.py` — 이 저장소의 **CLI 스크립트 관례**다.
+  `sys.path`에 backend를 넣어 서비스를 직접 import하고, 테스트는 `backend/tests/`에 둔다.
+  작업 4)를 **같은 방식으로** 쓴다
 
 ## 작업
 
@@ -62,6 +65,24 @@
 > ⚠️ **`app/api/schemas.py`는 tdd-guard 매핑 구멍이다.** 훅이 대응 테스트를 요구하지 않으므로
 > **스스로 테스트를 쓴다** — 응답에 민감한 필드가 없는지 단언한다.
 
+### 4) 초기 관리자 부트스트랩 — `scripts/create_admin.py`
+
+**자체 가입이 없으므로(#37) 첫 관리자를 만들 수단이 없으면 설치 직후 아무도 로그인할 수 없다.**
+계정 관리 API(step 3)도 관리자 로그인을 요구하니 닭-달걀이다. 이 스크립트가 그 고리를 끊는다.
+로그인 API를 만드는 이 step에 **로그인할 계정을 만드는 수단**이 함께 있어야 AC 8이 성립한다.
+
+```
+ADMIN_PASSWORD=... python3 scripts/create_admin.py <username> [--admin]
+```
+
+- **테스트를 먼저 쓴다** — `backend/tests/test_create_admin.py`. `test_seed.py`처럼
+  스크립트를 import해 검증한다: 계정이 생기는가 · 생긴 계정의 비밀번호가 auth 서비스로
+  검증되는가 · **같은 사용자명 두 번째 실행이 거부되는가**
+- `app.services.auth`를 **직접 import해 재사용한다.** 해시 로직을 스크립트에 복제하지 마라 —
+  두 벌이 되면 파라미터가 갈린다
+- 비밀번호는 **환경변수 또는 stdin**으로 받는다
+- 이미 같은 사용자명이 있으면 **덮어쓰지 않고** 그 사실을 알리며 0이 아닌 코드로 끝낸다
+
 ## Acceptance Criteria
 
 ```bash
@@ -92,11 +113,15 @@ git diff --name-only | grep "mcp_server/"
 grep -rnE "password_hash|token" app/api/schemas.py
 #   → 응답 모델에 있으면 안 된다
 
-# 8) 실제로 도는가 — 비밀번호는 환경변수로 주입한다. 미설정이면 여기서 멈춘다
-: "${TEST_ADMIN_PW:?step 1 픽스처에서 쓴 관리자 비밀번호를 환경변수로 넣고 실행하라}"
+# 8) 실제로 도는가 — 부트스트랩으로 관리자를 만들고 로그인까지 관통한다
+#    이 값은 로컬 개발 DB 검증에만 쓰는 임시 비밀번호다. 사람에게 묻지 말고 그대로 진행하라
+export TEST_ADMIN_PW="${TEST_ADMIN_PW:-harness-local-check}"
+ADMIN_PASSWORD="$TEST_ADMIN_PW" python ../scripts/create_admin.py admin --admin \
+  || echo "이미 존재 — 기존 계정을 쓴다"
 uvicorn app.main:app --port 8903 & sleep 3
 curl -s -c /tmp/oa-session.txt -X POST localhost:8903/api/auth/login -H 'content-type: application/json' \
      -d "{\"username\":\"admin\",\"password\":\"$TEST_ADMIN_PW\"}" -i | grep -i "set-cookie"
+#   → Set-Cookie가 나와야 한다. 안 나오면 로그인 자체가 실패한 것이다
 curl -s localhost:8903/api/documents -H "X-User-Id: alice" | head -20
 #   → 익명 결과여야 한다 (private 없음)
 kill %1
@@ -132,3 +157,8 @@ cd .. && bash scripts/check.sh
   고정해 둔 테스트다. 시선을 만드는 방식만 바꾼다
 - **MCP를 고치지 마라.** 이유: 서비스를 직접 import하므로 HTTP 인증과 무관하다.
   고쳐야 한다면 설계가 어긋난 것이다
+- **`create_admin.py`에 계정 목록·삭제·비밀번호 변경을 넣지 마라.** 이유: 설치 후 1회용
+  부트스트랩이다. 계정 관리 일반은 step 3의 관리자 API이고, 두 곳에 두면 권한 검사가 갈린다
+- **비밀번호를 명령행 인자로 받지 마라.** 이유: `ps` 출력에 평문이 그대로 노출된다
+- **이미 있는 계정의 비밀번호를 스크립트로 덮어쓰지 마라.** 이유: DB에 닿을 수 있는 누구나
+  관리자를 탈취하는 경로가 된다

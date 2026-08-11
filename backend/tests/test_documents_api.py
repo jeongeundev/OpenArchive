@@ -1,26 +1,29 @@
 import hashlib
+import io
+import zipfile
 from uuid import uuid4
 
 import psycopg
-from conftest import run_embedding_worker
+from conftest import login_as, run_embedding_worker
 from conftest import upload_document as upload
+from docx import Document
 from fastapi.testclient import TestClient
 
 
 def edit(client: TestClient, document_id: str, *, content: str, version: int, user_id="alice"):
-    headers = {"X-User-Id": user_id} if user_id is not None else {}
+    if user_id is not None:
+        login_as(client, user_id)
     return client.put(
         f"/api/documents/{document_id}",
-        headers=headers,
         json={"content": content, "version": version},
     )
 
 
 def replace_tags(client: TestClient, document_id: str, tags: list[str], user_id="alice"):
-    headers = {"X-User-Id": user_id} if user_id is not None else {}
+    if user_id is not None:
+        login_as(client, user_id)
     return client.put(
         f"/api/documents/{document_id}/tags",
-        headers=headers,
         json={"tags": tags},
     )
 
@@ -75,10 +78,63 @@ def test_upload_rejects_non_utf8_text(db_client: TestClient):
     assert response.json()["detail"] == "텍스트 파일은 UTF-8 인코딩이어야 합니다."
 
 
+def test_oversized_upload_is_rejected_before_read(db_client: TestClient, monkeypatch):
+    async def fail_if_read(*args, **kwargs):
+        raise AssertionError("oversized upload must be rejected before read()")
+
+    monkeypatch.setattr("starlette.datastructures.UploadFile.read", fail_if_read)
+
+    response = upload(db_client, content=b"x" * (10_000_000 + 1))
+
+    assert response.status_code == 413
+
+
+def test_upload_larger_than_its_declared_size_is_rejected(
+    db_client: TestClient, monkeypatch
+):
+    """`file.size`는 클라이언트가 보내는 선언값이라 없거나 실제와 다를 수 있다.
+
+    선언값만 보고 통과시키면 크기를 안 보내거나 줄여 보내는 클라이언트에게는 상한이
+    사실상 없다. 위 검사는 큰 파일을 읽지 않기 위한 것이고, 경계 자체는 읽어들인
+    바이트로도 지켜져야 한다.
+    """
+    oversized = b"x" * (10_000_000 + 1)
+
+    async def read_oversized(self, size: int = -1) -> bytes:
+        return oversized
+
+    monkeypatch.setattr("starlette.datastructures.UploadFile.read", read_oversized)
+
+    response = upload(db_client, content=b"small")
+
+    assert response.status_code == 413
+
+
+def test_extracted_text_over_service_limit_is_rejected(db_client: TestClient):
+    response = upload(db_client, content=b"x" * 500_001)
+
+    assert response.status_code == 400
+    assert "500KB" in response.json()["detail"]
+
+
+def test_upload_near_file_limit_with_small_extracted_text_succeeds(db_client: TestClient):
+    buf = io.BytesIO()
+    document = Document()
+    document.add_paragraph("OpenSQL near-limit document")
+    document.save(buf)
+    with zipfile.ZipFile(buf, "a", compression=zipfile.ZIP_STORED) as archive:
+        archive.writestr("word/media/padding.bin", b"x" * 9_000_000)
+
+    response = upload(db_client, filename="near-limit.docx", content=buf.getvalue())
+
+    assert len(buf.getvalue()) < 10_000_000
+    assert response.status_code == 201
+
+
 def test_upload_requires_user_id(db_client: TestClient):
     response = upload(db_client, user_id=None)
 
-    assert response.status_code == 400
+    assert response.status_code == 401
 
 
 def test_upload_stores_sha256_of_extracted_text(db_client: TestClient, migrated_db: str):
@@ -93,7 +149,7 @@ def test_upload_stores_sha256_of_extracted_text(db_client: TestClient, migrated_
     assert stored_hash == hashlib.sha256(content.encode("utf-8")).hexdigest()
 
 
-def test_list_hides_other_users_private_documents_and_anonymous_sees_public_only(
+def test_list_hides_other_users_private_documents_and_requires_login(
     db_client: TestClient,
 ):
     public_id = upload(db_client, data={"visibility": "public"}).json()["id"]
@@ -101,12 +157,15 @@ def test_list_hides_other_users_private_documents_and_anonymous_sees_public_only
         db_client, filename="private.txt", data={"visibility": "private"}
     ).json()["id"]
 
-    bob_ids = {item["id"] for item in db_client.get("/api/documents", headers={"X-User-Id": "bob"}).json()}
-    anonymous_ids = {item["id"] for item in db_client.get("/api/documents").json()}
+    login_as(db_client, "bob")
+    bob_ids = {item["id"] for item in db_client.get("/api/documents").json()}
+    db_client.post("/api/auth/logout")
+    # ADR-028: 익명은 아무 문서도 보지 못한다. 제거된 헤더로도 열리지 않는다.
+    anonymous = db_client.get("/api/documents", headers={"X-User-Id": "alice"})
 
     assert public_id in bob_ids
     assert private_id not in bob_ids
-    assert anonymous_ids == {public_id}
+    assert anonymous.status_code == 401
 
 
 def test_list_filters_by_tag_and_status(db_client: TestClient):
@@ -143,14 +202,15 @@ def test_detail_reports_versions_and_chunk_state_before_and_after_embedding(
 def test_detail_hides_other_users_private_document(db_client: TestClient):
     document_id = upload(db_client, data={"visibility": "private"}).json()["id"]
 
-    response = db_client.get(
-        f"/api/documents/{document_id}", headers={"X-User-Id": "bob"}
-    )
+    login_as(db_client, "bob")
+    response = db_client.get(f"/api/documents/{document_id}")
 
     assert response.status_code == 404
 
 
 def test_detail_returns_404_for_missing_document(db_client: TestClient):
+    login_as(db_client, "alice")
+
     response = db_client.get(f"/api/documents/{uuid4()}")
 
     assert response.status_code == 404
@@ -286,6 +346,15 @@ def test_edit_rejects_blank_content_without_changing_document(db_client: TestCli
     assert (detail["content"], detail["version"]) == ("OpenSQL guide", 1)
 
 
+def test_edit_rejects_extracted_text_over_service_limit(db_client: TestClient):
+    document_id = upload(db_client).json()["id"]
+
+    response = edit(db_client, document_id, content="x" * 500_001, version=1)
+
+    assert response.status_code == 400
+    assert "500KB" in response.json()["detail"]
+
+
 def test_edit_keeps_old_chunks_until_worker_replaces_them_and_exposes_convergence(
     db_client: TestClient, migrated_db: str
 ):
@@ -321,7 +390,7 @@ def test_delete_cascades_all_document_rows(db_client: TestClient, migrated_db: s
                 f"SELECT count(*) FROM {table} WHERE document_id = %s", (document_id,)
             ).fetchone()[0] > 0
 
-    response = db_client.delete(f"/api/documents/{document_id}", headers={"X-User-Id": "alice"})
+    response = db_client.delete(f"/api/documents/{document_id}")
 
     assert response.status_code == 204
     assert db_client.get(f"/api/documents/{document_id}").status_code == 404
@@ -341,9 +410,7 @@ def test_reembed_recovers_error_without_changing_version_and_coalesces_requests(
         conn.execute("UPDATE documents SET embedding_status = 'error' WHERE id = %s", (document_id,))
 
     for _ in range(2):
-        response = db_client.post(
-            f"/api/documents/{document_id}/reembed", headers={"X-User-Id": "alice"}
-        )
+        response = db_client.post(f"/api/documents/{document_id}/reembed")
         assert response.status_code == 200
 
     with psycopg.connect(migrated_db) as conn:
@@ -369,42 +436,36 @@ def test_write_endpoints_share_visibility_aware_ownership_rules(db_client: TestC
     public_id = upload(db_client, filename="public.txt", data={"visibility": "public"}).json()["id"]
 
     requests = (
-        lambda document_id, headers: db_client.put(
-            f"/api/documents/{document_id}", headers=headers, json={"content": "x", "version": 1}
+        lambda document_id: db_client.put(
+            f"/api/documents/{document_id}", json={"content": "x", "version": 1}
         ),
-        lambda document_id, headers: db_client.delete(
-            f"/api/documents/{document_id}", headers=headers
-        ),
-        lambda document_id, headers: db_client.post(
-            f"/api/documents/{document_id}/reembed", headers=headers
-        ),
-        lambda document_id, headers: db_client.put(
+        lambda document_id: db_client.delete(f"/api/documents/{document_id}"),
+        lambda document_id: db_client.post(f"/api/documents/{document_id}/reembed"),
+        lambda document_id: db_client.put(
             f"/api/documents/{document_id}/tags",
-            headers=headers,
             json={"tags": ["database"]},
         ),
     )
+    login_as(db_client, "bob")
     for request in requests:
-        assert request(private_id, {"X-User-Id": "bob"}).status_code == 404
-        assert request(public_id, {"X-User-Id": "bob"}).status_code == 403
-        assert request(public_id, {}).status_code == 400
+        assert request(private_id).status_code == 404
+        assert request(public_id).status_code == 403
+        db_client.post("/api/auth/logout")
+        assert request(public_id).status_code == 401
+        login_as(db_client, "bob")
 
 
 def test_write_endpoints_return_404_for_missing_document(db_client: TestClient):
     missing_id = str(uuid4())
-    headers = {"X-User-Id": "alice"}
+    login_as(db_client, "alice")
 
     assert db_client.put(
         f"/api/documents/{missing_id}",
-        headers=headers,
         json={"content": "x", "version": 1},
     ).status_code == 404
-    assert db_client.delete(f"/api/documents/{missing_id}", headers=headers).status_code == 404
-    assert db_client.post(
-        f"/api/documents/{missing_id}/reembed", headers=headers
-    ).status_code == 404
+    assert db_client.delete(f"/api/documents/{missing_id}").status_code == 404
+    assert db_client.post(f"/api/documents/{missing_id}/reembed").status_code == 404
     assert db_client.put(
         f"/api/documents/{missing_id}/tags",
-        headers=headers,
         json={"tags": ["database"]},
     ).status_code == 404

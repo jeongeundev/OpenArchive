@@ -13,7 +13,7 @@ import { VersionHistory } from "@/components/VersionHistory";
 import { useDocument } from "@/lib/useDocument";
 import { useRelated } from "@/lib/useRelated";
 import { ApiError, updateTags } from "@/lib/api";
-import { getCurrentUser } from "@/lib/user";
+import { useAuth } from "@/components/AuthProvider";
 
 export default function DocumentDetailPage({
   params,
@@ -27,7 +27,8 @@ export default function DocumentDetailPage({
   const [draftTags, setDraftTags] = useState<string[] | null>(null);
   const [savingTags, setSavingTags] = useState(false);
   const [tagError, setTagError] = useState<string | null>(null);
-  const anonymous = getCurrentUser() === null;
+  const { auth } = useAuth();
+  const anonymous = !auth.authenticated;
 
   if (loading) return <p className="text-sm text-neutral-500">불러오는 중…</p>;
   if (document === null) {
@@ -66,20 +67,12 @@ export default function DocumentDetailPage({
 
       <DocumentMeta document={document} />
 
-      <DocumentActions
-        disabled={anonymous || editing}
-        document={document}
-        onChanged={refresh}
-      />
-
-      <TagEditor
-        disabled={anonymous || editing}
-        error={tagError}
-        onChange={setDraftTags}
-        onSave={() => void saveTags(tags)}
-        saving={savingTags}
-        tags={tags}
-      />
+      {!anonymous ? (
+        <>
+          <DocumentActions disabled={editing} document={document} onChanged={refresh} />
+          <TagEditor disabled={editing} error={tagError} onChange={setDraftTags} onSave={() => void saveTags(tags)} saving={savingTags} tags={tags} />
+        </>
+      ) : null}
 
       <TextEditor
         disabled={anonymous}

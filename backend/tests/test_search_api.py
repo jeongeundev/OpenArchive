@@ -2,7 +2,7 @@ import asyncio
 
 import psycopg
 import pytest
-from conftest import insert_test_document, process_all_embedding_jobs
+from conftest import insert_test_document, login_as, process_all_embedding_jobs
 from fastapi.testclient import TestClient
 
 from app.embeddings.fake import FakeProvider
@@ -19,6 +19,26 @@ def seed_documents(dsn: str, documents: list[dict], *, process: bool = True) -> 
             return ids
 
     return asyncio.run(seed())
+
+
+@pytest.fixture(autouse=True)
+def logged_in(db_client: TestClient):
+    """읽기도 로그인을 요구하므로(ADR-028) 검색 테스트는 기본 세션을 갖는다.
+
+    익명 경계 자체는 `test_search_requires_login`이 따로 단언한다.
+    """
+    login_as(db_client, "alice")
+
+
+def test_search_requires_login(db_client: TestClient):
+    """ADR-028: 익명은 아무 문서도 보지 못한다. 제거된 헤더로도 열리지 않는다."""
+    db_client.post("/api/auth/logout")
+
+    response = db_client.post(
+        "/api/search", headers={"X-User-Id": "alice"}, json={"query": "접근통제"}
+    )
+
+    assert response.status_code == 401
 
 
 def test_search_returns_a_matching_document(db_client: TestClient, migrated_db: str):
@@ -112,7 +132,14 @@ def test_search_defaults_to_at_most_ten_items(db_client: TestClient, migrated_db
     assert len(response.json()["items"]) == 10
 
 
-def test_search_applies_anonymous_and_owner_visibility(db_client: TestClient, migrated_db: str):
+def test_search_applies_other_user_and_owner_visibility(
+    db_client: TestClient, migrated_db: str
+):
+    """열람 술어는 로그인 경계와 별개로 그대로다 (ADR-027).
+
+    익명이 막힌 뒤에도 "다른 사용자에게는 남의 private이 안 보인다"는 여전히 검증
+    대상이라, 익명 대신 실제 다른 계정의 시선으로 본다.
+    """
     public_id, private_id = seed_documents(
         migrated_db,
         [
@@ -126,12 +153,13 @@ def test_search_applies_anonymous_and_owner_visibility(db_client: TestClient, mi
         ],
     )
 
-    anonymous = db_client.post("/api/search", json={"query": "접근통제"}).json()["items"]
-    owner = db_client.post(
-        "/api/search", headers={"X-User-Id": "alice"}, json={"query": "접근통제"}
-    ).json()["items"]
+    login_as(db_client, "bob")
+    other = db_client.post("/api/search", json={"query": "접근통제"}).json()["items"]
+    db_client.post("/api/auth/logout")
+    login_as(db_client, "alice")
+    owner = db_client.post("/api/search", json={"query": "접근통제"}).json()["items"]
 
-    assert {item["document_id"] for item in anonymous} == {public_id}
+    assert {item["document_id"] for item in other} == {public_id}
     assert {item["document_id"] for item in owner} == {public_id, private_id}
 
 

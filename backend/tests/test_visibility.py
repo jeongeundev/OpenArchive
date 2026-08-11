@@ -3,6 +3,9 @@ import pytest
 from conftest import insert_test_document, process_all_embedding_jobs
 
 from app.embeddings import FakeProvider
+from app.services.auth import hash_password
+from app.services.clusters import get_clusters
+from app.services.diagnostics import get_diagnostics
 from app.services.related import find_related, suggest_tags
 from app.services.search import search_documents
 
@@ -87,6 +90,24 @@ async def test_owner_search_includes_own_private_document(
 
     assert {hit.document_id for hit in hits} == {public_id, alice_private_id}
     assert len(hits) == 2
+
+
+async def test_admin_search_still_hides_other_users_private_documents(
+    worker_conn, visibility_conn, visible_documents
+):
+    provider, public_id, alice_private_id, bob_private_id = visible_documents
+    await worker_conn.execute(
+        "INSERT INTO users (username, password_hash, is_admin) VALUES ('admin', %s, true)",
+        (hash_password("admin-secret"),),
+    )
+
+    hits = await search_documents(
+        visibility_conn, provider, query="OpenSQL 권한 경계", user_id="admin"
+    )
+
+    assert [hit.document_id for hit in hits] == [public_id]
+    assert alice_private_id not in {hit.document_id for hit in hits}
+    assert bob_private_id not in {hit.document_id for hit in hits}
 
 
 @pytest.mark.parametrize(
@@ -220,3 +241,99 @@ async def test_identical_documents_do_not_leave_private_placeholders(
     assert other_user.identical == []
     assert [item.document_id for item in owner.identical] == [alice_private_id]
     assert len(owner.identical) == 1
+
+
+async def test_diagnostics_counts_follow_anonymous_other_and_owner_visibility(
+    worker_conn, visibility_conn
+):
+    await insert_test_document(
+        worker_conn, title="공개 미분류", content="공개", tags=[]
+    )
+    await insert_test_document(
+        worker_conn,
+        title="앨리스 미분류",
+        content="앨리스",
+        owner_id="alice",
+        visibility="private",
+        tags=[],
+    )
+    await insert_test_document(
+        worker_conn,
+        title="밥 미분류 1",
+        content="밥 하나",
+        owner_id="bob",
+        visibility="private",
+        tags=[],
+    )
+    await insert_test_document(
+        worker_conn,
+        title="밥 미분류 2",
+        content="밥 둘",
+        owner_id="bob",
+        visibility="private",
+        tags=[],
+    )
+
+    anonymous = await get_diagnostics(visibility_conn, user_id=None)
+    other = await get_diagnostics(visibility_conn, user_id="bob")
+    owner = await get_diagnostics(visibility_conn, user_id="alice")
+
+    assert anonymous.uncategorized.count == 1
+    assert other.uncategorized.count == 3
+    assert owner.uncategorized.count == 2
+
+
+async def test_cluster_sizes_follow_anonymous_other_and_owner_visibility(
+    worker_conn, visibility_conn
+):
+    public_id = await insert_test_document(
+        worker_conn, title="공개 검색", content="공개 검색", tags=["공개"]
+    )
+    alice_id = await insert_test_document(
+        worker_conn,
+        title="앨리스 검색",
+        content="앨리스 검색",
+        owner_id="alice",
+        visibility="private",
+        tags=["앨리스"],
+    )
+    bob_id = await insert_test_document(
+        worker_conn,
+        title="밥 검색 1",
+        content="밥 검색 하나",
+        owner_id="bob",
+        visibility="private",
+        tags=["밥"],
+    )
+    await insert_test_document(
+        worker_conn,
+        title="밥 검색 2",
+        content="밥 검색 둘",
+        owner_id="bob",
+        visibility="private",
+        tags=["밥"],
+    )
+    await worker_conn.execute(
+        """
+        INSERT INTO document_edges
+            (src_document_id, dst_document_id, kind, score)
+        VALUES (%s, %s, 'related', 0.8),
+               (%s, %s, 'related', 0.8)
+        """,
+        (public_id, alice_id, public_id, bob_id),
+    )
+
+    anonymous = await get_clusters(visibility_conn, user_id=None)
+    other = await get_clusters(visibility_conn, user_id="bob")
+    owner = await get_clusters(visibility_conn, user_id="alice")
+
+    assert anonymous.clusters[0].size == 1
+    assert sorted(cluster.size for cluster in other.clusters) == [1, 2]
+    assert sorted(cluster.size for cluster in owner.clusters) == [1, 1]
+    assert anonymous.connections == []
+    assert [(item.source, item.target, item.count) for item in other.connections] == [
+        ("공개", "밥", 1)
+    ]
+    assert [(item.source, item.target, item.count) for item in owner.connections] == [
+        ("공개", "앨리스", 1)
+    ]

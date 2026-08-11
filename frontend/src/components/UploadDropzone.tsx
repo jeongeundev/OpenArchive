@@ -4,7 +4,6 @@ import { useRef, useState } from "react";
 
 import { ApiError, uploadDocument } from "@/lib/api";
 import { SUPPORTED_CONTENT_TYPES, type Visibility } from "@/lib/types";
-import { useCurrentUser } from "@/lib/useCurrentUser";
 
 export function UploadDropzone({
   onUploaded,
@@ -20,7 +19,6 @@ export function UploadDropzone({
   const [uploading, setUploading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const user = useCurrentUser();
 
   function selectFile(nextFile: File | null): void {
     setFile(nextFile);
@@ -30,7 +28,7 @@ export function UploadDropzone({
 
   async function submit(event: React.FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
-    if (user === null || file === null || uploading) return;
+    if (file === null || uploading) return;
 
     setUploading(true);
     setMessage(null);
@@ -56,7 +54,7 @@ export function UploadDropzone({
     }
   }
 
-  const disabled = user === null || uploading;
+  const disabled = uploading;
 
   return (
     <form
@@ -148,9 +146,6 @@ export function UploadDropzone({
         </div>
       </fieldset>
 
-      {user === null ? (
-        <p className="text-sm text-neutral-500">사용자를 선택하면 업로드할 수 있습니다.</p>
-      ) : null}
       {error !== null ? <p className="text-sm text-[#ef4444]">{error}</p> : null}
       {message !== null ? <p className="text-sm text-neutral-400">{message}</p> : null}
 

@@ -13,6 +13,7 @@ from app.embeddings.base import EmbeddingProvider
 from app.embeddings.fake import FakeProvider
 from app.main import app
 from app.migrations import run_migrations
+from app.services.auth import hash_password
 from app.worker import process_once
 
 # 개발 DB(openarchive)와 분리한다. 테스트는 매번 스키마를 통째로 비우므로
@@ -179,10 +180,33 @@ def upload_document(
     data: dict[str, str] | None = None,
 ):
     """업로드 요청을 보내고 응답을 그대로 돌려준다. 상태 코드 판정은 호출부의 몫이다."""
-    headers = {"X-User-Id": user_id} if user_id is not None else {}
+    if user_id is None:
+        client.post("/api/auth/logout")
+    else:
+        login_as(client, user_id)
     return client.post(
         "/api/documents",
-        headers=headers,
         files={"file": (filename, content, "application/octet-stream")},
         data=data,
     )
+
+
+def login_as(client: TestClient, username: str, password: str = "test-password") -> None:
+    """실제 로그인 API로 테스트 사용자를 만들고 쿠키 세션을 설정한다."""
+    current = client.get("/api/auth/me").json()
+    if current.get("authenticated") and current.get("username") == username:
+        return
+    dsn = get_settings().database_url
+    with psycopg.connect(dsn) as conn:
+        conn.execute(
+            """
+            INSERT INTO users (username, password_hash)
+            VALUES (%s, %s)
+            ON CONFLICT (username) DO NOTHING
+            """,
+            (username, hash_password(password)),
+        )
+    response = client.post(
+        "/api/auth/login", json={"username": username, "password": password}
+    )
+    assert response.status_code == 200

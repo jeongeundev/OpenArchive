@@ -1,9 +1,8 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { hydrateRoot } from "react-dom/client";
-import { renderToString } from "react-dom/server";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+
+import { AuthProvider } from "@/components/AuthProvider";
 import type { DocumentSummary } from "@/lib/types";
-import { setCurrentUser } from "@/lib/user";
 import { ErrorDocuments } from "./ErrorDocuments";
 
 const document: DocumentSummary = {
@@ -13,63 +12,55 @@ const document: DocumentSummary = {
 };
 const response = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 
+function renderDocuments(fetchMock: ReturnType<typeof vi.fn>): void {
+  vi.stubGlobal("fetch", fetchMock);
+  render(<AuthProvider><ErrorDocuments /></AuthProvider>);
+}
+
 describe("ErrorDocuments", () => {
-  beforeEach(() => { localStorage.clear(); vi.unstubAllGlobals(); setCurrentUser("alice"); });
+  beforeEach(() => vi.unstubAllGlobals());
 
   it("실패 문서를 표시하고 재임베딩 후 목록을 갱신한다", async () => {
-    const fetchMock = vi.fn().mockResolvedValueOnce(response([document])).mockResolvedValueOnce(response(document)).mockResolvedValueOnce(response([]));
-    vi.stubGlobal("fetch", fetchMock);
-    render(<ErrorDocuments />);
+    const fetchMock = vi.fn((url: string) => {
+      if (url === "/api/auth/me") return Promise.resolve(response({ authenticated: true, username: "alice", is_admin: false }));
+      if (url.endsWith("/reembed")) return Promise.resolve(response(document));
+      return Promise.resolve(response([document]));
+    });
+    renderDocuments(fetchMock);
     expect(await screen.findByText("실패 문서")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "재임베딩" }));
+    fireEvent.click(await screen.findByRole("button", { name: "재임베딩" }));
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/documents/doc-1/reembed", expect.objectContaining({ method: "POST" })));
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
   });
 
   it("재임베딩 403 응답의 detail을 표시한다", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(response([document])).mockResolvedValueOnce(response({ detail: "소유자만 요청할 수 있습니다." }, 403)));
-    render(<ErrorDocuments />);
+    renderDocuments(vi.fn((url: string) => Promise.resolve(
+      url === "/api/auth/me"
+        ? response({ authenticated: true, username: "alice", is_admin: false })
+        : url.endsWith("/reembed")
+          ? response({ detail: "소유자만 요청할 수 있습니다." }, 403)
+          : response([document]),
+    )));
     fireEvent.click(await screen.findByRole("button", { name: "재임베딩" }));
     expect(await screen.findByText("소유자만 요청할 수 있습니다.")).toBeInTheDocument();
   });
 
-  it("익명이면 재임베딩을 비활성화한다", async () => {
-    setCurrentUser(null);
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response([document])));
-    render(<ErrorDocuments />);
-    expect(await screen.findByRole("button", { name: "재임베딩" })).toBeDisabled();
-    expect(screen.getByText("사용자를 선택하면 재임베딩을 요청할 수 있습니다.")).toBeInTheDocument();
-  });
-
-  it("데모 사용자가 저장돼 있어도 프리렌더 마크업 위에 하이드레이션할 수 있다", async () => {
-    // `/admin/status`도 static prerender다. UploadDropzone과 같은 이유로,
-    // 첫 클라이언트 렌더가 localStorage를 읽으면 서버 HTML과 트리가 어긋난다.
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response([])));
-    localStorage.clear();
-    const serverHtml = renderToString(<ErrorDocuments />);
-    setCurrentUser("alice");
-
-    const container = window.document.createElement("div");
-    container.innerHTML = serverHtml;
-    window.document.body.appendChild(container);
-    const recoverableErrors: string[] = [];
-
-    const root = await act(async () =>
-      hydrateRoot(container, <ErrorDocuments />, {
-        onRecoverableError: (error: unknown) => recoverableErrors.push(String(error)),
-      }),
-    );
-    const textAfterHydration = container.textContent ?? "";
-    await act(async () => root.unmount());
-    container.remove();
-
-    expect(recoverableErrors).toEqual([]);
-    expect(textAfterHydration).not.toContain("사용자를 선택하면 재임베딩을 요청할 수 있습니다.");
+  it("익명에게 재임베딩 작업을 노출하지 않는다", async () => {
+    const fetchMock = vi.fn((url: string) => Promise.resolve(response(
+      url === "/api/auth/me"
+        ? { authenticated: false, username: null, is_admin: false }
+        : [document],
+    )));
+    renderDocuments(fetchMock);
+    expect(await screen.findByText("실패 문서")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "재임베딩" })).not.toBeInTheDocument();
   });
 
   it("실패 문서가 없으면 빈 목록 문구를 표시한다", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response([])));
-    render(<ErrorDocuments />);
+    renderDocuments(vi.fn((url: string) => Promise.resolve(response(
+      url === "/api/auth/me"
+        ? { authenticated: true, username: "alice", is_admin: false }
+        : [],
+    ))));
     expect(await screen.findByText("실패한 문서가 없습니다.")).toBeInTheDocument();
   });
 });

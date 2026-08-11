@@ -409,8 +409,9 @@ def test_edge_kind_distinguishes_overlaps_from_related_and_never_emits_points_to
 def test_a_single_chunk_document_never_claims_overlaps(conn: psycopg.Connection):
     """청크가 하나인 문서는 비율만으로는 항상 1.0이라 무조건 overlaps가 된다.
 
-    분모가 자기 청크 수이므로 이웃에 걸리기만 하면 1/1 = 1.0 >= 0.8이다. 내용이 전혀
-    달라도 "전반적으로 같은 내용"으로 단정되므로 겹친 청크의 절대 수 하한이 필요하다.
+    분모가 자기 청크 수이므로 이웃에 걸리기만 하면 1/1 = 1.0 >= 0.8이다. 하한 2가 이 자리를
+    막는다. 다만 하한이 막는 것은 1청크 문서까지이며, 주제가 가까운 긴 문서끼리 비율이 1.0에
+    붙는 것은 막지 못한다 — 그쪽은 화면 어휘로 다룬다 (ADR-029 정정, OPENSQL_RESEARCH §14).
     """
     long_id = insert_document(conn, "long", "sha256:min-chunks-long")
     single_id = insert_document(conn, "single", "sha256:min-chunks-single")

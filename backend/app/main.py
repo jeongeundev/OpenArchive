@@ -3,6 +3,10 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
+from app.api.admin import router as admin_router
+from app.api.auth import router as auth_router
+from app.api.clusters import router as clusters_router
+from app.api.diagnostics import router as diagnostics_router
 from app.api.documents import router as documents_router
 from app.api.retry import RetryOnOperationalError
 from app.api.search import router as search_router
@@ -31,7 +35,11 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="OpenArchive API", lifespan=lifespan)
 app.add_middleware(RetryOnOperationalError)
+app.include_router(admin_router)
+app.include_router(auth_router)
 app.include_router(documents_router)
+app.include_router(clusters_router)
+app.include_router(diagnostics_router)
 app.include_router(search_router)
 app.include_router(system_router)
 
@@ -50,6 +58,11 @@ async def _document_access_denied(request: Request, error: Exception) -> JSONRes
 
 @app.exception_handler(documents_service.EmptyExtractedText)
 async def _empty_extracted_text(request: Request, error: Exception) -> JSONResponse:
+    return JSONResponse(status_code=400, content={"detail": str(error)})
+
+
+@app.exception_handler(documents_service.ExtractedTextTooLarge)
+async def _extracted_text_too_large(request: Request, error: Exception) -> JSONResponse:
     return JSONResponse(status_code=400, content={"detail": str(error)})
 
 

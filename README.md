@@ -119,22 +119,38 @@ python3 -m venv .venv && source .venv/bin/activate   # scripts/check.sh가 backe
 pip install -e ".[dev]"          # 실제 임베딩(BGE-M3)까지 쓸 때는 ".[dev,local]"
 uvicorn app.main:app --reload
 
-# 3. 임베딩 워커 (별도 터미널) — API 서버를 먼저 기동해야 한다.
+# 3. 최초 관리자 계정 — 자체 가입이 없으므로 첫 로그인 전에 한 번 실행한다
+cd ..
+ADMIN_PASSWORD='<초기 비밀번호>' python scripts/create_admin.py admin --admin
+
+# 4. 임베딩 워커 (별도 터미널) — API 서버를 먼저 기동해야 한다.
 #    마이그레이션은 API startup에서만 실행되므로(ADR-012), 순서를 바꾸면
 #    워커가 "스키마 없음"으로 실패한다.
 cd backend && source .venv/bin/activate
 python -m app.worker
 
-# 4. 프론트엔드 (별도 터미널)
+# 5. 프론트엔드 (별도 터미널)
 cd frontend
 npm install && npm run dev
 
-# 5. MCP 서버 (Claude Desktop/Code가 기동한다. 수동 확인은 아래 커맨드)
+# 6. MCP 서버 (Claude Desktop/Code가 기동한다. 수동 확인은 아래 커맨드)
 cd backend && source .venv/bin/activate
 MCP_USER_ID=alice python -m mcp_server.server
 ```
 
 `http://localhost:3000` 접속.
+
+### 인증 환경변수
+
+| 환경변수 | 기본값 | 설명 |
+|---|---:|---|
+| `SESSION_LIFETIME_HOURS` | `24` | 서버 세션과 로그인 쿠키의 수명(시간) |
+| `SESSION_COOKIE_SECURE` | `false` | 로컬 HTTP에서는 `false`. HTTPS 상시 배포에서는 반드시 `true` |
+
+초기 계정은 환경변수로 자동 생성되지 않는다. API 서버를 먼저 기동해 마이그레이션을 적용한 뒤 위의
+`scripts/create_admin.py`를 실행한다. 비밀번호를 셸 기록에 남기고 싶지 않으면 `ADMIN_PASSWORD`를
+생략하면 대화형으로 입력받는다. 이후 관리자는 `/admin/users`에서 일반 사용자나 다른 관리자를
+발급할 수 있다. 관리자 권한은 계정 관리 전용이며 다른 사용자의 private 문서를 열람하게 하지는 않는다.
 
 ### Claude Code/Desktop에 MCP 서버 등록
 
@@ -161,6 +177,10 @@ stdio 서버 설정에 백엔드 가상환경의 Python과 모듈을 등록한�
 ### API 확인
 
 엔드포인트 목록과 요청·응답 스키마는 서버가 직접 제공합니다. 구현과 어긋날 수 없는 유일한 출처입니다.
+
+> **문서 관련 API는 읽기까지 전부 로그인 쿠키를 요구합니다** — 익명 요청은 401입니다 (ADR-028).
+> 위 3번에서 만든 계정으로 `POST /api/auth/login`을 먼저 호출하세요. MCP 서버는 HTTP를 거치지
+> 않고 서비스를 직접 호출하므로 이 경계와 무관하며, 열람 범위는 `MCP_USER_ID`가 정합니다.
 
 ```
 http://localhost:8000/docs

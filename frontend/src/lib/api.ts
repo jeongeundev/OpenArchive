@@ -1,15 +1,18 @@
 import type {
   ContentType,
+  AuthStatus,
+  ClustersResponse,
   DocumentDetail,
   DocumentSummary,
+  DiagnosticsResponse,
   EmbeddingStatus,
   RelatedResponse,
   SearchResponse,
   SystemStatus,
   TagSuggestionsResponse,
   Visibility,
+  UserSummary,
 } from "./types";
-import { getCurrentUser } from "./user";
 
 export class ApiError extends Error {
   readonly status: number;
@@ -25,26 +28,17 @@ export class ApiError extends Error {
   }
 }
 
-function userHeaders(): Headers {
-  const headers = new Headers();
-  const user = getCurrentUser();
-  if (user !== null) {
-    headers.set("X-User-Id", user);
-  }
-  return headers;
-}
-
 async function request<T>(
   path: string,
   init: RequestInit = {},
   parseResponse = true,
 ): Promise<T> {
   const headers = new Headers(init.headers);
-  for (const [name, value] of userHeaders()) {
-    headers.set(name, value);
-  }
-
-  const response = await fetch(path, { ...init, headers });
+  const response = await fetch(path, {
+    ...init,
+    credentials: "same-origin",
+    headers,
+  });
   if (!response.ok) {
     let errorBody: unknown;
     try {
@@ -65,6 +59,42 @@ async function request<T>(
     throw new ApiError(response.status, detail, currentVersion);
   }
   return parseResponse ? (response.json() as Promise<T>) : (undefined as T);
+}
+
+export function getAuthStatus(): Promise<AuthStatus> {
+  return request<AuthStatus>("/api/auth/me");
+}
+
+export function login(username: string, password: string): Promise<AuthStatus> {
+  return request<AuthStatus>("/api/auth/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username, password }),
+  });
+}
+
+export function logout(): Promise<AuthStatus> {
+  return request<AuthStatus>("/api/auth/logout", { method: "POST" });
+}
+
+export function listUsers(): Promise<UserSummary[]> {
+  return request<UserSummary[]>("/api/admin/users");
+}
+
+export function createUser(input: {
+  username: string;
+  password: string;
+  is_admin: boolean;
+}): Promise<UserSummary> {
+  return request<UserSummary>("/api/admin/users", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export function deleteUser(id: string): Promise<void> {
+  return request<void>(`/api/admin/users/${encodeURIComponent(id)}`, { method: "DELETE" }, false);
 }
 
 export function listDocuments(params?: {
@@ -170,4 +200,12 @@ export function search(input: {
 
 export function getSystemStatus(): Promise<SystemStatus> {
   return request<SystemStatus>("/api/system/status");
+}
+
+export function getDiagnostics(): Promise<DiagnosticsResponse> {
+  return request<DiagnosticsResponse>("/api/diagnostics");
+}
+
+export function getClusters(): Promise<ClustersResponse> {
+  return request<ClustersResponse>("/api/clusters");
 }

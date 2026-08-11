@@ -2,10 +2,12 @@
 
 import { DocumentTable } from "@/components/DocumentTable";
 import { UploadDropzone } from "@/components/UploadDropzone";
+import { useAuth } from "@/components/AuthProvider";
 import { useDocuments } from "@/lib/useDocuments";
 
 export default function Home(): React.ReactElement {
   const { documents, loading, error, refresh } = useDocuments();
+  const { auth } = useAuth();
 
   return (
     <section className="space-y-8">
@@ -16,7 +18,7 @@ export default function Home(): React.ReactElement {
         </p>
       </div>
 
-      <UploadDropzone onUploaded={refresh} />
+      {auth.authenticated ? <UploadDropzone onUploaded={refresh} /> : null}
 
       {loading ? (
         <p className="text-sm text-neutral-500">불러오는 중…</p>

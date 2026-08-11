@@ -59,5 +59,6 @@ describe("루트 페이지", () => {
       "href",
       "/documents/document-2",
     );
+    expect(screen.queryByRole("button", { name: "업로드" })).not.toBeInTheDocument();
   });
 });

@@ -45,6 +45,30 @@ class UpdateTagsRequest(BaseModel):
     tags: list[str]
 
 
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+class AuthStatus(BaseModel):
+    authenticated: bool
+    username: str | None
+    is_admin: bool
+
+
+class CreateUserRequest(BaseModel):
+    username: str
+    password: str
+    is_admin: bool = False
+
+
+class UserSummary(BaseModel):
+    id: UUID
+    username: str
+    is_admin: bool
+    created_at: datetime
+
+
 class SearchRequest(BaseModel):
     query: str
     tags: list[str] | None = None
@@ -119,3 +143,77 @@ class TagSuggestionsResponse(BaseModel):
     items: list[TagSuggestionItem]
     based_on_version: int | None
     reason: str | None
+
+
+class DiagnosticDocumentItem(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    document_id: UUID
+    title: str
+
+
+class DiagnosticDocumentList(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    count: int
+    items: list[DiagnosticDocumentItem]
+
+
+class DuplicatePairItem(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    first: DiagnosticDocumentItem
+    second: DiagnosticDocumentItem
+    score: float | None
+
+
+class DuplicateList(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    count: int
+    items: list[DuplicatePairItem]
+
+
+class DuplicateDiagnostics(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    identical: DuplicateList
+    overlaps: DuplicateList
+
+
+class DiagnosticsResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    orphans: DiagnosticDocumentList
+    duplicates: DuplicateDiagnostics
+    uncategorized: DiagnosticDocumentList
+
+
+class ClusterDocumentItem(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    document_id: UUID
+    title: str
+
+
+class ClusterItem(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    name: str
+    size: int
+    documents: list[ClusterDocumentItem]
+
+
+class ClusterConnectionItem(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    source: str
+    target: str
+    count: int
+
+
+class ClustersResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    clusters: list[ClusterItem]
+    connections: list[ClusterConnectionItem]
