@@ -63,7 +63,10 @@
       "type": "docs",
       "scope": "adr",
       "desc": "위키링크 결정을 ADR-030으로 신설하고 ADR-016을 정정",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-08-11T17:38:36+0900",
+      "summary": "ADR-030에 조회 시점 위키링크 결정을 기록하고 RRF 미채택·관계 그래프·진단·주제 덩어리의 실제 구현 상태를 ADR·PRD·CLAUDE.md에 정합화",
+      "completed_at": "2026-08-11T17:42:16+0900"
     }
   ],
   "created_at": "2026-08-11T16:44:39+0900"
