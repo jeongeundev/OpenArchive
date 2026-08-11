@@ -7,23 +7,23 @@ m9가 잘렸을 때 영원히 NULL인 컬럼과 안 타는 CHECK 분기가 남�
 
 **그래서 여기서 처음부터 정한다.**
 
-### 🔴 결정 1 — 위키링크를 사람이 실제로 쓰는가
+### ✅ 결정 1 — **확정: 위키링크를 만든다** (2026-08-11 사용자 결정)
 
-**이것을 먼저 확인하라.** 이 플랫폼은 **파일 업로드가 주 경로**이고, 편집 대상은 추출
-텍스트다(ADR-017). 시연 데이터도 ADR 문서를 변환한 복사본이라 **`[[...]]` 문법이 원래 없다.**
+**이 결정은 이미 닫혔다. 다시 판단하지 말고, 물어보지도 말고, 아래대로 진행하라.**
 
-| 답 | 이 phase가 하는 일 |
-|---|---|
-| **쓴다** (편집 화면에서 사람이 넣는다) | 아래 전부를 만든다 |
-| **안 쓴다** | **step 0~2를 건너뛰고 RRF만 한다.** 아무도 안 쓰는 문법을 파싱하는 것은 죽은 코드다 |
+원래 이 자리는 *"위키링크를 사람이 실제로 쓰는가"*를 묻는 열린 결정이었다. 사용자가
+**전부 실행(step 0~5)**으로 확정했다. 확정 근거는 다음 셋이며, 이후 step이 이 근거를
+전제로 삼는다:
 
-**확인 방법**: `frontend/`의 문서 편집 화면이 실제로 본문을 고칠 수 있는지, 시연에서
-사람이 링크를 넣는 장면이 성립하는지 본다. **성립하지 않으면 `blocked`로 두고 사용자에게
-물어라** — 이 판단을 하네스가 혼자 내리면 안 된다.
+- **편집 화면이 이미 있다** — `frontend/src/components/TextEditor.tsx`가 추출 텍스트를
+  `textarea`로 고친다. 사람이 `[[`를 칠 수 있다는 조건은 충족된다
+- **채택의 실제 값어치는 ADR-027을 화면에서 증명하는 데 있다** — seed에 private 4건
+  (`ADR-006:` `ADR-018:` `ADR-023:` `ADR-027:`)이 있고, 그것을 가리키는 링크가 다른
+  계정에게는 **"없는 문서"와 똑같은 깨진 링크**로 보인다. m8이 만든 권한 경계를 눈으로
+  증명하는 가장 직접적인 장면이다
+- **재료가 이미 있다** — `docs/`가 `ADR-011` 같은 문자열로 **241회** 서로 참조한다
 
-> 판단이 "쓴다"로 나면, **seed 스크립트가 변환할 때 `docs/`의 상호 참조를 `[[제목]]`으로
-> 바꾸는 경로**가 필요하다. ADR 25개가 서로 201회 참조하므로 재료는 이미 있다.
-> 그 변경은 m7의 `scripts/seed_demo.py`를 고치는 일이며, **이 step의 범위에 포함**한다.
+따라서 **step 0~2를 건너뛰지 마라.** seed 변경도 이 step의 범위다(아래 4항).
 
 ### 🔴 결정 2 — 동명 문서가 여럿일 때 무엇을 가리키나
 
@@ -94,25 +94,53 @@ CREATE TABLE document_links (
 > 없을 수 있다. **NULL로 두는 것이 정직하다** — 문서 단위 링크로 충분하고,
 > 위치가 꼭 필요하면 청크 준비 후 채우는 경로를 별도로 정한다. **억지로 추정하지 마라.**
 
-### 4) 결정 1이 "쓴다"면 seed를 고친다
+### 4) seed를 고친다 — **재임베딩까지가 이 step의 범위다**
 
 `scripts/seed_demo.py`가 변환할 때 `docs/`의 상호 참조(`ADR-018` 같은 문자열)를
 `[[ADR-018: 제목]]` 형태로 바꾼다. **`docs/` 원본은 그대로 둔다.**
+
+- **제목은 헤딩 텍스트 전체다.** `split_sections`가 `ADR-018: 태그·유형 필터를 …` 같은
+  헤딩 한 줄을 그대로 `title`로 쓴다. `[[ADR-018]]`만 쓰면 **전부 깨진 링크가 된다** —
+  번호 → 제목 매핑을 만들어 완전한 제목으로 링크하라
+- **깨진 링크를 일부러 남겨라** — 존재하지 않는 번호를 가리키는 링크가 하나도 없으면
+  step 1·2가 만드는 깨진 링크 경로가 시연에서 한 번도 나타나지 않는다. private 4건을
+  가리키는 링크는 소유자에게는 정상으로 보이므로 이 자리를 대신하지 못한다
+
+> 🔴 **`--reset`은 벡터를 지운다. 이 step이 끝나기 전에 되살려라.**
+>
+> 현재 개발 DB는 **BGE-M3 실벡터**다 — 63문서 · 280청크 · `document_edges` 1294행
+> (2026-08-11 직접 확인). `seed_demo.py --reset`은 문서를 지우므로 **청크와
+> `document_edges`가 전부 사라진다.** 재적재 후 반드시 워커를 돌려 되살린다:
+>
+> ```bash
+> cd backend && EMBEDDING_PROVIDER=local .venv/bin/python -m app.worker
+> #   embedding_jobs의 pending이 0이 될 때까지 두고, 그 뒤 종료한다
+> ```
+>
+> **`EMBEDDING_PROVIDER=local`을 생략하지 마라.** `app/config.py:19`의 기본값이 `fake`라
+> 생략하면 **조용히 가짜 해시 벡터로 채워진다.** 에러도 경고도 나지 않는데, step 3의 RRF
+> 측정과 m7의 관계 그래프가 전부 그 위에서 이뤄져 §14 기록이 통째로 무의미해진다.
+> 판별법: 임의 청크의 `embedding`을 `FakeProvider().embed([content])[0]`과 비교해
+> 최대오차가 `1e-6` 미만이면 fake, `0.6` 근처면 BGE-M3다
 
 ## Acceptance Criteria
 
 ```bash
 cd backend
 
-# 0) 결정 1을 실제로 판단했는가 — summary에 근거가 있어야 한다
-#    "안 쓴다"로 판단했다면 이 step은 skip이고 index.json에 그 사유를 남긴다
+# 0) DSN과 인터프리터를 먼저 고정한다 — 이것을 빼면 아래 psql이 전부 헛돈다
+#    셸에 DATABASE_URL이 설정돼 있지 않다(확인함). 빈 문자열로 psql을 부르면 호스트의
+#    로컬 소켓에 붙어 `role "..." does not exist`로 죽고, 그 실패가 `| grep`에 먹혀
+#    "출력 없음 = 통과"로 거짓 성립한다
+export DATABASE_URL="${DATABASE_URL:-postgresql://openarchive:openarchive@localhost:5433/openarchive}"
+PY=.venv/bin/python        # 시스템 python3에는 psycopg가 없다
 
 # 1) 테스트가 있고 통과하는가
-python -m pytest tests/test_tables.py tests/test_triggers.py -q
+$PY -m pytest tests/test_tables.py tests/test_triggers.py -q
 
 # 2) 대상 id를 저장하지 않는가 — 이 단언이 핵심이다
 psql "$DATABASE_URL" -c "\d document_links" | grep -i "uuid"
-#   → src_document_id 하나뿐이어야 한다
+#   → src_document_id 하나뿐이어야 한다. 행이 0줄이면 통과가 아니라 접속 실패를 의심하라
 
 # 3) 깨진 링크가 저장되는가
 grep -nE "없는|broken|missing" tests/test_triggers.py
@@ -126,9 +154,39 @@ docker compose -f ../docker-compose.yml up -d && sleep 5
 psql "$DATABASE_URL" -c "SELECT count(*) FROM document_links"
 #   → 0보다 커야 한다
 
-# 6) seed가 링크를 만드는가 (결정 1이 "쓴다"인 경우)
-python3 ../scripts/seed_demo.py --reset && python3 ../scripts/seed_demo.py
+# 6) seed가 링크를 만드는가
+$PY ../scripts/seed_demo.py --reset && $PY ../scripts/seed_demo.py
 psql "$DATABASE_URL" -c "SELECT count(*) FROM document_links"
+#   → 0보다 커야 한다
+
+# 6-1) 깨진 링크가 실제로 섞여 있는가 — 둘 다 0보다 커야 한다
+psql "$DATABASE_URL" -c "SELECT count(*) FILTER (WHERE d.id IS NOT NULL) AS resolved, \
+       count(*) FILTER (WHERE d.id IS NULL) AS broken \
+  FROM document_links l LEFT JOIN documents d ON d.title = l.target_title;"
+
+# 6-2) 🔴 벡터를 되살렸는가 — --reset이 청크와 edges를 지웠다
+EMBEDDING_PROVIDER=local $PY -m app.worker      # pending이 0이 되면 종료
+psql "$DATABASE_URL" -c "SELECT (SELECT count(*) FROM document_chunks) AS chunks, \
+       (SELECT count(*) FROM document_edges) AS edges, \
+       (SELECT count(*) FROM embedding_jobs WHERE status='pending') AS pending;"
+#   → chunks 200 이상 · edges 0 초과 · pending 0. 하나라도 어긋나면 이 step은 끝나지 않았다
+
+# 6-3) fake 벡터로 채우지 않았는가 — 0.6 근처여야 한다. 1e-6 미만이면 fake다
+$PY - <<'PY'
+import sys; sys.path.insert(0, ".")
+import numpy as np, psycopg
+from app.config import get_settings
+from app.embeddings.fake import FakeProvider
+with psycopg.connect(get_settings().database_url) as c:
+    content, emb = c.execute(
+        "SELECT content, embedding FROM document_chunks WHERE embedding IS NOT NULL LIMIT 1"
+    ).fetchone()
+v = np.array(eval(emb) if isinstance(emb, str) else emb, dtype=float)
+f = np.array(FakeProvider().embed([content])[0], dtype=float)
+d = float(np.abs(v - f).max())
+print(f"최대오차 {d:.6f} → {'FAKE — 재임베딩 실패' if d < 1e-6 else 'BGE-M3 정상'}")
+assert d >= 1e-6, "fake 벡터다. EMBEDDING_PROVIDER=local로 다시 임베딩하라"
+PY
 
 # 7) docs/를 안 건드렸는가 — 출력이 없어야 한다
 git diff --name-only | grep "^docs/"
@@ -139,8 +197,8 @@ cd .. && bash scripts/check.sh
 
 ## 검증 절차
 
-1. **결정 1을 먼저 판단한다.** "안 쓴다"면 step 0~2를 건너뛰고 그 사유를 index.json에
-   남긴 뒤 step 3으로 간다. 판단이 애매하면 **`blocked`로 두고 사용자에게 물어라.**
+1. **결정 1은 이미 닫혔다** — 위키링크를 만든다(2026-08-11 사용자 결정). 다시 판단하지
+   말고 바로 작업에 들어간다.
 2. 위 AC 커맨드를 실행한다.
 3. 아키텍처 체크리스트를 확인한다:
    - **대상 문서 id가 어디에도 저장되지 않는가?** 저장하면 ADR-027이 깨진다
@@ -148,9 +206,9 @@ cd .. && bash scripts/check.sh
    - **기존 트리거 함수를 고치지 않았는가?** 한 함수가 두 일을 하면 실패 격리가 사라진다
    - **`src_chunk_index`를 추정으로 채우지 않았는가?** 모르면 NULL이 정직하다
    - **`title`에 UNIQUE를 걸지 않았는가?** 충돌 에러 자체가 존재를 누출한다
+   - **재적재한 벡터가 BGE-M3인가?** AC 6-3이 통과해야 한다. fake면 이후 전부가 무의미하다
 4. 결과에 따라 `phases/m9-wikilink-rrf/index.json`의 step 0을 업데이트한다:
    - 성공 → `"status": "completed"`, `"summary": "산출물 한 줄 요약"`
-   - 결정 1이 "안 쓴다" → `"status": "completed"`, `"summary": "미채택 — 근거"`
    - 수정 3회 시도 후에도 실패 → `"status": "error"`, `"error_message": "구체적 에러 내용"`
    - 판단 불가 → `"status": "blocked"`, `"blocked_reason": "구체적 사유"` 후 즉시 중단
 
@@ -166,5 +224,7 @@ cd .. && bash scripts/check.sh
   대상 타입이 다르다 (ADR-029)
 - **`003_triggers.sql`의 기존 함수를 고치지 마라.** 이유: 실패 격리
 - **`src_chunk_index`를 추정으로 채우지 마라.** 이유: 틀린 위치는 없는 위치보다 나쁘다
-- **결정 1을 혼자 "쓴다"로 정하고 진행하지 마라.** 이유: 아무도 안 쓰는 문법을 파싱하면
-  코드 프리즈 전 마지막 시간을 죽은 코드에 쓰게 된다
+- **결정 1을 다시 열지 마라.** 이유: 2026-08-11에 사용자가 「전부 실행」으로 확정했다.
+  여기서 되묻는 것은 phase를 통째로 멈추는 일이다
+- **`EMBEDDING_PROVIDER`를 생략한 채 워커를 돌리지 마라.** 이유: 기본값이 `fake`라
+  조용히 가짜 벡터가 들어가고, 에러가 없어 아무도 알아채지 못한다
