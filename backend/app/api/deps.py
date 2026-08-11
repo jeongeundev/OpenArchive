@@ -40,6 +40,15 @@ async def require_user_id(user: Annotated[dict | None, Depends(current_user)]) -
     return user["username"]
 
 
+async def require_admin(user: Annotated[dict | None, Depends(current_user)]) -> dict:
+    """계정 관리 권한을 요구한다. 문서 열람 권한은 확장하지 않는다."""
+    if user is None:
+        raise HTTPException(status_code=401, detail="로그인이 필요합니다.")
+    if not user["is_admin"]:
+        raise HTTPException(status_code=403, detail="관리자 권한이 필요합니다.")
+    return user
+
+
 async def optional_user_id(user: Annotated[dict | None, Depends(current_user)]) -> str | None:
     """읽기 요청에는 인증 사용자명 또는 익명(None)을 전달한다."""
     return None if user is None else user["username"]

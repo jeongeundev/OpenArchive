@@ -1,9 +1,12 @@
 import hashlib
+import io
+import zipfile
 from uuid import uuid4
 
 import psycopg
 from conftest import login_as, run_embedding_worker
 from conftest import upload_document as upload
+from docx import Document
 from fastapi.testclient import TestClient
 
 
@@ -73,6 +76,38 @@ def test_upload_rejects_non_utf8_text(db_client: TestClient):
 
     assert response.status_code == 400
     assert response.json()["detail"] == "텍스트 파일은 UTF-8 인코딩이어야 합니다."
+
+
+def test_oversized_upload_is_rejected_before_read(db_client: TestClient, monkeypatch):
+    async def fail_if_read(*args, **kwargs):
+        raise AssertionError("oversized upload must be rejected before read()")
+
+    monkeypatch.setattr("starlette.datastructures.UploadFile.read", fail_if_read)
+
+    response = upload(db_client, content=b"x" * (10_000_000 + 1))
+
+    assert response.status_code == 413
+
+
+def test_extracted_text_over_service_limit_is_rejected(db_client: TestClient):
+    response = upload(db_client, content=b"x" * 500_001)
+
+    assert response.status_code == 400
+    assert "500KB" in response.json()["detail"]
+
+
+def test_upload_near_file_limit_with_small_extracted_text_succeeds(db_client: TestClient):
+    buf = io.BytesIO()
+    document = Document()
+    document.add_paragraph("OpenSQL near-limit document")
+    document.save(buf)
+    with zipfile.ZipFile(buf, "a", compression=zipfile.ZIP_STORED) as archive:
+        archive.writestr("word/media/padding.bin", b"x" * 9_000_000)
+
+    response = upload(db_client, filename="near-limit.docx", content=buf.getvalue())
+
+    assert len(buf.getvalue()) < 10_000_000
+    assert response.status_code == 201
 
 
 def test_upload_requires_user_id(db_client: TestClient):
@@ -291,6 +326,15 @@ def test_edit_rejects_blank_content_without_changing_document(db_client: TestCli
     assert response.status_code == 400
     detail = db_client.get(f"/api/documents/{document_id}").json()
     assert (detail["content"], detail["version"]) == ("OpenSQL guide", 1)
+
+
+def test_edit_rejects_extracted_text_over_service_limit(db_client: TestClient):
+    document_id = upload(db_client).json()["id"]
+
+    response = edit(db_client, document_id, content="x" * 500_001, version=1)
+
+    assert response.status_code == 400
+    assert "500KB" in response.json()["detail"]
 
 
 def test_edit_keeps_old_chunks_until_worker_replaces_them_and_exposes_convergence(

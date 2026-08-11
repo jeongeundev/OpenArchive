@@ -30,6 +30,9 @@ from app.services.search import MAX_K
 
 router = APIRouter(prefix="/api/documents", tags=["documents"])
 
+# 시연 데이터 최대 파일(약 90KB)의 5배보다 충분히 크면서 단일 요청의 메모리 폭증을 막는다.
+MAX_UPLOAD_BYTES = 10_000_000
+
 
 @router.post("", response_model=DocumentSummary, status_code=status.HTTP_201_CREATED)
 async def upload_document(
@@ -40,6 +43,8 @@ async def upload_document(
     tags: Annotated[list[str] | None, Form()] = None,
     visibility: Annotated[Literal["public", "private"], Form()] = "public",
 ) -> DocumentSummary:
+    if file.size is not None and file.size > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="업로드 파일은 10MB를 넘을 수 없습니다.")
     try:
         document = await service.create_document(
             conn,

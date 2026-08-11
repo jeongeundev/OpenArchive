@@ -56,6 +56,19 @@ class AuthStatus(BaseModel):
     is_admin: bool
 
 
+class CreateUserRequest(BaseModel):
+    username: str
+    password: str
+    is_admin: bool = False
+
+
+class UserSummary(BaseModel):
+    id: UUID
+    username: str
+    is_admin: bool
+    created_at: datetime
+
+
 class SearchRequest(BaseModel):
     query: str
     tags: list[str] | None = None

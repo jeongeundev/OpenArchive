@@ -20,6 +20,18 @@ SCRYPT_DKLEN = 64
 SALT_BYTES = 16
 
 
+class UserAlreadyExists(Exception):
+    """같은 사용자명의 계정이 이미 존재한다."""
+
+
+class UserNotFound(Exception):
+    """삭제할 사용자가 존재하지 않는다."""
+
+
+class UserOwnsDocuments(Exception):
+    """삭제하면 소유 문서가 유령 문서가 되는 사용자다."""
+
+
 class AuthenticationFailed(Exception):
     """자격 증명이나 세션이 유효하지 않은 경우. 세부 실패 사유는 외부에 노출하지 않는다."""
 
@@ -69,6 +81,47 @@ def verify_password(password: str, stored_hash: str) -> bool:
     except (ValueError, TypeError):
         return False
     return hmac.compare_digest(actual, expected)
+
+
+async def create_user(
+    conn: psycopg.AsyncConnection, username: str, password: str, *, is_admin: bool = False
+) -> dict:
+    """관리자가 로그인 가능한 계정을 만든다."""
+    cur = conn.cursor(row_factory=dict_row)
+    try:
+        await cur.execute(
+            """INSERT INTO users (username, password_hash, is_admin)
+               VALUES (%s, %s, %s)
+               RETURNING id, username, is_admin, created_at""",
+            (username, hash_password(password), is_admin),
+        )
+    except psycopg.errors.UniqueViolation as error:
+        raise UserAlreadyExists from error
+    return await cur.fetchone()
+
+
+async def list_users(conn: psycopg.AsyncConnection) -> list[dict]:
+    """비밀번호 해시를 제외한 계정 목록을 반환한다."""
+    cur = conn.cursor(row_factory=dict_row)
+    await cur.execute(
+        "SELECT id, username, is_admin, created_at FROM users ORDER BY created_at, id"
+    )
+    return await cur.fetchall()
+
+
+async def delete_user(conn: psycopg.AsyncConnection, user_id: UUID) -> None:
+    """소유 문서가 있으면 삭제를 거부해 owner_id 유령 문서를 만들지 않는다."""
+    owns_document = await (
+        await conn.execute(
+            "SELECT EXISTS (SELECT 1 FROM documents WHERE owner_id = (SELECT username FROM users WHERE id = %s))",
+            (user_id,),
+        )
+    ).fetchone()
+    if owns_document[0]:
+        raise UserOwnsDocuments
+    deleted = await conn.execute("DELETE FROM users WHERE id = %s", (user_id,))
+    if deleted.rowcount == 0:
+        raise UserNotFound
 
 
 async def authenticate_user(

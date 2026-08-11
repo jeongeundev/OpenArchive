@@ -3,6 +3,7 @@ import pytest
 from conftest import insert_test_document, process_all_embedding_jobs
 
 from app.embeddings import FakeProvider
+from app.services.auth import hash_password
 from app.services.related import find_related, suggest_tags
 from app.services.search import search_documents
 
@@ -87,6 +88,24 @@ async def test_owner_search_includes_own_private_document(
 
     assert {hit.document_id for hit in hits} == {public_id, alice_private_id}
     assert len(hits) == 2
+
+
+async def test_admin_search_still_hides_other_users_private_documents(
+    worker_conn, visibility_conn, visible_documents
+):
+    provider, public_id, alice_private_id, bob_private_id = visible_documents
+    await worker_conn.execute(
+        "INSERT INTO users (username, password_hash, is_admin) VALUES ('admin', %s, true)",
+        (hash_password("admin-secret"),),
+    )
+
+    hits = await search_documents(
+        visibility_conn, provider, query="OpenSQL 권한 경계", user_id="admin"
+    )
+
+    assert [hit.document_id for hit in hits] == [public_id]
+    assert alice_private_id not in {hit.document_id for hit in hits}
+    assert bob_private_id not in {hit.document_id for hit in hits}
 
 
 @pytest.mark.parametrize(
