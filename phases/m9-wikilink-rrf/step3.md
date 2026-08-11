@@ -123,8 +123,21 @@ gh issue view 12 --json body -q .body | grep -c "pg_trgm"     # 1 이상
 gh issue view 12 --json body -q .body | grep -c "to_tsvector" # 0 이어야 한다
 
 # 9) 실제 응답
+#    ⚠️ 검색은 **POST /api/search**다. GET으로 치면 405가 나오고 `| head`에 먹혀
+#    "출력이 있다"로 거짓 통과한다 — m7 step 8 AC 9번이 정확히 이렇게 아무것도
+#    검증하지 못했다. 그리고 m8이 익명 읽기를 닫았으므로(ADR-028) 로그인이 먼저다
+export TEST_ADMIN_PW="${TEST_ADMIN_PW:-harness-local-check}"
+ADMIN_PASSWORD="$TEST_ADMIN_PW" python ../scripts/create_admin.py admin --admin \
+  || echo "이미 존재 — 기존 계정을 쓴다"
 uvicorn app.main:app --port 8908 & sleep 3
-curl -s "localhost:8908/api/search?q=정합성&k=5" | head -40; kill %1
+curl -s -c /tmp/oa-session.txt -X POST localhost:8908/api/auth/login -H 'content-type: application/json' \
+     -d "{\"username\":\"admin\",\"password\":\"$TEST_ADMIN_PW\"}" -i | grep -i "set-cookie"
+#   → Set-Cookie가 나와야 한다. 안 나오면 아래가 전부 401이다
+curl -s -b /tmp/oa-session.txt -X POST localhost:8908/api/search \
+     -H 'content-type: application/json' -d '{"query":"정합성","k":5}' \
+     -o /tmp/oa-search.json -w '%{http_code}\n'
+#   → 200이어야 한다. 405면 메서드를, 401이면 로그인을 틀린 것이다
+head -40 /tmp/oa-search.json; kill %1
 
 # 10) 전체 검증
 cd .. && bash scripts/check.sh

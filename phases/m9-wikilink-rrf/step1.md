@@ -92,15 +92,27 @@ grep -nE "broken|깨진" app/services/diagnostics.py
 # 5) 순회 비용 측정이 §14에 덧붙었는가 (순회에 넣은 경우)
 sed -nE '/^## 14\./,/^(## 15\.|---)$/p' ../docs/OPENSQL_RESEARCH.md | grep -nE "resolve|제목 조인"
 
-# 6) 실제 응답 — 두 시선에서 깨진 링크 수가 다른가
+# 6) 실제 응답 — 로그인 경계와 로그인한 시선을 각각 본다
+#    ⚠️ m8이 익명 읽기를 닫았다(ADR-028). 익명 조회는 결과가 비는 게 아니라 401이다.
+#    `| grep`으로 받으면 401 본문에서 아무것도 못 찾아 **조용히 통과한다** — 상태줄을 본다.
 #    쿠키는 로그인해서 파일로 받는다. 자리표시자를 손으로 채우지 마라
-: "${TEST_ADMIN_PW:?m8 step 1 픽스처에서 쓴 관리자 비밀번호를 환경변수로 넣고 실행하라}"
+#    비밀번호는 m8 step 2가 만든 부트스트랩으로 직접 만든다 (사람에게 묻지 말 것)
+export TEST_ADMIN_PW="${TEST_ADMIN_PW:-harness-local-check}"
+ADMIN_PASSWORD="$TEST_ADMIN_PW" python ../scripts/create_admin.py admin --admin \
+  || echo "이미 존재 — 기존 계정을 쓴다"
 uvicorn app.main:app --port 8907 & sleep 3
-curl -s localhost:8907/api/diagnostics | grep -i broken                # 익명
+curl -s -o /dev/null -w '%{http_code}\n' localhost:8907/api/diagnostics
+#   → 401이어야 한다. 200이면 익명 경계가 뚫린 것이다
 curl -s -c /tmp/oa-session.txt -X POST localhost:8907/api/auth/login -H 'content-type: application/json' \
-     -d "{\"username\":\"admin\",\"password\":\"$TEST_ADMIN_PW\"}" > /dev/null
+     -d "{\"username\":\"admin\",\"password\":\"$TEST_ADMIN_PW\"}" -i | grep -i "set-cookie"
+#   → Set-Cookie가 나와야 한다. 안 나오면 아래 조회가 전부 401이라 무의미하다
 curl -s localhost:8907/api/diagnostics -b /tmp/oa-session.txt | grep -i broken   # 로그인한 시선
 kill %1
+
+# 6-1) 두 시선의 차이는 서비스 계층 테스트가 본다
+#      열람 술어는 그대로라(ADR-028은 HTTP에만 경계를 걸었다) `user_id=None`을 포함한
+#      세 시선이 test_visibility.py에서 여전히 유효하다. curl로 대신하려 하지 마라
+grep -nE "resolve|backlink" ../backend/tests/test_visibility.py
 
 # 7) 전체 검증
 cd .. && bash scripts/check.sh
