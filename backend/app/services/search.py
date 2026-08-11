@@ -47,6 +47,22 @@ WITH RECURSIVE candidates AS (
 direct_documents AS (
     SELECT DISTINCT document_id FROM candidates
 ),
+resolved_links AS (
+    SELECT l.src_document_id, d.id AS dst_document_id,
+           'refers'::text AS kind,
+           NULL::int AS dst_chunk_index
+    FROM document_links l
+    JOIN documents d
+      ON d.title = l.target_title
+     AND {VISIBLE_TO_USER}
+),
+traversal_edges AS (
+    SELECT e.src_document_id, e.dst_document_id, e.kind, e.dst_chunk_index
+    FROM document_edges e
+    UNION ALL
+    SELECT src_document_id, dst_document_id, kind, dst_chunk_index
+    FROM resolved_links
+),
 walk AS (
     SELECT c.document_id, c.chunk_index, c.content, c.version, c.dist,
            NULL::uuid AS via_document_id, NULL::text AS via_kind, 0 AS depth,
@@ -59,7 +75,7 @@ walk AS (
            w.dist + {GRAPH_DISTANCE_PENALTY},
            w.document_id, e.kind, w.depth + 1, w.path || e.dst_document_id
     FROM walk w
-    JOIN document_edges e ON e.src_document_id = w.document_id
+    JOIN traversal_edges e ON e.src_document_id = w.document_id
     JOIN documents d ON d.id = e.dst_document_id
     JOIN LATERAL (
         SELECT target.chunk_index, target.content, target.version
@@ -119,7 +135,7 @@ selected AS (
      ORDER BY dist,
               CASE via_kind
                   WHEN 'overlaps' THEN 0 WHEN 'related' THEN 1
-                  WHEN 'revision' THEN 2 ELSE 3
+                  WHEN 'refers' THEN 2 WHEN 'revision' THEN 3 ELSE 4
               END,
               depth, document_id, chunk_index
      LIMIT %(k)s)
@@ -133,7 +149,7 @@ ORDER BY CASE WHEN hit.depth = 0 THEN 0 ELSE 1 END,
          hit.dist,
          CASE hit.via_kind
              WHEN 'overlaps' THEN 0 WHEN 'related' THEN 1
-             WHEN 'revision' THEN 2 ELSE 3
+             WHEN 'refers' THEN 2 WHEN 'revision' THEN 3 ELSE 4
          END,
          hit.depth,
          hit.document_id, hit.chunk_index

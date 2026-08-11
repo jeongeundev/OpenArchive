@@ -52,6 +52,24 @@ WITH ranked AS (
 SELECT id, title, total FROM ranked LIMIT %(limit)s
 """
 
+BROKEN_LINKS_SQL = f"""
+WITH visible_sources AS (
+  SELECT d.id, d.title
+  FROM documents d
+  WHERE {VISIBLE_TO_USER}
+), ranked AS (
+  SELECT src.id, src.title, l.target_title, count(*) OVER () AS total
+  FROM document_links l
+  JOIN visible_sources src ON src.id = l.src_document_id
+  LEFT JOIN documents d
+    ON d.title = l.target_title
+   AND {VISIBLE_TO_USER}
+  WHERE d.id IS NULL
+  ORDER BY src.title, src.id, l.target_title
+)
+SELECT id, title, target_title, total FROM ranked LIMIT %(limit)s
+"""
+
 DUPLICATES_SQL = f"""
 WITH visible_documents AS (
   SELECT d.id, d.title, d.content_hash
@@ -108,6 +126,18 @@ class DiagnosticList:
 
 
 @dataclass(frozen=True)
+class BrokenLink:
+    source: DiagnosticDocument
+    target_title: str
+
+
+@dataclass(frozen=True)
+class BrokenLinkList:
+    count: int
+    items: list[BrokenLink]
+
+
+@dataclass(frozen=True)
 class DuplicatePair:
     first: DiagnosticDocument
     second: DiagnosticDocument
@@ -131,6 +161,7 @@ class DiagnosticsResult:
     orphans: DiagnosticList
     duplicates: DuplicateDiagnostics
     uncategorized: DiagnosticList
+    broken_links: BrokenLinkList
 
 
 def _document_list(rows: list[tuple]) -> DiagnosticList:
@@ -154,6 +185,9 @@ async def get_diagnostics(
         duplicate_rows = await (await conn.execute(DUPLICATES_SQL, params)).fetchall()
         uncategorized_rows = await (
             await conn.execute(UNCATEGORIZED_SQL, params)
+        ).fetchall()
+        broken_link_rows = await (
+            await conn.execute(BROKEN_LINKS_SQL, params)
         ).fetchall()
 
     pairs: dict[str, list[DuplicatePair]] = {"identical": [], "overlaps": []}
@@ -181,4 +215,14 @@ async def get_diagnostics(
             ),
         ),
         uncategorized=_document_list(uncategorized_rows),
+        broken_links=BrokenLinkList(
+            count=broken_link_rows[0][3] if broken_link_rows else 0,
+            items=[
+                BrokenLink(
+                    source=DiagnosticDocument(document_id=row[0], title=row[1]),
+                    target_title=row[2],
+                )
+                for row in broken_link_rows
+            ],
+        ),
     )

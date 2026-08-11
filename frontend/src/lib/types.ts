@@ -141,6 +141,13 @@ export interface DiagnosticsResponse {
     overlaps: DuplicateList;
   };
   uncategorized: DiagnosticDocumentList;
+  broken_links: {
+    count: number;
+    items: Array<{
+      source: DiagnosticDocument;
+      target_title: string;
+    }>;
+  };
 }
 
 export interface ClusterDocument {

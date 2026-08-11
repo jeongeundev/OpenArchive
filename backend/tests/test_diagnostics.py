@@ -126,6 +126,29 @@ def test_diagnostics_lists_only_documents_without_tags(
     assert tagged_id not in ids
 
 
+def test_diagnostics_lists_broken_links_without_exposing_a_reason(
+    db_client: TestClient, migrated_db: str
+):
+    source_id = _insert_document(
+        migrated_db, title="깨진 링크 출발", content="[[없는 문서]]", tags=["분류"]
+    )
+
+    response = db_client.get("/api/diagnostics")
+
+    assert response.status_code == 200
+    broken = response.json()["broken_links"]
+    assert broken == {
+        "count": 1,
+        "items": [
+            {
+                "source": {"document_id": source_id, "title": "깨진 링크 출발"},
+                "target_title": "없는 문서",
+            }
+        ],
+    }
+    assert "reason" not in response.text
+
+
 def test_document_connected_only_to_invisible_private_document_looks_orphaned(
     db_client: TestClient, migrated_db: str
 ):

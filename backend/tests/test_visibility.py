@@ -6,6 +6,7 @@ from app.embeddings import FakeProvider
 from app.services.auth import hash_password
 from app.services.clusters import get_clusters
 from app.services.diagnostics import get_diagnostics
+from app.services.links import find_backlinks, resolve_links
 from app.services.related import find_related, suggest_tags
 from app.services.search import search_documents
 
@@ -110,6 +111,98 @@ async def test_admin_search_still_hides_other_users_private_documents(
     assert bob_private_id not in {hit.document_id for hit in hits}
 
 
+async def test_private_and_missing_wikilinks_are_indistinguishable_to_anonymous_users(
+    worker_conn, visibility_conn
+):
+    source_id = await insert_test_document(
+        worker_conn,
+        title="링크 출발",
+        content="[[숨은 대상]]과 [[없는 대상]]",
+    )
+    await insert_test_document(
+        worker_conn,
+        title="숨은 대상",
+        content="비공개 링크 대상",
+        owner_id="alice",
+        visibility="private",
+    )
+
+    links = await resolve_links(visibility_conn, document_id=source_id, user_id=None)
+    other_user_links = await resolve_links(
+        visibility_conn, document_id=source_id, user_id="bob"
+    )
+
+    assert [(link.title, link.document_id) for link in links] == [
+        ("숨은 대상", None),
+        ("없는 대상", None),
+    ]
+    assert other_user_links == links
+    assert all(set(link.__dict__) == {"title", "document_id"} for link in links)
+
+
+async def test_wikilink_resolution_returns_every_visible_duplicate_title(
+    worker_conn, visibility_conn
+):
+    source_id = await insert_test_document(
+        worker_conn, title="동명 링크 출발", content="[[같은 제목]]"
+    )
+    public_id = await insert_test_document(
+        worker_conn, title="같은 제목", content="공개 동명 문서"
+    )
+    private_id = await insert_test_document(
+        worker_conn,
+        title="같은 제목",
+        content="비공개 동명 문서",
+        owner_id="alice",
+        visibility="private",
+    )
+
+    anonymous = await resolve_links(
+        visibility_conn, document_id=source_id, user_id=None
+    )
+    owner = await resolve_links(
+        visibility_conn, document_id=source_id, user_id="alice"
+    )
+
+    assert [link.document_id for link in anonymous] == [public_id]
+    assert {link.document_id for link in owner} == {public_id, private_id}
+
+
+async def test_backlinks_include_only_visible_source_documents(
+    worker_conn, visibility_conn
+):
+    target_id = await insert_test_document(
+        worker_conn, title="백링크 대상", content="대상 문서"
+    )
+    public_source_id = await insert_test_document(
+        worker_conn, title="공개 출발", content="[[백링크 대상]]"
+    )
+    private_source_id = await insert_test_document(
+        worker_conn,
+        title="비공개 출발",
+        content="[[백링크 대상]]",
+        owner_id="alice",
+        visibility="private",
+    )
+
+    anonymous = await find_backlinks(
+        visibility_conn, document_id=target_id, user_id=None
+    )
+    other_user = await find_backlinks(
+        visibility_conn, document_id=target_id, user_id="bob"
+    )
+    owner = await find_backlinks(
+        visibility_conn, document_id=target_id, user_id="alice"
+    )
+
+    assert [link.document_id for link in anonymous] == [public_source_id]
+    assert other_user == anonymous
+    assert {link.document_id for link in owner} == {
+        public_source_id,
+        private_source_id,
+    }
+
+
 @pytest.mark.parametrize(
     ("user_id", "can_traverse_through_private"),
     [(None, False), ("bob", False), ("alice", True)],
@@ -159,6 +252,45 @@ async def test_graph_search_cannot_traverse_through_an_invisible_private_documen
 
     assert (private_id in ids) is can_traverse_through_private
     assert (beyond_id in ids) is can_traverse_through_private
+
+
+@pytest.mark.parametrize(
+    ("user_id", "can_follow_private_link"),
+    [(None, False), ("bob", False), ("alice", True)],
+)
+async def test_graph_search_resolves_wikilinks_without_crossing_visibility(
+    worker_conn, visibility_conn, user_id, can_follow_private_link
+):
+    provider = FakeProvider()
+    entry_id = await insert_test_document(
+        worker_conn,
+        title="위키링크 진입점",
+        content=("위키링크 순회 질의 " * 2000) + "[[숨은 링크 대상]]",
+    )
+    private_id = await insert_test_document(
+        worker_conn,
+        title="숨은 링크 대상",
+        content="위키링크가 가리키는 비공개 문서",
+        owner_id="alice",
+        visibility="private",
+    )
+    await process_all_embedding_jobs(worker_conn, provider)
+    await worker_conn.execute("DELETE FROM document_edges")
+
+    hits = await search_documents(
+        visibility_conn,
+        provider,
+        query="위키링크 순회 질의",
+        user_id=user_id,
+        k=3,
+    )
+    private_hits = [hit for hit in hits if hit.document_id == private_id]
+
+    assert bool(private_hits) is can_follow_private_link
+    if private_hits:
+        assert private_hits[0].via is not None
+        assert private_hits[0].via.kind == "refers"
+        assert private_hits[0].via.from_document_id == entry_id
 
 
 async def test_anonymous_related_hides_private_documents(
@@ -281,6 +413,34 @@ async def test_diagnostics_counts_follow_anonymous_other_and_owner_visibility(
     assert anonymous.uncategorized.count == 1
     assert other.uncategorized.count == 3
     assert owner.uncategorized.count == 2
+
+
+async def test_broken_link_diagnostics_follow_the_viewers_visibility(
+    worker_conn, visibility_conn
+):
+    await insert_test_document(
+        worker_conn,
+        title="링크 진단 출발",
+        content="[[비공개 대상]]과 [[없는 대상]]",
+    )
+    await insert_test_document(
+        worker_conn,
+        title="비공개 대상",
+        content="소유자만 보는 대상",
+        owner_id="alice",
+        visibility="private",
+    )
+
+    anonymous = await get_diagnostics(visibility_conn, user_id=None)
+    owner = await get_diagnostics(visibility_conn, user_id="alice")
+
+    assert anonymous.broken_links.count == 2
+    assert {item.target_title for item in anonymous.broken_links.items} == {
+        "비공개 대상",
+        "없는 대상",
+    }
+    assert owner.broken_links.count == 1
+    assert [item.target_title for item in owner.broken_links.items] == ["없는 대상"]
 
 
 async def test_cluster_sizes_follow_anonymous_other_and_owner_visibility(

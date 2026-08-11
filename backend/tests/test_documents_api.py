@@ -53,6 +53,34 @@ def test_upload_trigger_creates_job_and_initial_text_version(
         ).fetchone() == (1,)
 
 
+def test_document_link_and_backlink_endpoints_return_resolved_documents(
+    db_client: TestClient,
+):
+    target_id = upload(
+        db_client,
+        filename="target.md",
+        content=b"target",
+        data={"title": "Target"},
+    ).json()["id"]
+    source_id = upload(
+        db_client,
+        filename="source.md",
+        content=b"[[Target]] and [[Missing]]",
+        data={"title": "Source"},
+    ).json()["id"]
+
+    links = db_client.get(f"/api/documents/{source_id}/links")
+    backlinks = db_client.get(f"/api/documents/{target_id}/backlinks")
+
+    assert links.status_code == 200
+    assert links.json() == [
+        {"title": "Missing", "document_id": None},
+        {"title": "Target", "document_id": target_id},
+    ]
+    assert backlinks.status_code == 200
+    assert backlinks.json() == [{"document_id": source_id, "title": "Source"}]
+
+
 def test_upload_rejects_blank_text_without_saving(db_client: TestClient, migrated_db: str):
     response = upload(db_client, content=b" \t\r\n\f")
 

@@ -15,15 +15,18 @@ from fastapi import (
 
 from app.api.deps import Connection, require_user_id
 from app.api.schemas import (
+    BacklinkItem,
     DocumentDetail,
     DocumentSummary,
     EditDocumentRequest,
     EditDocumentResponse,
     RelatedResponse,
+    ResolvedLinkItem,
     TagSuggestionsResponse,
     UpdateTagsRequest,
 )
 from app.services import documents as service
+from app.services.links import find_backlinks, resolve_links
 from app.services.parsing import SUPPORTED_CONTENT_TYPES, UnsupportedFileType
 from app.services.related import find_related, suggest_tags
 from app.services.search import MAX_K
@@ -92,6 +95,32 @@ async def get_document(
 ) -> DocumentDetail:
     document = await service.get_document(conn, document_id, user_id=user_id)
     return DocumentDetail.model_validate(document)
+
+
+@router.get("/{document_id}/links", response_model=list[ResolvedLinkItem])
+async def get_document_links(
+    document_id: UUID,
+    conn: Connection,
+    user_id: Annotated[str, Depends(require_user_id)],
+) -> list[ResolvedLinkItem]:
+    await service.get_document(conn, document_id, user_id=user_id)
+    return [
+        ResolvedLinkItem.model_validate(item)
+        for item in await resolve_links(conn, document_id=document_id, user_id=user_id)
+    ]
+
+
+@router.get("/{document_id}/backlinks", response_model=list[BacklinkItem])
+async def get_document_backlinks(
+    document_id: UUID,
+    conn: Connection,
+    user_id: Annotated[str, Depends(require_user_id)],
+) -> list[BacklinkItem]:
+    await service.get_document(conn, document_id, user_id=user_id)
+    return [
+        BacklinkItem.model_validate(item)
+        for item in await find_backlinks(conn, document_id=document_id, user_id=user_id)
+    ]
 
 
 @router.get("/{document_id}/related", response_model=RelatedResponse)
