@@ -29,8 +29,11 @@
       "name": "auth-api",
       "type": "feat",
       "scope": "api",
-      "desc": "로그인·로그아웃 API와 X-User-Id 제거",
-      "status": "pending"
+      "desc": "로그인·로그아웃 API, X-User-Id 제거와 초기 관리자 부트스트랩",
+      "status": "completed",
+      "summary": "HttpOnly 쿠키 기반 로그인·로그아웃·신원 API와 세션 의존성, 초기 관리자 부트스트랩을 추가하고 X-User-Id 우회 경로를 제거",
+      "started_at": "2026-08-11T09:14:52+0900",
+      "completed_at": "2026-08-11T09:25:05+0900"
     },
     {
       "step": 3,
