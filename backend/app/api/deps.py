@@ -49,11 +49,6 @@ async def require_admin(user: Annotated[dict | None, Depends(current_user)]) -> 
     return user
 
 
-async def optional_user_id(user: Annotated[dict | None, Depends(current_user)]) -> str | None:
-    """읽기 요청에는 인증 사용자명 또는 익명(None)을 전달한다."""
-    return None if user is None else user["username"]
-
-
 def get_embedding_provider(request: Request) -> EmbeddingProvider:
     """앱 lifespan에서 만든 임베딩 프로바이더를 반환한다."""
     return request.app.state.provider

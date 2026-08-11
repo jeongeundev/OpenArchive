@@ -18,11 +18,7 @@ if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
 
 from app.config import get_settings
-from app.services.auth import hash_password
-
-
-class UserAlreadyExists(Exception):
-    """부트스트랩이 기존 계정을 덮어쓰려 할 때 발생한다."""
+from app.services.auth import UserAlreadyExists, create_user
 
 
 async def create_admin(
@@ -32,13 +28,12 @@ async def create_admin(
     *,
     is_admin: bool,
 ) -> None:
-    try:
-        await conn.execute(
-            "INSERT INTO users (username, password_hash, is_admin) VALUES (%s, %s, %s)",
-            (username, hash_password(password), is_admin),
-        )
-    except psycopg.errors.UniqueViolation as error:
-        raise UserAlreadyExists(f"사용자명 '{username}'은 이미 존재합니다.") from error
+    """계정 생성은 서비스 계층에 맡긴다.
+
+    해시 파라미터와 중복 판정을 스크립트에 복제하면 두 벌이 되어 갈린다 — step 2가
+    "해시 로직을 스크립트에 복제하지 마라"로 지목한 자리다.
+    """
+    await create_user(conn, username, password, is_admin=is_admin)
 
 
 async def run(username: str, password: str, *, is_admin: bool) -> None:

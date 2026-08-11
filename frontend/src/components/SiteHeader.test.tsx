@@ -26,9 +26,27 @@ describe("SiteHeader", () => {
     );
     expect(screen.getByRole("link", { name: "문서 진단" })).toHaveAttribute(
       "href",
-      "/admin/diagnostics",
+      "/diagnostics",
     );
     expect(screen.queryByRole("link", { name: "사용자 관리" })).not.toBeInTheDocument();
+  });
+
+  it("운영 화면을 사용자 내비게이션에 노출하지 않는다", async () => {
+    // `/admin/status`는 관측 채널이라 사용자 메뉴에 두지 않는다 (UI_GUIDE 디자인 원칙 3·4).
+    // 문서 진단은 "내가 볼 수 있는 문서"의 상태라 사용자 화면이며 `/diagnostics`에 있다.
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response({
+      authenticated: true,
+      username: "root",
+      is_admin: true,
+    })));
+
+    render(<AuthProvider><SiteHeader /></AuthProvider>);
+
+    await screen.findByText("root");
+    const menu = screen.getByRole("navigation", { name: "주요 메뉴" });
+    const hrefs = Array.from(menu.querySelectorAll("a")).map((link) => link.getAttribute("href"));
+    expect(hrefs).not.toContain("/admin/status");
+    expect(hrefs).toContain("/diagnostics");
   });
 
   it("일반 사용자에게 로그아웃을 제공하되 사용자 관리는 숨긴다", async () => {

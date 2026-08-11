@@ -28,6 +28,18 @@ def _insert_edge(
         )
 
 
+@pytest.fixture(autouse=True)
+def logged_in(db_client: TestClient):
+    """진단 조회도 로그인을 요구한다 (ADR-028). 익명 경계는 아래에서 따로 단언한다."""
+    login_as(db_client, "alice")
+
+
+def test_diagnostics_require_login(db_client: TestClient):
+    db_client.post("/api/auth/logout")
+
+    assert db_client.get("/api/diagnostics").status_code == 401
+
+
 def test_diagnostics_lists_only_documents_without_visible_edges(
     db_client: TestClient, migrated_db: str
 ):
@@ -130,16 +142,19 @@ def test_document_connected_only_to_invisible_private_document_looks_orphaned(
     )
     _insert_edge(migrated_db, public_id, private_id)
 
-    anonymous = db_client.get("/api/diagnostics").json()
-    anonymous_orphans = {
-        item["document_id"] for item in anonymous["orphans"]["items"]
-    }
+    # 익명이 막힌 뒤에도(ADR-028) "이웃을 볼 수 없는 시선에게는 고아로 보인다"는 그대로
+    # 검증 대상이다. 익명 대신 그 비공개 문서를 볼 수 없는 다른 계정으로 본다.
+    db_client.post("/api/auth/logout")
+    login_as(db_client, "bob")
+    other = db_client.get("/api/diagnostics").json()
+    other_orphans = {item["document_id"] for item in other["orphans"]["items"]}
+    db_client.post("/api/auth/logout")
     login_as(db_client, "alice")
     owner = db_client.get("/api/diagnostics").json()
     owner_orphans = {item["document_id"] for item in owner["orphans"]["items"]}
 
-    assert public_id in anonymous_orphans  # 고아 판정도 열람 범위 안에서만 집계한다.
-    assert private_id not in anonymous_orphans
+    assert public_id in other_orphans  # 고아 판정도 열람 범위 안에서만 집계한다.
+    assert private_id not in other_orphans
     assert public_id not in owner_orphans
 
 

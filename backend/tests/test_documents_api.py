@@ -89,6 +89,27 @@ def test_oversized_upload_is_rejected_before_read(db_client: TestClient, monkeyp
     assert response.status_code == 413
 
 
+def test_upload_larger_than_its_declared_size_is_rejected(
+    db_client: TestClient, monkeypatch
+):
+    """`file.size`는 클라이언트가 보내는 선언값이라 없거나 실제와 다를 수 있다.
+
+    선언값만 보고 통과시키면 크기를 안 보내거나 줄여 보내는 클라이언트에게는 상한이
+    사실상 없다. 위 검사는 큰 파일을 읽지 않기 위한 것이고, 경계 자체는 읽어들인
+    바이트로도 지켜져야 한다.
+    """
+    oversized = b"x" * (10_000_000 + 1)
+
+    async def read_oversized(self, size: int = -1) -> bytes:
+        return oversized
+
+    monkeypatch.setattr("starlette.datastructures.UploadFile.read", read_oversized)
+
+    response = upload(db_client, content=b"small")
+
+    assert response.status_code == 413
+
+
 def test_extracted_text_over_service_limit_is_rejected(db_client: TestClient):
     response = upload(db_client, content=b"x" * 500_001)
 
@@ -128,7 +149,7 @@ def test_upload_stores_sha256_of_extracted_text(db_client: TestClient, migrated_
     assert stored_hash == hashlib.sha256(content.encode("utf-8")).hexdigest()
 
 
-def test_list_hides_other_users_private_documents_and_anonymous_sees_public_only(
+def test_list_hides_other_users_private_documents_and_requires_login(
     db_client: TestClient,
 ):
     public_id = upload(db_client, data={"visibility": "public"}).json()["id"]
@@ -139,17 +160,12 @@ def test_list_hides_other_users_private_documents_and_anonymous_sees_public_only
     login_as(db_client, "bob")
     bob_ids = {item["id"] for item in db_client.get("/api/documents").json()}
     db_client.post("/api/auth/logout")
-    db_client.post("/api/auth/logout")
-    anonymous_ids = {
-        item["id"]
-        for item in db_client.get(
-            "/api/documents", headers={"X-User-Id": "alice"}
-        ).json()
-    }
+    # ADR-028: 익명은 아무 문서도 보지 못한다. 제거된 헤더로도 열리지 않는다.
+    anonymous = db_client.get("/api/documents", headers={"X-User-Id": "alice"})
 
     assert public_id in bob_ids
     assert private_id not in bob_ids
-    assert anonymous_ids == {public_id}
+    assert anonymous.status_code == 401
 
 
 def test_list_filters_by_tag_and_status(db_client: TestClient):
@@ -193,6 +209,8 @@ def test_detail_hides_other_users_private_document(db_client: TestClient):
 
 
 def test_detail_returns_404_for_missing_document(db_client: TestClient):
+    login_as(db_client, "alice")
+
     response = db_client.get(f"/api/documents/{uuid4()}")
 
     assert response.status_code == 404

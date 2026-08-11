@@ -114,12 +114,11 @@ def test_related_does_not_leak_another_users_private_candidates(
     run_embedding_worker(migrated_db)
 
     db_client.post("/api/auth/logout")
+    # ADR-028: 익명은 아무 문서도 보지 못한다. 제거된 헤더로도 열리지 않는다.
     anonymous = db_client.get(
         f"/api/documents/{source_id}/related", headers={"X-User-Id": "alice"}
-    ).json()
-    assert private_id not in {
-        item["document_id"] for item in anonymous["items"] + anonymous["identical"]
-    }
+    )
+    assert anonymous.status_code == 401
 
     login_as(db_client, "alice")
     body = db_client.get(f"/api/documents/{source_id}/related").json()

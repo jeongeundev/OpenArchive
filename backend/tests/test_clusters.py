@@ -1,8 +1,21 @@
 import asyncio
 
 import psycopg
-from conftest import insert_test_document
+import pytest
+from conftest import insert_test_document, login_as
 from fastapi.testclient import TestClient
+
+
+@pytest.fixture(autouse=True)
+def logged_in(db_client: TestClient):
+    """덩어리 조회도 로그인을 요구한다 (ADR-028). 익명 경계는 아래에서 따로 단언한다."""
+    login_as(db_client, "alice")
+
+
+def test_clusters_require_login(db_client: TestClient):
+    db_client.post("/api/auth/logout")
+
+    assert db_client.get("/api/clusters").status_code == 401
 
 
 def _insert_document(dsn: str, **kwargs) -> str:

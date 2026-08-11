@@ -32,6 +32,18 @@ describe("ErrorDocuments", () => {
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/documents/doc-1/reembed", expect.objectContaining({ method: "POST" })));
   });
 
+  it("재임베딩 403 응답의 detail을 표시한다", async () => {
+    renderDocuments(vi.fn((url: string) => Promise.resolve(
+      url === "/api/auth/me"
+        ? response({ authenticated: true, username: "alice", is_admin: false })
+        : url.endsWith("/reembed")
+          ? response({ detail: "소유자만 요청할 수 있습니다." }, 403)
+          : response([document]),
+    )));
+    fireEvent.click(await screen.findByRole("button", { name: "재임베딩" }));
+    expect(await screen.findByText("소유자만 요청할 수 있습니다.")).toBeInTheDocument();
+  });
+
   it("익명에게 재임베딩 작업을 노출하지 않는다", async () => {
     const fetchMock = vi.fn((url: string) => Promise.resolve(response(
       url === "/api/auth/me"

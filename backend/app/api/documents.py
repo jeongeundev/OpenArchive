@@ -13,7 +13,7 @@ from fastapi import (
     status,
 )
 
-from app.api.deps import Connection, optional_user_id, require_user_id
+from app.api.deps import Connection, require_user_id
 from app.api.schemas import (
     DocumentDetail,
     DocumentSummary,
@@ -32,6 +32,7 @@ router = APIRouter(prefix="/api/documents", tags=["documents"])
 
 # 시연 데이터 최대 파일(약 90KB)의 5배보다 충분히 크면서 단일 요청의 메모리 폭증을 막는다.
 MAX_UPLOAD_BYTES = 10_000_000
+UPLOAD_TOO_LARGE = "업로드 파일은 10MB를 넘을 수 없습니다."
 
 
 @router.post("", response_model=DocumentSummary, status_code=status.HTTP_201_CREATED)
@@ -43,13 +44,18 @@ async def upload_document(
     tags: Annotated[list[str] | None, Form()] = None,
     visibility: Annotated[Literal["public", "private"], Form()] = "public",
 ) -> DocumentSummary:
+    # 선언된 크기를 먼저 보는 것은 큰 파일을 읽지 않기 위해서다. 다만 이 값은 클라이언트가
+    # 보내는 것이라 없거나 실제와 다를 수 있으므로, 경계 자체는 읽어들인 바이트로 지킨다.
     if file.size is not None and file.size > MAX_UPLOAD_BYTES:
-        raise HTTPException(status_code=413, detail="업로드 파일은 10MB를 넘을 수 없습니다.")
+        raise HTTPException(status_code=413, detail=UPLOAD_TOO_LARGE)
+    data = await file.read()
+    if len(data) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail=UPLOAD_TOO_LARGE)
     try:
         document = await service.create_document(
             conn,
             filename=file.filename or "",
-            data=await file.read(),
+            data=data,
             owner_id=user_id,
             title=title,
             tags=tags,
@@ -68,7 +74,7 @@ async def upload_document(
 @router.get("", response_model=list[DocumentSummary])
 async def list_documents(
     conn: Connection,
-    user_id: Annotated[str | None, Depends(optional_user_id)],
+    user_id: Annotated[str, Depends(require_user_id)],
     status_filter: Annotated[str | None, Query(alias="status")] = None,
     tag: str | None = None,
 ) -> list[DocumentSummary]:
@@ -82,7 +88,7 @@ async def list_documents(
 async def get_document(
     document_id: UUID,
     conn: Connection,
-    user_id: Annotated[str | None, Depends(optional_user_id)],
+    user_id: Annotated[str, Depends(require_user_id)],
 ) -> DocumentDetail:
     document = await service.get_document(conn, document_id, user_id=user_id)
     return DocumentDetail.model_validate(document)
@@ -92,7 +98,7 @@ async def get_document(
 async def get_related(
     document_id: UUID,
     conn: Connection,
-    user_id: Annotated[str | None, Depends(optional_user_id)],
+    user_id: Annotated[str, Depends(require_user_id)],
     k: Annotated[int, Query(ge=1, le=MAX_K)] = 10,
 ) -> RelatedResponse:
     await service.get_document(conn, document_id, user_id=user_id)
@@ -104,7 +110,7 @@ async def get_related(
 async def get_tag_suggestions(
     document_id: UUID,
     conn: Connection,
-    user_id: Annotated[str | None, Depends(optional_user_id)],
+    user_id: Annotated[str, Depends(require_user_id)],
     limit: Annotated[int, Query(ge=1, le=20)] = 5,
 ) -> TagSuggestionsResponse:
     await service.get_document(conn, document_id, user_id=user_id)

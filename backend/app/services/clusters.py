@@ -117,6 +117,9 @@ async def get_clusters(
             ClusterDocument(document_id=document_id, title=title)
         )
 
+    # 선의 굵기는 "덩어리 사이를 잇는 문서쌍이 몇 개인가"다. 트리거가 관계 하나를
+    # 양방향 두 행으로 저장하므로(ADR-029) 원시 edge를 세면 모든 값이 일률적으로
+    # 2배가 되어 굵기의 의미가 없다. 문서쌍 단위로 접어 실제 연결 수를 센다.
     connection_counts: Counter[tuple[ClusterKey, ClusterKey]] = Counter()
     seen_document_pairs: set[tuple[UUID, UUID]] = set()
     for source_id, target_id in edge_rows:

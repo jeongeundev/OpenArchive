@@ -80,16 +80,37 @@ async def test_registers_exactly_three_evidence_tools():
     }
 
 
+async def _login(client, dsn: str, username: str, password: str = "test-password") -> None:
+    """비동기 REST 클라이언트에 실제 쿠키 세션을 만든다."""
+    from app.services.auth import hash_password
+
+    async with await psycopg.AsyncConnection.connect(dsn, autocommit=True) as conn:
+        await conn.execute(
+            "INSERT INTO users (username, password_hash) VALUES (%s, %s)"
+            " ON CONFLICT (username) DO NOTHING",
+            (username, hash_password(password)),
+        )
+    response = await client.post(
+        "/api/auth/login", json={"username": username, "password": password}
+    )
+    assert response.status_code == 200
+
+
 async def test_search_tool_matches_the_rest_endpoint_and_returns_evidence(
-    rest_client, migrated_db: str
+    monkeypatch, rest_client, migrated_db: str
 ):
     """이슈 #9 완료 조건: 같은 질의에 REST와 MCP가 같은 결과를 준다.
 
     서비스 함수를 양쪽에서 부르면 동어반복이다 — 두 경로가 실제로 노출하는 응답을 본다.
+    MCP는 HTTP를 타지 않아 로그인과 무관하지만(ADR-028) REST는 이제 로그인을 요구한다.
+    같은 결과를 비교하려면 양쪽 시선을 같은 계정으로 맞춰야 한다.
     """
     from mcp_server.server import search_documents
 
     await _seed_documents(migrated_db)
+    monkeypatch.setenv("MCP_USER_ID", "alice")
+    get_settings.cache_clear()
+    await _login(rest_client, migrated_db, "alice")
 
     tool_items = (await search_documents("OpenSQL 공개 정합성"))["items"]
     response = await rest_client.post("/api/search", json={"query": "OpenSQL 공개 정합성"})
