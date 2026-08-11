@@ -30,7 +30,10 @@
       "type": "feat",
       "scope": "frontend",
       "desc": "본문의 위키링크 렌더와 백링크 표시",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-08-11T17:06:54+0900",
+      "completed_at": "2026-08-11T17:26:31+0900",
+      "summary": "WikilinkContent 컴포넌트로 본문의 [[제목]]을 렌더하고 백링크 영역·편집 문법 도움말을 추가함. 육안 AC는 사람이 확인해 닫았다 — 볼 수 없는 문서와 없는 문서의 링크가 태그·클래스·속성·계산 스타일까지 동일(identical: true), 백링크 seed 7건/bob 6건, 백링크 0건 문서는 영역 없음"
     },
     {
       "step": 3,

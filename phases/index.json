@@ -47,7 +47,8 @@
     },
     {
       "dir": "m9-wikilink-rrf",
-      "status": "pending"
+      "status": "blocked",
+      "blocked_at": "2026-08-11T17:13:59+0900"
     }
   ]
 }
