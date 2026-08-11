@@ -2,7 +2,7 @@ import asyncio
 
 import psycopg
 import pytest
-from conftest import insert_test_document, process_all_embedding_jobs
+from conftest import insert_test_document, login_as, process_all_embedding_jobs
 from fastapi.testclient import TestClient
 
 from app.embeddings.fake import FakeProvider
@@ -126,10 +126,13 @@ def test_search_applies_anonymous_and_owner_visibility(db_client: TestClient, mi
         ],
     )
 
-    anonymous = db_client.post("/api/search", json={"query": "접근통제"}).json()["items"]
-    owner = db_client.post(
-        "/api/search", headers={"X-User-Id": "alice"}, json={"query": "접근통제"}
+    anonymous = db_client.post(
+        "/api/search",
+        headers={"X-User-Id": "alice"},
+        json={"query": "접근통제"},
     ).json()["items"]
+    login_as(db_client, "alice")
+    owner = db_client.post("/api/search", json={"query": "접근통제"}).json()["items"]
 
     assert {item["document_id"] for item in anonymous} == {public_id}
     assert {item["document_id"] for item in owner} == {public_id, private_id}

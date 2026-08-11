@@ -1,6 +1,6 @@
 from uuid import uuid4
 
-from app.api.schemas import RelatedResponse, TagSuggestionsResponse
+from app.api.schemas import AuthStatus, RelatedResponse, TagSuggestionsResponse
 from app.services.related import (
     IdenticalDocument,
     RelatedDocument,
@@ -39,3 +39,13 @@ def test_tag_suggestions_response_accepts_service_dataclasses():
 
     assert response.items[0].tag == "database"
     assert response.items[0].freq == 2
+
+
+def test_auth_status_cannot_serialize_session_tokens_or_password_hashes():
+    response = AuthStatus(authenticated=True, username="alice", is_admin=False)
+
+    assert response.model_dump() == {
+        "authenticated": True,
+        "username": "alice",
+        "is_admin": False,
+    }

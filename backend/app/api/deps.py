@@ -2,10 +2,13 @@ from collections.abc import AsyncIterator
 from typing import Annotated
 
 import psycopg
-from fastapi import Depends, Header, HTTPException, Request
+from fastapi import Cookie, Depends, HTTPException, Request
 
 from app.db import get_pool
 from app.embeddings.base import EmbeddingProvider
+from app.services.auth import AuthenticationFailed, validate_session
+
+SESSION_COOKIE = "openarchive_session"
 
 
 async def get_conn() -> AsyncIterator[psycopg.AsyncConnection]:
@@ -17,16 +20,29 @@ async def get_conn() -> AsyncIterator[psycopg.AsyncConnection]:
 Connection = Annotated[psycopg.AsyncConnection, Depends(get_conn)]
 
 
-def require_user_id(x_user_id: Annotated[str | None, Header()] = None) -> str:
-    """쓰기 요청의 사용자 ID를 반환하며, 헤더가 없으면 거부한다."""
-    if x_user_id is None:
-        raise HTTPException(status_code=400, detail="X-User-Id 헤더가 필요합니다.")
-    return x_user_id
+async def current_user(
+    conn: Connection,
+    token: Annotated[str | None, Cookie(alias=SESSION_COOKIE)] = None,
+) -> dict | None:
+    """유효한 쿠키 세션의 사용자를 반환하며, 없거나 무효면 익명으로 둔다."""
+    if token is None:
+        return None
+    try:
+        return await validate_session(conn, token)
+    except AuthenticationFailed:
+        return None
 
 
-def optional_user_id(x_user_id: Annotated[str | None, Header()] = None) -> str | None:
-    """읽기 요청의 선택적 사용자 ID를 반환한다."""
-    return x_user_id
+async def require_user_id(user: Annotated[dict | None, Depends(current_user)]) -> str:
+    """쓰기 요청의 인증된 사용자명을 반환한다."""
+    if user is None:
+        raise HTTPException(status_code=401, detail="로그인이 필요합니다.")
+    return user["username"]
+
+
+async def optional_user_id(user: Annotated[dict | None, Depends(current_user)]) -> str | None:
+    """읽기 요청에는 인증 사용자명 또는 익명(None)을 전달한다."""
+    return None if user is None else user["username"]
 
 
 def get_embedding_provider(request: Request) -> EmbeddingProvider:

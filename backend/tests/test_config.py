@@ -35,6 +35,14 @@ def test_embedding_provider_defaults_to_fake(monkeypatch):
     assert settings.embedding_provider == "fake"
 
 
+def test_session_cookie_secure_follows_the_deployment_setting(monkeypatch):
+    monkeypatch.setenv("SESSION_COOKIE_SECURE", "true")
+
+    settings = Settings(**NO_ENV_FILE)
+
+    assert settings.session_cookie_secure is True
+
+
 def test_unknown_embedding_provider_is_rejected(monkeypatch):
     """상용 API 프로바이더는 대회 규정상 쓸 수 없다 — 설정 단계에서 막는다 (ADR-003)."""
     monkeypatch.setenv("EMBEDDING_PROVIDER", "openai")

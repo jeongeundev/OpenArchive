@@ -45,6 +45,17 @@ class UpdateTagsRequest(BaseModel):
     tags: list[str]
 
 
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+class AuthStatus(BaseModel):
+    authenticated: bool
+    username: str | None
+    is_admin: bool
+
+
 class SearchRequest(BaseModel):
     query: str
     tags: list[str] | None = None

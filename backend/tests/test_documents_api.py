@@ -2,25 +2,25 @@ import hashlib
 from uuid import uuid4
 
 import psycopg
-from conftest import run_embedding_worker
+from conftest import login_as, run_embedding_worker
 from conftest import upload_document as upload
 from fastapi.testclient import TestClient
 
 
 def edit(client: TestClient, document_id: str, *, content: str, version: int, user_id="alice"):
-    headers = {"X-User-Id": user_id} if user_id is not None else {}
+    if user_id is not None:
+        login_as(client, user_id)
     return client.put(
         f"/api/documents/{document_id}",
-        headers=headers,
         json={"content": content, "version": version},
     )
 
 
 def replace_tags(client: TestClient, document_id: str, tags: list[str], user_id="alice"):
-    headers = {"X-User-Id": user_id} if user_id is not None else {}
+    if user_id is not None:
+        login_as(client, user_id)
     return client.put(
         f"/api/documents/{document_id}/tags",
-        headers=headers,
         json={"tags": tags},
     )
 
@@ -78,7 +78,7 @@ def test_upload_rejects_non_utf8_text(db_client: TestClient):
 def test_upload_requires_user_id(db_client: TestClient):
     response = upload(db_client, user_id=None)
 
-    assert response.status_code == 400
+    assert response.status_code == 401
 
 
 def test_upload_stores_sha256_of_extracted_text(db_client: TestClient, migrated_db: str):
@@ -101,8 +101,16 @@ def test_list_hides_other_users_private_documents_and_anonymous_sees_public_only
         db_client, filename="private.txt", data={"visibility": "private"}
     ).json()["id"]
 
-    bob_ids = {item["id"] for item in db_client.get("/api/documents", headers={"X-User-Id": "bob"}).json()}
-    anonymous_ids = {item["id"] for item in db_client.get("/api/documents").json()}
+    login_as(db_client, "bob")
+    bob_ids = {item["id"] for item in db_client.get("/api/documents").json()}
+    db_client.post("/api/auth/logout")
+    db_client.post("/api/auth/logout")
+    anonymous_ids = {
+        item["id"]
+        for item in db_client.get(
+            "/api/documents", headers={"X-User-Id": "alice"}
+        ).json()
+    }
 
     assert public_id in bob_ids
     assert private_id not in bob_ids
@@ -143,9 +151,8 @@ def test_detail_reports_versions_and_chunk_state_before_and_after_embedding(
 def test_detail_hides_other_users_private_document(db_client: TestClient):
     document_id = upload(db_client, data={"visibility": "private"}).json()["id"]
 
-    response = db_client.get(
-        f"/api/documents/{document_id}", headers={"X-User-Id": "bob"}
-    )
+    login_as(db_client, "bob")
+    response = db_client.get(f"/api/documents/{document_id}")
 
     assert response.status_code == 404
 
@@ -321,7 +328,7 @@ def test_delete_cascades_all_document_rows(db_client: TestClient, migrated_db: s
                 f"SELECT count(*) FROM {table} WHERE document_id = %s", (document_id,)
             ).fetchone()[0] > 0
 
-    response = db_client.delete(f"/api/documents/{document_id}", headers={"X-User-Id": "alice"})
+    response = db_client.delete(f"/api/documents/{document_id}")
 
     assert response.status_code == 204
     assert db_client.get(f"/api/documents/{document_id}").status_code == 404
@@ -341,9 +348,7 @@ def test_reembed_recovers_error_without_changing_version_and_coalesces_requests(
         conn.execute("UPDATE documents SET embedding_status = 'error' WHERE id = %s", (document_id,))
 
     for _ in range(2):
-        response = db_client.post(
-            f"/api/documents/{document_id}/reembed", headers={"X-User-Id": "alice"}
-        )
+        response = db_client.post(f"/api/documents/{document_id}/reembed")
         assert response.status_code == 200
 
     with psycopg.connect(migrated_db) as conn:
@@ -369,42 +374,36 @@ def test_write_endpoints_share_visibility_aware_ownership_rules(db_client: TestC
     public_id = upload(db_client, filename="public.txt", data={"visibility": "public"}).json()["id"]
 
     requests = (
-        lambda document_id, headers: db_client.put(
-            f"/api/documents/{document_id}", headers=headers, json={"content": "x", "version": 1}
+        lambda document_id: db_client.put(
+            f"/api/documents/{document_id}", json={"content": "x", "version": 1}
         ),
-        lambda document_id, headers: db_client.delete(
-            f"/api/documents/{document_id}", headers=headers
-        ),
-        lambda document_id, headers: db_client.post(
-            f"/api/documents/{document_id}/reembed", headers=headers
-        ),
-        lambda document_id, headers: db_client.put(
+        lambda document_id: db_client.delete(f"/api/documents/{document_id}"),
+        lambda document_id: db_client.post(f"/api/documents/{document_id}/reembed"),
+        lambda document_id: db_client.put(
             f"/api/documents/{document_id}/tags",
-            headers=headers,
             json={"tags": ["database"]},
         ),
     )
+    login_as(db_client, "bob")
     for request in requests:
-        assert request(private_id, {"X-User-Id": "bob"}).status_code == 404
-        assert request(public_id, {"X-User-Id": "bob"}).status_code == 403
-        assert request(public_id, {}).status_code == 400
+        assert request(private_id).status_code == 404
+        assert request(public_id).status_code == 403
+        db_client.post("/api/auth/logout")
+        assert request(public_id).status_code == 401
+        login_as(db_client, "bob")
 
 
 def test_write_endpoints_return_404_for_missing_document(db_client: TestClient):
     missing_id = str(uuid4())
-    headers = {"X-User-Id": "alice"}
+    login_as(db_client, "alice")
 
     assert db_client.put(
         f"/api/documents/{missing_id}",
-        headers=headers,
         json={"content": "x", "version": 1},
     ).status_code == 404
-    assert db_client.delete(f"/api/documents/{missing_id}", headers=headers).status_code == 404
-    assert db_client.post(
-        f"/api/documents/{missing_id}/reembed", headers=headers
-    ).status_code == 404
+    assert db_client.delete(f"/api/documents/{missing_id}").status_code == 404
+    assert db_client.post(f"/api/documents/{missing_id}/reembed").status_code == 404
     assert db_client.put(
         f"/api/documents/{missing_id}/tags",
-        headers=headers,
         json={"tags": ["database"]},
     ).status_code == 404

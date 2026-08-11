@@ -24,6 +24,9 @@ class Settings(BaseSettings):
     # 한 근무일 동안 재로그인 없이 쓰되, 장기 토큰으로 남지 않도록 24시간으로 제한한다.
     session_lifetime_hours: int = 24
 
+    # 로컬 HTTP에서는 Secure 쿠키가 전송되지 않는다. HTTPS 배포에서만 환경변수로 켠다.
+    session_cookie_secure: bool = False
+
     # MCP는 HTTP 헤더가 없으므로 프로세스 환경으로만 사용자 컨텍스트를 고정한다.
     # 미설정(None)이면 서비스 권한 술어에 따라 public 문서만 보인다.
     mcp_user_id: str | None = None

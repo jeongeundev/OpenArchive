@@ -1,4 +1,4 @@
-from conftest import run_embedding_worker, upload_document
+from conftest import login_as, run_embedding_worker, upload_document
 from fastapi.testclient import TestClient
 
 
@@ -59,9 +59,9 @@ def test_status_observes_version_drift_and_convergence(
     run_embedding_worker(migrated_db)
     assert db_client.get("/api/system/status").json()["inconsistent_documents"] == 0
 
+    login_as(db_client, "alice")
     response = db_client.put(
         f"/api/documents/{document['id']}",
-        headers={"X-User-Id": "alice"},
         json={"content": "수정된 추출 텍스트", "version": document["version"]},
     )
     assert response.status_code == 200
@@ -80,9 +80,9 @@ def test_consistency_counter_counts_documents_not_chunks(
     detail = db_client.get(f"/api/documents/{document['id']}").json()
     assert detail["chunk_count"] >= 2
 
+    login_as(db_client, "alice")
     response = db_client.put(
         f"/api/documents/{document['id']}",
-        headers={"X-User-Id": "alice"},
         json={"content": "새 추출 텍스트", "version": document["version"]},
     )
     assert response.status_code == 200
