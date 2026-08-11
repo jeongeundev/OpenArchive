@@ -86,6 +86,7 @@ export interface TagSuggestionsResponse {
 export interface JobCounts {
   pending: number;
   processing: number;
+  recovery_pending: number;
   error: number;
 }
 
@@ -93,6 +94,8 @@ export interface SystemStatus {
   node_address: string | null;
   node_port: number;
   jobs: JobCounts;
+  zombie_timeout_minutes: number;
+  last_job_finished_at: string | null;
   inconsistent_documents: number;
   embedding_provider: string;
 }

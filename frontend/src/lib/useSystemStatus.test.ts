@@ -7,7 +7,9 @@ import { useSystemStatus } from "./useSystemStatus";
 const status: SystemStatus = {
   node_address: "192.168.64.4",
   node_port: 6432,
-  jobs: { pending: 1, processing: 0, error: 0 },
+  jobs: { pending: 1, processing: 0, recovery_pending: 0, error: 0 },
+  zombie_timeout_minutes: 5,
+  last_job_finished_at: null,
   inconsistent_documents: 0,
   embedding_provider: "fake",
 };

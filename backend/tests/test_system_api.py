@@ -1,3 +1,4 @@
+import psycopg
 from conftest import login_as, run_embedding_worker, upload_document
 from fastapi.testclient import TestClient
 
@@ -19,11 +20,20 @@ def test_status_is_available_without_authentication_and_reports_operational_fiel
         "node_address",
         "node_port",
         "jobs",
+        "zombie_timeout_minutes",
+        "last_job_finished_at",
         "inconsistent_documents",
         "embedding_provider",
     }
     assert "reconnect_events" not in body
-    assert body["jobs"] == {"pending": 0, "processing": 0, "error": 0}
+    assert body["jobs"] == {
+        "pending": 0,
+        "processing": 0,
+        "recovery_pending": 0,
+        "error": 0,
+    }
+    assert body["zombie_timeout_minutes"] == 5
+    assert body["last_job_finished_at"] is None
     assert body["inconsistent_documents"] == 0
     assert body["embedding_provider"] == "fake"
     # 접속 노드는 환경마다 다르다. TCP면 주소가, 유닉스 소켓이면 NULL이 온다.
@@ -40,16 +50,52 @@ def test_status_reports_pending_jobs_until_the_worker_processes_them(
     assert db_client.get("/api/system/status").json()["jobs"] == {
         "pending": 1,
         "processing": 0,
+        "recovery_pending": 0,
         "error": 0,
     }
 
     run_embedding_worker(migrated_db)
 
-    assert db_client.get("/api/system/status").json()["jobs"] == {
+    completed = db_client.get("/api/system/status").json()
+    assert completed["jobs"] == {
         "pending": 0,
         "processing": 0,
+        "recovery_pending": 0,
         "error": 0,
     }
+    assert completed["last_job_finished_at"] is not None
+
+
+def test_status_distinguishes_fresh_processing_jobs_from_recovery_pending_jobs(
+    db_client: TestClient, migrated_db: str
+):
+    upload(db_client, "fresh processing")
+    upload(db_client, "stale processing")
+    with psycopg.connect(migrated_db) as conn:
+        conn.execute(
+            """
+            UPDATE embedding_jobs
+               SET status = 'processing', started_at = now()
+             WHERE id = (SELECT min(id) FROM embedding_jobs)
+            """
+        )
+        conn.execute(
+            """
+            UPDATE embedding_jobs
+               SET status = 'processing', started_at = now() - interval '10 minutes'
+             WHERE id = (SELECT max(id) FROM embedding_jobs)
+            """
+        )
+
+    body = db_client.get("/api/system/status").json()
+
+    assert body["jobs"] == {
+        "pending": 0,
+        "processing": 2,
+        "recovery_pending": 1,
+        "error": 0,
+    }
+    assert body["zombie_timeout_minutes"] == 5
 
 
 def test_status_observes_version_drift_and_convergence(

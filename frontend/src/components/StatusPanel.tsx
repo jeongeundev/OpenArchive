@@ -20,7 +20,9 @@ export function StatusPanel({ status, error }: { status: SystemStatus | null; er
           </div>
           <div className="rounded-lg border border-neutral-800 bg-[#141414] p-6">
             <p className="text-sm font-medium text-neutral-400">임베딩 잡</p>
-            <dl className="mt-2 flex gap-5 text-sm"><div><dt className="text-neutral-500">pending</dt><dd className="text-white">{status.jobs.pending}</dd></div><div><dt className="text-neutral-500">processing</dt><dd className="text-white">{status.jobs.processing}</dd></div><div><dt className="text-[#ef4444]">error</dt><dd className="text-[#ef4444]">{status.jobs.error}</dd></div></dl>
+            <dl className="mt-2 flex gap-5 text-sm"><div><dt className="text-neutral-500">pending</dt><dd className="text-white">{status.jobs.pending}</dd></div><div><dt className="text-neutral-500">processing</dt><dd className="text-white">{status.jobs.processing}</dd></div><div><dt className="text-neutral-500">회수 대기</dt><dd className="text-white">{status.jobs.recovery_pending}</dd></div><div><dt className="text-[#ef4444]">error</dt><dd className="text-[#ef4444]">{status.jobs.error}</dd></div></dl>
+            <p className="mt-3 text-xs text-neutral-500">{status.zombie_timeout_minutes}분을 넘긴 잡은 워커의 다음 폴링에서 회수됩니다.</p>
+            <p className="mt-1 text-xs text-neutral-500">최근 잡 완료 시각: {status.last_job_finished_at === null ? "기록 없음" : new Date(status.last_job_finished_at).toLocaleString("ko-KR")}</p>
           </div>
           <div className="rounded-lg border border-neutral-800 bg-[#141414] p-6"><p className="text-sm font-medium text-neutral-400">임베딩 프로바이더</p><p className="mt-2 text-sm text-white">{status.embedding_provider}</p></div>
         </div>
