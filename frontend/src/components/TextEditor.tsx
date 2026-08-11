@@ -11,13 +11,13 @@ export function TextEditor({
   onSaved,
   onEditingChange,
   disabled,
-  links = [],
+  links = null,
 }: {
   document: DocumentDetail;
   onSaved: () => void;
   onEditingChange: (editing: boolean) => void;
   disabled: boolean;
-  links?: ResolvedLink[];
+  links?: ResolvedLink[] | null;
 }): React.ReactElement {
   const [editing, setEditing] = useState(false);
   const [content, setContent] = useState(document.content);

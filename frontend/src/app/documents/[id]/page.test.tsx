@@ -155,6 +155,29 @@ describe("문서 상세 페이지의 위키링크", () => {
     );
   });
 
+  // 조회가 실패했을 때 links를 빈 배열로 두면 본문의 모든 링크가 깨진 링크로 그려진다.
+  // ADR-027이 깨짐과 비공개를 구분되지 않게 만든 탓에 사용자는 오해를 되돌릴 단서가 없다.
+  it("링크를 불러오지 못하면 깨진 링크로 그리지 않고 그 사실을 말한다", async () => {
+    const linkedDetail = { ...detail, content: "[[대상 문서]]를 참고합니다." };
+    vi.stubGlobal("fetch", vi.fn((url: string) => {
+      if (url === "/api/auth/me") return Promise.resolve(jsonResponse({ authenticated: true, username: "alice", is_admin: false }));
+      if (url.endsWith("/links") || url.endsWith("/backlinks")) {
+        return Promise.resolve(jsonResponse({ detail: "링크를 불러오지 못했습니다." }, 500));
+      }
+      if (url.endsWith("/related")) return Promise.resolve(jsonResponse(related));
+      if (url.endsWith("/tag-suggestions")) return Promise.resolve(jsonResponse(suggestions));
+      return Promise.resolve(jsonResponse(linkedDetail));
+    }));
+
+    await renderPage();
+
+    expect(await screen.findByText("문서 링크를 불러오지 못했습니다.")).toBeInTheDocument();
+    // 깨진 링크의 모양(점선)으로 그리지 않는다 — 본문은 원문 그대로 남는다.
+    const brokenLike = screen.queryByText("대상 문서");
+    expect(brokenLike).not.toBeInTheDocument();
+    expect(screen.getByText(/\[\[대상 문서\]\]를 참고합니다\./)).toBeInTheDocument();
+  });
+
   it("백링크가 없으면 영역 자체를 표시하지 않는다", async () => {
     vi.stubGlobal("fetch", vi.fn((url: string) => {
       if (url === "/api/auth/me") return Promise.resolve(jsonResponse({ authenticated: true, username: "alice", is_admin: false }));

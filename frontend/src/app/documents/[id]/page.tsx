@@ -28,8 +28,9 @@ export default function DocumentDetailPage({
   const [draftTags, setDraftTags] = useState<string[] | null>(null);
   const [savingTags, setSavingTags] = useState(false);
   const [tagError, setTagError] = useState<string | null>(null);
-  const [links, setLinks] = useState<ResolvedLink[]>([]);
+  const [links, setLinks] = useState<ResolvedLink[] | null>(null);
   const [backlinks, setBacklinks] = useState<Backlink[]>([]);
+  const [linksError, setLinksError] = useState<string | null>(null);
   const { auth } = useAuth();
   const anonymous = !auth.authenticated;
 
@@ -40,11 +41,15 @@ export default function DocumentDetailPage({
         if (!active) return;
         setLinks(nextLinks);
         setBacklinks(nextBacklinks);
+        setLinksError(null);
       })
       .catch(() => {
         if (!active) return;
-        setLinks([]);
+        // links를 []로 두면 본문의 모든 링크가 깨진 링크로 보인다. 해석 결과가 없다는
+        // 것을 그대로 남기고 실패를 말한다.
+        setLinks(null);
         setBacklinks([]);
+        setLinksError("문서 링크를 불러오지 못했습니다.");
       });
     return () => {
       active = false;
@@ -102,6 +107,12 @@ export default function DocumentDetailPage({
         onSaved={refresh}
         links={links}
       />
+
+      {linksError !== null ? (
+        <p className="text-sm text-neutral-500" role="status">
+          {linksError}
+        </p>
+      ) : null}
 
       {backlinks.length > 0 ? (
         <section className="space-y-4">

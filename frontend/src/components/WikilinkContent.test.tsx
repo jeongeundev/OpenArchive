@@ -57,6 +57,34 @@ describe("WikilinkContent", () => {
     ]);
   });
 
+  // 트리거(`011_links_triggers.sql`)가 `btrim(match[1])`으로 저장하므로 API가 주는
+  // title에는 양끝 공백이 없다. 화면이 트림하지 않으면 정상 링크가 깨진 링크로 보인다.
+  it("양끝 공백이 있는 링크를 트리거와 같은 제목으로 해석한다", () => {
+    render(
+      <WikilinkContent
+        content="[[  OpenSQL 가이드  ]]를 읽습니다."
+        links={[{ title: "OpenSQL 가이드", document_id: "guide-1" }]}
+      />,
+    );
+
+    expect(screen.getByRole("link", { name: "OpenSQL 가이드" })).toHaveAttribute(
+      "href",
+      "/documents/guide-1",
+    );
+  });
+
+  // 트리거는 `WHERE btrim(match[1]) <> ''`로 걸러 아예 저장하지 않는다. 화면도
+  // 링크로 보지 않아야 양쪽이 같은 것을 링크라고 부른다.
+  it("공백뿐인 링크는 링크로 보지 않고 본문 그대로 남긴다", () => {
+    render(<WikilinkContent content="앞 [[   ]] 뒤" links={[]} />);
+
+    expect(screen.queryAllByRole("link")).toHaveLength(0);
+    // 기본 normalizer가 공백을 축약하므로 원문 보존을 보려면 정규화를 끈다.
+    expect(
+      screen.getByText("앞 [[   ]] 뒤", { normalizer: (text) => text }),
+    ).toBeInTheDocument();
+  });
+
   it("추출 텍스트의 HTML을 실행하지 않고 텍스트로 표시한다", () => {
     const { container } = render(
       <WikilinkContent content={'<script>alert("xss")</script> [[문서]]'} links={[]} />,
