@@ -52,7 +52,10 @@
       "type": "feat",
       "scope": "frontend",
       "desc": "융합 검색 결과 표시와 근거 노출",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-08-11T17:37:56+0900",
+      "summary": "생략 — Step 3의 실 BGE-M3 비교에서 RRF가 벡터 검색 품질을 낮춰 미채택되었으므로 표시할 융합 검색 결과가 없음",
+      "completed_at": "2026-08-11T17:38:36+0900"
     },
     {
       "step": 5,
