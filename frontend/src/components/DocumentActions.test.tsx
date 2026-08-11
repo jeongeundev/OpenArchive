@@ -2,7 +2,6 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { DocumentSummary } from "@/lib/types";
-import { setCurrentUser } from "@/lib/user";
 import { DocumentActions } from "./DocumentActions";
 
 const push = vi.fn();
@@ -28,7 +27,6 @@ describe("DocumentActions", () => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
     push.mockReset();
-    setCurrentUser("alice");
   });
 
   it("확인 후 문서와 청크·벡터 삭제를 요청하고 목록으로 이동한다", async () => {

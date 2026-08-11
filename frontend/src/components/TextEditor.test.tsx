@@ -2,7 +2,6 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { DocumentDetail } from "@/lib/types";
-import { setCurrentUser } from "@/lib/user";
 import { TextEditor } from "./TextEditor";
 
 const document: DocumentDetail = {
@@ -31,7 +30,6 @@ describe("TextEditor", () => {
     localStorage.clear();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
-    setCurrentUser("alice");
   });
 
   it("PDF와 DOCX에는 추출 텍스트 편집 안내를 상시 표시한다", () => {
@@ -204,8 +202,7 @@ describe("TextEditor", () => {
       />,
     );
 
-    expect(screen.getByRole("button", { name: "편집" })).toBeDisabled();
-    expect(screen.getByText("사용자를 선택하면 편집할 수 있습니다.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "편집" })).not.toBeInTheDocument();
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });

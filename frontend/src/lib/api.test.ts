@@ -4,39 +4,31 @@ import {
   ApiError,
   deleteDocument,
   editDocument,
+  getAuthStatus,
   listDocuments,
   search,
   updateTags,
   uploadDocument,
 } from "./api";
-import { DEMO_USERS, setCurrentUser } from "./user";
 
-describe("API user header", () => {
+describe("API cookie session", () => {
   beforeEach(() => {
     localStorage.clear();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
 
-  it("sends the selected user in X-User-Id", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(new Response("[]"));
-    vi.stubGlobal("fetch", fetchMock);
-    setCurrentUser(DEMO_USERS[0]);
-
-    await listDocuments();
-
-    const headers = new Headers(fetchMock.mock.calls[0][1]?.headers);
-    expect(headers.get("X-User-Id")).toBe(DEMO_USERS[0]);
-  });
-
-  it("omits X-User-Id for an anonymous user", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(new Response("[]"));
+  it("uses same-origin credentials without a user identity header", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({ authenticated: false, username: null, is_admin: false }),
+      ),
+    );
     vi.stubGlobal("fetch", fetchMock);
 
-    await listDocuments();
+    await getAuthStatus();
 
-    const headers = new Headers(fetchMock.mock.calls[0][1]?.headers);
-    expect(headers.has("X-User-Id")).toBe(false);
+    expect(fetchMock.mock.calls[0][1]?.credentials).toBe("same-origin");
   });
 });
 
@@ -70,7 +62,7 @@ describe("API responses", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue(
-        new Response(JSON.stringify({ detail: "X-User-Id 헤더가 필요합니다." }), {
+        new Response(JSON.stringify({ detail: "로그인이 필요합니다." }), {
           status: 400,
           headers: { "Content-Type": "application/json" },
         }),
@@ -82,7 +74,7 @@ describe("API responses", () => {
     );
 
     expect(error).toBeInstanceOf(ApiError);
-    expect(error).toMatchObject({ status: 400, detail: "X-User-Id 헤더가 필요합니다." });
+    expect(error).toMatchObject({ status: 400, detail: "로그인이 필요합니다." });
   });
 
   it("uploads multipart data with each tag as a repeated field", async () => {

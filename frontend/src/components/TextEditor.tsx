@@ -69,7 +69,7 @@ export function TextEditor({
     <section className="space-y-4">
       <div className="flex items-center justify-between gap-4">
         <h2 className="text-sm font-medium text-neutral-400">추출 텍스트</h2>
-        {!editing ? (
+        {!editing && !disabled ? (
           <button
             className="text-sm text-neutral-500 hover:text-neutral-300 disabled:cursor-not-allowed disabled:text-neutral-600"
             disabled={disabled}
@@ -119,9 +119,6 @@ export function TextEditor({
           {document.content}
         </div>
       )}
-      {disabled ? (
-        <p className="text-sm text-neutral-500">사용자를 선택하면 편집할 수 있습니다.</p>
-      ) : null}
     </section>
   );
 }

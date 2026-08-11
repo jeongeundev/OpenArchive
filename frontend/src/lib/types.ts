@@ -97,6 +97,19 @@ export interface SystemStatus {
   embedding_provider: string;
 }
 
+export interface AuthStatus {
+  authenticated: boolean;
+  username: string | null;
+  is_admin: boolean;
+}
+
+export interface UserSummary {
+  id: string;
+  username: string;
+  is_admin: boolean;
+  created_at: string;
+}
+
 export const SUPPORTED_CONTENT_TYPES = ["pdf", "docx", "txt", "md"] as const;
 
 // backend/app/services/search.py의 MAX_K와 같아야 하며, 초과하면 API가 422를 반환한다.
