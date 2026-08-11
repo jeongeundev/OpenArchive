@@ -38,7 +38,7 @@ function DuplicatePairs({ result }: { result: DuplicateList }): React.ReactEleme
           <Link className="text-neutral-300 hover:text-[#0ea5e9]" href={`/documents/${pair.first.document_id}`}>{pair.first.title}</Link>
           <span className="text-neutral-600">↔</span>
           <Link className="text-neutral-300 hover:text-[#0ea5e9]" href={`/documents/${pair.second.document_id}`}>{pair.second.title}</Link>
-          {pair.score !== null ? <span className="text-neutral-500">겹침 {Math.round(pair.score * 100)}%</span> : null}
+          {pair.score !== null ? <span className="text-neutral-500">닿은 대목 {Math.round(pair.score * 100)}%</span> : null}
         </li>
       ))}
     </ul>
@@ -82,11 +82,11 @@ export default function DiagnosticsPage(): React.ReactElement {
           </section>
 
           <section className="rounded-lg border border-neutral-800 bg-[#141414] p-6">
-            <h2 className="text-sm font-medium text-neutral-400">내용이 겹치는 문서 <span className="text-white">{diagnostics.duplicates.identical.count + diagnostics.duplicates.overlaps.count}</span></h2>
-            <p className="my-4 text-sm text-neutral-500">같은 내용인지 확인하고 필요한 문서를 남겨 보세요.</p>
+            <h2 className="text-sm font-medium text-neutral-400">같거나 가까운 문서 <span className="text-white">{diagnostics.duplicates.identical.count + diagnostics.duplicates.overlaps.count}</span></h2>
+            <p className="my-4 text-sm text-neutral-500">동일 텍스트는 하나만 남겨도 됩니다. 아래 목록은 같은 내용이라는 뜻이 아니라, 여러 대목이 서로 가장 가깝다는 뜻입니다.</p>
             <h3 className="mb-2 text-xs font-medium text-neutral-500">동일 텍스트 {diagnostics.duplicates.identical.count}</h3>
             <DuplicatePairs result={diagnostics.duplicates.identical} />
-            <h3 className="mb-2 mt-5 text-xs font-medium text-neutral-500">높은 겹침 {diagnostics.duplicates.overlaps.count}</h3>
+            <h3 className="mb-2 mt-5 text-xs font-medium text-neutral-500">여러 대목에서 만남 {diagnostics.duplicates.overlaps.count}</h3>
             <DuplicatePairs result={diagnostics.duplicates.overlaps} />
           </section>
 
