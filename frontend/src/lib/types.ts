@@ -28,6 +28,16 @@ export interface DocumentDetail extends DocumentSummary {
   chunk_version: number | null;
 }
 
+export interface ResolvedLink {
+  title: string;
+  document_id: string | null;
+}
+
+export interface Backlink {
+  document_id: string;
+  title: string;
+}
+
 export interface SearchResult {
   document_id: string;
   title: string;
@@ -141,6 +151,13 @@ export interface DiagnosticsResponse {
     overlaps: DuplicateList;
   };
   uncategorized: DiagnosticDocumentList;
+  broken_links: {
+    count: number;
+    items: Array<{
+      source: DiagnosticDocument;
+      target_title: string;
+    }>;
+  };
 }
 
 export interface ClusterDocument {

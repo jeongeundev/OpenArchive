@@ -70,6 +70,18 @@ def history(conn: psycopg.Connection, doc_id) -> list[tuple]:
     ).fetchall()
 
 
+def links_for(conn: psycopg.Connection, doc_id) -> list[tuple[str, int | None]]:
+    return conn.execute(
+        """
+        SELECT target_title, src_chunk_index
+        FROM document_links
+        WHERE src_document_id = %s
+        ORDER BY target_title
+        """,
+        (doc_id,),
+    ).fetchall()
+
+
 def mark_document_ready(
     conn: psycopg.Connection,
     doc_id,
@@ -171,6 +183,39 @@ def test_metadata_only_update_does_not_fire_the_trigger(conn: psycopg.Connection
 
     assert job_statuses(conn, doc_id) == ["pending"]  # INSERT 때 만들어진 것 그대로
     assert [h[0] for h in history(conn, doc_id)] == [1]
+
+
+def test_wikilinks_are_stored_once_and_replaced_with_the_document_content(
+    conn: psycopg.Connection,
+):
+    doc_id = insert_document(
+        conn,
+        "[[존재하는 문서]]와 [[존재하는 문서]], [[없는 문서]]를 함께 가리킨다.",
+        "sha256:links-v1",
+    )
+
+    assert set(links_for(conn, doc_id)) == {
+        ("없는 문서", None),
+        ("존재하는 문서", None),
+    }
+
+    edit_content(conn, doc_id, "이제 [[새 대상]]만 가리킨다.", "sha256:links-v2")
+
+    assert links_for(conn, doc_id) == [("새 대상", None)]
+
+
+def test_deleting_a_document_cascades_its_outgoing_wikilinks(
+    conn: psycopg.Connection,
+):
+    doc_id = insert_document(conn, "[[남겨진 제목]]", "sha256:links-delete")
+    assert links_for(conn, doc_id) == [("남겨진 제목", None)]
+
+    conn.execute("DELETE FROM documents WHERE id = %s", (doc_id,))
+
+    (remaining,) = conn.execute(
+        "SELECT count(*) FROM document_links WHERE src_document_id = %s", (doc_id,)
+    ).fetchone()
+    assert remaining == 0
 
 
 def test_editing_content_returns_the_status_to_pending(conn: psycopg.Connection):

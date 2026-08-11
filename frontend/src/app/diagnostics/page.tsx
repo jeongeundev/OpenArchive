@@ -74,7 +74,7 @@ export default function DiagnosticsPage(): React.ReactElement {
       {error !== null ? <p className="text-sm text-[#ef4444]" role="alert">{error}</p> : null}
       {diagnostics === null && error === null ? <p className="text-sm text-neutral-500">불러오는 중…</p> : null}
       {diagnostics !== null ? (
-        <div className="grid gap-4 md:grid-cols-3">
+        <div className="grid gap-4 md:grid-cols-2">
           <section className="rounded-lg border border-neutral-800 bg-[#141414] p-6">
             <h2 className="text-sm font-medium text-neutral-400">연결 없는 문서 <span className="text-white">{diagnostics.orphans.count}</span></h2>
             <p className="my-4 text-sm text-neutral-500">관련 문서가 없습니다. 태그를 달거나 다른 문서에서 참조해 보세요.</p>
@@ -94,6 +94,22 @@ export default function DiagnosticsPage(): React.ReactElement {
             <h2 className="text-sm font-medium text-neutral-400">태그 없는 문서 <span className="text-white">{diagnostics.uncategorized.count}</span></h2>
             <p className="my-4 text-sm text-neutral-500">태그를 달아 검색과 탐색에서 분류 기준을 더해 보세요.</p>
             <DocumentList result={diagnostics.uncategorized} />
+          </section>
+
+          <section className="rounded-lg border border-neutral-800 bg-[#141414] p-6">
+            <h2 className="text-sm font-medium text-neutral-400">깨진 링크 <span className="text-white">{diagnostics.broken_links.count}</span></h2>
+            <p className="my-4 text-sm text-neutral-500">현재 열람 범위에서 연결할 문서를 찾지 못한 링크입니다.</p>
+            {diagnostics.broken_links.items.length === 0 ? <Empty /> : (
+              <ul className="space-y-2">
+                {diagnostics.broken_links.items.map((item) => (
+                  <li className="text-sm" key={`${item.source.document_id}:${item.target_title}`}>
+                    <Link className="text-neutral-300 hover:text-[#0ea5e9]" href={`/documents/${item.source.document_id}`}>{item.source.title}</Link>
+                    <span className="text-neutral-600"> → </span>
+                    <span className="text-neutral-400">{item.target_title}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
           </section>
         </div>
       ) : null}

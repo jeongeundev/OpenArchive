@@ -1,3 +1,4 @@
+import re
 import sys
 from pathlib import Path
 
@@ -63,6 +64,19 @@ def test_repository_seed_has_tags_private_documents_and_measurement_scale():
         document.visibility == "private" and document.title.startswith("ADR-018:")
         for document in documents
     )
+
+
+def test_repository_seed_turns_adr_references_into_full_title_wikilinks():
+    documents = load_seed_documents(ROOT)
+    titles = {document.title for document in documents}
+    targets = [
+        target
+        for document in documents
+        for target in re.findall(r"\[\[([^\[\]]+)\]\]", document.content)
+    ]
+
+    assert any(target.startswith("ADR-018:") and target in titles for target in targets)
+    assert any(target not in titles for target in targets), "시연용 깨진 링크가 하나는 있어야 한다"
 
 
 async def test_repository_fragments_pass_the_migrated_content_check(migrated_db: str):

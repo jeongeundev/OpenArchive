@@ -3,18 +3,21 @@
 import { useState } from "react";
 
 import { ApiError, editDocument } from "@/lib/api";
-import type { DocumentDetail } from "@/lib/types";
+import type { DocumentDetail, ResolvedLink } from "@/lib/types";
+import { WikilinkContent } from "./WikilinkContent";
 
 export function TextEditor({
   document,
   onSaved,
   onEditingChange,
   disabled,
+  links = null,
 }: {
   document: DocumentDetail;
   onSaved: () => void;
   onEditingChange: (editing: boolean) => void;
   disabled: boolean;
+  links?: ResolvedLink[] | null;
 }): React.ReactElement {
   const [editing, setEditing] = useState(false);
   const [content, setContent] = useState(document.content);
@@ -95,6 +98,9 @@ export function TextEditor({
             onChange={(event) => setContent(event.target.value)}
             value={content}
           />
+          <p className="text-xs text-neutral-500">
+            다른 문서를 연결하려면 [[문서 제목]] 형식으로 입력하세요.
+          </p>
           {error !== null ? <p className="text-sm text-[#ef4444]">{error}</p> : null}
           <div className="flex gap-3">
             <button
@@ -116,7 +122,7 @@ export function TextEditor({
         </form>
       ) : (
         <div className="whitespace-pre-wrap rounded-lg border border-neutral-800 bg-[#141414] p-6 text-sm leading-relaxed text-neutral-300">
-          {document.content}
+          <WikilinkContent content={document.content} links={links} />
         </div>
       )}
     </section>

@@ -18,7 +18,11 @@
                   │  openSQL 클러스터 (PostgreSQL 17 + pgvector)  │
                   │  documents ──AFTER trigger──▶ embedding_jobs  │
                   │  (같은 트랜잭션에 잡 기록 = 트랜잭셔널 아웃박스) │
+                  │           └──AFTER trigger──▶ document_links  │
+                  │              (본문의 [[제목]] — 벡터 불필요)    │
                   │  document_chunks (vector(1024), HNSW)         │
+                  │           └──청크 교체와 같은 트랜잭션──▶       │
+                  │              document_edges (저장된 관계)      │
                   │  pg_notify('embedding_jobs') — 커밋 시 발행    │
                   └───────────────┬──────────────────────────────┘
                                   │ 5초 폴링 (주 경로)
@@ -29,6 +33,8 @@
                   │  해시 재확인 + 청크 교체 + job done (단일 트랜잭션)│
                   └──────────────────────────────────────────────┘
 ```
+
+**관계는 두 갈래로 만들어지고 시점이 다르다.** `document_links`는 본문이 바뀌는 즉시(벡터 불필요), `document_edges`는 청크가 교체되는 트랜잭션 안에서 생긴다. 둘 다 **DB 계층**이 만들며 애플리케이션은 읽기만 한다 — 관련 문서·태그 추천이 조회 시점 벡터 계산을 그만둔 근거다 (ADR-029 결정 5, ADR-030).
 
 핵심 프레이밍: **잡 생성·코얼레싱·삭제 정합성은 전부 DB 안**(트리거 함수, 파셜 유니크 인덱스, FK CASCADE)에서 보장된다. 워커는 "DB가 만들어 둔 잡을 집어가는 무상태 실행기"이며, DB 밖 연산은 임베딩 모델 추론뿐이다.
 
@@ -42,25 +48,31 @@ OpenArchive/
 ├── scripts/check.sh              # 통합 검증 (backend lint+test, frontend lint+test+build)
 ├── backend/
 │   ├── pyproject.toml            # fastapi, psycopg[binary,pool], pydantic-settings, mcp<2, pypdf, python-docx / [dev]: pytest, ruff / [local]: sentence-transformers
-│   ├── migrations/               # 001_extensions.sql, 002_tables.sql, 003_triggers.sql, 004_indexes.sql
+│   ├── migrations/               # 001~011: extensions, tables, triggers, indexes,
+│   │                             #   trgm, edges(006~008), auth(009), links(010~011)
 │   ├── app/
 │   │   ├── main.py               # FastAPI 앱 조립
 │   │   ├── config.py             # pydantic-settings (DATABASE_URL, EMBEDDING_PROVIDER 등)
 │   │   ├── db.py                 # AsyncConnectionPool만 — import 시 부작용 없음
 │   │   ├── migrations.py         # 마이그레이션 러너 — API 서버 startup에서만 호출
-│   │   ├── api/                  # 라우터: documents.py, search.py, system.py
-│   │   ├── services/             # parsing.py, chunking.py, documents.py, search.py, related.py
+│   │   ├── api/                  # 라우터: documents, search, system, auth, admin,
+│   │   │                         #   diagnostics, clusters, retry (+ deps, schemas)
+│   │   ├── services/             # parsing, chunking, documents, search, related,
+│   │   │                         #   links, diagnostics, clusters, auth, visibility
 │   │   ├── embeddings/           # base.py(Protocol), local.py(bge-m3), fake.py
 │   │   └── worker.py             # 임베딩 워커 진입점
 │   ├── mcp_server/server.py      # FastMCP stdio 서버 — search_documents, get_document, list_documents
 │   └── tests/                    # test_chunking.py, test_triggers.py, test_worker.py, test_search_api.py ...
 └── frontend/
     └── src/
-        ├── app/                  # /(목록+업로드), /documents/[id], /search, /admin/status
+        ├── app/                  # /(목록+업로드), /documents/[id], /search, /login,
+        │                         #   /diagnostics, /clusters, /admin/status, /admin/users
         ├── components/
         ├── types/
         └── lib/                  # API 클라이언트 (fetch 래퍼)
 ```
+
+`services/visibility.py`의 `VISIBLE_TO_USER`는 **모든 조회 경로가 공유하는 단일 열람 술어**다. 검색·관련 문서·그래프 순회·집계·위키링크 해석이 각자 조건을 쓰면 한 곳만 빠져도 비공개 문서가 새어 나간다 (ADR-018, ADR-027).
 
 MCP 서버는 `app.services`를 직접 재사용한다. `search_documents`는 발췌(`excerpt`)·출처(`document_id`, `title`, `filename`)·기준 버전(`based_on_version`)을 반환하고, `get_document`는 추출 텍스트와 텍스트 버전·청크 상태를, `list_documents`는 접근 가능한 문서 메타데이터를 반환한다. 사용자 컨텍스트는 툴 인자가 아니라 `MCP_USER_ID` 환경변수로 고정하며, 미설정 시 public 문서만 조회한다 (ADR-025).
 
@@ -130,9 +142,46 @@ CREATE TABLE embedding_jobs (
 -- 핵심: 문서당 pending 잡은 1개만 — DB 계층 코얼레싱
 CREATE UNIQUE INDEX uq_pending_job_per_doc
   ON embedding_jobs(document_id) WHERE status = 'pending';
+
+-- document_edges: 저장 시점에 만드는 관계 그래프 (006, ADR-029)
+CREATE TABLE document_edges (
+  src_document_id uuid NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+  dst_document_id uuid NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+  kind            text NOT NULL,   -- overlaps|points_to|broader|related
+  src_chunk_index int,             -- 위치가 의미 있는 관계만 채운다
+  dst_chunk_index int,
+  score           real NOT NULL,   -- ★ 척도가 kind마다 다르다 (아래)
+  CONSTRAINT document_edges_not_self CHECK (src_document_id <> dst_document_id)
+);
+
+-- document_links: 위키링크. 대상 id가 아니라 제목을 저장한다 (010, ADR-030)
+CREATE TABLE document_links (
+  src_document_id uuid NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+  src_chunk_index int,
+  target_title    text NOT NULL    -- ★ 해석은 조회 시점에, 조회자의 열람 범위에서
+);
+
+-- users·sessions: 최소 로그인 (009)
+CREATE TABLE users (
+  id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  username      text NOT NULL UNIQUE,
+  password_hash text NOT NULL,     -- hashlib.scrypt 결과만 저장한다
+  is_admin      boolean NOT NULL DEFAULT false,
+  created_at    timestamptz NOT NULL DEFAULT now()
+);
+CREATE TABLE sessions (
+  token      text PRIMARY KEY,     -- secrets.token_urlsafe(32)
+  user_id    uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  expires_at timestamptz NOT NULL
+);
 ```
 
 설계 근거: 잡은 콘텐츠 페이로드 없이 "이 문서는 재임베딩이 필요하다"는 신호만 담는다. 워커가 처리 시점에 `documents`의 최신 content를 읽으므로 (a) 연속 수정이 자연스럽게 코얼레싱되고 (b) 재처리가 최신 상태로 수렴하는 멱등 구조가 된다.
+
+**관계 두 종류를 한 테이블에 넣지 않았다.** `document_edges`의 노드는 항상 **문서 id**이고 벡터가 준비된 뒤 트리거가 만든다. `document_links`의 대상은 **제목 문자열**이라 벡터가 필요 없고 본문이 바뀌는 순간 만들어지며, 대상 문서가 없어도 저장된다(깨진 링크는 위키의 정상 기능). 한 테이블로 합치면 `dst_document_id NOT NULL`이 깨지고 링크가 불필요하게 임베딩을 기다린다 (ADR-030).
+
+**두 테이블 모두 `UNIQUE`에서 `NULL` chunk_index를 `-1`로 접는다.** PostgreSQL의 일반 `UNIQUE`는 `NULL`을 서로 다른 값으로 보므로, 위치 없는 관계가 여러 번 저장되는 것을 그대로 두면 중복이 쌓인다 (`COALESCE(src_chunk_index, -1)`).
 
 ### `document_chunks.version`의 용도
 
@@ -403,12 +452,20 @@ OpenSQL `patroni.yml`의 PostgreSQL 파라미터는 `max_connections: 100`이다
 | `PUT /api/documents/{id}/tags` | `{tags: string[]}`로 태그 전체 교체. 트리거는 `UPDATE OF content_hash`에만 걸려 있으므로 **재임베딩을 유발하지 않는다** |
 | `DELETE /api/documents/{id}` | CASCADE로 벡터까지 원자 삭제 |
 | `POST /api/documents/{id}/reembed` | **임베딩 실패 복구.** 아래 참조 |
-| `GET /api/documents/{id}/related` | **관련 문서.** 청크 평균 벡터로 유사 문서 조회 (ADR-018). 청크가 없으면 `not_indexed` |
-| `GET /api/documents/{id}/tag-suggestions` | **태그 추천.** 유사 문서의 태그 빈도 (ADR-019). 청크가 없으면 `not_indexed` |
-| `POST /api/search` | 하이브리드 검색 (아래) |
+| `GET /api/documents/{id}/related` | **관련 문서.** 저장된 관계(`document_edges`)를 읽는다 (ADR-018 개정 · ADR-029). 청크가 없으면 `not_indexed`, edge가 없으면 `no_edges` |
+| `GET /api/documents/{id}/tag-suggestions` | **태그 추천.** 관계 이웃의 태그 빈도 (ADR-019). 청크가 없으면 `not_indexed` |
+| `GET /api/documents/{id}/links` | **본문이 가리키는 위키링크.** 조회자의 열람 범위에서 해석하며, 대상이 없거나 보이지 않으면 `document_id: null` (ADR-030) |
+| `GET /api/documents/{id}/backlinks` | **이 문서를 가리키는 문서.** 열람 가능한 출발 문서만 |
+| `POST /api/search` | 하이브리드 검색 + 관계 순회 (아래) |
+| `POST /api/auth/login` · `logout` · `GET /api/auth/me` | 최소 로그인. 세션 토큰은 `sessions` 테이블에 저장 |
+| `GET /api/diagnostics` | **진단.** 고아 문서·깨진 링크·중복 후보 등을 **열람 범위 기준**으로 집계 (ADR-027) |
+| `GET /api/clusters` | **주제 덩어리.** 관계 그래프의 연결 요소 |
+| `GET /api/admin/users` 등 | 관리자 전용 |
 | `GET /api/system/status` | **운영/데모 전용**: `inet_server_addr()`(현재 접속 노드), pending/processing/error 잡 수, 임베딩 프로바이더명, **정합성 검증 쿼리 결과**(`c.version <> d.version` 건수). `/admin/status`가 소비하며 사용자 화면은 호출하지 않는다 |
 
-> **구현 현황 (M5 기준)**: `/related`·`/tag-suggestions`, MCP 서버와 복구 데모까지 구현되어 있다. 수집하지 않던 상태 응답 필드는 채우지 않고 제거했다 — 워커 로그와 잡·정합성 카운터가 같은 복구 사실을 검증하기 때문이다.
+> **구현 현황 (M9 기준)**: 위 표 전체가 구현되어 있다. 수집하지 않던 상태 응답 필드는 채우지 않고 제거했다 — 워커 로그와 잡·정합성 카운터가 같은 복구 사실을 검증하기 때문이다.
+>
+> **모든 조회에 열람 범위가 걸린다.** 검색·관련 문서·링크·백링크·진단 집계·클러스터가 같은 `VISIBLE_TO_USER` 술어를 쓴다. 볼 수 없는 문서는 자리 표시조차 남기지 않는다 — 표시 자체가 존재와 개수를 누출한다 (ADR-027).
 >
 > 새 파일로 교체하는 경로는 없다. 새 파일을 올리려면 업로드 후 이전 문서를 삭제해야 한다.
 >
@@ -467,7 +524,7 @@ PUT /api/documents/{id}
 
 ## 검색 데이터 흐름
 
-질의 텍스트 → 동일 프로바이더로 질의 임베딩 → 단일 하이브리드 SQL:
+질의 텍스트 → 동일 프로바이더로 질의 임베딩 → **단일 `WITH RECURSIVE` SQL**. 벡터 후보 확보와 관계 순회가 한 쿼리 안에서 끝난다.
 
 ```sql
 BEGIN;  -- ★ plain BEGIN. READ ONLY 금지 (아래 설명)
@@ -475,35 +532,60 @@ BEGIN;  -- ★ plain BEGIN. READ ONLY 금지 (아래 설명)
 SET LOCAL hnsw.ef_search = 200;      -- 필터 통과 후보를 충분히 확보 (기본 40)
 SET LOCAL random_page_cost = 1.1;    -- 무필터 검색이 HNSW를 타게 한다 (ADR-011 보강 5)
 
-WITH candidates AS (
-    -- 1단계: HNSW 인덱스로 후보를 넉넉히 뽑는다 (k의 5배)
-    SELECT c.document_id, c.chunk_index, c.content,
-           c.embedding <=> %(qvec)s AS dist
-    FROM document_chunks c
-    JOIN documents d ON d.id = c.document_id
+WITH RECURSIVE candidates AS (       -- ① 벡터 후보 (k * 5). 필터를 여기 안에 둔다
+    SELECT c.document_id, c.chunk_index,
+           ( … 앞뒤 청크를 이어붙인 발췌 … ) AS content,
+           c.version, c.embedding <=> %(qvec)s::vector AS dist
+    FROM document_chunks c JOIN documents d ON d.id = c.document_id
     WHERE (%(tags)s::text[] IS NULL OR d.tags && %(tags)s)
       AND (%(ctype)s::text IS NULL OR d.content_type = %(ctype)s)
       AND (d.visibility = 'public' OR d.owner_id = %(user)s)
-    ORDER BY c.embedding <=> %(qvec)s
+    ORDER BY c.embedding <=> %(qvec)s::vector
     LIMIT %(k)s * 5
 ),
-best_per_doc AS (
-    -- 2단계: 문서당 최고 점수 청크 1개만 남긴다
-    SELECT DISTINCT ON (document_id) *
-    FROM candidates
-    ORDER BY document_id, dist
+resolved_links AS (                  -- ② 위키링크를 열람 범위에서 edge로 해석 (ADR-030)
+    SELECT l.src_document_id, d.id AS dst_document_id, 'refers'::text AS kind, …
+    FROM document_links l
+    JOIN documents d ON d.title = l.target_title
+                    AND (d.visibility = 'public' OR d.owner_id = %(user)s)
+),
+traversal_edges AS (                 -- ③ 저장된 관계 ∪ 해석된 링크
+    SELECT … FROM document_edges
+    UNION ALL
+    SELECT … FROM resolved_links
+),
+walk AS (                            -- ④ 깊이 2까지 순회. 한 단계마다 거리에 +2.0
+    SELECT …, 0 AS depth FROM candidates          -- 시작점
+    UNION ALL
+    SELECT …, w.dist + 2.0, w.depth + 1
+    FROM walk w JOIN traversal_edges e ON e.src_document_id = w.document_id
+    …                                             -- path 배열로 순환을 막는다
+),
+expanded AS (                        -- ⑤ 직전 텍스트 버전을 revision으로 더한다
+    SELECT … FROM walk
+    UNION ALL
+    SELECT …, 'revision' FROM candidates JOIN document_versions …
+),
+deduplicated AS ( … ),               -- ⑥ 문서·버전·청크 단위로 1건
+selected AS (                        -- ⑦ 직접 결과와 확장 결과를 각각 LIMIT k
+    (SELECT * FROM deduplicated WHERE depth = 0 ORDER BY dist, … LIMIT %(k)s)
+    UNION ALL
+    (SELECT * FROM deduplicated WHERE depth > 0 ORDER BY dist, <kind 순서>, … LIMIT %(k)s)
 )
-SELECT d.id, d.title, d.tags, d.content_type,
-       b.chunk_index, b.content, 1 - b.dist AS score
-FROM best_per_doc b
-JOIN documents d ON d.id = b.document_id
-ORDER BY b.dist
-LIMIT %(k)s;
+SELECT … FROM selected hit JOIN documents d ON d.id = hit.document_id
+ORDER BY CASE WHEN hit.depth = 0 THEN 0 ELSE 1 END,   -- 직접 결과가 항상 먼저
+         hit.dist, <kind 순서>, hit.depth, …;
 
 COMMIT;
 ```
 
-정형 필터·권한 술어·벡터 정렬이 한 쿼리에 결합된다(가산점 포인트). 이 쿼리는 `services/search.py` 한 곳에만 존재하며 REST API와 MCP 서버가 공유한다.
+> 실제 쿼리는 `services/search.py`의 `SEARCH_SQL` **한 곳에만** 존재하며 REST API와 MCP 서버가 공유한다. 위는 단계 구조만 옮긴 것이다 — 컬럼 목록과 순환 방지 `path` 배열은 코드를 보라. **문서에 전체 SQL을 복사해 두지 않는다**: 쿼리가 길어진 뒤로는 복사본이 조용히 낡아 잘못된 근거가 된다.
+
+정형 필터·권한 술어·벡터 정렬·관계 순회가 한 쿼리에 결합된다(가산점 포인트).
+
+**`<kind 순서>`는 동점 타이브레이커다** — `overlaps`(0) · `related`(1) · `refers`(2) · `revision`(3). 사람이 본문에 직접 쓴 링크가 같은 문서의 과거 판본보다 앞선다 (ADR-030).
+
+**한 단계마다 거리에 `GRAPH_DISTANCE_PENALTY = 2.0`을 더한다.** 코사인 거리의 최대값이 2이므로, 관계로 닿은 문서가 직접 벡터 결과를 절대 앞지르지 못한다. `score = 1 - dist` 정렬 의미를 그대로 두면서 층을 가르는 방법이다.
 
 ### 네 가지 설계 결정이 이 쿼리에 반영되어 있다
 
@@ -550,72 +632,27 @@ OpenProxy는 `query_parser_read_write_splitting` 활성 시 **트랜잭션 밖�
 
 `embedding_status`는 **검색 필터가 아니라 UI 상태 표시용**으로만 쓴다.
 
-### 조건부 확장: 키워드 + 벡터 RRF (ADR-016)
+### 키워드 + 벡터 RRF는 검토 후 미채택 (ADR-016)
 
-> **이 절은 선택 사항이다.** core 요건("정형 필터 + 벡터를 단일 SQL로 결합")은 위 쿼리로 충족된다. 아래는 core가 완성된 뒤 일정에 여유가 있을 때만 착수하며, 착수하지 않아도 나머지 설계는 그대로 성립한다.
+**검색 경로에 키워드 랭킹을 두지 않는다. 검색 코드에 RRF는 없다.** 원래는 "core 완성 후 여유가 있으면 착수하는 조건부 확장"이었고, m9에서 실측한 뒤 접었다. 여기에 계획 SQL을 남겨 두면 다음 사람이 그것을 근거로 되살리므로 **의도적으로 지웠다.** 측정 기록은 `OPENSQL_RESEARCH.md` §14 Step 3에 있다.
 
-착수 시 스키마와 인덱스를 하나씩 추가한다. `content_tsv`는 **`GENERATED ALWAYS AS ... STORED`이므로 애플리케이션 코드 없이 DB가 유지한다** — 청크가 쓰이는 순간 키워드 색인이 함께 생긴다.
+두 단계로 배제됐다.
 
-```sql
--- migrations/005_fts.sql
-ALTER TABLE document_chunks
-  ADD COLUMN content_tsv tsvector
-  GENERATED ALWAYS AS (to_tsvector('simple', content)) STORED;
+**1단계 — `tsvector` 경로 (#29).** 번들 확장에 한국어 형태소 분석기가 없다. `simple` 파서는 조사를 분리하지 못해 `"OpenSQL의"`가 `opensql의`로 색인되고 `opensql`로 검색되지 않는다. 효과가 조사 없이 등장하는 토큰에만 한정된다.
 
-CREATE INDEX idx_chunks_tsv ON document_chunks USING gin (content_tsv);
-```
+**2단계 — `pg_trgm` 대안 (m9 step 3).** `tsvector` 대신 trigram으로 키워드 경로를 세워 실측했다. GIN 인덱스(1,384 kB)는 정상적으로 탔다 — **느려서 접은 것이 아니다.**
 
-검색 쿼리는 위 구조를 유지한 채 CTE 두 개를 추가하고, `DISTINCT ON`을 **RRF 융합 이후**로 옮긴다 (ADR-011 보강 2).
+> **trigram은 포함 여부를 판정하는 이진 필터이지 랭킹 함수가 아니다.** `word_similarity`는 질의어가 content 안에 온전히 있으면 무조건 1.000을 준다. 실측에서 `OpenSQL` 후보 125개 중 **109개가 동점**이었고, 순위는 보조 정렬(`c.id`)이 정했다 — 사실상 무작위다. RRF는 순위를 입력으로 받는 알고리즘이라, 한쪽 입력이 무작위면 융합은 정보를 더하는 게 아니라 **잡음을 섞는 일**이 된다.
 
-```sql
-BEGIN;
-SET LOCAL hnsw.ef_search = 200;
-SET LOCAL random_page_cost = 1.1;    -- 검색 쿼리와 동일한 이유 (ADR-011 보강 5)
-
-WITH vec AS (          -- 위 candidates 절과 동일한 필터·JOIN 구조
-  SELECT c.id, c.document_id, c.chunk_index, c.content,
-         row_number() OVER (ORDER BY c.embedding <=> %(qvec)s) AS rnk
-  FROM document_chunks c JOIN documents d ON d.id = c.document_id
-  WHERE (%(tags)s::text[] IS NULL OR d.tags && %(tags)s)
-    AND (%(ctype)s::text IS NULL OR d.content_type = %(ctype)s)
-    AND (d.visibility = 'public' OR d.owner_id = %(user)s)
-  ORDER BY c.embedding <=> %(qvec)s LIMIT %(k)s * 5
-),
-kw AS (                -- GIN 인덱스 경로. 필터는 vec과 완전히 동일해야 한다
-  SELECT c.id, c.document_id, c.chunk_index, c.content,
-         row_number() OVER (ORDER BY ts_rank(c.content_tsv, q) DESC) AS rnk
-  FROM document_chunks c JOIN documents d ON d.id = c.document_id,
-       websearch_to_tsquery('simple', %(query)s) q
-  WHERE c.content_tsv @@ q
-    AND (%(tags)s::text[] IS NULL OR d.tags && %(tags)s)
-    AND (%(ctype)s::text IS NULL OR d.content_type = %(ctype)s)
-    AND (d.visibility = 'public' OR d.owner_id = %(user)s)
-  ORDER BY ts_rank(c.content_tsv, q) DESC LIMIT %(k)s * 5
-),
-fused AS (             -- RRF: 1/(60 + rank)
-  SELECT COALESCE(v.id, w.id) AS id,
-         COALESCE(v.document_id, w.document_id) AS document_id,
-         COALESCE(v.chunk_index, w.chunk_index) AS chunk_index,
-         COALESCE(v.content, w.content) AS content,
-         COALESCE(1.0/(60 + v.rnk), 0) + COALESCE(1.0/(60 + w.rnk), 0) AS score
-  FROM vec v FULL OUTER JOIN kw w ON v.id = w.id
-),
-best_per_doc AS (      -- 문서당 1건 — RRF 이후에 적용한다
-  SELECT DISTINCT ON (document_id) * FROM fused
-  ORDER BY document_id, score DESC
-)
-SELECT d.id, d.title, d.tags, d.content_type, b.chunk_index, b.content, b.score
-FROM best_per_doc b JOIN documents d ON d.id = b.document_id
-ORDER BY b.score DESC LIMIT %(k)s;
-
-COMMIT;
-```
-
-> ⚠️ **한국어에서 기대 효과가 제한적이다.** 번들 확장에 한국어 형태소 분석기가 없어 `simple` 파서를 쓰는데, 이는 조사를 분리하지 못한다 — `"OpenSQL의"`는 `opensql의`로 색인되어 `opensql`로 검색되지 않는다. 효과는 **조사 없이 등장하는 토큰**(독립 표기된 제품명·영문 약어·숫자·에러 코드)에 한정되며, 실제 비중은 실측 전까지 알 수 없다. ADR-016을 조건부로 둔 이유다.
+빈도·문서 길이 정규화(BM25 계열)가 있어야 순위가 생기는데 trigram으로는 만들 수 없다. **한국어에서 키워드 랭킹을 세우려면 형태소 분석기가 먼저이며, 그것이 이 결정의 진짜 제약이다.** `pg_trgm` 확장 자체는 관계 방향 실측의 재현 근거로 005 마이그레이션에 남지만 검색 경로에서는 쓰지 않는다.
 
 ## 관련 문서·태그 추천
 
-문서 상세에서 두 가지를 제공한다. 둘 다 대상 문서의 **청크 평균 벡터를 질의 시점에 계산**하며, 문서 대표 벡터를 컬럼으로 저장하지 않는다 (ADR-018).
+문서 상세에서 두 가지를 제공한다. 둘 다 **저장된 관계(`document_edges`)를 읽으며, 조회 시점에 벡터를 계산하지 않는다** (ADR-018 개정 · ADR-029 결정 5).
+
+> **2026-08-11에 방식이 바뀌었다.** 원래는 대상 문서의 `avg(embedding)`을 질의 시점에 계산해 이웃을 찾았다. 그 방식을 고른 근거는 *"조회 시점 계산이라 항상 현재 청크를 따른다"*였는데, 관계 edge를 **청크 교체와 같은 트랜잭션에서** 만드는 트리거를 채택하면서 최신성 차이가 사라졌다. 문서 대표 벡터를 컬럼으로 저장하지 않는다는 원래 판단은 그대로다 — edge는 벡터가 아니라 관계다.
+>
+> 따라서 이 절의 두 쿼리에는 **벡터 연산이 없고, `SET LOCAL` 두 줄도 필요 없다.** 벡터 정렬은 청크가 바뀔 때 트리거가 한 번 수행하며 그 구조는 「자동 임베딩 파이프라인」의 관계 생성 트리거에 있다.
 
 ### 세 가지 공통 규칙
 
@@ -627,29 +664,34 @@ COMMIT;
 
 빠뜨리면 관련 문서가 private 문서를 노출하고, 태그 추천이 private 문서의 태그를 흘린다. 대상 문서 자체의 접근 권한은 API 레이어의 문서 조회에서 이미 걸린다.
 
-**2. `DISTINCT ON`은 후보 확보 이후에 (ADR-011 보강 1)**
+**2. `kind`를 섞어 `score`로 정렬하지 않는다**
 
-```
-1) 벡터 정렬 + LIMIT 으로 후보 확보   ← 여기서만 인덱스를 탄다
-2) DISTINCT ON (document_id) 로 문서당 1건
-3) 거리순 재정렬 + 최종 LIMIT
+```sql
+ORDER BY e.kind, e.score DESC, d.id     -- kind로 묶은 뒤 그 안에서 점수순
 ```
 
-2)와 3)을 합쳐 `DISTINCT ON ... ORDER BY document_id, dist LIMIT k`로 쓰면 **유사도가 아니라 `document_id`(UUID) 순으로 잘린다.**
+`score`의 **척도가 `kind`마다 다르기** 때문이다 — `overlaps`는 매칭 비율, `related`·`points_to`는 `1.0 - 최소거리`다 (`006_edges_tables.sql`). 섞어서 정렬하면 서로 다른 단위의 숫자를 한 줄에 세우게 된다. 화면도 `kind`별로 묶어 보여준다.
 
-**3. 청크가 없는 문서는 쿼리를 실행하지 않는다**
+> 벡터 정렬 후보를 `DISTINCT ON`으로 줄이는 순서 규칙(ADR-011 보강 1)은 이 절에 더 이상 해당하지 않는다 — 여기에는 벡터 정렬이 없다. 그 규칙이 살아 있는 곳은 **검색 쿼리**이며 「검색 데이터 흐름」 절에 있다.
 
-`avg(embedding)`은 청크가 0행이면 **NULL을 반환**한다. 그러면 `embedding <=> NULL`이 NULL이 되어 정렬이 무의미해지고, **에러 없이 무작위 문서 목록이 반환된다.** 애플리케이션이 먼저 막는다.
+**3. 청크가 없는 문서는 관계를 조회하지 않는다**
+
+관계 edge는 청크가 만들어질 때 함께 생긴다. 청크가 0행이면 edge도 없으므로, 빈 결과를 관계 없음으로 보고하는 대신 **아직 색인 전**임을 구분해 알린다.
+
+> ⚠️ 이 분기의 **원래 이유는 달랐다.** `avg(embedding)`이 청크 0행에서 NULL을 반환해 `embedding <=> NULL`이 정렬을 무의미하게 만들고 **에러 없이 무작위 문서 목록을 반환**하는 것을 막는 방어였다. 지금 이 절에는 `avg`가 없지만, **규칙은 재도입 대비로 `CLAUDE.md`에 남아 있다.** 벡터 정렬을 이 경로에 다시 넣는다면 그 함정이 함께 돌아온다.
 
 ```
 GET /api/documents/{id}/related
 GET /api/documents/{id}/tag-suggestions
 
-  /related, 청크 0건 → 200 { "items": [], "identical": [...], "based_on_version": null, "reason": "not_indexed" }
-  /related, 청크 있음 → 200 { "items": [...], "identical": [...], "based_on_version": 2, "reason": null }
+  /related, 청크 0건        → 200 { "items": [], "identical": [...], "based_on_version": null, "reason": "not_indexed" }
+  /related, 청크 O·edge 0건 → 200 { "items": [], "identical": [...], "based_on_version": 2,    "reason": "no_edges" }
+  /related, 청크 O·edge O   → 200 { "items": [...], "identical": [...], "based_on_version": 2, "reason": null }
   /tag-suggestions, 청크 0건 → 200 { "items": [], "based_on_version": null, "reason": "not_indexed" }
   /tag-suggestions, 청크 있음 → 200 { "items": [...], "based_on_version": 2, "reason": null }
 ```
+
+- **`no_edges`는 `not_indexed`와 다르다.** 색인은 끝났는데 관련성이 옅어 저장된 관계가 하나도 없는 상태다. edge 방식은 이 경우가 실제로 생기므로 *"관련 문서 없음"*을 정직하게 표시한다 (ADR-029 결정 5). 질의 시점 벡터 계산에서는 늘 최근접 k개가 나와 이 구분이 없었다
 
 - **404·400이 아니라 200이다.** 문서는 존재하고 요청도 유효하다. "아직 색인 전"은 오류가 아니라 상태다
 - 분기 기준은 `embedding_status`가 **아니라 청크 존재 여부**다. 재임베딩 중(`processing`)에도 이전 청크가 남아 있으므로 정상 응답해야 하며, 이는 검색이 재임베딩 중 이전 벡터로 동작하는 정책과 일치한다
@@ -660,60 +702,49 @@ GET /api/documents/{id}/tag-suggestions
 ### 관련 문서
 
 ```sql
-BEGIN;  -- ★ SET LOCAL은 트랜잭션 밖에서 경고만 내고 무효다. plain BEGIN (ADR-010)
-SET LOCAL hnsw.ef_search = 200;      -- k*10 보다 커야 한다 (ADR-011 보강 4)
-SET LOCAL random_page_cost = 1.1;    -- 없으면 플래너가 HNSW를 버린다 (ADR-011 보강 5)
+BEGIN;  -- plain BEGIN (ADR-010). 벡터 연산이 없어 SET LOCAL 두 줄은 걸지 않는다
 
-WITH me AS (
-  SELECT avg(embedding) AS v FROM document_chunks WHERE document_id = %(id)s
-),
-cand AS (                      -- 1) 권한 필터를 건 상태로 벡터 인덱스 후보 확보
-  SELECT c.document_id, c.embedding <=> (SELECT v FROM me) AS dist
-  FROM document_chunks c
-  JOIN documents d ON d.id = c.document_id
-  WHERE c.document_id <> %(id)s
-    AND (d.visibility = 'public' OR d.owner_id = %(user)s)
-  ORDER BY c.embedding <=> (SELECT v FROM me)
-  LIMIT %(k)s * 10
-),
-best AS (                      -- 2) 문서당 최소 거리 1건
-  SELECT DISTINCT ON (document_id) document_id, dist
-  FROM cand
-  ORDER BY document_id, dist
-)
-SELECT d.id, d.title, d.tags, 1 - b.dist AS score   -- 3) 거리순 재정렬 + LIMIT
-FROM best b JOIN documents d ON d.id = b.document_id
-ORDER BY b.dist LIMIT %(k)s;
+-- 1) 청크 상태 — not_indexed 분기와 based_on_version을 함께 얻는다
+SELECT count(*), min(version) FROM document_chunks WHERE document_id = %(id)s;
+
+-- 2) 동일 텍스트 문서 (벡터가 아니라 content_hash. 청크가 없어도 반환한다)
+SELECT d.id, d.title
+FROM documents me
+JOIN documents d ON d.content_hash = me.content_hash AND d.id <> me.id
+WHERE me.id = %(id)s
+  AND (d.visibility = 'public' OR d.owner_id = %(user)s)
+ORDER BY d.created_at, d.id;
+
+-- 3) 저장된 관계 — 벡터 정렬 없이 edge를 읽기만 한다
+SELECT d.id, d.title, d.tags, e.kind, e.score
+FROM document_edges e
+JOIN documents d ON d.id = e.dst_document_id
+WHERE e.src_document_id = %(id)s
+  AND (d.visibility = 'public' OR d.owner_id = %(user)s)   -- ★ 열람 범위는 조회 시점에
+ORDER BY e.kind, e.score DESC, d.id
+LIMIT %(k)s;
 
 COMMIT;
 ```
 
-> **왜 필터가 `cand` 안에 있나 — 한 번 밖으로 뺐다가 되돌렸다 (2026-08-05).**
->
-> 1차 실측은 "`cand` 안에 JOIN이 있으면 `enable_seqscan=off`로도 HNSW를 못 쓴다(255ms vs 106ms)"로
-> 읽고 필터를 밖으로 뺐다. **재측정에서 재현되지 않았다** — 위 형태 그대로 HNSW를 정상 사용한다
-> (강제 하 32.7ms, 무강제 `rpc=1.1`에서 33.8ms). 플래너는 벡터 정렬을 인덱스로 처리하고
-> `documents`를 그 뒤에 nested loop로 붙인다 (`OPENSQL_RESEARCH.md` §12 17번, ADR-018 재개정).
->
-> **필터를 밖으로 빼면 대가만 남는다.** 비공개 문서의 청크가 후보 자리를 차지하고 버려져,
-> 후보 100개가 퍼지는 문서 수가 **54.5개 → 40.5개로 줄었다**(비공개 20%, 문서 20건 표본).
-> `k=10`에는 둘 다 여유가 있으나 얻는 것이 없는 손실이다.
->
-> **진짜 변수는 `random_page_cost`였다.** 기본값 4에서는 어떤 형태도 HNSW를 쓰지 않는다
-> (624~785ms). 1.1로 낮추면 쿼리를 그대로 두고 33~36ms가 된다 (ADR-011 보강 5).
+> **권한은 저장이 아니라 조회에서 건다.** 워커에는 사용자 컨텍스트가 없으므로 edge 자체는 권한과 무관하게 만들어진다. 열람 범위는 **읽을 때** 적용하며, 비공개 문서로 향하는 edge는 그 사용자에게 없는 것처럼 보인다 (ADR-027).
 
-**`score`가 무엇인지 정확히** — 문서 간 유사도가 아니다.
+**`score`가 무엇인지 정확히** — `kind`마다 척도가 다르다. 하나의 유사도 축이 아니다.
 
-```
-score = 1 − distance( 대상 문서의 청크 평균 벡터 ,  후보 문서에서 가장 가까운 단일 청크 )
-                     └── 문서 전체를 뭉친 값 ──┘   └──── 최댓값 하나만 ────┘
-```
+| `kind` | `score`의 의미 | 계산 |
+|---|---|---|
+| `overlaps` | 자기 대목 중 상대 문서에서 최근접 이웃을 찾은 **비율** | `overlap_ratio` |
+| `related` · `points_to` | 가장 가까운 청크 쌍의 **유사도** | `1.0 - 최소거리` |
 
-대상 쪽은 **평균**, 후보 쪽은 **최댓값**이라 **비대칭**이다. 의미는 *"이 문서 전반의 주제에 가장 잘 맞는 구절을 가진 문서"*이며 A→B와 B→A 점수가 다를 수 있다. 필드명을 `sim`이 아니라 `score`로 둔 이유다.
+`008_edges_triggers.sql:119`의 `CASE WHEN is_overlaps THEN overlap_ratio ELSE 1.0 - min_dist END`가 그 자리다. **비율과 거리는 같은 줄에 세울 수 없으므로 `kind`를 섞어 정렬하지 않는다**(공통 규칙 2).
+
+> **`overlaps`를 "같은 내용"으로 읽으면 안 된다.** 이웃 판정이 순위 기반이라 절대 거리 임계가 없고, 주제가 가까운 문서끼리는 모든 대목이 서로 최근접이 되어 비율이 1.0에 붙는다 — 실 BGE-M3 실측에서 `PRD`↔`UI 디자인 가이드`가 1.00이었다 (`OPENSQL_RESEARCH.md` §14). 화면 어휘를 「여러 대목에서 만난다」로 두고 대목 수만 달리 말하는 이유다 (`UI_GUIDE.md`).
 
 ### 유사 후보 표시 — 중복 "탐지"가 아니다
 
-위 `score`는 **중복 판정에 쓰지 않는다.** 비대칭이라 양방향으로 실패한다 — 완전히 같은 문서도 주제가 여럿이면 점수가 낮게 나올 수 있고(거짓 음성), 긴 문서가 짧은 문서를 포함하면 높게 나온다(포함이지 중복이 아님, 거짓 양성).
+위 `score`는 **중복 판정에 쓰지 않는다.** 완전히 같은 문서도 주제가 여럿이면 점수가 낮게 나올 수 있고(거짓 음성), 긴 문서가 짧은 문서를 포함하면 높게 나온다(포함이지 중복이 아님, 거짓 양성).
+
+**저장된 `score`는 양방향이 같지만, 그것은 근사다.** 트리거가 `both_directions`로 같은 값을 A→B와 B→A에 함께 넣는다(`008_edges_triggers.sql:122`). kNN 자체는 대칭이 아닌데, 정확한 역방향을 구하려면 기존 문서 전부를 다시 계산해야 해 비용이 문서 수에 비례한다. 새 문서 기준 한 번의 조회를 양방향에 복사하는 쪽을 택했다 — 중복 판정처럼 정밀도가 필요한 곳에 쓸 수 없는 또 하나의 이유다.
 
 | 신호 | 판정 | 방법 |
 |---|---|---|
@@ -727,46 +758,30 @@ score = 1 − distance( 대상 문서의 청크 평균 벡터 ,  후보 문서�
 태그를 임베딩하지 않는다. 유사 문서를 찾은 뒤 **그 문서들의 태그를 빈도순**으로 제시한다 (ADR-019).
 
 ```sql
-BEGIN;  -- ★ 관련 문서와 같은 이유 — SET LOCAL은 트랜잭션 안에서만 유효하다
-SET LOCAL hnsw.ef_search = 200;      -- 아래 LIMIT 100 보다 커야 한다 (ADR-011 보강 4)
-SET LOCAL random_page_cost = 1.1;    -- 관련 문서와 같은 이유 (ADR-011 보강 5)
+BEGIN;  -- plain BEGIN (ADR-010). 관련 문서와 같은 이유로 SET LOCAL이 없다
 
-WITH me AS (
-  SELECT avg(embedding) AS v FROM document_chunks WHERE document_id = %(id)s
-),
-cand AS (
-  SELECT c.document_id, c.embedding <=> (SELECT v FROM me) AS dist
-  FROM document_chunks c       -- 관련 문서와 같은 구조 — 필터를 여기 둔다
-  JOIN documents d ON d.id = c.document_id
-  WHERE c.document_id <> %(id)s
+WITH neighbors AS (            -- 저장된 관계에서 이웃 10건 (NEIGHBOR_LIMIT)
+  SELECT e.dst_document_id AS document_id
+  FROM document_edges e
+  JOIN documents d ON d.id = e.dst_document_id
+  WHERE e.src_document_id = %(id)s
     AND (d.visibility = 'public' OR d.owner_id = %(user)s)
-  ORDER BY c.embedding <=> (SELECT v FROM me)
-  LIMIT 100
-),
-best AS (
-  SELECT DISTINCT ON (document_id) document_id, dist
-  FROM cand
-  ORDER BY document_id, dist
-),
-neighbors AS (                 -- ★ 유사도 순으로 자른다 (document_id 순이 아니다)
-  SELECT document_id FROM best ORDER BY dist LIMIT 10
+  ORDER BY e.kind, e.score DESC, d.id      -- 관련 문서와 같은 정렬 (공통 규칙 2)
+  LIMIT 10
 )
 SELECT t.tag, count(*) AS freq
 FROM neighbors n
 JOIN documents d ON d.id = n.document_id
 CROSS JOIN LATERAL unnest(d.tags) AS t(tag)
 WHERE NOT (t.tag = ANY(%(current_tags)s::text[]))   -- 이미 달린 태그 제외
-GROUP BY t.tag ORDER BY freq DESC, t.tag LIMIT 5;
+GROUP BY t.tag ORDER BY freq DESC, t.tag LIMIT %(limit)s;
 
 COMMIT;
 ```
 
-`documents.tags`(정형 배열)와 벡터 이웃이 한 쿼리에서 결합된다 — 하이브리드 활용 사례가 하나 더 늘어난다. 문서가 적을 때는 이웃이 없어 추천도 비는데, 이는 콜드스타트로 수용한다.
+`documents.tags`(정형 배열)와 저장된 관계가 한 쿼리에서 결합된다 — 하이브리드 활용 사례가 하나 더 늘어난다. 문서가 적을 때는 이웃이 없어 추천도 비는데, 이는 콜드스타트로 수용한다.
 
-> **`avg`는 인덱스를 탄다 — 실측 완료 (2026-08-05).** 플래너가 `(SELECT v FROM me)`를 `InitPlan`으로
-> 접어 한 번만 평가하고 HNSW 프로브로 쓴다. 대비하던 "왕복 2회" 대안은 필요 없다.
-> **`cand` 안의 JOIN도 인덱스를 막지 않는다** — 1차 실측의 그 결론은 재측정에서 재현되지 않았다.
-> `docs/OPENSQL_RESEARCH.md` §12 12·17번, ADR-018 재개정.
+**이웃 수(10)와 추천 개수(`limit`, 기본 5)는 다르다.** 이웃 10건에서 태그를 모아 빈도순으로 정렬한 뒤 `limit`개를 자른다. 이웃을 추천 개수로 자르면 빈도를 셀 표본이 사라진다.
 
 ## 임베딩 프로바이더
 

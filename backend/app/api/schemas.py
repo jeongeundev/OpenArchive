@@ -145,6 +145,20 @@ class TagSuggestionsResponse(BaseModel):
     reason: str | None
 
 
+class ResolvedLinkItem(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    title: str
+    document_id: UUID | None
+
+
+class BacklinkItem(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    document_id: UUID
+    title: str
+
+
 class DiagnosticDocumentItem(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -157,6 +171,20 @@ class DiagnosticDocumentList(BaseModel):
 
     count: int
     items: list[DiagnosticDocumentItem]
+
+
+class BrokenLinkItem(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    source: DiagnosticDocumentItem
+    target_title: str
+
+
+class BrokenLinkList(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    count: int
+    items: list[BrokenLinkItem]
 
 
 class DuplicatePairItem(BaseModel):
@@ -187,6 +215,7 @@ class DiagnosticsResponse(BaseModel):
     orphans: DiagnosticDocumentList
     duplicates: DuplicateDiagnostics
     uncategorized: DiagnosticDocumentList
+    broken_links: BrokenLinkList
 
 
 class ClusterDocumentItem(BaseModel):

@@ -17,6 +17,13 @@ const diagnostics = {
     overlaps: { count: 0, items: [] },
   },
   uncategorized: { count: 0, items: [] },
+  broken_links: {
+    count: 1,
+    items: [{
+      source: { document_id: "source-1", title: "링크 출발" },
+      target_title: "없는 문서",
+    }],
+  },
 };
 
 describe("문서 진단 화면", () => {
@@ -32,6 +39,7 @@ describe("문서 진단 화면", () => {
     expect(screen.getByText(/태그를 달거나 다른 문서에서 참조해 보세요/)).toBeInTheDocument();
     expect(screen.getByText("동일 A")).toBeInTheDocument();
     expect(screen.getByText("동일 B")).toBeInTheDocument();
+    expect(screen.getByText("없는 문서")).toBeInTheDocument();
     expect(screen.getAllByText("정리할 것이 없습니다")).toHaveLength(2);
     expect(screen.queryByText(/오류/)).not.toBeInTheDocument();
     expect(screen.queryByText(/권한 없는/)).not.toBeInTheDocument();

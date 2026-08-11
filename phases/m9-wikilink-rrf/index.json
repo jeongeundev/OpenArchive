@@ -8,7 +8,10 @@
       "type": "feat",
       "scope": "db",
       "desc": "위키링크 저장 테이블과 본문 파싱 트리거",
-      "status": "pending"
+      "status": "completed",
+      "summary": "문서 제목 기반 위키링크 테이블·본문 변경 트리거와 resolve/broken seed 데이터를 추가하고 BGE-M3 벡터를 복구함",
+      "started_at": "2026-08-11T16:44:39+0900",
+      "completed_at": "2026-08-11T16:53:34+0900"
     },
     {
       "step": 1,
@@ -16,7 +19,10 @@
       "type": "feat",
       "scope": "api",
       "desc": "조회 시점 링크 해석과 백링크·깨진 링크 진단",
-      "status": "pending"
+      "status": "completed",
+      "summary": "조회 시점 위키링크 해석·백링크와 열람 범위별 깨진 링크 진단을 추가하고 refers 순회 비용을 검증함",
+      "started_at": "2026-08-11T16:53:34+0900",
+      "completed_at": "2026-08-11T17:06:54+0900"
     },
     {
       "step": 2,
@@ -24,7 +30,10 @@
       "type": "feat",
       "scope": "frontend",
       "desc": "본문의 위키링크 렌더와 백링크 표시",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-08-11T17:06:54+0900",
+      "completed_at": "2026-08-11T17:26:31+0900",
+      "summary": "WikilinkContent 컴포넌트로 본문의 [[제목]]을 렌더하고 백링크 영역·편집 문법 도움말을 추가함. 육안 AC는 사람이 확인해 닫았다 — 볼 수 없는 문서와 없는 문서의 링크가 태그·클래스·속성·계산 스타일까지 동일(identical: true), 백링크 seed 7건/bob 6건, 백링크 0건 문서는 영역 없음"
     },
     {
       "step": 3,
@@ -32,7 +41,10 @@
       "type": "feat",
       "scope": "search",
       "desc": "pg_trgm 키워드 랭킹과 벡터 랭킹의 RRF 융합",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-08-11T17:28:00+0900",
+      "completed_at": "2026-08-11T17:37:56+0900",
+      "summary": "미채택 — 실 BGE-M3 63문서·299청크의 10질의 비교에서 RRF가 OpenProxy·태그 추천 등 벡터 상위 결과를 낮췄고 K 조정으로도 개선되지 않아 측정 근거만 남김"
     },
     {
       "step": 4,
@@ -40,7 +52,10 @@
       "type": "feat",
       "scope": "frontend",
       "desc": "융합 검색 결과 표시와 근거 노출",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-08-11T17:37:56+0900",
+      "summary": "생략 — Step 3의 실 BGE-M3 비교에서 RRF가 벡터 검색 품질을 낮춰 미채택되었으므로 표시할 융합 검색 결과가 없음",
+      "completed_at": "2026-08-11T17:38:36+0900"
     },
     {
       "step": 5,
@@ -48,7 +63,12 @@
       "type": "docs",
       "scope": "adr",
       "desc": "위키링크 결정을 ADR-030으로 신설하고 ADR-016을 정정",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-08-11T17:38:36+0900",
+      "summary": "ADR-030에 조회 시점 위키링크 결정을 기록하고 RRF 미채택·관계 그래프·진단·주제 덩어리의 실제 구현 상태를 ADR·PRD·CLAUDE.md에 정합화",
+      "completed_at": "2026-08-11T17:42:16+0900"
     }
-  ]
+  ],
+  "created_at": "2026-08-11T16:44:39+0900",
+  "completed_at": "2026-08-11T17:42:16+0900"
 }

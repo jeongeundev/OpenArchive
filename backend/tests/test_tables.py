@@ -21,6 +21,7 @@ CORE_TABLES = {
     "document_chunks",
     "embedding_jobs",
     "document_edges",
+    "document_links",
     "users",
     "sessions",
 }
@@ -324,6 +325,25 @@ def test_document_content_over_500kb_is_rejected(conn: psycopg.Connection):
         insert_document(conn, content="가" * 500_001)
 
     assert "documents_content_length" in str(exc.value)
+
+
+def test_document_links_store_titles_without_resolving_target_ids(
+    conn: psycopg.Connection,
+):
+    rows = conn.execute(
+        """
+        SELECT column_name, data_type, is_nullable
+        FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'document_links'
+        ORDER BY ordinal_position
+        """
+    ).fetchall()
+
+    assert rows == [
+        ("src_document_id", "uuid", "NO"),
+        ("src_chunk_index", "integer", "YES"),
+        ("target_title", "text", "NO"),
+    ]
 
 
 def insert_edge(

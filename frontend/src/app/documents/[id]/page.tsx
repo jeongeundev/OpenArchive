@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { use, useState } from "react";
+import { use, useEffect, useState } from "react";
 
 import { DocumentActions } from "@/components/DocumentActions";
 import { DocumentMeta } from "@/components/DocumentMeta";
@@ -12,8 +12,9 @@ import { TextEditor } from "@/components/TextEditor";
 import { VersionHistory } from "@/components/VersionHistory";
 import { useDocument } from "@/lib/useDocument";
 import { useRelated } from "@/lib/useRelated";
-import { ApiError, updateTags } from "@/lib/api";
+import { ApiError, getDocumentBacklinks, getDocumentLinks, updateTags } from "@/lib/api";
 import { useAuth } from "@/components/AuthProvider";
+import type { Backlink, ResolvedLink } from "@/lib/types";
 
 export default function DocumentDetailPage({
   params,
@@ -27,8 +28,33 @@ export default function DocumentDetailPage({
   const [draftTags, setDraftTags] = useState<string[] | null>(null);
   const [savingTags, setSavingTags] = useState(false);
   const [tagError, setTagError] = useState<string | null>(null);
+  const [links, setLinks] = useState<ResolvedLink[] | null>(null);
+  const [backlinks, setBacklinks] = useState<Backlink[]>([]);
+  const [linksError, setLinksError] = useState<string | null>(null);
   const { auth } = useAuth();
   const anonymous = !auth.authenticated;
+
+  useEffect(() => {
+    let active = true;
+    void Promise.all([getDocumentLinks(id), getDocumentBacklinks(id)])
+      .then(([nextLinks, nextBacklinks]) => {
+        if (!active) return;
+        setLinks(nextLinks);
+        setBacklinks(nextBacklinks);
+        setLinksError(null);
+      })
+      .catch(() => {
+        if (!active) return;
+        // links를 []로 두면 본문의 모든 링크가 깨진 링크로 보인다. 해석 결과가 없다는
+        // 것을 그대로 남기고 실패를 말한다.
+        setLinks(null);
+        setBacklinks([]);
+        setLinksError("문서 링크를 불러오지 못했습니다.");
+      });
+    return () => {
+      active = false;
+    };
+  }, [id, document?.version]);
 
   if (loading) return <p className="text-sm text-neutral-500">불러오는 중…</p>;
   if (document === null) {
@@ -79,7 +105,34 @@ export default function DocumentDetailPage({
         document={document}
         onEditingChange={setEditing}
         onSaved={refresh}
+        links={links}
       />
+
+      {linksError !== null ? (
+        <p className="text-sm text-neutral-500" role="status">
+          {linksError}
+        </p>
+      ) : null}
+
+      {backlinks.length > 0 ? (
+        <section className="space-y-4">
+          <h2 className="text-sm font-medium text-neutral-400">
+            이 문서를 가리키는 문서
+          </h2>
+          <ul className="space-y-2">
+            {backlinks.map((backlink) => (
+              <li key={backlink.document_id}>
+                <Link
+                  className="text-sm text-[#0ea5e9] hover:underline"
+                  href={`/documents/${backlink.document_id}`}
+                >
+                  {backlink.title}
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
 
       <VersionHistory versions={document.versions} currentVersion={document.version} />
 
