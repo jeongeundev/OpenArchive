@@ -28,6 +28,7 @@ export function SiteHeader(): React.ReactElement {
           <nav aria-label="주요 메뉴" className="flex items-center gap-4 text-sm">
             <Link className="text-neutral-400 hover:text-[#0ea5e9]" href="/">문서</Link>
             <Link className="text-neutral-400 hover:text-[#0ea5e9]" href="/search">검색</Link>
+            <Link className="text-neutral-400 hover:text-[#0ea5e9]" href="/clusters">주제 덩어리</Link>
             <Link className="text-neutral-400 hover:text-[#0ea5e9]" href="/admin/diagnostics">문서 진단</Link>
             {auth.is_admin ? (
               <Link className="text-neutral-400 hover:text-[#0ea5e9]" href="/admin/users">

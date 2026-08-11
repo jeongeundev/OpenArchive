@@ -5,6 +5,7 @@ from fastapi.responses import JSONResponse
 
 from app.api.admin import router as admin_router
 from app.api.auth import router as auth_router
+from app.api.clusters import router as clusters_router
 from app.api.diagnostics import router as diagnostics_router
 from app.api.documents import router as documents_router
 from app.api.retry import RetryOnOperationalError
@@ -37,6 +38,7 @@ app.add_middleware(RetryOnOperationalError)
 app.include_router(admin_router)
 app.include_router(auth_router)
 app.include_router(documents_router)
+app.include_router(clusters_router)
 app.include_router(diagnostics_router)
 app.include_router(search_router)
 app.include_router(system_router)

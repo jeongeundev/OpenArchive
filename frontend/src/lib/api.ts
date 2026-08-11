@@ -1,6 +1,7 @@
 import type {
   ContentType,
   AuthStatus,
+  ClustersResponse,
   DocumentDetail,
   DocumentSummary,
   DiagnosticsResponse,
@@ -203,4 +204,8 @@ export function getSystemStatus(): Promise<SystemStatus> {
 
 export function getDiagnostics(): Promise<DiagnosticsResponse> {
   return request<DiagnosticsResponse>("/api/diagnostics");
+}
+
+export function getClusters(): Promise<ClustersResponse> {
+  return request<ClustersResponse>("/api/clusters");
 }

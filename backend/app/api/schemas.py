@@ -187,3 +187,33 @@ class DiagnosticsResponse(BaseModel):
     orphans: DiagnosticDocumentList
     duplicates: DuplicateDiagnostics
     uncategorized: DiagnosticDocumentList
+
+
+class ClusterDocumentItem(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    document_id: UUID
+    title: str
+
+
+class ClusterItem(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    name: str
+    size: int
+    documents: list[ClusterDocumentItem]
+
+
+class ClusterConnectionItem(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    source: str
+    target: str
+    count: int
+
+
+class ClustersResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    clusters: list[ClusterItem]
+    connections: list[ClusterConnectionItem]

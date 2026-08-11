@@ -140,6 +140,28 @@ export interface DiagnosticsResponse {
   uncategorized: DiagnosticDocumentList;
 }
 
+export interface ClusterDocument {
+  document_id: string;
+  title: string;
+}
+
+export interface Cluster {
+  name: string;
+  size: number;
+  documents: ClusterDocument[];
+}
+
+export interface ClusterConnection {
+  source: string;
+  target: string;
+  count: number;
+}
+
+export interface ClustersResponse {
+  clusters: Cluster[];
+  connections: ClusterConnection[];
+}
+
 export const SUPPORTED_CONTENT_TYPES = ["pdf", "docx", "txt", "md"] as const;
 
 // backend/app/services/search.py의 MAX_K와 같아야 하며, 초과하면 API가 422를 반환한다.

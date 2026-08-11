@@ -4,6 +4,7 @@ from conftest import insert_test_document, process_all_embedding_jobs
 
 from app.embeddings import FakeProvider
 from app.services.auth import hash_password
+from app.services.clusters import get_clusters
 from app.services.diagnostics import get_diagnostics
 from app.services.related import find_related, suggest_tags
 from app.services.search import search_documents
@@ -280,3 +281,59 @@ async def test_diagnostics_counts_follow_anonymous_other_and_owner_visibility(
     assert anonymous.uncategorized.count == 1
     assert other.uncategorized.count == 3
     assert owner.uncategorized.count == 2
+
+
+async def test_cluster_sizes_follow_anonymous_other_and_owner_visibility(
+    worker_conn, visibility_conn
+):
+    public_id = await insert_test_document(
+        worker_conn, title="공개 검색", content="공개 검색", tags=["공개"]
+    )
+    alice_id = await insert_test_document(
+        worker_conn,
+        title="앨리스 검색",
+        content="앨리스 검색",
+        owner_id="alice",
+        visibility="private",
+        tags=["앨리스"],
+    )
+    bob_id = await insert_test_document(
+        worker_conn,
+        title="밥 검색 1",
+        content="밥 검색 하나",
+        owner_id="bob",
+        visibility="private",
+        tags=["밥"],
+    )
+    await insert_test_document(
+        worker_conn,
+        title="밥 검색 2",
+        content="밥 검색 둘",
+        owner_id="bob",
+        visibility="private",
+        tags=["밥"],
+    )
+    await worker_conn.execute(
+        """
+        INSERT INTO document_edges
+            (src_document_id, dst_document_id, kind, score)
+        VALUES (%s, %s, 'related', 0.8),
+               (%s, %s, 'related', 0.8)
+        """,
+        (public_id, alice_id, public_id, bob_id),
+    )
+
+    anonymous = await get_clusters(visibility_conn, user_id=None)
+    other = await get_clusters(visibility_conn, user_id="bob")
+    owner = await get_clusters(visibility_conn, user_id="alice")
+
+    assert anonymous.clusters[0].size == 1
+    assert sorted(cluster.size for cluster in other.clusters) == [1, 2]
+    assert sorted(cluster.size for cluster in owner.clusters) == [1, 1]
+    assert anonymous.connections == []
+    assert [(item.source, item.target, item.count) for item in other.connections] == [
+        ("공개", "밥", 1)
+    ]
+    assert [(item.source, item.target, item.count) for item in owner.connections] == [
+        ("공개", "앨리스", 1)
+    ]
