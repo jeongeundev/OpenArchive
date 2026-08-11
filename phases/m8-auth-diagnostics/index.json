@@ -52,7 +52,9 @@
       "type": "feat",
       "scope": "frontend",
       "desc": "로그인 화면과 사용자 관리 화면",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-08-11T09:30:57+0900",
+      "summary": "HttpOnly 쿠키 기반 로그인·사용자 관리 화면과 AuthProvider를 추가하고 userHeaders(X-User-Id)를 제거 — 익명은 public만, 로그인 시 소유 private 노출, 관리자도 타인 private 불가를 브라우저로 실측 확인"
     },
     {
       "step": 5,
