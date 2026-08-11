@@ -28,6 +28,16 @@ export interface DocumentDetail extends DocumentSummary {
   chunk_version: number | null;
 }
 
+export interface ResolvedLink {
+  title: string;
+  document_id: string | null;
+}
+
+export interface Backlink {
+  document_id: string;
+  title: string;
+}
+
 export interface SearchResult {
   document_id: string;
   title: string;

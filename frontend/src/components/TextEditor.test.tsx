@@ -86,6 +86,21 @@ describe("TextEditor", () => {
     });
   });
 
+  it("편집 화면에 위키링크 문법 도움말을 표시한다", () => {
+    render(
+      <TextEditor
+        disabled={false}
+        document={document}
+        onEditingChange={vi.fn()}
+        onSaved={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "편집" }));
+
+    expect(screen.getByText(/\[\[문서 제목\]\]/)).toBeInTheDocument();
+  });
+
   it("편집 중 폴링으로 문서가 갱신돼도 편집을 시작한 버전을 보낸다", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(JSON.stringify({ ...document, version: 4 }), {

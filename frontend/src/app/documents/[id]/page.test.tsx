@@ -44,6 +44,7 @@ function jsonResponse(body: unknown, status = 200): Response {
 function stubFetch(tagsResponse: () => Response) {
   const fetchMock = vi.fn((url: string, init?: RequestInit) => {
     if (url === "/api/auth/me") return Promise.resolve(jsonResponse({ authenticated: true, username: "alice", is_admin: false }));
+    if (url.endsWith("/links") || url.endsWith("/backlinks")) return Promise.resolve(jsonResponse([]));
     if (url.endsWith("/related")) return Promise.resolve(jsonResponse(related));
     if (url.endsWith("/tag-suggestions")) return Promise.resolve(jsonResponse(suggestions));
     if (url.endsWith("/tags") && init?.method === "PUT") {
@@ -122,5 +123,49 @@ describe("문서 상세 페이지의 태그 편집", () => {
       await screen.findByText("태그를 수정할 권한이 없습니다."),
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "임시 태그 삭제" })).toBeInTheDocument();
+  });
+});
+
+describe("문서 상세 페이지의 위키링크", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("API가 해석한 본문 링크와 백링크를 표시한다", async () => {
+    const linkedDetail = { ...detail, content: "[[대상 문서]]를 참고합니다." };
+    vi.stubGlobal("fetch", vi.fn((url: string) => {
+      if (url === "/api/auth/me") return Promise.resolve(jsonResponse({ authenticated: true, username: "alice", is_admin: false }));
+      if (url.endsWith("/links")) return Promise.resolve(jsonResponse([{ title: "대상 문서", document_id: "target-1" }]));
+      if (url.endsWith("/backlinks")) return Promise.resolve(jsonResponse([{ document_id: "source-1", title: "출발 문서" }]));
+      if (url.endsWith("/related")) return Promise.resolve(jsonResponse(related));
+      if (url.endsWith("/tag-suggestions")) return Promise.resolve(jsonResponse(suggestions));
+      return Promise.resolve(jsonResponse(linkedDetail));
+    }));
+
+    await renderPage();
+
+    expect(await screen.findByRole("link", { name: "대상 문서" })).toHaveAttribute(
+      "href",
+      "/documents/target-1",
+    );
+    expect(screen.getByRole("heading", { name: "이 문서를 가리키는 문서" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "출발 문서" })).toHaveAttribute(
+      "href",
+      "/documents/source-1",
+    );
+  });
+
+  it("백링크가 없으면 영역 자체를 표시하지 않는다", async () => {
+    vi.stubGlobal("fetch", vi.fn((url: string) => {
+      if (url === "/api/auth/me") return Promise.resolve(jsonResponse({ authenticated: true, username: "alice", is_admin: false }));
+      if (url.endsWith("/links") || url.endsWith("/backlinks")) return Promise.resolve(jsonResponse([]));
+      if (url.endsWith("/related")) return Promise.resolve(jsonResponse(related));
+      if (url.endsWith("/tag-suggestions")) return Promise.resolve(jsonResponse(suggestions));
+      return Promise.resolve(jsonResponse(detail));
+    }));
+
+    await renderPage();
+
+    expect(screen.queryByRole("heading", { name: "이 문서를 가리키는 문서" })).not.toBeInTheDocument();
   });
 });

@@ -1,12 +1,14 @@
 import type {
   ContentType,
   AuthStatus,
+  Backlink,
   ClustersResponse,
   DocumentDetail,
   DocumentSummary,
   DiagnosticsResponse,
   EmbeddingStatus,
   RelatedResponse,
+  ResolvedLink,
   SearchResponse,
   SystemStatus,
   TagSuggestionsResponse,
@@ -110,6 +112,14 @@ export function listDocuments(params?: {
 
 export function getDocument(id: string): Promise<DocumentDetail> {
   return request<DocumentDetail>(`/api/documents/${encodeURIComponent(id)}`);
+}
+
+export function getDocumentLinks(id: string): Promise<ResolvedLink[]> {
+  return request<ResolvedLink[]>(`/api/documents/${encodeURIComponent(id)}/links`);
+}
+
+export function getDocumentBacklinks(id: string): Promise<Backlink[]> {
+  return request<Backlink[]>(`/api/documents/${encodeURIComponent(id)}/backlinks`);
 }
 
 export function getRelated(id: string): Promise<RelatedResponse> {
