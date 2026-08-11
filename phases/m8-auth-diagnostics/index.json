@@ -41,7 +41,10 @@
       "type": "feat",
       "scope": "api",
       "desc": "관리자 전용 계정 관리 API와 업로드 크기 제한",
-      "status": "pending"
+      "status": "completed",
+      "summary": "관리자 전용 계정 CRUD와 문서 소유 사용자 삭제 방지, 파일 10MB·추출 텍스트 500KB 상한을 추가",
+      "started_at": "2026-08-11T09:25:05+0900",
+      "completed_at": "2026-08-11T09:30:57+0900"
     },
     {
       "step": 4,
