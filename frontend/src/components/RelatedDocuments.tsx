@@ -15,7 +15,10 @@ export function RelatedDocuments({
       byKind.set(item.kind, items);
       return byKind;
     }, new Map<string, RelatedResponse["items"]>()),
-  ).map(([kind, items]) => [kind, items.toSorted((a, b) => b.score - a.score)] as const);
+    // reduce가 만든 새 배열이라 제자리 정렬해도 response.items의 순서는 그대로다.
+    // toSorted(ES2023)·Map.groupBy(ES2024)는 런타임 메서드라 target: ES2017 다운레벨로
+    // 채워지지 않고 Next.js도 폴리필하지 않는다. 오래된 Safari에서 페이지 전체가 죽는다.
+  ).map(([kind, items]) => [kind, items.sort((a, b) => b.score - a.score)] as const);
 
   return (
     <section className="space-y-4">
