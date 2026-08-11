@@ -24,6 +24,10 @@ describe("SiteHeader", () => {
       "href",
       "/login",
     );
+    expect(screen.getByRole("link", { name: "문서 진단" })).toHaveAttribute(
+      "href",
+      "/admin/diagnostics",
+    );
     expect(screen.queryByRole("link", { name: "사용자 관리" })).not.toBeInTheDocument();
   });
 

@@ -110,6 +110,36 @@ export interface UserSummary {
   created_at: string;
 }
 
+export interface DiagnosticDocument {
+  document_id: string;
+  title: string;
+}
+
+export interface DiagnosticDocumentList {
+  count: number;
+  items: DiagnosticDocument[];
+}
+
+export interface DuplicatePair {
+  first: DiagnosticDocument;
+  second: DiagnosticDocument;
+  score: number | null;
+}
+
+export interface DuplicateList {
+  count: number;
+  items: DuplicatePair[];
+}
+
+export interface DiagnosticsResponse {
+  orphans: DiagnosticDocumentList;
+  duplicates: {
+    identical: DuplicateList;
+    overlaps: DuplicateList;
+  };
+  uncategorized: DiagnosticDocumentList;
+}
+
 export const SUPPORTED_CONTENT_TYPES = ["pdf", "docx", "txt", "md"] as const;
 
 // backend/app/services/search.py의 MAX_K와 같아야 하며, 초과하면 API가 422를 반환한다.

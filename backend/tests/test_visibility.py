@@ -4,6 +4,7 @@ from conftest import insert_test_document, process_all_embedding_jobs
 
 from app.embeddings import FakeProvider
 from app.services.auth import hash_password
+from app.services.diagnostics import get_diagnostics
 from app.services.related import find_related, suggest_tags
 from app.services.search import search_documents
 
@@ -239,3 +240,43 @@ async def test_identical_documents_do_not_leave_private_placeholders(
     assert other_user.identical == []
     assert [item.document_id for item in owner.identical] == [alice_private_id]
     assert len(owner.identical) == 1
+
+
+async def test_diagnostics_counts_follow_anonymous_other_and_owner_visibility(
+    worker_conn, visibility_conn
+):
+    await insert_test_document(
+        worker_conn, title="공개 미분류", content="공개", tags=[]
+    )
+    await insert_test_document(
+        worker_conn,
+        title="앨리스 미분류",
+        content="앨리스",
+        owner_id="alice",
+        visibility="private",
+        tags=[],
+    )
+    await insert_test_document(
+        worker_conn,
+        title="밥 미분류 1",
+        content="밥 하나",
+        owner_id="bob",
+        visibility="private",
+        tags=[],
+    )
+    await insert_test_document(
+        worker_conn,
+        title="밥 미분류 2",
+        content="밥 둘",
+        owner_id="bob",
+        visibility="private",
+        tags=[],
+    )
+
+    anonymous = await get_diagnostics(visibility_conn, user_id=None)
+    other = await get_diagnostics(visibility_conn, user_id="bob")
+    owner = await get_diagnostics(visibility_conn, user_id="alice")
+
+    assert anonymous.uncategorized.count == 1
+    assert other.uncategorized.count == 3
+    assert owner.uncategorized.count == 2

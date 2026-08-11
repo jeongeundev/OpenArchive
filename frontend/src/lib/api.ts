@@ -3,6 +3,7 @@ import type {
   AuthStatus,
   DocumentDetail,
   DocumentSummary,
+  DiagnosticsResponse,
   EmbeddingStatus,
   RelatedResponse,
   SearchResponse,
@@ -198,4 +199,8 @@ export function search(input: {
 
 export function getSystemStatus(): Promise<SystemStatus> {
   return request<SystemStatus>("/api/system/status");
+}
+
+export function getDiagnostics(): Promise<DiagnosticsResponse> {
+  return request<DiagnosticsResponse>("/api/diagnostics");
 }

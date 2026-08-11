@@ -143,3 +143,47 @@ class TagSuggestionsResponse(BaseModel):
     items: list[TagSuggestionItem]
     based_on_version: int | None
     reason: str | None
+
+
+class DiagnosticDocumentItem(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    document_id: UUID
+    title: str
+
+
+class DiagnosticDocumentList(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    count: int
+    items: list[DiagnosticDocumentItem]
+
+
+class DuplicatePairItem(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    first: DiagnosticDocumentItem
+    second: DiagnosticDocumentItem
+    score: float | None
+
+
+class DuplicateList(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    count: int
+    items: list[DuplicatePairItem]
+
+
+class DuplicateDiagnostics(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    identical: DuplicateList
+    overlaps: DuplicateList
+
+
+class DiagnosticsResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    orphans: DiagnosticDocumentList
+    duplicates: DuplicateDiagnostics
+    uncategorized: DiagnosticDocumentList
