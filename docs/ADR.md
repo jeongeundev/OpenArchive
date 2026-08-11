@@ -1264,3 +1264,10 @@ public·private 문서가 있을 때 저장 시점에 private id를 고르면, �
 제목 resolve를 합친 순회는 **1.220 ms**로 0.268 ms 늘었다. 제목 결합은 작은 입력에서 Hash Join을
 썼고 전체가 2 ms 아래여서 제외할 근거가 없었다. 이 값은 현재 seed의 계획 검증이며, 문서 수가
 커지면 제목 인덱스 필요성을 다시 측정한다 (`OPENSQL_RESEARCH.md` §14).
+
+**동점 타이브레이커에서 `refers`를 `revision` 앞에 둔다**: `search.py`의 `CASE via_kind`가
+`overlaps`(0) · `related`(1) · `refers`(2) · `revision`(3) 순이며, `refers`가 들어오면서
+`revision`이 2에서 3으로 밀렸다. 거리가 같을 때만 작동하는 순서이고, 사람이 본문에 직접 쓴
+링크가 **같은 문서의 과거 판본**보다 새 정보를 줄 가능성이 크다는 판단이다. 화면 어휘도 같은
+이유로 갈린다 — `refers`만 자동 판정이 아니므로 「본문에서 가리킨다」로 단정한다
+(`UI_GUIDE.md` 관계 종류 어휘).
