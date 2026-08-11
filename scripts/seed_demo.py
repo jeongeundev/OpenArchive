@@ -28,6 +28,8 @@ PRIVATE_TITLES = {
     "ADR-023:",
     "ADR-027:",
 }
+ADR_REFERENCE = re.compile(r"(?<!\[\[)\bADR-\d{3}\b")
+BROKEN_LINK_TITLE = "ADR-999: 존재하지 않는 결정"
 
 
 @dataclass(frozen=True)
@@ -87,6 +89,48 @@ def _whole_file(path: Path, source_tag: str) -> SeedDocument:
     return SeedDocument(title, content, _topic_tags(title, source_tag))
 
 
+def _add_wikilinks(documents: list[SeedDocument]) -> list[SeedDocument]:
+    """ADR 번호 참조를 seed 문서의 전체 제목 위키링크로 바꾼다."""
+    titles_by_number = {
+        title.split(":", 1)[0]: title
+        for title in (document.title for document in documents)
+        if re.fullmatch(r"ADR-\d{3}:.*", title)
+    }
+
+    def replace_content(document: SeedDocument) -> SeedDocument:
+        lines = []
+        for line in document.content.splitlines():
+            if line.startswith("### ADR-"):
+                lines.append(line)
+                continue
+            lines.append(
+                ADR_REFERENCE.sub(
+                    lambda match: (
+                        f"[[{titles_by_number[match.group(0)]}]]"
+                        if match.group(0) in titles_by_number
+                        else match.group(0)
+                    ),
+                    line,
+                )
+            )
+        return SeedDocument(
+            document.title,
+            "\n".join(lines),
+            document.tags,
+            document.visibility,
+        )
+
+    linked = [replace_content(document) for document in documents]
+    first = linked[0]
+    linked[0] = SeedDocument(
+        first.title,
+        f"{first.content}\n\n시연용 깨진 링크: [[{BROKEN_LINK_TITLE}]]",
+        first.tags,
+        first.visibility,
+    )
+    return linked
+
+
 def load_seed_documents(root: Path = ROOT) -> list[SeedDocument]:
     """저장소 원본은 수정하지 않고 적재할 복사본 목록만 만든다."""
     docs = root / "docs"
@@ -108,7 +152,7 @@ def load_seed_documents(root: Path = ROOT) -> list[SeedDocument]:
     ):
         result.append(_whole_file(docs / filename, source_tag))
     result.append(_whole_file(root / "CLAUDE.md", "규칙"))
-    return result
+    return _add_wikilinks(result)
 
 
 async def seed_documents(conn: psycopg.AsyncConnection, documents: list[SeedDocument]) -> int:
