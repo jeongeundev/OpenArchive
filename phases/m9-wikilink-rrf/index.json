@@ -41,7 +41,10 @@
       "type": "feat",
       "scope": "search",
       "desc": "pg_trgm 키워드 랭킹과 벡터 랭킹의 RRF 융합",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-08-11T17:28:00+0900",
+      "completed_at": "2026-08-11T17:37:56+0900",
+      "summary": "미채택 — 실 BGE-M3 63문서·299청크의 10질의 비교에서 RRF가 OpenProxy·태그 추천 등 벡터 상위 결과를 낮췄고 K 조정으로도 개선되지 않아 측정 근거만 남김"
     },
     {
       "step": 4,
