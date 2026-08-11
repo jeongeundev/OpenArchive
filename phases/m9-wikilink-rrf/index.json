@@ -8,7 +8,10 @@
       "type": "feat",
       "scope": "db",
       "desc": "위키링크 저장 테이블과 본문 파싱 트리거",
-      "status": "pending"
+      "status": "completed",
+      "summary": "문서 제목 기반 위키링크 테이블·본문 변경 트리거와 resolve/broken seed 데이터를 추가하고 BGE-M3 벡터를 복구함",
+      "started_at": "2026-08-11T16:44:39+0900",
+      "completed_at": "2026-08-11T16:53:34+0900"
     },
     {
       "step": 1,
@@ -50,5 +53,6 @@
       "desc": "위키링크 결정을 ADR-030으로 신설하고 ADR-016을 정정",
       "status": "pending"
     }
-  ]
+  ],
+  "created_at": "2026-08-11T16:44:39+0900"
 }
