@@ -36,7 +36,7 @@ export default function LoginPage(): React.ReactElement {
       <form className="space-y-4 rounded-lg border border-neutral-800 bg-[#141414] p-6" onSubmit={(event) => void submit(event)}>
         <label className="block text-sm text-neutral-400">
           사용자명
-          <input className="mt-2 w-full rounded-lg border border-neutral-800 bg-neutral-900 px-4 py-3 text-neutral-300" autoComplete="username" onChange={(event) => setUsername(event.target.value)} value={username} />
+          <input className="mt-2 w-full rounded-lg border border-neutral-800 bg-neutral-900 px-4 py-3 text-neutral-300" autoComplete="username" onChange={(event) => setUsername(event.target.value)} type="text" value={username} />
         </label>
         <label className="block text-sm text-neutral-400">
           비밀번호

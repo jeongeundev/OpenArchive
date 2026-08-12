@@ -31,8 +31,11 @@ export function useDocument(id: string): {
       })
       .catch((reason: unknown) => {
         if (!mountedRef.current) return;
+        // 422는 경로가 UUID가 아닐 때 FastAPI가 내는 검증 실패다. 사용자에게는 없는
+        // 문서와 같은 사실이고, 다르게 보이면 「없는 문서」가 입력 형태에 따라 두 얼굴을
+        // 갖는다. 폴백 문구는 상태 코드를 노출하므로 여기서 걸러야 한다.
         setError(
-          reason instanceof ApiError && reason.status === 404
+          reason instanceof ApiError && (reason.status === 404 || reason.status === 422)
             ? "문서를 찾을 수 없습니다."
             : reason instanceof Error
               ? reason.message

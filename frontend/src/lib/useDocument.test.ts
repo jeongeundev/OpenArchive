@@ -101,4 +101,19 @@ describe("useDocument", () => {
 
     expect(result.current.error).toBe("문서를 찾을 수 없습니다.");
   });
+
+  // 경로가 UUID가 아니면 FastAPI의 경로 파라미터 검증이 422를 내고, 그 `detail`은
+  // 문자열이 아니라 validation error 배열이라 `api.ts`의 폴백(상태 코드가 박힌 문구)에
+  // 걸린다. 사용자에게 없는 UUID와 형식이 틀린 값은 같은 사실이므로 같은 문구여야 한다.
+  it("경로 형식이 틀린 값(422)도 없는 문서와 같은 문구로 표시한다", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(
+      { detail: [{ type: "uuid_parsing", loc: ["path", "document_id"], msg: "Input should be a valid UUID" }] },
+      422,
+    )));
+
+    const { result } = renderHook(() => useDocument("abc"));
+    await flushRequest();
+
+    expect(result.current.error).toBe("문서를 찾을 수 없습니다.");
+  });
 });

@@ -204,6 +204,53 @@ def test_wikilinks_are_stored_once_and_replaced_with_the_document_content(
     assert links_for(conn, doc_id) == [("새 대상", None)]
 
 
+def test_bracket_literals_that_are_not_titles_do_not_become_wikilinks(
+    conn: psycopg.Connection,
+):
+    """기술 문서의 JSON 중첩 배열과 여러 줄 대괄호는 링크가 아니다.
+
+    seed 적재에서 실제로 1건 나왔다 — `docs/ADR.md`의 OpenProxy 설정 예시 코드
+    블록 안 리터럴이 대괄호 사이에 대괄호를 담지 않아 제목으로 저장됐다. 그런 제목의
+    문서는 없으니 깨진 링크가 되고, 사람이 고칠 수 없는 항목이 `/diagnostics`의
+    「깨진 링크」 목록에 섞여 목록 전체의 신뢰를 깎는다.
+
+    제목에 큰따옴표를 쓰는 일이 없고 개행을 넘는 링크도 의도된 적이 없으므로, 둘을
+    제목에서 배제하는 것으로 가른다.
+    """
+    doc_id = insert_document(
+        conn,
+        '설정 예시는 [["192.168.64.4", 5432, "primary"]] 형태다.\n'
+        "여러 줄에 걸친 [[앞\n뒤]]도 링크가 아니다.\n"
+        "링크는 [[운영 가이드]] 하나뿐이다.",
+        "sha256:links-bracket-literals",
+    )
+
+    assert links_for(conn, doc_id) == [("운영 가이드", None)]
+
+
+def test_titles_containing_double_quotes_are_still_wikilinks(
+    conn: psycopg.Connection,
+):
+    """제목 안의 큰따옴표는 링크를 깨뜨리지 않는다 — 우리 저장소에 실재한다.
+
+    seed 실측에서 `ADR-015: 제품은 "AI를 위한 문서 저장소"이며, …`를 가리키는 링크가
+    3건 나왔고 셋 다 정상 해석된다(`docs/ADR.md:498`의 섹션 제목이다). 제목에서
+    큰따옴표를 통째로 배제하면 오탐 1건을 지우려다 이 3건을 깨진 링크로 만든다.
+
+    가르는 것은 큰따옴표의 존재가 아니라 위치다. JSON 문자열 리터럴은 큰따옴표로
+    시작하고, 문서 제목은 그렇지 않다.
+    """
+    title = (
+        'ADR-015: 제품은 "AI를 위한 문서 저장소"이며, '
+        "보장 범위는 버전 일관성과 최신 수렴이다"
+    )
+    doc_id = insert_document(
+        conn, f"[[{title}]]를 따른다.", "sha256:links-quoted-title"
+    )
+
+    assert links_for(conn, doc_id) == [(title, None)]
+
+
 def test_deleting_a_document_cascades_its_outgoing_wikilinks(
     conn: psycopg.Connection,
 ):
