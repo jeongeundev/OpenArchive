@@ -3,10 +3,11 @@ import { Fragment } from "react";
 
 import type { ResolvedLink } from "@/lib/types";
 
-// `011_links_triggers.sql`의 `regexp_matches(content, '\[\[([^\[\]]+)\]\]', 'g')`와
+// `012_links_triggers.sql`의 `regexp_matches(content, '\[\[([^\[\]\n]+)\]\]', 'g')`와
 // 같은 것을 링크로 본다. 한쪽만 달라지면 API가 해석해 준 정상 링크를 화면이 깨진 링크로
 // 그리거나 그 반대가 된다 — 볼 수 있는 문서가 없는 문서처럼 보인다 (ADR-027).
-const WIKILINK_PATTERN = /\[\[([^\[\]]+)\]\]/g;
+// 개행을 뺀 것은 링크가 줄을 넘도록 의도된 적이 없어서다 (#49).
+const WIKILINK_PATTERN = /\[\[([^\[\]\n]+)\]\]/g;
 
 export function WikilinkContent({
   content,
@@ -34,9 +35,13 @@ export function WikilinkContent({
   for (const match of content.matchAll(WIKILINK_PATTERN)) {
     // 트리거가 `btrim` 뒤에 저장하므로 API가 주는 title에는 양끝 공백이 없다.
     const title = match[1].trim();
-    // 트리거의 `WHERE btrim(match[1]) <> ''`에 대응한다. previousEnd를 그대로 두면
-    // 다음 조각에 이 구간이 함께 실려 본문이 원문대로 남는다.
-    if (title === "") continue;
+    // 트리거의 `WHERE btrim(match[1]) <> '' AND btrim(match[1]) NOT LIKE '"%'`에
+    // 대응한다. previousEnd를 그대로 두면 다음 조각에 이 구간이 함께 실려 본문이
+    // 원문대로 남는다.
+    //
+    // 큰따옴표는 시작 위치만 본다. 제목 안의 큰따옴표까지 막으면 `ADR-015: 제품은
+    // "AI를 위한 문서 저장소"이며, …` 같은 실재하는 제목이 깨진 링크가 된다 (#49).
+    if (title === "" || title.startsWith('"')) continue;
 
     const start = match.index;
     parts.push(content.slice(previousEnd, start));
