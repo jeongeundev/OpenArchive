@@ -85,6 +85,48 @@ describe("WikilinkContent", () => {
     ).toBeInTheDocument();
   });
 
+  // 트리거(`012_links_triggers.sql`)가 제목에서 `"`와 개행을 배제한다. 화면이 여전히
+  // 링크로 보면 트리거가 저장하지 않은 제목을 깨진 링크로 그리게 된다 — 양쪽 패턴이
+  // 어긋나면 생기는 바로 그 어긋남이다.
+  it("JSON 중첩 배열은 링크로 보지 않고 본문 그대로 남긴다", () => {
+    render(
+      <WikilinkContent content={'설정은 [["192.168.64.4", 5432, "primary"]] 형태'} links={[]} />,
+    );
+
+    expect(screen.queryAllByRole("link")).toHaveLength(0);
+    expect(
+      screen.getByText('설정은 [["192.168.64.4", 5432, "primary"]] 형태', {
+        normalizer: (text) => text,
+      }),
+    ).toBeInTheDocument();
+  });
+
+  // 실측에서 `ADR-015: 제품은 "AI를 위한 문서 저장소"이며, …`를 가리키는 링크가 3건
+  // 나왔고 셋 다 정상 해석된다. 큰따옴표를 통째로 배제하면 이 3건이 깨진 링크가 된다.
+  it("제목 안의 큰따옴표는 링크를 깨뜨리지 않는다", () => {
+    const title = 'ADR-015: 제품은 "AI를 위한 문서 저장소"이며, 보장 범위는 버전 일관성과 최신 수렴이다';
+    render(
+      <WikilinkContent
+        content={`[[${title}]]를 따른다.`}
+        links={[{ title, document_id: "adr-015" }]}
+      />,
+    );
+
+    expect(screen.getByRole("link", { name: title })).toHaveAttribute(
+      "href",
+      "/documents/adr-015",
+    );
+  });
+
+  it("여러 줄에 걸친 대괄호는 링크로 보지 않고 본문 그대로 남긴다", () => {
+    render(<WikilinkContent content={"앞 [[제목\n계속]] 뒤"} links={[]} />);
+
+    expect(screen.queryAllByRole("link")).toHaveLength(0);
+    expect(
+      screen.getByText("앞 [[제목\n계속]] 뒤", { normalizer: (text) => text }),
+    ).toBeInTheDocument();
+  });
+
   it("추출 텍스트의 HTML을 실행하지 않고 텍스트로 표시한다", () => {
     const { container } = render(
       <WikilinkContent content={'<script>alert("xss")</script> [[문서]]'} links={[]} />,
