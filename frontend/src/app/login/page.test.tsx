@@ -29,6 +29,21 @@ describe("로그인 화면", () => {
     expect(screen.getByRole("button", { name: "로그인" })).toBeInTheDocument();
   });
 
+  // 속성이 없어도 사람이 쓰는 데는 지장이 없다(HTML 기본값이 text). 다만 `type`으로
+  // 거는 선택자에 걸리지 않아 로그인을 거치는 브라우저 자동화가 이 칸에서 멈춘다.
+  it("입력 두 칸 모두 type을 명시한다", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response({
+      authenticated: false,
+      username: null,
+      is_admin: false,
+    })));
+
+    render(<AuthProvider><LoginPage /></AuthProvider>);
+
+    expect(await screen.findByRole("textbox", { name: "사용자명" })).toHaveAttribute("type", "text");
+    expect(screen.getByLabelText("비밀번호")).toHaveAttribute("type", "password");
+  });
+
   it("로그인 성공 후 문서 화면으로 이동한다", async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(response({ authenticated: false, username: null, is_admin: false }))
