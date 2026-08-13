@@ -70,6 +70,11 @@ async def _load_for_write(
     return row[2]
 
 
+def normalize_tags(tags: list[str] | None) -> list[str]:
+    """공백을 걷어내고 순서를 보존하며 중복을 제거한다. 대소문자는 구분한다."""
+    return list(dict.fromkeys(tag.strip() for tag in (tags or []) if tag.strip()))
+
+
 async def create_document(
     conn: psycopg.AsyncConnection,
     *,
@@ -106,7 +111,7 @@ async def create_document(
             hashlib.sha256(content.encode("utf-8")).hexdigest(),
             owner_id,
             visibility,
-            tags or [],
+            normalize_tags(tags),
         ),
     )
     return await cur.fetchone()
@@ -221,7 +226,7 @@ async def update_tags(
 ) -> dict:
     """태그만 교체한다. 추출 텍스트 버전과 임베딩 파이프라인은 건드리지 않는다."""
     await _load_for_write(conn, document_id, user_id)
-    normalized_tags = list(dict.fromkeys(tag.strip() for tag in tags if tag.strip()))
+    normalized_tags = normalize_tags(tags)
 
     cur = conn.cursor(row_factory=dict_row)
     await cur.execute(
