@@ -5,13 +5,27 @@ import { useRef, useState } from "react";
 import { ApiError, uploadDocument } from "@/lib/api";
 import { SUPPORTED_CONTENT_TYPES, type Visibility } from "@/lib/types";
 
+// 백엔드 경계(backend/app/api/documents.py의 MAX_UPLOAD_BYTES)와 같은 값·문구.
+// 선검사는 대형 파일의 전송 비용을 아끼기 위한 것이고, 경계의 최종 권위는 백엔드의 413이다.
+const MAX_UPLOAD_BYTES = 10_000_000;
+const UPLOAD_TOO_LARGE = "업로드 파일은 10MB를 넘을 수 없습니다.";
+
+type UploadItemStatus = "대기" | "업로드 중" | "완료" | "실패" | "건너뜀";
+
+type UploadItem = {
+  file?: File;
+  name: string;
+  status: UploadItemStatus;
+  detail?: string;
+};
+
 export function UploadDropzone({
   onUploaded,
 }: {
   onUploaded: () => void;
 }): React.ReactElement {
   const inputRef = useRef<HTMLInputElement>(null);
-  const [file, setFile] = useState<File | null>(null);
+  const [items, setItems] = useState<UploadItem[]>([]);
   const [title, setTitle] = useState("");
   const [tags, setTags] = useState("");
   const [visibility, setVisibility] = useState<Visibility>("public");
@@ -20,38 +34,69 @@ export function UploadDropzone({
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  function selectFile(nextFile: File | null): void {
-    setFile(nextFile);
+  const fileCount = items.filter((item) => item.file !== undefined).length;
+  const pendingCount = items.filter((item) => item.status === "대기").length;
+
+  function selectFiles(files: File[]): void {
+    setItems(files.map((file) => ({ file, name: file.name, status: "대기" as const })));
     setMessage(null);
     setError(null);
   }
 
+  function patchItem(index: number, patch: Partial<UploadItem>): void {
+    setItems((current) =>
+      current.map((item, at) => (at === index ? { ...item, ...patch } : item)),
+    );
+  }
+
   async function submit(event: React.FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
-    if (file === null || uploading) return;
+    if (pendingCount === 0 || uploading) return;
 
     setUploading(true);
     setMessage(null);
     setError(null);
-    try {
-      await uploadDocument({
-        file,
-        title: title.trim() === "" ? undefined : title.trim(),
-        tags: tags.split(",").map((tag) => tag.trim()).filter(Boolean),
-        visibility,
-      });
-      setFile(null);
+    const cleanTitle = title.trim();
+    const cleanTags = tags.split(",").map((tag) => tag.trim()).filter(Boolean);
+    let succeeded = 0;
+    let failed = 0;
+    for (const [index, item] of items.entries()) {
+      if (item.status !== "대기" || item.file === undefined) continue;
+      patchItem(index, { status: "업로드 중" });
+      if (item.file.size > MAX_UPLOAD_BYTES) {
+        patchItem(index, { status: "실패", detail: UPLOAD_TOO_LARGE });
+        failed += 1;
+        continue;
+      }
+      try {
+        await uploadDocument({
+          file: item.file,
+          // 배치에는 제목이 파일명이다 — 파일이 1개일 때만 입력한 제목을 보낸다.
+          title: fileCount === 1 && cleanTitle !== "" ? cleanTitle : undefined,
+          tags: cleanTags,
+          visibility,
+        });
+        patchItem(index, { status: "완료" });
+        succeeded += 1;
+      } catch (reason: unknown) {
+        patchItem(index, {
+          status: "실패",
+          detail: reason instanceof ApiError ? reason.detail : "업로드에 실패했습니다.",
+        });
+        failed += 1;
+      }
+    }
+    if (failed === 0) {
       setTitle("");
       setTags("");
       setVisibility("public");
-      if (inputRef.current !== null) inputRef.current.value = "";
       setMessage("업로드했습니다. 임베딩이 끝나면 상태가 완료로 바뀝니다.");
-      onUploaded();
-    } catch (reason: unknown) {
-      setError(reason instanceof ApiError ? reason.detail : "업로드에 실패했습니다.");
-    } finally {
-      setUploading(false);
+    } else {
+      setError(succeeded > 0 ? "일부 파일을 업로드하지 못했습니다." : "업로드에 실패했습니다.");
     }
+    if (inputRef.current !== null) inputRef.current.value = "";
+    if (succeeded > 0) onUploaded();
+    setUploading(false);
   }
 
   const disabled = uploading;
@@ -82,10 +127,14 @@ export function UploadDropzone({
         onDrop={(event) => {
           event.preventDefault();
           setDragging(false);
-          if (!disabled) selectFile(event.dataTransfer.files[0] ?? null);
+          if (!disabled) selectFiles(Array.from(event.dataTransfer.files));
         }}
       >
-        <span>{file === null ? "파일을 끌어놓거나 클릭해 선택하세요." : file.name}</span>
+        <span>
+          {fileCount === 0
+            ? "파일을 끌어놓거나 클릭해 선택하세요."
+            : `${fileCount}개 파일 선택됨`}
+        </span>
         <input
           ref={inputRef}
           accept={SUPPORTED_CONTENT_TYPES.map((type) => `.${type}`).join(",")}
@@ -93,7 +142,8 @@ export function UploadDropzone({
           className="sr-only"
           disabled={disabled}
           id="document-file"
-          onChange={(event) => selectFile(event.target.files?.[0] ?? null)}
+          multiple
+          onChange={(event) => selectFiles(Array.from(event.target.files ?? []))}
           type="file"
         />
         <span className="mt-2 block text-neutral-500">
@@ -101,16 +151,31 @@ export function UploadDropzone({
         </span>
       </label>
 
+      {items.length > 0 ? (
+        <ul aria-label="업로드 목록" className="space-y-1 text-sm text-neutral-300">
+          {items.map((item, index) => (
+            <li key={`${item.name}-${index}`} className="flex flex-wrap gap-x-2">
+              <span>{`${item.name} — ${item.status}`}</span>
+              {item.detail !== undefined ? (
+                <span className="text-[#ef4444]">{item.detail}</span>
+              ) : null}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+
       <div className="grid gap-4 sm:grid-cols-2">
-        <label className="text-sm text-neutral-400">
-          제목 (선택)
-          <input
-            className="mt-2 w-full rounded-lg border border-neutral-800 bg-neutral-900 px-4 py-3 text-neutral-300"
-            disabled={disabled}
-            onChange={(event) => setTitle(event.target.value)}
-            value={title}
-          />
-        </label>
+        {fileCount <= 1 ? (
+          <label className="text-sm text-neutral-400">
+            제목 (선택)
+            <input
+              className="mt-2 w-full rounded-lg border border-neutral-800 bg-neutral-900 px-4 py-3 text-neutral-300"
+              disabled={disabled}
+              onChange={(event) => setTitle(event.target.value)}
+              value={title}
+            />
+          </label>
+        ) : null}
         <label className="text-sm text-neutral-400">
           태그 (쉼표로 구분)
           <input
@@ -151,7 +216,7 @@ export function UploadDropzone({
 
       <button
         className="rounded-lg bg-white px-4 py-2 text-sm text-black hover:bg-neutral-200 disabled:cursor-not-allowed disabled:bg-neutral-700 disabled:text-neutral-400"
-        disabled={disabled || file === null}
+        disabled={disabled || pendingCount === 0}
         type="submit"
       >
         {uploading ? "업로드 중…" : "업로드"}
