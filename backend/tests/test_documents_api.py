@@ -323,6 +323,24 @@ def test_replacing_tags_with_empty_array_removes_all_tags(db_client: TestClient)
     assert response.json()["tags"] == []
 
 
+def test_upload_normalizes_tags_stripping_blanks_and_duplicates(db_client: TestClient):
+    """업로드 경로도 태그 교체와 같은 정규화를 거친다 — 공백 제거·순서 보존 중복 제거."""
+    response = upload(db_client, data={"tags": [" 규정 ", "규정", "  ", "인사"]})
+
+    assert response.status_code == 201
+    assert response.json()["tags"] == ["규정", "인사"]
+
+    detail = db_client.get(f"/api/documents/{response.json()['id']}")
+    assert detail.json()["tags"] == ["규정", "인사"]
+
+
+def test_upload_without_tags_stores_empty_list(db_client: TestClient):
+    response = upload(db_client)
+
+    assert response.status_code == 201
+    assert response.json()["tags"] == []
+
+
 def test_edit_trigger_creates_version_job_and_pending_status(
     db_client: TestClient, migrated_db: str
 ):
