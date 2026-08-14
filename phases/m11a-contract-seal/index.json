@@ -41,7 +41,10 @@
       "type": "fix",
       "scope": "frontend",
       "desc": "시스템 상태 화면에 로그인 가드를 건다",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-08-14T22:08:26+0900",
+      "summary": "로그인 전에는 상태 폴링을 시작하지 않는 화면 가드와 동작 테스트를 추가했다",
+      "completed_at": "2026-08-14T22:11:57+0900"
     },
     {
       "step": 4,
