@@ -14,7 +14,7 @@
 | `docs/PRD.md`, `docs/UI_GUIDE.md` | 기능 범위, UI 규칙 | 화면·기능 작업 시 |
 | `docs/ROADMAP.md` | 확장점 지도, 단계적 발전 경로, 하지 않는 것 | 새 기능·확장 제안의 채택 여부를 판단할 때 |
 
-> 제품 정의의 정본은 ADR-015(코어 계약)와 ADR-031(플랫폼 확장 — Web UI는 여러 소비 인터페이스 중 하나)이고, 제품 경계와 발전 경로의 기준은 `docs/ROADMAP.md`다.
+> 제품 정의의 정본은 ADR-015(코어 계약)·ADR-031(플랫폼 확장 — Web UI는 여러 소비 인터페이스 중 하나)·ADR-032(PRD 기준선 재도출)이고, 제품 경계의 기준은 `docs/PRD.md` 「하지 않는 것」 절, 발전 경로의 기준은 `docs/ROADMAP.md`다.
 
 > ⚠️ **OpenSQL은 단일 DBMS가 아니라 4컴포넌트 제품이다** — PostgreSQL **17.8** + OpenHA Cluster Manager(Patroni 4.0.5) + OpenHA DCS(etcd 3.6.5) + **OpenProxy**(Rust 커넥션 풀러, VRRP VIP, 1.1.3). 일반 PostgreSQL 관례로 추론하지 말고 `docs/OPENSQL_RESEARCH.md`를 먼저 확인할 것.
 >
