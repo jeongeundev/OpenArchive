@@ -30,7 +30,10 @@
       "type": "feat",
       "scope": "api",
       "desc": "시스템 상태 조회에 인증을 요구한다",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-08-14T22:04:41+0900",
+      "summary": "시스템 상태 조회에 로그인을 요구하고 복구 데모의 무인증 기동 확인을 health 엔드포인트로 분리했다",
+      "completed_at": "2026-08-14T22:08:26+0900"
     },
     {
       "step": 3,
