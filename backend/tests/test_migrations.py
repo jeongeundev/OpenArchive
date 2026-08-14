@@ -43,7 +43,9 @@ def test_clean_db_targets_the_dedicated_test_database(clean_db: str):
 
     # 기대값을 conftest에서 import하지 않고 여기 적는다 — 상수를 공유하면
     # 픽스처가 개발 DB를 가리키도록 바뀌어도 이 테스트가 함께 따라가 버린다.
-    assert current == "openarchive_test"
+    # 이름 끝에는 PID가 붙는다(세션마다 다르다). 두 pytest가 같은 DB 서버에서
+    # 서로의 테스트 DB를 DROP하지 않게 하려는 것이며, 근거는 conftest 주석에 있다.
+    assert current.startswith("openarchive_test_")
     assert current != dev_dbname
 
 

@@ -1,5 +1,7 @@
 import asyncio
+import contextlib
 import hashlib
+import os
 from uuid import UUID
 
 import psycopg
@@ -18,7 +20,15 @@ from app.worker import process_once
 
 # 개발 DB(openarchive)와 분리한다. 테스트는 매번 스키마를 통째로 비우므로
 # 같은 DB를 쓰면 개발 데이터가 사라진다.
-TEST_DB_NAME = "openarchive_test"
+#
+# 이름에 PID를 붙이는 이유: 고정 이름이면 **같은 DB 서버를 쓰는 두 pytest 세션이
+# 서로를 파괴한다.** 각 세션이 시작할 때 `DROP DATABASE ... WITH (FORCE)`로 같은 DB를
+# 지우므로, 늦게 시작한 쪽이 먼저 돌던 쪽의 DB를 통째로 날린다. 그때 나오는 증상은
+# 원인을 짐작하기 어렵다 — `pg_namespace_nspname_index`·`pg_extension_name_index`
+# 유니크 위반, vector 확장이 사라진 스키마를 가리키는 고아 상태, 그리고 그 뒤로 전부
+# `type "vector" does not exist`. 이 저장소는 Stop 훅이 `check.sh`를 돌리므로
+# 수동 실행과 겹치는 일이 흔하고, CI에서 job을 병렬로 돌려도 같은 조건이 된다.
+TEST_DB_NAME = f"openarchive_test_{os.getpid()}"
 
 
 def swap_dbname(dsn: str, dbname: str) -> str:
@@ -54,7 +64,7 @@ def client() -> TestClient:
 
 @pytest.fixture(scope="session")
 def test_dsn() -> str:
-    """테스트 전용 DB를 세션마다 새로 만들고 그 DSN을 반환한다."""
+    """테스트 전용 DB를 세션마다 새로 만들고 그 DSN을 낸다. 세션이 끝나면 지운다."""
     admin_dsn = get_settings().database_url
     dsn = swap_dbname(admin_dsn, TEST_DB_NAME)
 
@@ -79,7 +89,16 @@ def test_dsn() -> str:
             pytrace=False,
         )
 
-    return dsn
+    yield dsn
+
+    # 이름이 PID마다 다르므로 남겨두면 DB가 쌓인다. 세션 끝에 지운다.
+    # 정리 실패는 테스트 결과를 뒤집을 사유가 아니라 삼킨다 — 다음 실행이 같은 PID를
+    # 받으면 시작 시 DROP이 어차피 치운다.
+    with (
+        contextlib.suppress(psycopg.Error),
+        psycopg.connect(admin_dsn, autocommit=True, connect_timeout=5) as conn,
+    ):
+        conn.execute(f'DROP DATABASE IF EXISTS "{TEST_DB_NAME}" WITH (FORCE)')
 
 
 @pytest.fixture
