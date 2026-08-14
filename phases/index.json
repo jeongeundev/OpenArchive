@@ -55,6 +55,10 @@
       "dir": "m11a-contract-seal",
       "status": "completed",
       "completed_at": "2026-08-14T22:23:34+0900"
+    },
+    {
+      "dir": "m11b-text-ingest",
+      "status": "pending"
     }
   ]
 }

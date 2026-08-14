@@ -11,7 +11,7 @@ from uuid import UUID
 import psycopg
 from psycopg.rows import dict_row
 
-from app.services.parsing import detect_content_type, extract_text
+from app.services.parsing import UnsupportedFileType, detect_content_type, extract_text
 from app.services.visibility import VISIBLE_TO_USER
 
 # 목록·요약 응답이 쓰는 컬럼. 네 곳에서 같은 나열을 반복하지 않도록 한 곳에 둔다.
@@ -20,6 +20,7 @@ SUMMARY_COLUMNS = """id, title, filename, content_type, version, owner_id, visib
 
 # 시연 데이터 최대 추출 텍스트(약 90KB)의 5배보다 크고 DB CHECK와 같은 경계다.
 MAX_EXTRACTED_TEXT_LENGTH = 500_000
+TEXT_CONTENT_TYPES: tuple[str, ...] = ("txt", "md")
 
 SUBJECT_VISIBLE_SQL = f"""
 SELECT 1
@@ -113,12 +114,67 @@ async def create_document(
     """업로드 파일에서 텍스트를 추출해 문서를 만든다. 임베딩 잡은 트리거가 만든다."""
     content_type = detect_content_type(filename)
     content = extract_text(data, content_type)
-    if not content.strip():
-        raise EmptyExtractedText(
+    return await _insert_document(
+        conn,
+        title=title or PurePath(filename).stem,
+        filename=filename,
+        content_type=content_type,
+        content=content,
+        owner_id=owner_id,
+        tags=tags,
+        visibility=visibility,
+        empty_message=(
             "문서에서 텍스트를 추출하지 못했습니다. 스캔 이미지 PDF는 지원하지 않습니다."
-        )
+        ),
+        too_large_message="추출 텍스트는 500KB를 넘을 수 없습니다.",
+    )
+
+
+async def create_text_document(
+    conn: psycopg.AsyncConnection,
+    *,
+    title: str,
+    content: str,
+    content_type: str = "md",
+    owner_id: str,
+    tags: list[str] | None = None,
+    visibility: str = "public",
+) -> dict:
+    """공급자가 이미 가진 텍스트로 문서를 만든다. 원본 파일이 없으므로 filename은 NULL이다."""
+    if content_type not in TEXT_CONTENT_TYPES:
+        raise UnsupportedFileType("텍스트로 공급할 수 있는 유형은 txt, md입니다.")
+    return await _insert_document(
+        conn,
+        title=title,
+        filename=None,
+        content_type=content_type,
+        content=content,
+        owner_id=owner_id,
+        tags=tags,
+        visibility=visibility,
+        empty_message="문서 텍스트는 비어 있을 수 없습니다.",
+        too_large_message="문서 텍스트는 500KB를 넘을 수 없습니다.",
+    )
+
+
+async def _insert_document(
+    conn: psycopg.AsyncConnection,
+    *,
+    title: str,
+    filename: str | None,
+    content_type: str,
+    content: str,
+    owner_id: str,
+    tags: list[str] | None,
+    visibility: str,
+    empty_message: str,
+    too_large_message: str,
+) -> dict:
+    """검증된 문서 텍스트를 저장한다. 파생 데이터는 DB 트리거가 만든다."""
+    if not content.strip():
+        raise EmptyExtractedText(empty_message)
     if len(content) > MAX_EXTRACTED_TEXT_LENGTH:
-        raise ExtractedTextTooLarge("추출 텍스트는 500KB를 넘을 수 없습니다.")
+        raise ExtractedTextTooLarge(too_large_message)
 
     cur = conn.cursor(row_factory=dict_row)
     await cur.execute(
@@ -129,7 +185,7 @@ async def create_document(
         RETURNING {SUMMARY_COLUMNS}
         """,
         (
-            title or PurePath(filename).stem,
+            title,
             filename,
             content_type,
             content,
