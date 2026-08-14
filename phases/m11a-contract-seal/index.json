@@ -62,7 +62,10 @@
       "name": "github-actions",
       "type": "ci",
       "desc": "PR·push에서 check.sh를 실행하는 워크플로를 추가한다",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-08-14T22:16:18+0900",
+      "summary": "GitHub Actions에서 로컬과 같은 check.sh를 실행하고 CI 배지를 추가했다; 빨간불 확인은 PR 단계에서 사람이 수행",
+      "completed_at": "2026-08-14T22:19:23+0900"
     },
     {
       "step": 6,
