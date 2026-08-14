@@ -9,6 +9,7 @@ from app.services.documents import (
     ExtractedTextTooLarge,
     create_document,
     create_text_document,
+    update_extracted_text,
 )
 from app.services.parsing import UnsupportedFileType
 
@@ -123,6 +124,42 @@ async def test_create_text_document_normalizes_tags(documents_conn):
     )
 
     assert document["tags"] == ["search", "db"]
+
+
+async def test_edit_rejection_calls_text_by_its_name_for_each_origin(documents_conn):
+    """거절 문구가 원본 파일 유무를 따른다 (ADR-035 결정 3).
+
+    편집 경로는 두 진입점이 만든 문서를 모두 받는다. 직접 공급 문서에 "추출 텍스트"라
+    답하면, 추출한 대상이 없는데 추출을 말하는 문구가 사용자 화면에 그대로 나온다 —
+    `TextEditor`가 서버의 `detail`을 출력하기 때문이다.
+    """
+    supplied = await create_text_document(
+        documents_conn, title="직접 공급", content="문서 텍스트", owner_id="alice"
+    )
+    uploaded = await create_document(
+        documents_conn,
+        filename="uploaded.md",
+        data="추출된 텍스트".encode(),
+        owner_id="alice",
+    )
+
+    for document, expected in ((supplied, "문서 텍스트"), (uploaded, "추출 텍스트")):
+        with pytest.raises(EmptyExtractedText, match=f"{expected}는 비어 있을 수 없습니다"):
+            await update_extracted_text(
+                documents_conn,
+                document["id"],
+                user_id="alice",
+                content="   ",
+                client_version=document["version"],
+            )
+        with pytest.raises(ExtractedTextTooLarge, match=f"{expected}는 500KB"):
+            await update_extracted_text(
+                documents_conn,
+                document["id"],
+                user_id="alice",
+                content="x" * (MAX_EXTRACTED_TEXT_LENGTH + 1),
+                client_version=document["version"],
+            )
 
 
 async def test_create_document_keeps_filename_stem_and_trigger_derivatives(
