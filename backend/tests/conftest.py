@@ -177,7 +177,7 @@ def upload_document(
     filename: str = "guide.txt",
     content: bytes = b"OpenSQL guide",
     user_id: str | None = "alice",
-    data: dict[str, str] | None = None,
+    data: dict[str, str | list[str]] | None = None,
 ):
     """업로드 요청을 보내고 응답을 그대로 돌려준다. 상태 코드 판정은 호출부의 몫이다."""
     if user_id is None:
