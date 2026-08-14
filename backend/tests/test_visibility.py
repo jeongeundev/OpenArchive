@@ -1,3 +1,5 @@
+from uuid import uuid4
+
 import psycopg
 import pytest
 from conftest import insert_test_document, process_all_embedding_jobs
@@ -6,6 +8,7 @@ from app.embeddings import FakeProvider
 from app.services.auth import hash_password
 from app.services.clusters import get_clusters
 from app.services.diagnostics import get_diagnostics
+from app.services.documents import DocumentNotFound
 from app.services.links import find_backlinks, resolve_links
 from app.services.related import find_related, suggest_tags
 from app.services.search import search_documents
@@ -91,6 +94,84 @@ async def test_owner_search_includes_own_private_document(
 
     assert {hit.document_id for hit in hits} == {public_id, alice_private_id}
     assert len(hits) == 2
+
+
+async def test_related_hides_the_existence_of_an_invisible_subject_document(
+    visibility_conn, visible_documents
+):
+    _, _, _, bob_private_id = visible_documents
+
+    for user_id in (None, "alice"):
+        with pytest.raises(DocumentNotFound):
+            await find_related(
+                visibility_conn, document_id=bob_private_id, user_id=user_id
+            )
+
+    owner = await find_related(
+        visibility_conn, document_id=bob_private_id, user_id="bob"
+    )
+    assert owner.based_on_version is not None
+
+    with pytest.raises(DocumentNotFound):
+        await find_related(visibility_conn, document_id=uuid4(), user_id="bob")
+
+
+async def test_tag_suggestions_hide_the_existence_of_an_invisible_subject_document(
+    visibility_conn, visible_documents
+):
+    _, _, _, bob_private_id = visible_documents
+
+    for user_id in (None, "alice"):
+        with pytest.raises(DocumentNotFound):
+            await suggest_tags(
+                visibility_conn, document_id=bob_private_id, user_id=user_id
+            )
+
+    owner = await suggest_tags(
+        visibility_conn, document_id=bob_private_id, user_id="bob"
+    )
+    assert owner.based_on_version is not None
+
+    with pytest.raises(DocumentNotFound):
+        await suggest_tags(visibility_conn, document_id=uuid4(), user_id="bob")
+
+
+async def test_link_resolution_hides_the_existence_of_an_invisible_subject_document(
+    visibility_conn, visible_documents
+):
+    _, _, _, bob_private_id = visible_documents
+
+    for user_id in (None, "alice"):
+        with pytest.raises(DocumentNotFound):
+            await resolve_links(
+                visibility_conn, document_id=bob_private_id, user_id=user_id
+            )
+
+    assert await resolve_links(
+        visibility_conn, document_id=bob_private_id, user_id="bob"
+    ) == []
+
+    with pytest.raises(DocumentNotFound):
+        await resolve_links(visibility_conn, document_id=uuid4(), user_id="bob")
+
+
+async def test_backlinks_hide_the_existence_of_an_invisible_subject_document(
+    visibility_conn, visible_documents
+):
+    _, _, _, bob_private_id = visible_documents
+
+    for user_id in (None, "alice"):
+        with pytest.raises(DocumentNotFound):
+            await find_backlinks(
+                visibility_conn, document_id=bob_private_id, user_id=user_id
+            )
+
+    assert await find_backlinks(
+        visibility_conn, document_id=bob_private_id, user_id="bob"
+    ) == []
+
+    with pytest.raises(DocumentNotFound):
+        await find_backlinks(visibility_conn, document_id=uuid4(), user_id="bob")
 
 
 async def test_admin_search_still_hides_other_users_private_documents(
@@ -413,6 +494,66 @@ async def test_diagnostics_counts_follow_anonymous_other_and_owner_visibility(
     assert anonymous.uncategorized.count == 1
     assert other.uncategorized.count == 3
     assert owner.uncategorized.count == 2
+
+
+async def test_duplicate_diagnostics_hide_pairs_and_totals_unless_both_ends_are_visible(
+    worker_conn, visibility_conn
+):
+    provider = FakeProvider()
+    identical_content = "동일한 추출 텍스트"
+    await insert_test_document(
+        worker_conn,
+        title="공개 동일 문서",
+        content=identical_content,
+        owner_id="alice",
+        visibility="public",
+    )
+    await insert_test_document(
+        worker_conn,
+        title="비공개 동일 문서",
+        content=identical_content,
+        owner_id="alice",
+        visibility="private",
+    )
+    overlap_public_id = await insert_test_document(
+        worker_conn,
+        title="공개 겹침 문서",
+        content="OpenSQL 관계 진단 공개 문서 " * 100,
+        owner_id="alice",
+        visibility="public",
+    )
+    overlap_private_id = await insert_test_document(
+        worker_conn,
+        title="비공개 겹침 문서",
+        content="OpenSQL 관계 진단 비공개 문서 " * 100,
+        owner_id="alice",
+        visibility="private",
+    )
+    await process_all_embedding_jobs(worker_conn, provider)
+    await worker_conn.execute("DELETE FROM document_edges")
+    await worker_conn.execute(
+        """
+        INSERT INTO document_edges
+            (src_document_id, dst_document_id, kind, score)
+        VALUES (%s, %s, 'overlaps', 0.97)
+        """,
+        (overlap_public_id, overlap_private_id),
+    )
+
+    anonymous = await get_diagnostics(visibility_conn, user_id=None)
+    other = await get_diagnostics(visibility_conn, user_id="bob")
+    owner = await get_diagnostics(visibility_conn, user_id="alice")
+
+    for hidden in (anonymous, other):
+        assert hidden.duplicates.identical.count == 0
+        assert hidden.duplicates.identical.items == []
+        assert hidden.duplicates.overlaps.count == 0
+        assert hidden.duplicates.overlaps.items == []
+
+    assert owner.duplicates.identical.count == 1
+    assert len(owner.duplicates.identical.items) == 1
+    assert owner.duplicates.overlaps.count == 1
+    assert len(owner.duplicates.overlaps.items) == 1
 
 
 async def test_broken_link_diagnostics_follow_the_viewers_visibility(

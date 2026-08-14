@@ -56,6 +56,27 @@ class AuthStatus(BaseModel):
     is_admin: bool
 
 
+class JobCounts(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    pending: int
+    processing: int
+    recovery_pending: int
+    error: int
+
+
+class SystemStatus(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    node_address: str | None
+    node_port: int
+    jobs: JobCounts
+    zombie_timeout_minutes: int
+    last_job_finished_at: datetime | None
+    inconsistent_documents: int
+    embedding_provider: str
+
+
 class CreateUserRequest(BaseModel):
     username: str
     password: str

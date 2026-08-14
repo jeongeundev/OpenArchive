@@ -21,6 +21,13 @@ SUMMARY_COLUMNS = """id, title, filename, content_type, version, owner_id, visib
 # 시연 데이터 최대 추출 텍스트(약 90KB)의 5배보다 크고 DB CHECK와 같은 경계다.
 MAX_EXTRACTED_TEXT_LENGTH = 500_000
 
+SUBJECT_VISIBLE_SQL = f"""
+SELECT 1
+FROM documents d
+WHERE d.id = %(id)s
+  AND {VISIBLE_TO_USER}
+"""
+
 
 class DocumentNotFound(Exception):
     """문서가 없거나, 볼 권한이 없어 존재를 알려주지 않는 경우."""
@@ -47,6 +54,24 @@ class VersionConflict(Exception):
     def __init__(self, current_version: int) -> None:
         super().__init__("다른 곳에서 문서가 수정되었습니다. 새로고침 후 다시 시도하세요.")
         self.current_version = current_version
+
+
+async def ensure_visible(
+    conn: psycopg.AsyncConnection,
+    document_id: UUID,
+    *,
+    user_id: str | None = None,
+) -> None:
+    """주체 문서를 볼 수 없으면 DocumentNotFound를 던진다."""
+    # 인터페이스가 아니라 서비스가 주체 문서의 열람 범위를 검증한다. 서비스를 직접
+    # 부르는 인터페이스가 늘어도 계약이 약해지지 않게 하기 위함이다.
+    row = await (
+        await conn.execute(
+            SUBJECT_VISIBLE_SQL, {"id": document_id, "user": user_id}
+        )
+    ).fetchone()
+    if row is None:
+        raise DocumentNotFound
 
 
 async def _load_for_write(

@@ -34,7 +34,7 @@ async def current_user(
 
 
 async def require_user_id(user: Annotated[dict | None, Depends(current_user)]) -> str:
-    """쓰기 요청의 인증된 사용자명을 반환한다."""
+    """로그인을 요구하는 요청의 인증된 사용자명을 반환한다."""
     if user is None:
         raise HTTPException(status_code=401, detail="로그인이 필요합니다.")
     return user["username"]

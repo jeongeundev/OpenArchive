@@ -1,6 +1,11 @@
 from uuid import uuid4
 
-from app.api.schemas import AuthStatus, RelatedResponse, TagSuggestionsResponse
+from app.api.schemas import (
+    AuthStatus,
+    RelatedResponse,
+    SystemStatus,
+    TagSuggestionsResponse,
+)
 from app.services.related import (
     IdenticalDocument,
     RelatedDocument,
@@ -8,6 +13,7 @@ from app.services.related import (
     TagSuggestion,
     TagSuggestionResult,
 )
+from app.services.system import JobCounts, SystemStatusResult
 
 
 def test_related_response_accepts_service_dataclasses():
@@ -49,3 +55,22 @@ def test_auth_status_cannot_serialize_session_tokens_or_password_hashes():
         "username": "alice",
         "is_admin": False,
     }
+
+
+def test_system_status_accepts_service_dataclasses():
+    result = SystemStatusResult(
+        node_address="127.0.0.1",
+        node_port=5432,
+        jobs=JobCounts(pending=1, processing=2, recovery_pending=1, error=3),
+        zombie_timeout_minutes=5,
+        last_job_finished_at=None,
+        inconsistent_documents=4,
+        embedding_provider="fake",
+    )
+
+    response = SystemStatus.model_validate(result)
+
+    assert response.jobs.pending == 1
+    assert response.jobs.recovery_pending == 1
+    assert response.inconsistent_documents == 4
+    assert response.embedding_provider == "fake"

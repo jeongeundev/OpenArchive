@@ -1,0 +1,84 @@
+{
+  "project": "OpenArchive",
+  "phase": "m11a-contract-seal",
+  "steps": [
+    {
+      "step": 0,
+      "name": "subject-visibility",
+      "type": "fix",
+      "scope": "api",
+      "desc": "주체 문서 열람 검증을 서비스 계층으로 내린다",
+      "status": "completed",
+      "started_at": "2026-08-14T21:55:39+0900",
+      "summary": "주체 문서 열람 검증을 서비스 계층에 추가하고 중복 라우터 가드를 제거했다",
+      "completed_at": "2026-08-14T22:00:34+0900"
+    },
+    {
+      "step": 1,
+      "name": "system-service",
+      "type": "refactor",
+      "scope": "api",
+      "desc": "운영 상태 쿼리를 services/system.py로 추출한다",
+      "status": "completed",
+      "started_at": "2026-08-14T22:00:34+0900",
+      "summary": "운영 상태 쿼리와 결과 모델을 서비스 계층으로 옮기고 라우터를 위임 전용으로 축소했다",
+      "completed_at": "2026-08-14T22:04:41+0900"
+    },
+    {
+      "step": 2,
+      "name": "status-auth",
+      "type": "feat",
+      "scope": "api",
+      "desc": "시스템 상태 조회에 인증을 요구한다",
+      "status": "completed",
+      "started_at": "2026-08-14T22:04:41+0900",
+      "summary": "시스템 상태 조회에 로그인을 요구하고 복구 데모의 무인증 기동 확인을 health 엔드포인트로 분리했다",
+      "completed_at": "2026-08-14T22:08:26+0900"
+    },
+    {
+      "step": 3,
+      "name": "status-guard",
+      "type": "fix",
+      "scope": "frontend",
+      "desc": "시스템 상태 화면에 로그인 가드를 건다",
+      "status": "completed",
+      "started_at": "2026-08-14T22:08:26+0900",
+      "summary": "로그인 전에는 상태 폴링을 시작하지 않는 화면 가드와 동작 테스트를 추가했다",
+      "completed_at": "2026-08-14T22:11:57+0900"
+    },
+    {
+      "step": 4,
+      "name": "contract-tests",
+      "type": "test",
+      "scope": "api",
+      "desc": "중복 진단 열람 범위·세션 독립 폐기·계층 경계를 테스트로 고정한다",
+      "status": "completed",
+      "started_at": "2026-08-14T22:11:57+0900",
+      "summary": "중복 진단 열람 범위·세션 독립 폐기와 파생 테이블·HTTP 계층 경계를 계약 테스트로 고정했다",
+      "completed_at": "2026-08-14T22:16:17+0900"
+    },
+    {
+      "step": 5,
+      "name": "github-actions",
+      "type": "ci",
+      "desc": "PR·push에서 check.sh를 실행하는 워크플로를 추가한다",
+      "status": "completed",
+      "started_at": "2026-08-14T22:16:18+0900",
+      "summary": "GitHub Actions에서 로컬과 같은 check.sh를 실행하고 CI 배지를 추가했다; 빨간불 확인은 PR 단계에서 사람이 수행",
+      "completed_at": "2026-08-14T22:19:23+0900"
+    },
+    {
+      "step": 6,
+      "name": "adr-contract-seal",
+      "type": "docs",
+      "scope": "adr",
+      "desc": "경계를 서비스 계층으로 옮긴 결정을 ADR-027·028 개정으로 기록한다",
+      "status": "completed",
+      "started_at": "2026-08-14T22:19:23+0900",
+      "summary": "주체 문서 검증의 서비스 경계와 시스템 상태 인증을 ADR·아키텍처·PRD·프로젝트 규칙에 반영했다",
+      "completed_at": "2026-08-14T22:23:34+0900"
+    }
+  ],
+  "created_at": "2026-08-14T21:55:39+0900",
+  "completed_at": "2026-08-14T22:23:34+0900"
+}

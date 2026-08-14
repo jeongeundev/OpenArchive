@@ -84,6 +84,19 @@ async def test_logout_immediately_invalidates_the_session(conn):
         await validate_session(conn, token)
 
 
+async def test_logout_revokes_only_the_given_session_not_the_others(conn):
+    user_id = await _create_user(conn)
+    revoked_token = await create_session(conn, user_id)
+    remaining_token = await create_session(conn, user_id)
+
+    await logout(conn, revoked_token)
+
+    with pytest.raises(AuthenticationFailed):
+        await validate_session(conn, revoked_token)
+    remaining_user = await validate_session(conn, remaining_token)
+    assert remaining_user["id"] == user_id
+
+
 @pytest.mark.parametrize("token", ["missing-token", ""])
 async def test_missing_or_empty_session_token_is_rejected(conn, token):
     with pytest.raises(AuthenticationFailed):
