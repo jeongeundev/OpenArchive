@@ -84,6 +84,8 @@ print(value)
 
 status_value() {
   local path="$1"
+  # status는 로그인을 요구하므로(ADR-028) 이 함수는 로그인 이후에만 부를 수 있다.
+  # 기동 대기에는 무인증인 api_ready()를 쓴다.
   curl -fsS --max-time 3 -b "$COOKIE_JAR" "$API_URL/api/system/status" |
     "$PYTHON" -c '
 import json, sys
