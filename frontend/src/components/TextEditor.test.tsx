@@ -56,6 +56,24 @@ describe("TextEditor", () => {
     expect(screen.queryByText(notice)).not.toBeInTheDocument();
   });
 
+  it("원본 파일이 없는 문서는 문서 텍스트로 표시한다", () => {
+    render(
+      <TextEditor
+        disabled={false}
+        document={{ ...document, filename: null, content_type: "md" }}
+        onEditingChange={vi.fn()}
+        onSaved={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("heading", { name: "문서 텍스트" })).toBeInTheDocument();
+    expect(screen.queryByText(notice)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "편집" }));
+
+    expect(screen.getByRole("textbox", { name: "문서 텍스트" })).toBeInTheDocument();
+  });
+
   it("편집한 추출 텍스트와 화면이 읽은 버전을 저장한다", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(JSON.stringify({ ...document, content: "고친 텍스트", version: 3 }), {
