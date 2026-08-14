@@ -34,6 +34,12 @@
                   └──────────────────────────────────────────────┘
 ```
 
+> **다섯 구분으로 읽기 (설명용 개념 모델, ADR-031)**: 위 다이어그램에서 Next.js UI·MCP
+> Server·REST API가 **Interface**(같은 services를 소비하는 대등한 인터페이스), 업로드
+> API에서 `create_document`까지가 **Ingestion**, 트리거와 Embedding Worker가 **Processing**,
+> openSQL 클러스터가 **Storage**, 검색·관계 조회 서비스가 **Retrieval**이다. 공식 용어가
+> 아니며 기존 "DB 계층"·커밋 스코프 어휘를 대체하지 않는다.
+
 **관계는 두 갈래로 만들어지고 시점이 다르다.** `document_links`는 본문이 바뀌는 즉시(벡터 불필요), `document_edges`는 청크가 교체되는 트랜잭션 안에서 생긴다. 둘 다 **DB 계층**이 만들며 애플리케이션은 읽기만 한다 — 관련 문서·태그 추천이 조회 시점 벡터 계산을 그만둔 근거다 (ADR-029 결정 5, ADR-030).
 
 핵심 프레이밍: **잡 생성·코얼레싱·삭제 정합성은 전부 DB 안**(트리거 함수, 파셜 유니크 인덱스, FK CASCADE)에서 보장된다. 워커는 "DB가 만들어 둔 잡을 집어가는 무상태 실행기"이며, DB 밖 연산은 임베딩 모델 추론뿐이다.
@@ -500,7 +506,7 @@ UPDATE documents SET content_hash = content_hash WHERE id = %(doc_id)s;
 
 ### 인라인 편집과 낙관적 동시성 (`PUT /api/documents/{id}`)
 
-플랫폼 안에서 문서를 고칠 수 있다. **편집 대상은 추출 텍스트이며 원본 파일이 아니다** (ADR-017).
+문서는 재업로드 없이 고칠 수 있다. **편집 대상은 추출 텍스트이며 원본 파일이 아니다** (ADR-017).
 
 ```
 PUT /api/documents/{id}
@@ -804,14 +810,14 @@ class EmbeddingProvider(Protocol):
 
 ## 프론트엔드 패턴
 
-- 사용자 3화면: `/`(목록 + 업로드 드롭존), `/documents/[id]`(메타데이터·텍스트 버전 이력·청크 수와 기준 버전 요약·**추출 텍스트 편집**·관련 문서·태그 추천), `/search`(질의 + 태그/유형 필터 + 결과. "실행된 SQL 보기" 토글)
+- 사용자 화면: `/`(목록 + 업로드 드롭존), `/documents/[id]`(메타데이터·텍스트 버전 이력·청크 수와 기준 버전 요약·**추출 텍스트 편집**·관련 문서·태그 추천), `/search`(질의 + 태그/유형 필터 + 결과. "실행된 SQL 보기" 토글), `/clusters`(태그 덩어리와 연결), `/diagnostics`(고아·중복 후보·미분류·깨진 링크), `/login`
 - **편집은 Client Component**다. 보기 ↔ 편집 토글, 저장 시 `version`을 함께 전송하고 409를 처리한다. 저장 직후 상태 배지가 `pending → processing → ready`로 바뀌는 것을 2초 폴링으로 보여준다
 - **사용자 화면은 인프라 상태를 노출하지 않는다.** 페일오버가 나도 화면 구성이 달라지지 않으며, 사용자는 업로드·검색이 계속 성공하는 것만 본다 (UI_GUIDE 디자인 원칙 3).
-- 운영 1화면: `/admin/status` — `GET /api/system/status`를 폴링해 접속 노드·잡 수·프로바이더 표시. **페일오버 데모의 증거 채널**이며 사용자 내비게이션에 노출하지 않는다.
-- 네 화면은 모두 Client Component다. 데모 사용자 식별이 `localStorage`에 있고 목록·상세·운영 화면이 폴링하기 때문이다
+- 관리 화면: `/admin/status` — `GET /api/system/status`를 폴링해 접속 노드·잡 수·프로바이더 표시. **페일오버 데모의 증거 채널**이며 사용자 내비게이션에 노출하지 않는다. `/admin/users` — 계정 발급·삭제 (ADR-028)
+- 화면은 모두 Client Component다. 로그인 세션 확인과 목록·상세·관리 화면의 폴링 때문이다
 - API 연동은 `next.config.js` rewrites로 FastAPI 프록시
 
 ## 상태 관리
 
 - 서버 상태: fetch 기반. 목록과 `/admin/status`는 상시 2초 폴링하고, 문서 상세는 `pending`·`processing`일 때만 2초 폴링하며 `ready`·`error`에서는 멈춘다. 폴링 실패 시 마지막 성공 데이터를 유지한다. SSE/웹소켓 사용 안 함
-- 클라이언트 상태: useState만 사용하고 전역 상태 라이브러리는 두지 않는다. 데모 사용자는 `localStorage`에 저장하며 헤더 셀렉터에서 변경하면 `window.location.reload()`로 화면 전체를 다시 그린다
+- 클라이언트 상태: useState만 사용하고 전역 상태 라이브러리는 두지 않는다. 로그인 사용자는 서버 세션 쿠키가 정하며(ADR-028), 화면은 `GET /api/auth/me`로 확인만 한다
