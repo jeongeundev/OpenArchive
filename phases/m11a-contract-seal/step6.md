@@ -142,8 +142,10 @@ grep -c "^### ADR-033" docs/ADR.md || echo "0건 — 예약 번호 보존됨"
 grep -c "ensure_visible" CLAUDE.md
 #   → 1 이상
 
-# 7) 과대 진술 점검 — 이번 phase가 건드린 문서에서 금지 표현을 센다
-grep -n "항상 최신\|실시간 동기화" docs/ADR.md docs/ARCHITECTURE.md docs/PRD.md CLAUDE.md README.md \
+# 7) 과대 진술 점검 — 사용자 대상 문구에서 금지 표현을 센다
+#    CLAUDE.md·docs/는 이 표현을 "쓰지 마라"며 인용하므로 검사 대상이 아니다.
+#    인용을 지워 grep을 통과시키는 것은 회피이며, 규칙 원문은 그대로 둔다.
+grep -rn "항상 최신\|실시간 동기화" frontend/src README.md \
   || echo "0건 — 금지 표현 없음"
 #   → "0건 — 금지 표현 없음"
 
