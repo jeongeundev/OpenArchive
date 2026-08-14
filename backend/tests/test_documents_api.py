@@ -1,6 +1,8 @@
 import hashlib
 import io
+import sys
 import zipfile
+from pathlib import Path
 from uuid import uuid4
 
 import psycopg
@@ -8,6 +10,13 @@ from conftest import login_as, run_embedding_worker
 from conftest import upload_document as upload
 from docx import Document
 from fastapi.testclient import TestClient
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT))
+
+from examples.ingest_text import DOCUMENT_PATH, INGEST_PATH, LOGIN_PATH
+
+from app.main import app
 
 
 def edit(client: TestClient, document_id: str, *, content: str, version: int, user_id="alice"):
@@ -26,6 +35,20 @@ def replace_tags(client: TestClient, document_id: str, tags: list[str], user_id=
         f"/api/documents/{document_id}/tags",
         json={"tags": tags},
     )
+
+
+def test_ingest_example_paths_are_registered_routes():
+    def collect_paths(routes) -> set[str]:
+        paths = {route.path for route in routes if hasattr(route, "path")}
+        for route in routes:
+            included = getattr(route, "original_router", None)
+            if included is not None:
+                paths.update(collect_paths(included.routes))
+        return paths
+
+    registered_paths = collect_paths(app.routes)
+
+    assert {LOGIN_PATH, INGEST_PATH, DOCUMENT_PATH} <= registered_paths
 
 
 def test_upload_txt_returns_pending_document(db_client: TestClient):

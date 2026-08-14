@@ -21,7 +21,7 @@ if [ -f "$ROOT/backend/pyproject.toml" ]; then
     FAILED=1
   else
     echo "== backend: ruff =="
-    "$VENV/bin/ruff" check . || FAILED=1
+    "$VENV/bin/ruff" check . "$ROOT/examples" || FAILED=1
     echo "== backend: pytest =="
     "$VENV/bin/pytest" || FAILED=1
   fi
