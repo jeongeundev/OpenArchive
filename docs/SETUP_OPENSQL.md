@@ -648,9 +648,9 @@ aws ec2 authorize-security-group-ingress --region ap-northeast-2 \
   --group-id <SG> --protocol tcp --port 3000 --cidr <내 IP>/32
 ```
 
-**3000만 연다.** API(8000)는 `127.0.0.1`에만 바인딩하고 Next.js가 `/api/*`를 rewrite로 프록시한다(`next.config.ts`). `X-User-Id`를 검증 없이 신원으로 쓰는 상태(`deps.py:20`)라 API를 직접 열면 남의 private 문서가 그대로 열린다.
+**3000만 연다.** API(8000)는 `127.0.0.1`에만 바인딩하고 Next.js가 `/api/*`를 rewrite로 프록시한다(`next.config.ts`). 신원은 서버가 발급한 세션 쿠키의 검증으로만 해석되므로(ADR-028) 익명 요청은 public 문서까지만 닿지만, API를 직접 열면 로그인·쓰기 엔드포인트가 그대로 인터넷에 노출된다. 공개면은 프론트 하나로 좁혀 둔다.
 
-같은 이유로 **상시 공개는 최소 로그인이 들어간 뒤**다. 확인용으로 열었다면 끝나고 규칙을 지운다.
+로그인은 ADR-028에서 들어갔다. 그래도 확인용으로 열었다면 끝나고 규칙을 지운다 — 열어둔 상태를 습관으로 남기지 않는다.
 
 ```bash
 aws ec2 revoke-security-group-ingress --region ap-northeast-2 \
