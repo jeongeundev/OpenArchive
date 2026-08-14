@@ -51,7 +51,10 @@
       "type": "fix",
       "scope": "frontend",
       "desc": "원본 파일 없는 문서의 편집 레이블을 문서 텍스트로 바꾼다",
-      "status": "pending"
+      "status": "completed",
+      "summary": "원본 파일 유무에 따라 문서 텍스트·추출 텍스트 편집 어휘를 구분하고 회귀 테스트로 고정",
+      "started_at": "2026-08-15T01:14:35+0900",
+      "completed_at": "2026-08-15T01:18:04+0900"
     },
     {
       "step": 5,
