@@ -30,7 +30,10 @@
       "type": "feat",
       "scope": "api",
       "desc": "표준 라이브러리만 쓰는 외부 공급 클라이언트 예제",
-      "status": "pending"
+      "status": "completed",
+      "summary": "표준 라이브러리만으로 로그인·텍스트 공급·상태 폴링을 수행하는 독립 HTTP 클라이언트 예제와 독립성 검사를 추가",
+      "started_at": "2026-08-15T01:07:11+0900",
+      "completed_at": "2026-08-15T01:11:04+0900"
     },
     {
       "step": 3,
