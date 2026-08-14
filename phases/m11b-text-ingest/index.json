@@ -1,0 +1,57 @@
+{
+  "project": "OpenArchive",
+  "phase": "m11b-text-ingest",
+  "steps": [
+    {
+      "step": 0,
+      "name": "text-entrypoint",
+      "type": "feat",
+      "scope": "api",
+      "desc": "텍스트 직접 공급 진입점을 서비스 계층에 만든다",
+      "status": "completed",
+      "summary": "파일 업로드와 텍스트 직접 공급이 하나의 INSERT 경로와 DB 트리거 파생 계약을 공유하도록 구현",
+      "started_at": "2026-08-15T00:58:45+0900",
+      "completed_at": "2026-08-15T01:02:59+0900"
+    },
+    {
+      "step": 1,
+      "name": "text-ingest-api",
+      "type": "feat",
+      "scope": "api",
+      "desc": "JSON 텍스트로 문서를 공급하는 REST 엔드포인트",
+      "status": "pending"
+    },
+    {
+      "step": 2,
+      "name": "ingest-client-example",
+      "type": "feat",
+      "scope": "api",
+      "desc": "표준 라이브러리만 쓰는 외부 공급 클라이언트 예제",
+      "status": "pending"
+    },
+    {
+      "step": 3,
+      "name": "seed-text-ingest",
+      "type": "refactor",
+      "desc": "seed 적재의 가짜 파일명 우회를 텍스트 진입점으로 교체한다",
+      "status": "pending"
+    },
+    {
+      "step": 4,
+      "name": "text-vocabulary-ui",
+      "type": "fix",
+      "scope": "frontend",
+      "desc": "원본 파일 없는 문서의 편집 레이블을 문서 텍스트로 바꾼다",
+      "status": "pending"
+    },
+    {
+      "step": 5,
+      "name": "adr-text-ingest",
+      "type": "docs",
+      "scope": "adr",
+      "desc": "텍스트 공급 API 의미론을 ADR-035로 확정하고 문서에 반영한다",
+      "status": "pending"
+    }
+  ],
+  "created_at": "2026-08-15T00:58:45+0900"
+}
