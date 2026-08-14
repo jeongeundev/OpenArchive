@@ -19,7 +19,10 @@
       "type": "refactor",
       "scope": "api",
       "desc": "운영 상태 쿼리를 services/system.py로 추출한다",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-08-14T22:00:34+0900",
+      "summary": "운영 상태 쿼리와 결과 모델을 서비스 계층으로 옮기고 라우터를 위임 전용으로 축소했다",
+      "completed_at": "2026-08-14T22:04:41+0900"
     },
     {
       "step": 2,
