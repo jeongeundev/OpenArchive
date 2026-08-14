@@ -63,8 +63,8 @@ pkill -f 'next-server' 2>/dev/null || true
 
 cd "$APP_ROOT/backend"
 # API는 127.0.0.1에만 연다. 외부에 노출되는 것은 프론트뿐이고, /api/*는 Next.js가
-# rewrite로 프록시한다 (next.config.ts). X-User-Id를 검증 없이 신원으로 쓰므로
-# API를 직접 열면 남의 private 문서가 그대로 열린다.
+# rewrite로 프록시한다 (next.config.ts). 신원은 세션 쿠키 검증으로만 해석되지만
+# (ADR-028), API를 직접 열면 로그인·쓰기 엔드포인트가 그대로 인터넷에 노출된다.
 setsid nohup .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 \
   </dev/null > "$HOME/api.log" 2>&1 &
 setsid nohup .venv/bin/python -m app.worker \

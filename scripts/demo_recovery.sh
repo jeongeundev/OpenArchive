@@ -9,7 +9,9 @@ PATRONI_LOG="${PATRONI_LOG:-/home/opensql/logs/patroni.log}"
 API_PORT="${API_PORT:-18000}"
 API_URL="http://127.0.0.1:${API_PORT}"
 PYTHON="backend/.venv/bin/python"
-DEMO_USER="recovery-demo"
+# 쓰기 경로는 세션 쿠키로만 통과한다 (ADR-028). 기존 계정을 쓰려면 두 값을 함께 주입한다.
+DEMO_USER="${DEMO_USER:-recovery-demo}"
+DEMO_PASSWORD="${DEMO_PASSWORD:-recovery-demo-password}"
 
 API_PID=""
 WORKER_PID=""
@@ -23,6 +25,8 @@ LAST_STAGE_AT="$(date '+%Y-%m-%d %H:%M:%S')"
 TMP_DIR="$(mktemp -d)"
 API_LOG="$TMP_DIR/api.log"
 WORKER_LOG="$TMP_DIR/worker.log"
+COOKIE_JAR="$TMP_DIR/cookies.txt"
+LOGIN_BODY="$TMP_DIR/login.json"
 
 mark_stage() {
   LAST_STAGE="$1"
@@ -186,7 +190,7 @@ cleanup() {
   if [[ -n "$API_PID" ]] && kill -0 "$API_PID" 2>/dev/null; then
     for document_id in ${DOCUMENT_IDS[@]+"${DOCUMENT_IDS[@]}"}; do
       curl -fsS --max-time 5 -X DELETE \
-        -H "X-User-Id: $DEMO_USER" \
+        -b "$COOKIE_JAR" \
         "$API_URL/api/documents/$document_id" >/dev/null 2>&1 || true
     done
   fi
@@ -207,11 +211,34 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
+# 주체는 서버가 발급한 세션 쿠키의 검증으로만 해석된다 — 헤더로 신원을 주장하는 경로는
+# ADR-028에서 제거됐고, 남겨 두면 쓰기 요청이 전부 401로 떨어진다.
+try_login() {
+  curl -fsS --max-time 10 -X POST \
+    -c "$COOKIE_JAR" \
+    -H "Content-Type: application/json" \
+    --data-binary "@$LOGIN_BODY" \
+    "$API_URL/api/auth/login" >/dev/null 2>&1
+}
+
+ensure_demo_session() {
+  "$PYTHON" -c 'import json,sys; json.dump({"username": sys.argv[1], "password": sys.argv[2]}, open(sys.argv[3], "w"))' \
+    "$DEMO_USER" "$DEMO_PASSWORD" "$LOGIN_BODY"
+  if try_login; then
+    return 0
+  fi
+  # 계정이 없는 설치에서는 부트스트랩 CLI로 만든다. 해시 로직을 여기에 복제하지 않는다.
+  DATABASE_URL="$DATABASE_URL" ADMIN_PASSWORD="$DEMO_PASSWORD" \
+    "$PYTHON" scripts/create_admin.py "$DEMO_USER" >/dev/null ||
+    fail "데모 계정 '$DEMO_USER'을 만들지 못했습니다 (이미 있는 계정이면 DEMO_PASSWORD를 함께 주입하세요)"
+  try_login || fail "데모 계정 '$DEMO_USER'으로 로그인하지 못했습니다"
+}
+
 upload_document() {
   local file="$1"
   local response document_id
   response="$(curl -fsS --max-time 10 -X POST \
-    -H "X-User-Id: $DEMO_USER" \
+    -b "$COOKIE_JAR" \
     -F "file=@$file;type=text/plain" \
     "$API_URL/api/documents")"
   document_id="$(printf '%s' "$response" | "$PYTHON" -c 'import json,sys; print(json.load(sys.stdin)["id"])')"
@@ -223,7 +250,7 @@ edit_document() {
   local document_id="$1"
   local body_file="$2"
   curl -fsS --max-time 10 -X PUT \
-    -H "X-User-Id: $DEMO_USER" \
+    -b "$COOKIE_JAR" \
     -H "Content-Type: application/json" \
     --data-binary "@$body_file" \
     "$API_URL/api/documents/$document_id" >/dev/null
@@ -255,6 +282,7 @@ mark_stage "1. 기준선 확인: role=$BASE_ROLE, TL=$BASE_TL, inconsistent=0"
 ) >"$API_LOG" 2>&1 &
 API_PID=$!
 wait_until 30 "API 기동" api_ready || fail "API가 기동하지 않았습니다"
+ensure_demo_session
 
 (
   cd backend
@@ -354,7 +382,7 @@ FINAL_TL="$(patroni_value timeline)"
 FINAL_ROLE="$(patroni_value role)"
 [[ "$FINAL_ROLE" == "primary" ]] || fail "복구 후 Patroni role이 primary가 아닙니다: $FINAL_ROLE"
 [[ "$FINAL_TL" == "$BASE_TL" ]] || fail "Single 복구 중 timeline이 바뀌었습니다: TL $BASE_TL -> $FINAL_TL"
-curl -fsS --max-time 5 -X DELETE -H "X-User-Id: $DEMO_USER" \
+curl -fsS --max-time 5 -X DELETE -b "$COOKIE_JAR" \
   "$API_URL/api/documents/$DOC_ID" >/dev/null || fail "데모 문서를 정리하지 못했습니다"
 DOCUMENT_IDS=()
 [[ "$(db_value documents)" == "$BASE_DOCUMENTS" ]] || fail "데모 문서 정리 후 기존 문서 수가 달라졌습니다"

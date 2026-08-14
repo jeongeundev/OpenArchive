@@ -217,9 +217,9 @@ CREATE INDEX idx_chunks_embedding ON document_chunks
 
 - HNSW 선택 근거는 ADR-002. 코사인 거리(`<=>`)는 BGE-M3의 정규화 임베딩과 맞음.
 - 필터 결합 검색의 "결과 부족" 문제는 검색 트랜잭션에서 `SET LOCAL hnsw.ef_search = 200`으로 완화한다 (ADR-011). pgvector 버전에 무관하게 동작한다.
-- pgvector 0.8+로 확인되면 `SET LOCAL hnsw.iterative_scan = relaxed_order`를 추가로 적용할 수 있다. **버전 미확인이므로 조건부다** — `docs/OPENSQL_RESEARCH.md` §8.
+- `SET LOCAL hnsw.iterative_scan = relaxed_order`도 **쓸 수 있다** — 0.8+를 요구하는데 배포판이 0.8.1이다. 다만 **켜지 않는다**: ADR-011 보강 3이 실측 없이 켜지 않기로 정했고, `backend/tests/test_indexes.py`가 그 선택을 근거와 함께 고정한다.
 
-> ⚠️ **HNSW 인덱스 자체의 사용 가능 여부가 미확인이다.** OpenSQL 문서에 pgvector 버전과 HNSW 지원 여부가 명시되어 있지 않다. M0에서 `CREATE INDEX ... USING hnsw`를 실제로 실행해 확인하고, 불가하면 pgvectorscale 또는 IVFFlat으로 전환한다 (ADR-002).
+> **HNSW 가용성은 확정됐다.** 배포판에 pgvector **0.8.1**이 번들되어 있고(`docs/OPENSQL_RESEARCH.md` §0), 실 VM에서 `CREATE INDEX ... USING hnsw`와 검색 계획의 인덱스 사용을 실측했다(§12). ADR-002가 대비해 둔 pgvectorscale·IVFFlat 전환 경로는 쓰지 않는다.
 
 ## 자동 임베딩 파이프라인 (DB 계층)
 
@@ -287,7 +287,8 @@ BEGIN;
   -- 처리 중 문서가 또 수정됐는지 확인. 다르면 이 결과는 낡았으므로 폐기.
   -- 청크에 기록할 version도 이 잠금 아래에서 함께 읽는다.
   SELECT content_hash, version FROM documents WHERE id = %(doc_id)s FOR UPDATE;
-  -- content_hash <> 읽었던 값이면 → ROLLBACK, job은 done 처리
+  -- content_hash <> 읽었던 값이면 → 아무것도 쓰지 않고 job만 done으로 마감하고 COMMIT
+  --   (여기까지 쓴 것이 없어 ROLLBACK과 결과가 같다. 되돌리면 done 마감까지 날아간다)
   --   (새 pending 잡이 이미 생성돼 있으므로 최신 내용으로 다시 처리된다)
 
   DELETE FROM document_chunks WHERE document_id = %(doc_id)s;
