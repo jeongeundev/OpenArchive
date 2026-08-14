@@ -5,6 +5,7 @@ from uuid import UUID
 
 import psycopg
 
+from app.services.documents import ensure_visible
 from app.services.search import MAX_K
 from app.services.visibility import VISIBLE_TO_USER
 
@@ -114,6 +115,7 @@ async def find_related(
         "k": k,
     }
     async with conn.transaction():
+        await ensure_visible(conn, document_id, user_id=user_id)
         chunk_count, based_on_version = await _get_chunk_state(conn, params)
 
         identical_cur = await conn.execute(IDENTICAL_SQL, params)
@@ -165,6 +167,7 @@ async def suggest_tags(
         "limit": limit,
     }
     async with conn.transaction():
+        await ensure_visible(conn, document_id, user_id=user_id)
         chunk_count, based_on_version = await _get_chunk_state(conn, params)
         if chunk_count == 0:
             return TagSuggestionResult(

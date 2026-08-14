@@ -1,3 +1,5 @@
+from uuid import uuid4
+
 import psycopg
 import pytest
 from conftest import insert_test_document, process_all_embedding_jobs
@@ -6,6 +8,7 @@ from app.embeddings import FakeProvider
 from app.services.auth import hash_password
 from app.services.clusters import get_clusters
 from app.services.diagnostics import get_diagnostics
+from app.services.documents import DocumentNotFound
 from app.services.links import find_backlinks, resolve_links
 from app.services.related import find_related, suggest_tags
 from app.services.search import search_documents
@@ -91,6 +94,84 @@ async def test_owner_search_includes_own_private_document(
 
     assert {hit.document_id for hit in hits} == {public_id, alice_private_id}
     assert len(hits) == 2
+
+
+async def test_related_hides_the_existence_of_an_invisible_subject_document(
+    visibility_conn, visible_documents
+):
+    _, _, _, bob_private_id = visible_documents
+
+    for user_id in (None, "alice"):
+        with pytest.raises(DocumentNotFound):
+            await find_related(
+                visibility_conn, document_id=bob_private_id, user_id=user_id
+            )
+
+    owner = await find_related(
+        visibility_conn, document_id=bob_private_id, user_id="bob"
+    )
+    assert owner.based_on_version is not None
+
+    with pytest.raises(DocumentNotFound):
+        await find_related(visibility_conn, document_id=uuid4(), user_id="bob")
+
+
+async def test_tag_suggestions_hide_the_existence_of_an_invisible_subject_document(
+    visibility_conn, visible_documents
+):
+    _, _, _, bob_private_id = visible_documents
+
+    for user_id in (None, "alice"):
+        with pytest.raises(DocumentNotFound):
+            await suggest_tags(
+                visibility_conn, document_id=bob_private_id, user_id=user_id
+            )
+
+    owner = await suggest_tags(
+        visibility_conn, document_id=bob_private_id, user_id="bob"
+    )
+    assert owner.based_on_version is not None
+
+    with pytest.raises(DocumentNotFound):
+        await suggest_tags(visibility_conn, document_id=uuid4(), user_id="bob")
+
+
+async def test_link_resolution_hides_the_existence_of_an_invisible_subject_document(
+    visibility_conn, visible_documents
+):
+    _, _, _, bob_private_id = visible_documents
+
+    for user_id in (None, "alice"):
+        with pytest.raises(DocumentNotFound):
+            await resolve_links(
+                visibility_conn, document_id=bob_private_id, user_id=user_id
+            )
+
+    assert await resolve_links(
+        visibility_conn, document_id=bob_private_id, user_id="bob"
+    ) == []
+
+    with pytest.raises(DocumentNotFound):
+        await resolve_links(visibility_conn, document_id=uuid4(), user_id="bob")
+
+
+async def test_backlinks_hide_the_existence_of_an_invisible_subject_document(
+    visibility_conn, visible_documents
+):
+    _, _, _, bob_private_id = visible_documents
+
+    for user_id in (None, "alice"):
+        with pytest.raises(DocumentNotFound):
+            await find_backlinks(
+                visibility_conn, document_id=bob_private_id, user_id=user_id
+            )
+
+    assert await find_backlinks(
+        visibility_conn, document_id=bob_private_id, user_id="bob"
+    ) == []
+
+    with pytest.raises(DocumentNotFound):
+        await find_backlinks(visibility_conn, document_id=uuid4(), user_id="bob")
 
 
 async def test_admin_search_still_hides_other_users_private_documents(

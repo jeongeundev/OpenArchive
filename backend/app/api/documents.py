@@ -103,7 +103,6 @@ async def get_document_links(
     conn: Connection,
     user_id: Annotated[str, Depends(require_user_id)],
 ) -> list[ResolvedLinkItem]:
-    await service.get_document(conn, document_id, user_id=user_id)
     return [
         ResolvedLinkItem.model_validate(item)
         for item in await resolve_links(conn, document_id=document_id, user_id=user_id)
@@ -116,7 +115,6 @@ async def get_document_backlinks(
     conn: Connection,
     user_id: Annotated[str, Depends(require_user_id)],
 ) -> list[BacklinkItem]:
-    await service.get_document(conn, document_id, user_id=user_id)
     return [
         BacklinkItem.model_validate(item)
         for item in await find_backlinks(conn, document_id=document_id, user_id=user_id)
@@ -130,7 +128,6 @@ async def get_related(
     user_id: Annotated[str, Depends(require_user_id)],
     k: Annotated[int, Query(ge=1, le=MAX_K)] = 10,
 ) -> RelatedResponse:
-    await service.get_document(conn, document_id, user_id=user_id)
     result = await find_related(conn, document_id=document_id, user_id=user_id, k=k)
     return RelatedResponse.model_validate(result)
 
@@ -142,7 +139,6 @@ async def get_tag_suggestions(
     user_id: Annotated[str, Depends(require_user_id)],
     limit: Annotated[int, Query(ge=1, le=20)] = 5,
 ) -> TagSuggestionsResponse:
-    await service.get_document(conn, document_id, user_id=user_id)
     result = await suggest_tags(
         conn, document_id=document_id, user_id=user_id, limit=limit
     )

@@ -5,6 +5,7 @@ from uuid import UUID
 
 import psycopg
 
+from app.services.documents import ensure_visible
 from app.services.visibility import VISIBLE_TO_USER
 
 RESOLVE_LINKS_SQL = f"""
@@ -47,6 +48,7 @@ async def resolve_links(
     user_id: str | None = None,
 ) -> list[ResolvedLink]:
     """문서가 낸 링크를 대상이 없거나 보이지 않아도 빠뜨리지 않고 반환한다."""
+    await ensure_visible(conn, document_id, user_id=user_id)
     rows = await (
         await conn.execute(
             RESOLVE_LINKS_SQL,
@@ -63,6 +65,7 @@ async def find_backlinks(
     user_id: str | None = None,
 ) -> list[Backlink]:
     """현재 문서 제목을 가리키는 열람 가능한 출발 문서를 반환한다."""
+    await ensure_visible(conn, document_id, user_id=user_id)
     rows = await (
         await conn.execute(
             BACKLINKS_SQL,
