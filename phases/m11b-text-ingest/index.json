@@ -62,7 +62,10 @@
       "type": "docs",
       "scope": "adr",
       "desc": "텍스트 공급 API 의미론을 ADR-035로 확정하고 문서에 반영한다",
-      "status": "pending"
+      "status": "completed",
+      "summary": "텍스트 공급 API의 진입점·귀속·어휘·형식·CORS·크기 경계를 ADR-035로 확정하고 제품 문서를 현재 구현과 일치시킴",
+      "started_at": "2026-08-15T01:18:04+0900",
+      "completed_at": "2026-08-15T01:21:57+0900"
     }
   ],
   "created_at": "2026-08-15T00:58:45+0900"
