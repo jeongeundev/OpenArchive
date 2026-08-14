@@ -1,0 +1,65 @@
+{
+  "project": "OpenArchive",
+  "phase": "m11a-contract-seal",
+  "steps": [
+    {
+      "step": 0,
+      "name": "subject-visibility",
+      "type": "fix",
+      "scope": "api",
+      "desc": "주체 문서 열람 검증을 서비스 계층으로 내린다",
+      "status": "completed",
+      "started_at": "2026-08-14T21:55:39+0900",
+      "summary": "주체 문서 열람 검증을 서비스 계층에 추가하고 중복 라우터 가드를 제거했다",
+      "completed_at": "2026-08-14T22:00:34+0900"
+    },
+    {
+      "step": 1,
+      "name": "system-service",
+      "type": "refactor",
+      "scope": "api",
+      "desc": "운영 상태 쿼리를 services/system.py로 추출한다",
+      "status": "pending"
+    },
+    {
+      "step": 2,
+      "name": "status-auth",
+      "type": "feat",
+      "scope": "api",
+      "desc": "시스템 상태 조회에 인증을 요구한다",
+      "status": "pending"
+    },
+    {
+      "step": 3,
+      "name": "status-guard",
+      "type": "fix",
+      "scope": "frontend",
+      "desc": "시스템 상태 화면에 로그인 가드를 건다",
+      "status": "pending"
+    },
+    {
+      "step": 4,
+      "name": "contract-tests",
+      "type": "test",
+      "scope": "api",
+      "desc": "중복 진단 열람 범위·세션 독립 폐기·계층 경계를 테스트로 고정한다",
+      "status": "pending"
+    },
+    {
+      "step": 5,
+      "name": "github-actions",
+      "type": "ci",
+      "desc": "PR·push에서 check.sh를 실행하는 워크플로를 추가한다",
+      "status": "pending"
+    },
+    {
+      "step": 6,
+      "name": "adr-contract-seal",
+      "type": "docs",
+      "scope": "adr",
+      "desc": "경계를 서비스 계층으로 옮긴 결정을 ADR-027·028 개정으로 기록한다",
+      "status": "pending"
+    }
+  ],
+  "created_at": "2026-08-14T21:55:39+0900"
+}
