@@ -37,7 +37,7 @@
 > **다섯 구분으로 읽기 (설명용 개념 모델, ADR-031)**: 위 다이어그램에서 Next.js UI·MCP
 > Server·REST API가 **Interface**(같은 services를 소비하는 대등한 인터페이스), 업로드
 > API에서 `create_document`까지가 **Ingestion**, 트리거와 Embedding Worker가 **Processing**,
-> openSQL 클러스터가 **Storage**, 검색·관계 조회 서비스가 **Retrieval**다. 공식 용어가
+> openSQL 클러스터가 **Storage**, 검색·관계 조회 서비스가 **Retrieval**이다. 공식 용어가
 > 아니며 기존 "DB 계층"·커밋 스코프 어휘를 대체하지 않는다.
 
 **관계는 두 갈래로 만들어지고 시점이 다르다.** `document_links`는 본문이 바뀌는 즉시(벡터 불필요), `document_edges`는 청크가 교체되는 트랜잭션 안에서 생긴다. 둘 다 **DB 계층**이 만들며 애플리케이션은 읽기만 한다 — 관련 문서·태그 추천이 조회 시점 벡터 계산을 그만둔 근거다 (ADR-029 결정 5, ADR-030).
@@ -814,7 +814,7 @@ class EmbeddingProvider(Protocol):
 - **편집은 Client Component**다. 보기 ↔ 편집 토글, 저장 시 `version`을 함께 전송하고 409를 처리한다. 저장 직후 상태 배지가 `pending → processing → ready`로 바뀌는 것을 2초 폴링으로 보여준다
 - **사용자 화면은 인프라 상태를 노출하지 않는다.** 페일오버가 나도 화면 구성이 달라지지 않으며, 사용자는 업로드·검색이 계속 성공하는 것만 본다 (UI_GUIDE 디자인 원칙 3).
 - 관리 화면: `/admin/status` — `GET /api/system/status`를 폴링해 접속 노드·잡 수·프로바이더 표시. **페일오버 데모의 증거 채널**이며 사용자 내비게이션에 노출하지 않는다. `/admin/users` — 계정 발급·삭제 (ADR-028)
-- 화면은 모두 Client Component다. 로그인 세션 확인과 목록·상세·운영 화면의 폴링 때문이다
+- 화면은 모두 Client Component다. 로그인 세션 확인과 목록·상세·관리 화면의 폴링 때문이다
 - API 연동은 `next.config.js` rewrites로 FastAPI 프록시
 
 ## 상태 관리

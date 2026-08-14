@@ -9,7 +9,7 @@
 [![Embedding](https://img.shields.io/badge/embedding-BGE--M3%20(MIT)-orange.svg)](https://huggingface.co/BAAI/bge-m3)
 
 > 2026년 오픈소스 개발자대회 기업 지정과제 출품작
-> **현재 상태**: DB 계층(트리거·잡 큐·워커), 백엔드 API·하이브리드 검색, 관련 문서·태그 추천, MCP 서버와 프론트엔드(문서·검색·클러스터·진단·운영 화면)가 동작합니다.
+> **현재 상태**: DB 계층(트리거·잡 큐·워커), 백엔드 API·하이브리드 검색, 관련 문서·태그 추천, MCP 서버와 프론트엔드(문서 목록·상세·검색·클러스터·진단과 관리 화면)가 동작합니다.
 
 ---
 
@@ -49,7 +49,7 @@ SELECT count(*) FROM documents d
 ## 동작 방식
 
 ```
-문서 업로드
+문서 업로드 — Web UI · REST API · documents에 INSERT하는 모든 클라이언트
    │
    ▼
 documents 테이블 INSERT/UPDATE
@@ -69,7 +69,7 @@ document_chunks 교체 (단일 트랜잭션)
 하이브리드 검색 — 태그·유형·권한 필터 + 벡터 유사도를 단일 SQL로
    │
    ▼
-Web UI · REST API · MCP — 같은 서비스 계층을 소비하는 인터페이스
+근거 소비 — Web UI · REST API · MCP (진입과 같은 services 계층)
 ```
 
 **핵심은 "애플리케이션이 임베딩 파이프라인을 조율하지 않는다"는 점입니다.** 업로드 API는 `INSERT`만 합니다. 나머지는 DB가 합니다. 그래서 문서를 공급하는 주체가 꼭 사람일 필요가 없습니다 — `documents`에 INSERT하는 클라이언트는 무엇이든 같은 파이프라인을 얻습니다 ([Roadmap](docs/ROADMAP.md)).
@@ -189,7 +189,7 @@ stdio 서버 설정에 백엔드 가상환경의 Python과 모듈을 등록한�
 http://localhost:8000/docs
 ```
 
-스크립트나 외부 시스템에서 이 API를 쓸 때도 같은 경로입니다 — 쿠키 자를 유지하는 HTTP
+스크립트나 외부 시스템에서 이 API를 쓸 때도 같은 경로입니다 — 쿠키를 유지하는 HTTP
 클라이언트로 `POST /api/auth/login`을 호출한 뒤 세션 쿠키를 동봉하면 업로드부터 검색까지 전부
 호출할 수 있습니다. 토큰 인증 같은 프로그래매틱 표면의 확장은 [Roadmap](docs/ROADMAP.md)의
 단계적 발전 경로에 있습니다.
