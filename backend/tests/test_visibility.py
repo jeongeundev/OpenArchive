@@ -496,6 +496,66 @@ async def test_diagnostics_counts_follow_anonymous_other_and_owner_visibility(
     assert owner.uncategorized.count == 2
 
 
+async def test_duplicate_diagnostics_hide_pairs_and_totals_unless_both_ends_are_visible(
+    worker_conn, visibility_conn
+):
+    provider = FakeProvider()
+    identical_content = "동일한 추출 텍스트"
+    await insert_test_document(
+        worker_conn,
+        title="공개 동일 문서",
+        content=identical_content,
+        owner_id="alice",
+        visibility="public",
+    )
+    await insert_test_document(
+        worker_conn,
+        title="비공개 동일 문서",
+        content=identical_content,
+        owner_id="alice",
+        visibility="private",
+    )
+    overlap_public_id = await insert_test_document(
+        worker_conn,
+        title="공개 겹침 문서",
+        content="OpenSQL 관계 진단 공개 문서 " * 100,
+        owner_id="alice",
+        visibility="public",
+    )
+    overlap_private_id = await insert_test_document(
+        worker_conn,
+        title="비공개 겹침 문서",
+        content="OpenSQL 관계 진단 비공개 문서 " * 100,
+        owner_id="alice",
+        visibility="private",
+    )
+    await process_all_embedding_jobs(worker_conn, provider)
+    await worker_conn.execute("DELETE FROM document_edges")
+    await worker_conn.execute(
+        """
+        INSERT INTO document_edges
+            (src_document_id, dst_document_id, kind, score)
+        VALUES (%s, %s, 'overlaps', 0.97)
+        """,
+        (overlap_public_id, overlap_private_id),
+    )
+
+    anonymous = await get_diagnostics(visibility_conn, user_id=None)
+    other = await get_diagnostics(visibility_conn, user_id="bob")
+    owner = await get_diagnostics(visibility_conn, user_id="alice")
+
+    for hidden in (anonymous, other):
+        assert hidden.duplicates.identical.count == 0
+        assert hidden.duplicates.identical.items == []
+        assert hidden.duplicates.overlaps.count == 0
+        assert hidden.duplicates.overlaps.items == []
+
+    assert owner.duplicates.identical.count == 1
+    assert len(owner.duplicates.identical.items) == 1
+    assert owner.duplicates.overlaps.count == 1
+    assert len(owner.duplicates.overlaps.items) == 1
+
+
 async def test_broken_link_diagnostics_follow_the_viewers_visibility(
     worker_conn, visibility_conn
 ):
