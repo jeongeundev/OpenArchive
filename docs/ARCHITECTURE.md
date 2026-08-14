@@ -64,7 +64,7 @@ OpenArchive/
 │   │   ├── api/                  # 라우터: documents, search, system, auth, admin,
 │   │   │                         #   diagnostics, clusters, retry (+ deps, schemas)
 │   │   ├── services/             # parsing, chunking, documents, search, related,
-│   │   │                         #   links, diagnostics, clusters, auth, visibility
+│   │   │                         #   links, diagnostics, clusters, auth, system, visibility
 │   │   ├── embeddings/           # base.py(Protocol), local.py(bge-m3), fake.py
 │   │   └── worker.py             # 임베딩 워커 진입점
 │   ├── mcp_server/server.py      # FastMCP stdio 서버 — search_documents, get_document, list_documents
@@ -468,7 +468,7 @@ OpenSQL `patroni.yml`의 PostgreSQL 파라미터는 `max_connections: 100`이다
 | `GET /api/diagnostics` | **진단.** 고아 문서·깨진 링크·중복 후보 등을 **열람 범위 기준**으로 집계 (ADR-027) |
 | `GET /api/clusters` | **주제 덩어리.** 관계 그래프의 연결 요소 |
 | `GET /api/admin/users` 등 | 관리자 전용 |
-| `GET /api/system/status` | **운영/데모 전용**: `inet_server_addr()`(현재 접속 노드), pending/processing/error 잡 수, 임베딩 프로바이더명, **정합성 검증 쿼리 결과**(`c.version <> d.version` 건수). `/admin/status`가 소비하며 사용자 화면은 호출하지 않는다 |
+| `GET /api/system/status` | **로그인 필요 · 운영/데모 전용**: `inet_server_addr()`(현재 접속 노드), pending/processing/error 잡 수, 임베딩 프로바이더명, **정합성 검증 쿼리 결과**(`c.version <> d.version` 건수). `/admin/status`가 소비하며 사용자 화면은 호출하지 않는다. SQL과 결과 모델은 `services/system.py`에 있고 라우터는 인증과 응답 변환만 맡는다 |
 
 > **구현 현황 (M9 기준)**: 위 표 전체가 구현되어 있다. 수집하지 않던 상태 응답 필드는 채우지 않고 제거했다 — 워커 로그와 잡·정합성 카운터가 같은 복구 사실을 검증하기 때문이다.
 >
@@ -476,7 +476,7 @@ OpenSQL `patroni.yml`의 PostgreSQL 파라미터는 `max_connections: 100`이다
 >
 > 새 파일로 교체하는 경로는 없다. 새 파일을 올리려면 업로드 후 이전 문서를 삭제해야 한다.
 >
-> 라우터는 얇다. 요청 검증과 상태 코드 변환만 하고 실제 로직은 `services/documents.py`·`services/search.py`에 있으며, MCP 서버가 같은 함수를 재사용한다. 도메인 예외를 상태 코드로 옮기는 매핑은 `main.py`의 exception handler 한 곳에 있다.
+> 라우터는 얇다. 요청 검증과 상태 코드 변환만 하고 실제 로직은 `services/documents.py`·`services/search.py`·`services/system.py` 등에 있으며, MCP 서버가 문서·검색 서비스를 재사용한다. 도메인 예외를 상태 코드로 옮기는 매핑은 `main.py`의 exception handler 한 곳에 있다.
 
 ### 빈 파싱 결과 처리 (`POST /api/documents`)
 
@@ -669,7 +669,7 @@ OpenProxy는 `query_parser_read_write_splitting` 활성 시 **트랜잭션 밖�
 (d.visibility = 'public' OR d.owner_id = %(user)s)
 ```
 
-빠뜨리면 관련 문서가 private 문서를 노출하고, 태그 추천이 private 문서의 태그를 흘린다. 대상 문서 자체의 접근 권한은 API 레이어의 문서 조회에서 이미 걸린다.
+빠뜨리면 관련 문서가 private 문서를 노출하고, 태그 추천이 private 문서의 태그를 흘린다. 대상 문서 자체도 서비스가 `ensure_visible`로 검증한다. 현재 이 검증은 `find_related`·`suggest_tags`·`resolve_links`·`find_backlinks` 네 함수에 걸려 있어 HTTP를 거치지 않는 호출에도 같은 404 의미의 `DocumentNotFound`가 적용된다.
 
 **2. `kind`를 섞어 `score`로 정렬하지 않는다**
 
