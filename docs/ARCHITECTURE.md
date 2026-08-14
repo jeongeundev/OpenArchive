@@ -95,7 +95,7 @@ CREATE TABLE documents (
   title            text NOT NULL,
   filename         text,                   -- 업로드된 원본 파일명 (출처 표시용). 파일 자체는 보관하지 않는다
   content_type     text NOT NULL,          -- pdf | docx | txt | md
-  content          text NOT NULL,          -- 추출 텍스트 (현재 버전). 편집·버전 관리·임베딩의 대상
+  content          text NOT NULL,          -- 문서 텍스트 (현재 버전). 편집·버전 관리·임베딩의 대상
   content_hash     text NOT NULL,          -- sha256, 트리거의 변경 감지 기준
   version          int  NOT NULL DEFAULT 1,
   owner_id         text NOT NULL,
@@ -112,8 +112,8 @@ CREATE TABLE documents (
   CONSTRAINT documents_content_not_blank CHECK (length(btrim(content, E' \t\r\n\f')) > 0)
 );
 
--- document_versions: 추출 텍스트의 버전 이력 (append-only)
--- 파일 버전 이력이 아니다. v1으로 되돌려도 원본 파일이 아니라 v1 시점의 추출 텍스트가 나온다.
+-- document_versions: 문서 텍스트의 버전 이력 (append-only)
+-- 파일 버전 이력이 아니다. v1으로 되돌려도 원본 파일이 아니라 v1 시점의 문서 텍스트가 나온다.
 CREATE TABLE document_versions (
   document_id  uuid NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
   version      int  NOT NULL,
@@ -458,7 +458,7 @@ OpenSQL `patroni.yml`의 PostgreSQL 파라미터는 `max_connections: 100`이다
 | `POST /api/documents/text` | JSON 텍스트 공급(`txt`·`md`). `filename`은 NULL이며, 파생 데이터는 업로드 경로와 동일하게 DB 트리거가 만든다. 빈 문서 텍스트와 500,000자 초과는 400 |
 | `GET /api/documents` | 목록 + `status`/`tag` 필터, embedding_status 포함 |
 | `GET /api/documents/{id}` | 상세 + 텍스트 버전 목록 + 청크 수 + 청크 기준 버전 |
-| `PUT /api/documents/{id}` | 편집된 추출 텍스트(`{content, version}` JSON) → `version`+1, `content`, `content_hash` UPDATE. **버전 이력 기록과 재임베딩 잡 생성은 트리거가 수행.** 요청의 `version`이 현재 버전과 다르면 **409** (아래) |
+| `PUT /api/documents/{id}` | 편집된 문서 텍스트(`{content, version}` JSON) → `version`+1, `content`, `content_hash` UPDATE. **버전 이력 기록과 재임베딩 잡 생성은 트리거가 수행.** 요청의 `version`이 현재 버전과 다르면 **409** (아래) |
 | `PUT /api/documents/{id}/tags` | `{tags: string[]}`로 태그 전체 교체. 트리거는 `UPDATE OF content_hash`에만 걸려 있으므로 **재임베딩을 유발하지 않는다** |
 | `DELETE /api/documents/{id}` | CASCADE로 벡터까지 원자 삭제 |
 | `POST /api/documents/{id}/reembed` | **임베딩 실패 복구.** 아래 참조 |
@@ -510,7 +510,9 @@ UPDATE documents SET content_hash = content_hash WHERE id = %(doc_id)s;
 
 ### 인라인 편집과 낙관적 동시성 (`PUT /api/documents/{id}`)
 
-문서는 재업로드 없이 고칠 수 있다. **편집 대상은 추출 텍스트이며 원본 파일이 아니다** (ADR-017).
+문서는 재업로드 없이 고칠 수 있다. **편집 대상은 문서 텍스트이며 원본 파일이 아니다** (ADR-017).
+업로드 문서에서는 그 텍스트가 추출 텍스트이고, 직접 공급 문서(`filename IS NULL`)에는 추출한
+대상이 없다 — 거절 문구와 UI 레이블이 이 구분을 따른다 (ADR-035 결정 3).
 
 ```
 PUT /api/documents/{id}
@@ -530,7 +532,7 @@ PUT /api/documents/{id}
 - `WHERE ... AND version = %(client_version)s`로 비교와 갱신을 한 문장에 두어, 확인과 쓰기 사이의 경쟁을 없앤다
 - 저장 직후 `embedding_status`가 `pending`으로 돌아가고, 정합성 카운터(`c.version <> d.version`)가 1 올랐다가 워커 처리 후 0으로 복귀한다. **이 흐름이 데모의 핵심 장면이다**
 
-**원본 파일과 추출 텍스트를 구분한다.** 현재 스키마에 바이너리 컬럼이 없으므로, 편집 후에는 `filename = report.pdf`인데 `content`가 그 PDF의 추출 결과와 다른 상태가 될 수 있다. **결함이 아니라 설계된 동작**이며, 스캔 품질이 나쁜 PDF의 오추출을 고치는 정당한 용도가 있다. UI는 편집 영역을 "본문"이 아니라 **"추출 텍스트"**로 표기한다 (`UI_GUIDE.md`).
+**원본 파일과 추출 텍스트를 구분한다.** 현재 스키마에 바이너리 컬럼이 없으므로, 편집 후에는 `filename = report.pdf`인데 `content`가 그 PDF의 추출 결과와 다른 상태가 될 수 있다. **결함이 아니라 설계된 동작**이며, 스캔 품질이 나쁜 PDF의 오추출을 고치는 정당한 용도가 있다. UI는 편집 영역을 "본문"이 아니라 **"추출 텍스트"**로 표기한다 — 원본 파일이 없는 문서에서는 **"문서 텍스트"**다 (`UI_GUIDE.md`).
 
 ## 검색 데이터 흐름
 
@@ -814,7 +816,7 @@ class EmbeddingProvider(Protocol):
 
 ## 프론트엔드 패턴
 
-- 사용자 화면: `/`(목록 + 업로드 드롭존), `/documents/[id]`(메타데이터·텍스트 버전 이력·청크 수와 기준 버전 요약·**추출 텍스트 편집**·관련 문서·태그 추천), `/search`(질의 + 태그/유형 필터 + 결과. "실행된 SQL 보기" 토글), `/clusters`(태그 덩어리와 연결), `/diagnostics`(고아·중복 후보·미분류·깨진 링크), `/login`
+- 사용자 화면: `/`(목록 + 업로드 드롭존), `/documents/[id]`(메타데이터·텍스트 버전 이력·청크 수와 기준 버전 요약·**문서 텍스트 편집**·관련 문서·태그 추천), `/search`(질의 + 태그/유형 필터 + 결과. "실행된 SQL 보기" 토글), `/clusters`(태그 덩어리와 연결), `/diagnostics`(고아·중복 후보·미분류·깨진 링크), `/login`
 - **편집은 Client Component**다. 보기 ↔ 편집 토글, 저장 시 `version`을 함께 전송하고 409를 처리한다. 저장 직후 상태 배지가 `pending → processing → ready`로 바뀌는 것을 2초 폴링으로 보여준다
 - **사용자 화면은 인프라 상태를 노출하지 않는다.** 페일오버가 나도 화면 구성이 달라지지 않으며, 사용자는 업로드·검색이 계속 성공하는 것만 본다 (UI_GUIDE 디자인 원칙 3).
 - 관리 화면: `/admin/status` — `GET /api/system/status`를 폴링해 접속 노드·잡 수·프로바이더 표시. **페일오버 데모의 증거 채널**이며 사용자 내비게이션에 노출하지 않는다. `/admin/users` — 계정 발급·삭제 (ADR-028)
