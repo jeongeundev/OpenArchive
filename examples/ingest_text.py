@@ -24,6 +24,14 @@ LOGIN_PATH = "/api/auth/login"
 INGEST_PATH = "/api/documents/text"
 DOCUMENT_PATH = "/api/documents/{document_id}"
 
+# 임베딩이 아직 끝나지 않은 상태. 워커가 잡을 집으면 pending → processing으로 넘어가므로,
+# pending만 기다리면 그 순간 폴링이 끝나 미완 문서를 결과로 내놓는다.
+IN_PROGRESS_STATUSES = frozenset({"pending", "processing"})
+
+
+def is_in_progress(document: dict[str, Any]) -> bool:
+    return document["embedding_status"] in IN_PROGRESS_STATUSES
+
 
 def _request_json(
     opener: urllib.request.OpenerDirector,
@@ -74,7 +82,7 @@ def ingest(args: argparse.Namespace) -> dict[str, Any]:
     )
 
     deadline = time.monotonic() + args.timeout
-    while document["embedding_status"] == "pending" and time.monotonic() < deadline:
+    while is_in_progress(document) and time.monotonic() < deadline:
         time.sleep(args.poll_interval)
         path = DOCUMENT_PATH.format(document_id=document["id"])
         document = _request_json(opener, base_url + path)

@@ -82,7 +82,13 @@ async def create_text_document(
     user_id: Annotated[str, Depends(require_user_id)],
 ) -> DocumentSummary:
     document = await service.create_text_document(
-        conn, owner_id=user_id, **body.model_dump()
+        conn,
+        title=body.title,
+        content=body.content,
+        content_type=body.content_type,
+        owner_id=user_id,
+        tags=body.tags,
+        visibility=body.visibility,
     )
     return DocumentSummary.model_validate(document)
 
