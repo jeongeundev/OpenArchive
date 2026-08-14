@@ -52,7 +52,10 @@
       "type": "test",
       "scope": "api",
       "desc": "중복 진단 열람 범위·세션 독립 폐기·계층 경계를 테스트로 고정한다",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-08-14T22:11:57+0900",
+      "summary": "중복 진단 열람 범위·세션 독립 폐기와 파생 테이블·HTTP 계층 경계를 계약 테스트로 고정했다",
+      "completed_at": "2026-08-14T22:16:17+0900"
     },
     {
       "step": 5,
