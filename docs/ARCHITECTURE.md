@@ -52,6 +52,8 @@
 OpenArchive/
 ├── docker-compose.yml            # 로컬 개발용 pgvector 컨테이너
 ├── scripts/check.sh              # 통합 검증 (backend lint+test, frontend lint+test+build)
+├── examples/
+│   └── ingest_text.py            # 표준 라이브러리만 쓰는 독립 HTTP 텍스트 공급 예제
 ├── backend/
 │   ├── pyproject.toml            # fastapi, psycopg[binary,pool], pydantic-settings, mcp<2, pypdf, python-docx / [dev]: pytest, ruff / [local]: sentence-transformers
 │   ├── migrations/               # 001~011: extensions, tables, triggers, indexes,
@@ -453,6 +455,7 @@ OpenSQL `patroni.yml`의 PostgreSQL 파라미터는 `max_connections: 100`이다
 | 엔드포인트 | 내용 |
 |---|---|
 | `POST /api/documents` | multipart 업로드. pypdf/python-docx/plain 파싱 → INSERT. 여기서 트리거가 파이프라인을 자동 기동 — 임베딩 관련 코드 없음. **텍스트 추출 결과가 비면 400** (아래). **원본 파일은 보관하지 않는다** — 추출 텍스트만 저장하고 파일은 버린다 |
+| `POST /api/documents/text` | JSON 텍스트 공급(`txt`·`md`). `filename`은 NULL이며, 파생 데이터는 업로드 경로와 동일하게 DB 트리거가 만든다. 빈 문서 텍스트와 500,000자 초과는 400 |
 | `GET /api/documents` | 목록 + `status`/`tag` 필터, embedding_status 포함 |
 | `GET /api/documents/{id}` | 상세 + 텍스트 버전 목록 + 청크 수 + 청크 기준 버전 |
 | `PUT /api/documents/{id}` | 편집된 추출 텍스트(`{content, version}` JSON) → `version`+1, `content`, `content_hash` UPDATE. **버전 이력 기록과 재임베딩 잡 생성은 트리거가 수행.** 요청의 `version`이 현재 버전과 다르면 **409** (아래) |
@@ -470,7 +473,7 @@ OpenSQL `patroni.yml`의 PostgreSQL 파라미터는 `max_connections: 100`이다
 | `GET /api/admin/users` 등 | 관리자 전용 |
 | `GET /api/system/status` | **로그인 필요 · 운영/데모 전용**: `inet_server_addr()`(현재 접속 노드), pending/processing/error 잡 수, 임베딩 프로바이더명, **정합성 검증 쿼리 결과**(`c.version <> d.version` 건수). `/admin/status`가 소비하며 사용자 화면은 호출하지 않는다. SQL과 결과 모델은 `services/system.py`에 있고 라우터는 인증과 응답 변환만 맡는다 |
 
-> **구현 현황 (M9 기준)**: 위 표 전체가 구현되어 있다. 수집하지 않던 상태 응답 필드는 채우지 않고 제거했다 — 워커 로그와 잡·정합성 카운터가 같은 복구 사실을 검증하기 때문이다.
+> **구현 현황 (M11-b 기준)**: 위 표 전체가 구현되어 있다. 파일 업로드와 JSON 텍스트 공급은 같은 INSERT 헬퍼와 DB 트리거 파생 계약을 공유한다. 비대화형 자격증명은 아직 없어 텍스트 공급도 현재는 사람의 세션 로그인이 필요하다 (ADR-035).
 >
 > **모든 조회에 열람 범위가 걸린다.** 검색·관련 문서·링크·백링크·진단 집계·클러스터가 같은 `VISIBLE_TO_USER` 술어를 쓴다. 볼 수 없는 문서는 자리 표시조차 남기지 않는다 — 표시 자체가 존재와 개수를 누출한다 (ADR-027).
 >
