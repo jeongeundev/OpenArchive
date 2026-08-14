@@ -1,5 +1,6 @@
 import ast
 import re
+import sys
 from pathlib import Path
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
@@ -15,6 +16,22 @@ APPLICATION_SOURCE_ROOTS = (
 # 셸도 검사한다 — scripts/ 는 psql 힙독으로 SQL을 담는다.
 SOURCE_SUFFIXES = {".py", ".sh"}
 HTTP_MODULES = {"fastapi", "starlette"}
+FORBIDDEN_EXAMPLE_MODULES = {"app", "backend", "mcp_server"}
+
+
+def _example_imports() -> dict[Path, set[str]]:
+    imports = {}
+    for path in (REPOSITORY_ROOT / "examples").rglob("*.py"):
+        tree = ast.parse(path.read_text(), filename=str(path))
+        modules = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                modules.update(alias.name.split(".", maxsplit=1)[0] for alias in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                modules.add(node.module.split(".", maxsplit=1)[0])
+        imports[path] = modules
+    assert imports, "examples/ 아래에 검사할 Python 예제가 없습니다."
+    return imports
 
 
 def test_application_code_does_not_insert_into_derived_tables():
@@ -50,3 +67,23 @@ def test_services_do_not_import_http_frameworks():
                     )
 
     assert not violations, "services HTTP 의존 금지 위반:\n" + "\n".join(violations)
+
+
+def test_examples_do_not_import_application_modules():
+    violations = {
+        str(path.relative_to(REPOSITORY_ROOT)): sorted(modules & FORBIDDEN_EXAMPLE_MODULES)
+        for path, modules in _example_imports().items()
+        if modules & FORBIDDEN_EXAMPLE_MODULES
+    }
+
+    assert not violations, f"examples 애플리케이션 의존 금지 위반: {violations}"
+
+
+def test_examples_only_import_standard_library_modules():
+    violations = {
+        str(path.relative_to(REPOSITORY_ROOT)): sorted(modules - sys.stdlib_module_names)
+        for path, modules in _example_imports().items()
+        if modules - sys.stdlib_module_names
+    }
+
+    assert not violations, f"examples 표준 라이브러리 밖 의존: {violations}"

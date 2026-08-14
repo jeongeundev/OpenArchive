@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -30,6 +31,14 @@ class DocumentDetail(DocumentSummary):
     versions: list[TextVersion]
     chunk_count: int
     chunk_version: int | None
+
+
+class CreateTextDocumentRequest(BaseModel):
+    title: str
+    content: str
+    content_type: Literal["txt", "md"] = "md"
+    tags: list[str] | None = None
+    visibility: Literal["public", "private"] = "public"
 
 
 class EditDocumentRequest(BaseModel):

@@ -53,6 +53,168 @@ def test_upload_trigger_creates_job_and_initial_text_version(
         ).fetchone() == (1,)
 
 
+def test_text_ingest_matches_upload_pipeline_derivatives(
+    db_client: TestClient, migrated_db: str
+):
+    upload(
+        db_client,
+        filename="target.md",
+        content=b"target",
+        data={"title": "Target"},
+    )
+    content = "shared pipeline text [[Target]]"
+    uploaded = upload(
+        db_client,
+        filename="uploaded.md",
+        content=content.encode(),
+        data={"title": "Uploaded"},
+    )
+    supplied = db_client.post(
+        "/api/documents/text",
+        json={"title": "Supplied", "content": content},
+    )
+
+    assert uploaded.status_code == 201
+    assert supplied.status_code == 201
+    supplied_body = supplied.json()
+    assert supplied_body["filename"] is None
+    run_embedding_worker(migrated_db)
+
+    document_ids = [uploaded.json()["id"], supplied_body["id"]]
+    with psycopg.connect(migrated_db) as conn:
+        derivatives = []
+        for document_id in document_ids:
+            derivatives.append(
+                (
+                    conn.execute(
+                        "SELECT count(*) FROM embedding_jobs WHERE document_id = %s",
+                        (document_id,),
+                    ).fetchone()[0],
+                    conn.execute(
+                        "SELECT count(*) FROM document_versions WHERE document_id = %s",
+                        (document_id,),
+                    ).fetchone()[0],
+                    conn.execute(
+                        "SELECT count(*) FROM document_chunks WHERE document_id = %s",
+                        (document_id,),
+                    ).fetchone()[0],
+                    conn.execute(
+                        "SELECT array_agg(target_title ORDER BY target_title) "
+                        "FROM document_links WHERE src_document_id = %s",
+                        (document_id,),
+                    ).fetchone()[0],
+                    conn.execute(
+                        "SELECT count(*) FROM document_edges WHERE src_document_id = %s",
+                        (document_id,),
+                    ).fetchone()[0]
+                    > 0,
+                )
+            )
+
+    # 대칭 비교만으로는 두 경로가 나란히 아무것도 만들지 않아도 통과한다.
+    # 업로드 쪽 파생이 실제로 존재하는 것을 먼저 못박아 비교의 기준점을 세운다.
+    jobs, versions, chunks, links, has_edges = derivatives[0]
+    assert (jobs, versions, links, has_edges) == (1, 1, ["Target"], True)
+    assert chunks > 0
+    assert derivatives[0] == derivatives[1]
+
+
+def test_text_ingest_uses_authenticated_owner_and_normalizes_metadata(
+    db_client: TestClient,
+):
+    login_as(db_client, "alice")
+    response = db_client.post(
+        "/api/documents/text",
+        json={
+            "title": "API document",
+            "content": "document text",
+            "content_type": "txt",
+            "tags": [" alpha ", "beta", "alpha", "  "],
+            "visibility": "private",
+            "owner_id": "mallory",
+        },
+    )
+
+    assert response.status_code == 201
+    assert response.json()["filename"] is None
+    assert response.json()["content_type"] == "txt"
+    assert response.json()["tags"] == ["alpha", "beta"]
+    assert response.json()["visibility"] == "private"
+    assert response.json()["owner_id"] == "alice"
+
+
+def test_text_ingest_requires_authentication(db_client: TestClient):
+    response = db_client.post(
+        "/api/documents/text",
+        json={"title": "Anonymous", "content": "document text"},
+    )
+
+    assert response.status_code == 401
+
+
+def test_private_text_ingest_is_hidden_from_other_users(db_client: TestClient):
+    login_as(db_client, "alice")
+    document_id = db_client.post(
+        "/api/documents/text",
+        json={
+            "title": "Private API document",
+            "content": "private text",
+            "visibility": "private",
+        },
+    ).json()["id"]
+
+    login_as(db_client, "bob")
+    assert all(item["id"] != document_id for item in db_client.get("/api/documents").json())
+    assert db_client.get(f"/api/documents/{document_id}").status_code == 404
+
+
+def test_text_ingest_rejects_invalid_content_without_saving(
+    db_client: TestClient, migrated_db: str
+):
+    login_as(db_client, "alice")
+
+    for content in (" \t\r\n\f", "x" * 500_001):
+        response = db_client.post(
+            "/api/documents/text",
+            json={"title": "Invalid", "content": content},
+        )
+        assert response.status_code == 400
+
+    unsupported = db_client.post(
+        "/api/documents/text",
+        json={"title": "PDF", "content": "text", "content_type": "pdf"},
+    )
+    assert unsupported.status_code == 422
+    with psycopg.connect(migrated_db) as conn:
+        assert conn.execute("SELECT count(*) FROM documents").fetchone() == (0,)
+
+
+def test_text_ingest_document_uses_existing_optimistic_locking(db_client: TestClient):
+    login_as(db_client, "alice")
+    created = db_client.post(
+        "/api/documents/text",
+        json={"title": "Editable", "content": "version one"},
+    ).json()
+
+    updated = edit(
+        db_client,
+        created["id"],
+        content="version two",
+        version=created["version"],
+    )
+    stale = edit(
+        db_client,
+        created["id"],
+        content="stale edit",
+        version=created["version"],
+    )
+
+    assert updated.status_code == 200
+    assert updated.json()["version"] == 2
+    assert stale.status_code == 409
+    assert stale.json()["current_version"] == 2
+
+
 def test_document_link_and_backlink_endpoints_return_resolved_documents(
     db_client: TestClient,
 ):

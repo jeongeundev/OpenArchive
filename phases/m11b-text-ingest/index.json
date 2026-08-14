@@ -1,0 +1,73 @@
+{
+  "project": "OpenArchive",
+  "phase": "m11b-text-ingest",
+  "steps": [
+    {
+      "step": 0,
+      "name": "text-entrypoint",
+      "type": "feat",
+      "scope": "api",
+      "desc": "텍스트 직접 공급 진입점을 서비스 계층에 만든다",
+      "status": "completed",
+      "summary": "파일 업로드와 텍스트 직접 공급이 하나의 INSERT 경로와 DB 트리거 파생 계약을 공유하도록 구현",
+      "started_at": "2026-08-15T00:58:45+0900",
+      "completed_at": "2026-08-15T01:02:59+0900"
+    },
+    {
+      "step": 1,
+      "name": "text-ingest-api",
+      "type": "feat",
+      "scope": "api",
+      "desc": "JSON 텍스트로 문서를 공급하는 REST 엔드포인트",
+      "status": "completed",
+      "summary": "인증된 사용자가 JSON 텍스트를 공급하고 파일 업로드와 동일한 DB 파생 파이프라인을 거치는 REST 엔드포인트 구현",
+      "started_at": "2026-08-15T01:02:59+0900",
+      "completed_at": "2026-08-15T01:07:11+0900"
+    },
+    {
+      "step": 2,
+      "name": "ingest-client-example",
+      "type": "feat",
+      "scope": "api",
+      "desc": "표준 라이브러리만 쓰는 외부 공급 클라이언트 예제",
+      "status": "completed",
+      "summary": "표준 라이브러리만으로 로그인·텍스트 공급·상태 폴링을 수행하는 독립 HTTP 클라이언트 예제와 독립성 검사를 추가",
+      "started_at": "2026-08-15T01:07:11+0900",
+      "completed_at": "2026-08-15T01:11:04+0900"
+    },
+    {
+      "step": 3,
+      "name": "seed-text-ingest",
+      "type": "refactor",
+      "desc": "seed 적재의 가짜 파일명 우회를 텍스트 진입점으로 교체한다",
+      "status": "completed",
+      "summary": "seed 적재를 텍스트 진입점으로 교체하고 원본 파일명 NULL·Markdown 유형·위키링크 파생 계약을 DB 테스트로 고정",
+      "started_at": "2026-08-15T01:11:04+0900",
+      "completed_at": "2026-08-15T01:14:34+0900"
+    },
+    {
+      "step": 4,
+      "name": "text-vocabulary-ui",
+      "type": "fix",
+      "scope": "frontend",
+      "desc": "원본 파일 없는 문서의 편집 레이블을 문서 텍스트로 바꾼다",
+      "status": "completed",
+      "summary": "원본 파일 유무에 따라 문서 텍스트·추출 텍스트 편집 어휘를 구분하고 회귀 테스트로 고정",
+      "started_at": "2026-08-15T01:14:35+0900",
+      "completed_at": "2026-08-15T01:18:04+0900"
+    },
+    {
+      "step": 5,
+      "name": "adr-text-ingest",
+      "type": "docs",
+      "scope": "adr",
+      "desc": "텍스트 공급 API 의미론을 ADR-035로 확정하고 문서에 반영한다",
+      "status": "completed",
+      "summary": "텍스트 공급 API의 진입점·귀속·어휘·형식·CORS·크기 경계를 ADR-035로 확정하고 제품 문서를 현재 구현과 일치시킴",
+      "started_at": "2026-08-15T01:18:04+0900",
+      "completed_at": "2026-08-15T01:21:57+0900"
+    }
+  ],
+  "created_at": "2026-08-15T00:58:45+0900",
+  "completed_at": "2026-08-15T01:21:57+0900"
+}

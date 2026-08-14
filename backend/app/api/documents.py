@@ -16,6 +16,7 @@ from fastapi import (
 from app.api.deps import Connection, require_user_id
 from app.api.schemas import (
     BacklinkItem,
+    CreateTextDocumentRequest,
     DocumentDetail,
     DocumentSummary,
     EditDocumentRequest,
@@ -71,6 +72,24 @@ async def upload_document(
         # 파싱 실패(비 UTF-8, 손상된 PDF/DOCX)만 여기 온다. 업로드에만 있는 경로라
         # 앱 전역 핸들러로 올리지 않는다 — 올리면 무관한 ValueError까지 400이 된다.
         raise HTTPException(status_code=400, detail=str(error)) from error
+    return DocumentSummary.model_validate(document)
+
+
+@router.post("/text", response_model=DocumentSummary, status_code=status.HTTP_201_CREATED)
+async def create_text_document(
+    body: CreateTextDocumentRequest,
+    conn: Connection,
+    user_id: Annotated[str, Depends(require_user_id)],
+) -> DocumentSummary:
+    document = await service.create_text_document(
+        conn,
+        title=body.title,
+        content=body.content,
+        content_type=body.content_type,
+        owner_id=user_id,
+        tags=body.tags,
+        visibility=body.visibility,
+    )
     return DocumentSummary.model_validate(document)
 
 

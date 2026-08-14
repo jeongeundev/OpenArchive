@@ -26,6 +26,7 @@ export function TextEditor({
   const [editingVersion, setEditingVersion] = useState(document.version);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const textLabel = document.filename === null ? "문서 텍스트" : "추출 텍스트";
   const showsExtractionNotice =
     document.content_type === "pdf" || document.content_type === "docx";
 
@@ -61,7 +62,7 @@ export function TextEditor({
           : "";
         setError(`${reason.detail}${version}`);
       } else {
-        setError("추출 텍스트를 저장하지 못했습니다.");
+        setError(`${textLabel}를 저장하지 못했습니다.`);
       }
     } finally {
       setSaving(false);
@@ -71,7 +72,7 @@ export function TextEditor({
   return (
     <section className="space-y-4">
       <div className="flex items-center justify-between gap-4">
-        <h2 className="text-sm font-medium text-neutral-400">추출 텍스트</h2>
+        <h2 className="text-sm font-medium text-neutral-400">{textLabel}</h2>
         {!editing && !disabled ? (
           <button
             className="text-sm text-neutral-500 hover:text-neutral-300 disabled:cursor-not-allowed disabled:text-neutral-600"
@@ -91,7 +92,7 @@ export function TextEditor({
       ) : null}
       {editing ? (
         <form className="space-y-3" onSubmit={(event) => void save(event)}>
-          <label className="sr-only" htmlFor="extracted-text">추출 텍스트</label>
+          <label className="sr-only" htmlFor="extracted-text">{textLabel}</label>
           <textarea
             className="min-h-80 w-full rounded-lg border border-neutral-800 bg-neutral-900 px-4 py-3 text-sm leading-relaxed text-neutral-300"
             id="extracted-text"

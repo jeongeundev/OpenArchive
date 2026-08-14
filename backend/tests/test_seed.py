@@ -92,3 +92,38 @@ async def test_repository_fragments_pass_the_migrated_content_check(migrated_db:
 
     assert created == len(documents)
     assert count == len(documents)
+
+
+async def test_repository_seed_uses_text_documents_and_derives_wikilinks(migrated_db: str):
+    documents = load_seed_documents(ROOT)
+
+    async with await psycopg.AsyncConnection.connect(migrated_db, autocommit=True) as conn:
+        await seed_documents(conn, documents)
+        metadata = await (
+            await conn.execute(
+                """
+                SELECT count(*) FILTER (WHERE filename IS NOT NULL),
+                       count(*) FILTER (WHERE content_type <> 'md')
+                FROM documents
+                WHERE owner_id = 'seed'
+                """
+            )
+        ).fetchone()
+        resolved_adr_links = (
+            await (
+                await conn.execute(
+                    """
+                    SELECT count(*)
+                    FROM document_links l
+                    JOIN documents src ON src.id = l.src_document_id
+                    JOIN documents dst ON dst.title = l.target_title
+                    WHERE src.owner_id = 'seed'
+                      AND dst.owner_id = 'seed'
+                      AND l.target_title LIKE 'ADR-018:%'
+                    """
+                )
+            ).fetchone()
+        )[0]
+
+    assert metadata == (0, 0)
+    assert resolved_adr_links > 0

@@ -11,7 +11,7 @@ from uuid import UUID
 import psycopg
 from psycopg.rows import dict_row
 
-from app.services.parsing import detect_content_type, extract_text
+from app.services.parsing import UnsupportedFileType, detect_content_type, extract_text
 from app.services.visibility import VISIBLE_TO_USER
 
 # 목록·요약 응답이 쓰는 컬럼. 네 곳에서 같은 나열을 반복하지 않도록 한 곳에 둔다.
@@ -20,6 +20,7 @@ SUMMARY_COLUMNS = """id, title, filename, content_type, version, owner_id, visib
 
 # 시연 데이터 최대 추출 텍스트(약 90KB)의 5배보다 크고 DB CHECK와 같은 경계다.
 MAX_EXTRACTED_TEXT_LENGTH = 500_000
+TEXT_CONTENT_TYPES: tuple[str, ...] = ("txt", "md")
 
 SUBJECT_VISIBLE_SQL = f"""
 SELECT 1
@@ -76,15 +77,16 @@ async def ensure_visible(
 
 async def _load_for_write(
     conn: psycopg.AsyncConnection, document_id: UUID, user_id: str
-) -> int:
-    """쓰기 전 권한을 확인하고 현재 버전을 반환한다.
+) -> tuple[int, str | None]:
+    """쓰기 전 권한을 확인하고 현재 버전과 원본 파일명을 반환한다.
 
     버전을 여기서 함께 읽어두면 충돌 응답을 만들 때 다시 조회할 필요가 없다.
     조회를 한 번으로 줄이면 그 사이 문서가 사라져 None을 역참조하는 경로도 없어진다.
+    `filename`도 같은 이유로 함께 읽는다 — 거절 문구가 이 값으로 갈린다.
     """
     row = await (
         await conn.execute(
-            "SELECT owner_id, visibility, version FROM documents WHERE id = %s",
+            "SELECT owner_id, visibility, version, filename FROM documents WHERE id = %s",
             (document_id,),
         )
     ).fetchone()
@@ -92,12 +94,21 @@ async def _load_for_write(
         raise DocumentNotFound
     if row[0] != user_id:
         raise DocumentAccessDenied
-    return row[2]
+    return row[2], row[3]
 
 
 def normalize_tags(tags: list[str] | None) -> list[str]:
     """공백을 걷어내고 순서를 보존하며 중복을 제거한다. 대소문자는 구분한다."""
     return list(dict.fromkeys(tag.strip() for tag in (tags or []) if tag.strip()))
+
+
+def text_label(filename: str | None) -> str:
+    """`documents.content`를 사용자에게 부를 이름을 원본 파일 유무로 고른다 (ADR-035 결정 3).
+
+    직접 공급된 텍스트는 무엇에서도 추출된 것이 아니므로 "추출 텍스트"라 부를 수 없다.
+    이 함수를 거친 문구는 예외 메시지로 실려 화면에 그대로 표시된다.
+    """
+    return "추출 텍스트" if filename else "문서 텍스트"
 
 
 async def create_document(
@@ -113,12 +124,73 @@ async def create_document(
     """업로드 파일에서 텍스트를 추출해 문서를 만든다. 임베딩 잡은 트리거가 만든다."""
     content_type = detect_content_type(filename)
     content = extract_text(data, content_type)
-    if not content.strip():
-        raise EmptyExtractedText(
+    return await _insert_document(
+        conn,
+        title=title or PurePath(filename).stem,
+        filename=filename,
+        content_type=content_type,
+        content=content,
+        owner_id=owner_id,
+        tags=tags,
+        visibility=visibility,
+        empty_message=(
             "문서에서 텍스트를 추출하지 못했습니다. 스캔 이미지 PDF는 지원하지 않습니다."
-        )
+        ),
+    )
+
+
+async def create_text_document(
+    conn: psycopg.AsyncConnection,
+    *,
+    title: str,
+    content: str,
+    content_type: str = "md",
+    owner_id: str,
+    tags: list[str] | None = None,
+    visibility: str = "public",
+) -> dict:
+    """공급자가 이미 가진 텍스트로 문서를 만든다. 원본 파일이 없으므로 filename은 NULL이다."""
+    # REST는 pydantic Literal이 먼저 422로 막아 이 가드에 닿지 않는다. 그래도 두는 것은
+    # MCP 서버와 스크립트가 라우터를 거치지 않고 이 함수를 직접 부르기 때문이다 — 코어가
+    # 자기 계약을 스스로 지킨다.
+    if content_type not in TEXT_CONTENT_TYPES:
+        raise UnsupportedFileType("텍스트로 공급할 수 있는 유형은 txt, md입니다.")
+    return await _insert_document(
+        conn,
+        title=title,
+        filename=None,
+        content_type=content_type,
+        content=content,
+        owner_id=owner_id,
+        tags=tags,
+        visibility=visibility,
+        empty_message="문서 텍스트는 비어 있을 수 없습니다.",
+    )
+
+
+async def _insert_document(
+    conn: psycopg.AsyncConnection,
+    *,
+    title: str,
+    filename: str | None,
+    content_type: str,
+    content: str,
+    owner_id: str,
+    tags: list[str] | None,
+    visibility: str,
+    empty_message: str,
+) -> dict:
+    """검증된 문서 텍스트를 저장한다. 파생 데이터는 DB 트리거가 만든다.
+
+    빈 텍스트 문구만 인자로 받는다 — 업로드는 추출 실패고 직접 공급은 빈 입력이라
+    상황 자체가 다르다. 크기 초과는 두 경로가 같은 상황이므로 `text_label`로 부른다.
+    """
+    if not content.strip():
+        raise EmptyExtractedText(empty_message)
     if len(content) > MAX_EXTRACTED_TEXT_LENGTH:
-        raise ExtractedTextTooLarge("추출 텍스트는 500KB를 넘을 수 없습니다.")
+        raise ExtractedTextTooLarge(
+            f"{text_label(filename)}는 500KB를 넘을 수 없습니다."
+        )
 
     cur = conn.cursor(row_factory=dict_row)
     await cur.execute(
@@ -129,7 +201,7 @@ async def create_document(
         RETURNING {SUMMARY_COLUMNS}
         """,
         (
-            title or PurePath(filename).stem,
+            title,
             filename,
             content_type,
             content,
@@ -207,15 +279,19 @@ async def update_extracted_text(
     content: str,
     client_version: int,
 ) -> dict:
-    """추출 텍스트를 낙관적 동시성으로 갱신한다 (ADR-017).
+    """문서 텍스트를 낙관적 동시성으로 갱신한다 (ADR-017).
 
-    편집 대상은 추출 텍스트이며 원본 파일이 아니다. 원본 파일은 보관하지 않는다.
+    편집 대상은 문서 텍스트이며 원본 파일이 아니다. 원본 파일은 보관하지 않는다.
+    업로드로 들어온 문서에서는 그 텍스트가 추출 텍스트이고, 직접 공급된 문서
+    (`filename IS NULL`)에는 추출한 대상이 없다 — 거절 문구가 그 구분을 따른다
+    (ADR-035 결정 3).
     """
-    current_version = await _load_for_write(conn, document_id, user_id)
+    current_version, filename = await _load_for_write(conn, document_id, user_id)
+    label = text_label(filename)
     if not content.strip():
-        raise EmptyExtractedText("추출 텍스트는 비어 있을 수 없습니다.")
+        raise EmptyExtractedText(f"{label}는 비어 있을 수 없습니다.")
     if len(content) > MAX_EXTRACTED_TEXT_LENGTH:
-        raise ExtractedTextTooLarge("추출 텍스트는 500KB를 넘을 수 없습니다.")
+        raise ExtractedTextTooLarge(f"{label}는 500KB를 넘을 수 없습니다.")
     if current_version != client_version:
         raise VersionConflict(current_version)
 

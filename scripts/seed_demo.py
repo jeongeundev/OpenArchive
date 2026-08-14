@@ -19,7 +19,7 @@ if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
 
 from app.config import get_settings
-from app.services.documents import create_document
+from app.services.documents import create_text_document
 
 SEED_OWNER = "seed"
 PRIVATE_TITLES = {
@@ -167,12 +167,12 @@ async def seed_documents(conn: psycopg.AsyncConnection, documents: list[SeedDocu
     for document in documents:
         if document.title in existing:
             continue
-        await create_document(
+        await create_text_document(
             conn,
-            filename=f"{document.title}.md",
-            data=document.content.encode(),
-            owner_id=SEED_OWNER,
             title=document.title,
+            content=document.content,
+            content_type="md",
+            owner_id=SEED_OWNER,
             tags=document.tags,
             visibility=document.visibility,
         )
