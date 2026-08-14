@@ -119,7 +119,7 @@ docker compose up -d
 # 2. 백엔드 — 마이그레이션이 여기서 실행되므로 가장 먼저 띄운다
 cd backend
 python3 -m venv .venv && source .venv/bin/activate   # scripts/check.sh가 backend/.venv를 찾는다
-pip install -e ".[dev]"          # 실제 임베딩(BGE-M3)까지 쓸 때는 ".[dev,local]"
+pip install -e ".[dev]"          # 기본은 가짜 임베딩이다. 실제 BGE-M3는 아래 「임베딩 프로바이더」
 uvicorn app.main:app --reload
 
 # 3. 최초 관리자 계정 — 자체 가입이 없으므로 첫 로그인 전에 한 번 실행한다
@@ -142,6 +142,29 @@ MCP_USER_ID=alice python -m mcp_server.server
 ```
 
 `http://localhost:3000` 접속.
+
+### 임베딩 프로바이더
+
+**기본값은 `fake`입니다.** 의존성이 가볍고 테스트가 빨라 개발·검증 기본값으로 둔 것인데, 이
+상태에서도 업로드·검색이 **동작하기 때문에** 알아채기 어렵습니다. 가짜 벡터는 의미를 담지
+않으므로 **검색 품질을 이 상태로 판단하지 마세요.**
+
+실제 `BAAI/bge-m3`로 돌리려면 설치와 환경변수가 **둘 다** 필요합니다.
+
+```bash
+pip install -e ".[dev,local]"                      # sentence-transformers + torch (수 GB)
+
+EMBEDDING_PROVIDER=local uvicorn app.main:app --reload   # API — 검색 질의를 임베딩한다
+EMBEDDING_PROVIDER=local python -m app.worker            # 워커 — 문서를 임베딩한다
+```
+
+| 환경변수 | 기본값 | 값 |
+|---|---:|---|
+| `EMBEDDING_PROVIDER` | `fake` | `local` — `BAAI/bge-m3`(MIT, 1024차원) · `fake` — 테스트용 |
+
+**API·워커·MCP 서버는 각자 프로바이더를 생성하므로 세 프로세스에 같은 값을 주어야 합니다.**
+값이 엇갈리면 질의 벡터와 문서 벡터가 다른 공간에 놓여, 에러 없이 검색 결과만 무의미해집니다.
+모델은 첫 임베딩 때 내려받아 캐시하므로 최초 1회는 시간이 걸립니다.
 
 ### 인증 환경변수
 
