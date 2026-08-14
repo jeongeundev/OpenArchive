@@ -84,7 +84,7 @@ print(value)
 
 status_value() {
   local path="$1"
-  curl -fsS --max-time 3 "$API_URL/api/system/status" |
+  curl -fsS --max-time 3 -b "$COOKIE_JAR" "$API_URL/api/system/status" |
     "$PYTHON" -c '
 import json, sys
 
@@ -111,7 +111,9 @@ wait_until() {
 }
 
 api_ready() {
-  curl -fsS --max-time 2 "$API_URL/api/system/status" >/dev/null 2>&1
+  # status는 로그인을 요구하므로(ADR-028) 세션이 생기기 전인 이 시점에는 쓸 수 없다.
+  # health는 토폴로지·문서 정보가 없어 무인증으로 남는다.
+  curl -fsS --max-time 2 "$API_URL/api/health" >/dev/null 2>&1
 }
 
 db_ready() {

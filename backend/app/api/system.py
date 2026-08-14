@@ -2,13 +2,17 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends
 
-from app.api.deps import Connection, get_embedding_provider
+from app.api.deps import Connection, get_embedding_provider, require_user_id
 from app.api.schemas import SystemStatus
 from app.config import get_settings
 from app.embeddings.base import EmbeddingProvider
 from app.services import system as service
 
-router = APIRouter(prefix="/api/system", tags=["system"])
+router = APIRouter(
+    prefix="/api/system",
+    tags=["system"],
+    dependencies=[Depends(require_user_id)],
+)
 
 
 @router.get("/status", response_model=SystemStatus)

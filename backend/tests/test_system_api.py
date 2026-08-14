@@ -1,4 +1,5 @@
 import psycopg
+import pytest
 from conftest import login_as, run_embedding_worker, upload_document
 from fastapi.testclient import TestClient
 
@@ -9,9 +10,19 @@ def upload(client: TestClient, content: str = "OpenSQL status") -> dict:
     return response.json()
 
 
-def test_status_is_available_without_authentication_and_reports_operational_fields(
-    db_client: TestClient,
-):
+@pytest.fixture(autouse=True)
+def logged_in(db_client: TestClient):
+    """시스템 상태 조회도 로그인을 요구한다 (ADR-028). 익명 경계는 아래에서 따로 단언한다."""
+    login_as(db_client, "alice")
+
+
+def test_status_requires_login(db_client: TestClient):
+    db_client.post("/api/auth/logout")
+
+    assert db_client.get("/api/system/status").status_code == 401
+
+
+def test_status_reports_operational_fields(db_client: TestClient):
     response = db_client.get("/api/system/status")
 
     assert response.status_code == 200
