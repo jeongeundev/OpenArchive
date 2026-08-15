@@ -1,0 +1,30 @@
+{
+  "project": "OpenArchive",
+  "phase": "m11d-mcp-write",
+  "steps": [
+    {
+      "step": 0,
+      "name": "visibility-guard",
+      "type": "fix",
+      "scope": "api",
+      "desc": "코어가 공개범위 계약을 스스로 지킨다",
+      "status": "pending"
+    },
+    {
+      "step": 1,
+      "name": "mcp-create-tool",
+      "type": "feat",
+      "scope": "mcp",
+      "desc": "AI 에이전트가 문서를 공급하는 MCP 쓰기 도구",
+      "status": "pending"
+    },
+    {
+      "step": 2,
+      "name": "adr-mcp-write",
+      "type": "docs",
+      "scope": "adr",
+      "desc": "MCP 쓰기 도구를 ADR-036으로 확정하고 코어 불변성 실측치를 기록한다",
+      "status": "pending"
+    }
+  ]
+}
