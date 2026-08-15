@@ -78,7 +78,7 @@ async def require_session_user(
 
 
 async def require_admin(
-    user: Annotated[dict | None, Depends(require_session_user)],
+    user: Annotated[dict | None, Depends(current_user)],
 ) -> dict:
     """계정 관리 권한을 요구한다. 문서 열람 권한은 확장하지 않는다."""
     user = await require_session_user(user)
