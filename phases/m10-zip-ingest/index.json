@@ -8,7 +8,10 @@
       "type": "feat",
       "scope": "frontend",
       "desc": "브라우저에서 ZIP을 풀어 지원 문서만 골라내는 모듈",
-      "status": "pending"
+      "status": "completed",
+      "summary": "JSZip 기반 브라우저 ZIP 해제와 지원 문서 선별 순수 모듈 및 테스트 추가",
+      "started_at": "2026-08-15T16:31:40+0900",
+      "completed_at": "2026-08-15T16:34:44+0900"
     },
     {
       "step": 1,
@@ -26,5 +29,6 @@
       "desc": "브라우저 해제 결정을 ADR-033으로 기록한다",
       "status": "pending"
     }
-  ]
+  ],
+  "created_at": "2026-08-15T16:31:40+0900"
 }
