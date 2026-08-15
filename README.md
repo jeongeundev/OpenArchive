@@ -99,7 +99,7 @@ document_chunks 교체 (단일 트랜잭션)
 | DB | [Tmax OpenSQL v3](https://docs.tibero.com/tmaxopensql/overview) (PostgreSQL 17 + pgvector) · OpenHA(Patroni) · OpenHA DCS(etcd) · OpenProxy |
 | 백엔드 | Python 3.12+ · FastAPI · psycopg3 |
 | 임베딩 | [`BAAI/bge-m3`](https://huggingface.co/BAAI/bge-m3) (MIT, 1024차원) — 로컬 구동 |
-| 프론트엔드 | Next.js (App Router) · TypeScript · Tailwind CSS |
+| 프론트엔드 | Next.js (App Router) · TypeScript · Tailwind CSS · [JSZip 3.10.1](https://stuk.github.io/jszip/) (MIT) |
 | MCP | Python `mcp` SDK (FastMCP, stdio) |
 
 ---
