@@ -73,7 +73,8 @@
     },
     {
       "dir": "m10-zip-ingest",
-      "status": "pending"
+      "status": "completed",
+      "completed_at": "2026-08-15T16:40:56+0900"
     }
   ]
 }
