@@ -30,7 +30,10 @@
       "type": "feat",
       "scope": "api",
       "desc": "Bearer 토큰 인증과 쓰기·세션 전용 게이트",
-      "status": "pending"
+      "status": "completed",
+      "summary": "Bearer 우선 인증과 read/read_write 쓰기 게이트, 관리자 세션 전용 경계를 HTTP 라우터에 적용했다.",
+      "started_at": "2026-08-15T12:50:24+0900",
+      "completed_at": "2026-08-15T12:54:52+0900"
     },
     {
       "step": 3,
