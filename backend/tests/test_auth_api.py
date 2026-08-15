@@ -1,4 +1,6 @@
 import hashlib
+import json
+from uuid import uuid4
 
 import psycopg
 from fastapi.testclient import TestClient
@@ -15,15 +17,15 @@ def create_user(dsn: str, username: str = "alice", password: str = "secret") -> 
         )
 
 
-def issue_token(dsn: str, username: str) -> str:
+def issue_token(dsn: str, username: str, scope: str = "read") -> str:
     token = f"{username}-api-token"
     with psycopg.connect(dsn) as conn:
         user_id = conn.execute(
             "SELECT id FROM users WHERE username = %s", (username,)
         ).fetchone()[0]
         conn.execute(
-            "INSERT INTO api_tokens (user_id, name, token_hash, scope) VALUES (%s, 'test', %s, 'read')",
-            (user_id, hashlib.sha256(token.encode()).hexdigest()),
+            "INSERT INTO api_tokens (user_id, name, token_hash, scope) VALUES (%s, 'test', %s, %s)",
+            (user_id, hashlib.sha256(token.encode()).hexdigest(), scope),
         )
     return token
 
@@ -154,3 +156,130 @@ def test_non_bearer_and_empty_bearer_headers_are_anonymous(
             "/api/auth/me", headers={"Authorization": authorization}
         )
         assert response.json()["authenticated"] is False
+
+
+def test_session_user_can_create_and_list_a_token_without_exposing_secrets(
+    db_client: TestClient, migrated_db: str
+):
+    create_user(migrated_db)
+    db_client.post("/api/auth/login", json={"username": "alice", "password": "secret"})
+
+    created = db_client.post("/api/auth/tokens", json={"name": "CLI"})
+    listed = db_client.get("/api/auth/tokens")
+
+    assert created.status_code == 201
+    assert set(created.json()) == {"id", "name", "scope", "created_at", "token"}
+    assert created.json()["name"] == "CLI"
+    assert created.json()["scope"] == "read"
+    assert created.json()["token"]
+    assert listed.status_code == 200
+    assert listed.json() == [
+        {
+            "id": created.json()["id"],
+            "name": "CLI",
+            "scope": "read",
+            "created_at": created.json()["created_at"],
+        }
+    ]
+    serialized = json.dumps(listed.json())
+    assert "token" not in serialized
+    assert "token_hash" not in serialized
+    assert created.json()["token"] not in serialized
+
+
+def test_token_list_only_contains_the_session_users_tokens(
+    db_client: TestClient, migrated_db: str
+):
+    create_user(migrated_db, "alice")
+    create_user(migrated_db, "bob")
+    db_client.post("/api/auth/login", json={"username": "alice", "password": "secret"})
+    alice_token = db_client.post("/api/auth/tokens", json={"name": "Alice CLI"}).json()
+    db_client.post("/api/auth/login", json={"username": "bob", "password": "secret"})
+    bob_token = db_client.post(
+        "/api/auth/tokens", json={"name": "Bob CLI", "scope": "read_write"}
+    ).json()
+
+    response = db_client.get("/api/auth/tokens")
+
+    assert response.json() == [
+        {
+            "id": bob_token["id"],
+            "name": "Bob CLI",
+            "scope": "read_write",
+            "created_at": bob_token["created_at"],
+        }
+    ]
+    assert alice_token["id"] not in response.text
+
+
+def test_token_scope_rejects_values_outside_the_declared_literal(
+    db_client: TestClient, migrated_db: str
+):
+    create_user(migrated_db)
+    db_client.post("/api/auth/login", json={"username": "alice", "password": "secret"})
+
+    for scope in ("admin", "write"):
+        response = db_client.post(
+            "/api/auth/tokens", json={"name": "invalid", "scope": scope}
+        )
+        assert response.status_code == 422
+
+
+def test_issued_token_authenticates_until_the_owner_revokes_it(
+    db_client: TestClient, migrated_db: str
+):
+    create_user(migrated_db)
+    db_client.post("/api/auth/login", json={"username": "alice", "password": "secret"})
+    issued = db_client.post("/api/auth/tokens", json={"name": "CLI"}).json()
+    headers = {"Authorization": f"Bearer {issued['token']}"}
+    db_client.cookies.clear()
+
+    assert db_client.get("/api/auth/me", headers=headers).json()["username"] == "alice"
+
+    db_client.post("/api/auth/login", json={"username": "alice", "password": "secret"})
+    revoked = db_client.delete(f"/api/auth/tokens/{issued['id']}")
+    db_client.cookies.clear()
+
+    assert revoked.status_code == 204
+    assert db_client.get("/api/auth/me", headers=headers).json()["authenticated"] is False
+
+
+def test_revoking_another_users_or_unknown_token_returns_not_found_without_revoking_it(
+    db_client: TestClient, migrated_db: str
+):
+    create_user(migrated_db, "alice")
+    create_user(migrated_db, "bob")
+    db_client.post("/api/auth/login", json={"username": "alice", "password": "secret"})
+    issued = db_client.post("/api/auth/tokens", json={"name": "Alice CLI"}).json()
+    headers = {"Authorization": f"Bearer {issued['token']}"}
+    db_client.post("/api/auth/login", json={"username": "bob", "password": "secret"})
+
+    assert db_client.delete(f"/api/auth/tokens/{issued['id']}").status_code == 404
+    assert db_client.delete(f"/api/auth/tokens/{uuid4()}").status_code == 404
+    db_client.cookies.clear()
+    assert db_client.get("/api/auth/me", headers=headers).json()["username"] == "alice"
+
+
+def test_token_management_endpoints_require_a_session_even_for_read_write_tokens(
+    db_client: TestClient, migrated_db: str
+):
+    create_user(migrated_db)
+    token = issue_token(migrated_db, "alice", scope="read_write")
+    headers = {"Authorization": f"Bearer {token}"}
+    token_id = uuid4()
+
+    assert db_client.post(
+        "/api/auth/tokens", json={"name": "nested"}, headers=headers
+    ).status_code == 403
+    assert db_client.get("/api/auth/tokens", headers=headers).status_code == 403
+    assert db_client.delete(f"/api/auth/tokens/{token_id}", headers=headers).status_code == 403
+
+
+def test_token_management_endpoints_reject_anonymous_requests(
+    db_client: TestClient,
+):
+    token_id = uuid4()
+
+    assert db_client.post("/api/auth/tokens", json={"name": "anonymous"}).status_code == 401
+    assert db_client.get("/api/auth/tokens").status_code == 401
+    assert db_client.delete(f"/api/auth/tokens/{token_id}").status_code == 401

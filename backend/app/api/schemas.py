@@ -65,6 +65,22 @@ class AuthStatus(BaseModel):
     is_admin: bool
 
 
+class CreateTokenRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    scope: Literal["read", "read_write"] = "read"
+
+
+class TokenSummary(BaseModel):
+    id: UUID
+    name: str
+    scope: str
+    created_at: datetime
+
+
+class TokenCreated(TokenSummary):
+    token: str
+
+
 class JobCounts(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
