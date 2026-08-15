@@ -287,6 +287,25 @@ def test_anonymous_and_regular_users_cannot_manage_accounts(db_client):
     assert db_client.get("/api/admin/users").status_code == 403
 
 
+def test_admin_api_rejects_an_admins_read_write_token(db_client, migrated_db):
+    login_as(db_client, "alice")
+    token = "admin-read-write-token"
+    with psycopg.connect(migrated_db) as conn:
+        user_id = conn.execute(
+            "UPDATE users SET is_admin = true WHERE username = 'alice' RETURNING id"
+        ).fetchone()[0]
+        conn.execute(
+            "INSERT INTO api_tokens (user_id, name, token_hash, scope) VALUES (%s, 'admin-test', %s, 'read_write')",
+            (user_id, hashlib.sha256(token.encode()).hexdigest()),
+        )
+
+    response = db_client.get(
+        "/api/admin/users", headers={"Authorization": f"Bearer {token}"}
+    )
+
+    assert response.status_code == 403
+
+
 def test_admin_can_create_list_and_login_as_a_new_user(db_client, migrated_db):
     login_as(db_client, "alice")
     with psycopg.connect(migrated_db) as conn:
