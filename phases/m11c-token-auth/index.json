@@ -52,7 +52,10 @@
       "type": "feat",
       "scope": "api",
       "desc": "토큰 단독 경로의 교차 검증과 공급 예제의 토큰 지원",
-      "status": "pending"
+      "status": "completed",
+      "summary": "API 토큰만으로 공급·검색·열람하는 전 구간과 scope·폐기·열람·사칭 방지·관리 경계를 검증하고 독립 공급 예제에 --token 인증을 추가했다.",
+      "started_at": "2026-08-15T12:58:33+0900",
+      "completed_at": "2026-08-15T13:04:00+0900"
     },
     {
       "step": 5,
