@@ -68,7 +68,8 @@
     },
     {
       "dir": "m11d-mcp-write",
-      "status": "pending"
+      "status": "completed",
+      "completed_at": "2026-08-15T15:21:02+0900"
     },
     {
       "dir": "m10-zip-ingest",
