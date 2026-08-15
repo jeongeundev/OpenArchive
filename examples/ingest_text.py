@@ -8,7 +8,7 @@
     python examples/ingest_text.py --base-url http://localhost:8000 \
       --username alice --password secret --title "API 문서" document.md
     python examples/ingest_text.py --base-url http://localhost:8000 \
-      --token oa_example --title "API 문서" document.md
+      --token "$OPENARCHIVE_API_TOKEN" --title "API 문서" document.md
 """
 
 from __future__ import annotations

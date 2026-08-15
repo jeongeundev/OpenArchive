@@ -26,7 +26,7 @@ DB 계층에 있고, 애플리케이션 코드에는 파이프라인을 조율�
 |---|---|---|
 | **Ingestion** (수집) | `POST /api/documents`(파일 업로드)와 `POST /api/documents/text`(JSON 텍스트) → `services/documents.py`의 두 입력 어댑터 → 공통 INSERT 헬퍼 | 진입점 2개, 파일 4종 + 직접 텍스트 2종. 파생 계약은 동일 (ADR-035) |
 | **Processing** (변환·임베딩) | DB 트리거(잡 생성·코얼레싱) + 워커(청킹·임베딩) + edge 트리거(관계 생성) | 견고 — 조율이 전부 DB 안에 있다 |
-| **Storage** (저장·정합성) | 테이블 8개(문서 6 + 인증 2), 제약·CASCADE·`vector(1024)` 타입, 정합성 관측 쿼리 | 코어 계약(ADR-015)의 자리 |
+| **Storage** (저장·정합성) | 테이블 9개(문서 6 + 인증 3), 제약·CASCADE·`vector(1024)` 타입, 정합성 관측 쿼리 | 코어 계약(ADR-015)의 자리 |
 | **Retrieval** (검색·관계) | 단일 SQL 검색(정형+벡터+그래프) · 저장 edge · 위키링크 · 진단·클러스터 | 전 경로가 같은 열람 술어를 공유 (ADR-027) |
 | **Interface** (소비) | Web UI · REST API · MCP — 같은 services 계층을 소비하는 대등한 인터페이스 (ADR-031 결정 3) | 위임 API 토큰으로 REST의 비대화형 소비·공급 가능 (ADR-034). 커넥터·MCP 쓰기는 다음 확장 |
 
