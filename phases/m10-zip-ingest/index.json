@@ -30,7 +30,10 @@
       "type": "docs",
       "scope": "adr",
       "desc": "브라우저 해제 결정을 ADR-033으로 기록한다",
-      "status": "pending"
+      "status": "completed",
+      "summary": "브라우저 ZIP 해제 결정과 필터·중첩·부분 실패 원칙을 ADR-033에 기록하고 JSZip 의존성과 대량 투입 현황을 문서화",
+      "started_at": "2026-08-15T16:38:01+0900",
+      "completed_at": "2026-08-15T16:40:56+0900"
     }
   ],
   "created_at": "2026-08-15T16:31:40+0900"
