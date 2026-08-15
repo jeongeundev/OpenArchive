@@ -7,6 +7,8 @@
 
     python examples/ingest_text.py --base-url http://localhost:8000 \
       --username alice --password secret --title "API 문서" document.md
+    python examples/ingest_text.py --base-url http://localhost:8000 \
+      --token oa_example --title "API 문서" document.md
 """
 
 from __future__ import annotations
@@ -39,13 +41,17 @@ def _request_json(
     *,
     method: str = "GET",
     body: dict[str, Any] | None = None,
+    headers: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     data = json.dumps(body).encode() if body is not None else None
+    request_headers = dict(headers or {})
+    if data is not None:
+        request_headers["Content-Type"] = "application/json"
     request = urllib.request.Request(
         url,
         data=data,
         method=method,
-        headers={"Content-Type": "application/json"} if data is not None else {},
+        headers=request_headers,
     )
     with opener.open(request) as response:
         return json.load(response)
@@ -62,16 +68,19 @@ def ingest(args: argparse.Namespace) -> dict[str, Any]:
     opener = urllib.request.build_opener(
         urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar())
     )
-    _request_json(
-        opener,
-        base_url + LOGIN_PATH,
-        method="POST",
-        body={"username": args.username, "password": args.password},
-    )
+    headers = {"Authorization": f"Bearer {args.token}"} if args.token else {}
+    if not args.token:
+        _request_json(
+            opener,
+            base_url + LOGIN_PATH,
+            method="POST",
+            body={"username": args.username, "password": args.password},
+        )
     document = _request_json(
         opener,
         base_url + INGEST_PATH,
         method="POST",
+        headers=headers,
         body={
             "title": args.title,
             "content": _read_content(args.input),
@@ -85,7 +94,7 @@ def ingest(args: argparse.Namespace) -> dict[str, Any]:
     while is_in_progress(document) and time.monotonic() < deadline:
         time.sleep(args.poll_interval)
         path = DOCUMENT_PATH.format(document_id=document["id"])
-        document = _request_json(opener, base_url + path)
+        document = _request_json(opener, base_url + path, headers=headers)
     return document
 
 
@@ -93,15 +102,22 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("input", nargs="?", default="-", help="텍스트 파일 경로 (기본: stdin)")
     parser.add_argument("--base-url", default="http://localhost:8000")
-    parser.add_argument("--username", required=True)
-    parser.add_argument("--password", required=True)
+    authentication = parser.add_mutually_exclusive_group(required=True)
+    authentication.add_argument("--token")
+    authentication.add_argument("--username")
+    parser.add_argument("--password")
     parser.add_argument("--title", required=True)
     parser.add_argument("--content-type", choices=("txt", "md"), default="md")
     parser.add_argument("--tags", nargs="*", default=[])
     parser.add_argument("--visibility", choices=("public", "private"), default="public")
     parser.add_argument("--timeout", type=float, default=30.0, help="폴링 제한 시간(초)")
     parser.add_argument("--poll-interval", type=float, default=1.0, help="폴링 간격(초)")
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.username and not args.password:
+        parser.error("--username requires --password")
+    if args.password and not args.username:
+        parser.error("--password requires --username")
+    return args
 
 
 def main() -> None:
