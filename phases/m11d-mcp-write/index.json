@@ -19,7 +19,10 @@
       "type": "feat",
       "scope": "mcp",
       "desc": "AI 에이전트가 문서를 공급하는 MCP 쓰기 도구",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-08-15T15:07:13+0900",
+      "summary": "MCP create_document 도구가 MCP_USER_ID 소유권으로 코어 텍스트 진입점을 재사용하고 DB 파생·열람 계약을 유지함; app/·migrations/ 코어 변경 0줄",
+      "completed_at": "2026-08-15T15:11:03+0900"
     },
     {
       "step": 2,
