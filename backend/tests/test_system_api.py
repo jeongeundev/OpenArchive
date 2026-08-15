@@ -22,6 +22,25 @@ def test_status_requires_login(db_client: TestClient):
     assert db_client.get("/api/system/status").status_code == 401
 
 
+def test_read_scope_token_can_poll_status_without_a_cookie(db_client: TestClient):
+    """모니터링은 쓰기 권한 없이 상태를 폴링할 수 있어야 한다 (이슈 #65 구현 범위 5).
+
+    status는 읽기 엔드포인트이므로 `read` 토큰으로 통과하는 것이 의도다. 이 단언이
+    없으면 이후 status에 쓰기 게이트가 잘못 붙어도 아무도 알아채지 못한다.
+    """
+    issued = db_client.post(
+        "/api/auth/tokens", json={"name": "monitoring", "scope": "read"}
+    ).json()
+    db_client.cookies.clear()
+
+    response = db_client.get(
+        "/api/system/status", headers={"Authorization": f"Bearer {issued['token']}"}
+    )
+
+    assert response.status_code == 200
+    assert response.json()["embedding_provider"]
+
+
 def test_status_reports_operational_fields(db_client: TestClient):
     response = db_client.get("/api/system/status")
 

@@ -175,15 +175,12 @@ def test_unverified_identifiers_never_authenticate_and_valid_token_is_issuer_onl
             "username": "alice",
         },
     )
-    assert response.status_code in (201, 422)
-    if response.status_code == 201:
-        assert response.json()["owner_id"] == "bob"
-        assert response.json()["id"] in {
-            item["id"]
-            for item in db_client.get(
-                "/api/documents", headers=bearer(valid["token"])
-            ).json()
-        }
+    assert response.status_code == 201
+    assert response.json()["owner_id"] == "bob"
+    assert response.json()["id"] in {
+        item["id"]
+        for item in db_client.get("/api/documents", headers=bearer(valid["token"])).json()
+    }
     assert db_client.get("/api/auth/me", headers=bearer(valid["token"])).json()[
         "username"
     ] == "bob"

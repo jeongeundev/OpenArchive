@@ -145,17 +145,32 @@ def test_invalid_bearer_does_not_fall_back_to_a_valid_cookie(
     }
 
 
-def test_non_bearer_and_empty_bearer_headers_are_anonymous(
+def test_empty_bearer_value_is_anonymous_and_does_not_reach_the_cookie(
     db_client: TestClient, migrated_db: str
 ):
     create_user(migrated_db)
     db_client.post("/api/auth/login", json={"username": "alice", "password": "secret"})
 
-    for authorization in ("Basic abc", "Bearer "):
-        response = db_client.get(
-            "/api/auth/me", headers={"Authorization": authorization}
-        )
-        assert response.json()["authenticated"] is False
+    response = db_client.get("/api/auth/me", headers={"Authorization": "Bearer "})
+
+    assert response.json()["authenticated"] is False
+
+
+def test_another_authorization_scheme_leaves_the_cookie_session_intact(
+    db_client: TestClient, migrated_db: str
+):
+    """Basic 등 다른 스킴은 이 앱을 향한 토큰이 아니므로 세션을 무력화하지 않는다.
+
+    Bearer 폴백 금지의 근거(폐기가 관측되지 않는다·read 토큰이 조용히 승격된다)는
+    토큰이 실제로 제시됐을 때만 성립한다. 여기에는 폐기할 토큰도 좁힌 scope도 없다.
+    Authorization을 덧붙이는 프록시 뒤에서 브라우저 세션이 조용히 끊기면 안 된다.
+    """
+    create_user(migrated_db)
+    db_client.post("/api/auth/login", json={"username": "alice", "password": "secret"})
+
+    response = db_client.get("/api/auth/me", headers={"Authorization": "Basic abc"})
+
+    assert response.json()["username"] == "alice"
 
 
 def test_session_user_can_create_and_list_a_token_without_exposing_secrets(
