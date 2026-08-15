@@ -56,8 +56,8 @@ OpenArchive/
 │   └── ingest_text.py            # 표준 라이브러리만 쓰는 독립 HTTP 텍스트 공급 예제
 ├── backend/
 │   ├── pyproject.toml            # fastapi, psycopg[binary,pool], pydantic-settings, mcp<2, pypdf, python-docx / [dev]: pytest, ruff / [local]: sentence-transformers
-│   ├── migrations/               # 001~011: extensions, tables, triggers, indexes,
-│   │                             #   trgm, edges(006~008), auth(009), links(010~011)
+│   ├── migrations/               # 001~013: extensions, tables, triggers, indexes,
+│   │                             #   trgm, edges(006~008), auth(009), links(010~011), token(013)
 │   ├── app/
 │   │   ├── main.py               # FastAPI 앱 조립
 │   │   ├── config.py             # pydantic-settings (DATABASE_URL, EMBEDDING_PROVIDER 등)
@@ -182,6 +182,16 @@ CREATE TABLE sessions (
   user_id    uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   created_at timestamptz NOT NULL DEFAULT now(),
   expires_at timestamptz NOT NULL
+);
+
+-- api_tokens: 프로그램용 장수명 위임 자격증명 (013, ADR-034)
+CREATE TABLE api_tokens (
+  id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id    uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name       text NOT NULL,
+  token_hash text NOT NULL UNIQUE,   -- sha256(원문). 원문은 발급 응답에만 반환
+  scope      text NOT NULL CHECK (scope IN ('read', 'read_write')),
+  created_at timestamptz NOT NULL DEFAULT now()
 );
 ```
 
@@ -468,12 +478,13 @@ OpenSQL `patroni.yml`의 PostgreSQL 파라미터는 `max_connections: 100`이다
 | `GET /api/documents/{id}/backlinks` | **이 문서를 가리키는 문서.** 열람 가능한 출발 문서만 |
 | `POST /api/search` | 하이브리드 검색 + 관계 순회 (아래) |
 | `POST /api/auth/login` · `logout` · `GET /api/auth/me` | 최소 로그인. 세션 토큰은 `sessions` 테이블에 저장 |
+| `POST /api/auth/tokens` · `GET /api/auth/tokens` · `DELETE /api/auth/tokens/{id}` | **세션 전용** API 토큰 발급·목록·폐기. 원문은 발급 응답에만 반환하며 기본 scope는 `read` |
 | `GET /api/diagnostics` | **진단.** 고아 문서·깨진 링크·중복 후보 등을 **열람 범위 기준**으로 집계 (ADR-027) |
 | `GET /api/clusters` | **주제 덩어리.** 관계 그래프의 연결 요소 |
 | `GET /api/admin/users` 등 | 관리자 전용 |
 | `GET /api/system/status` | **로그인 필요 · 운영/데모 전용**: `inet_server_addr()`(현재 접속 노드), pending/processing/error 잡 수, 임베딩 프로바이더명, **정합성 검증 쿼리 결과**(`c.version <> d.version` 건수). `/admin/status`가 소비하며 사용자 화면은 호출하지 않는다. SQL과 결과 모델은 `services/system.py`에 있고 라우터는 인증과 응답 변환만 맡는다 |
 
-> **구현 현황 (M11-b 기준)**: 위 표 전체가 구현되어 있다. 파일 업로드와 JSON 텍스트 공급은 같은 INSERT 헬퍼와 DB 트리거 파생 계약을 공유한다. 비대화형 자격증명은 아직 없어 텍스트 공급도 현재는 사람의 세션 로그인이 필요하다 (ADR-035).
+> **구현 현황 (M11-c 기준)**: 위 표 전체가 구현되어 있다. 파일 업로드와 JSON 텍스트 공급은 같은 INSERT 헬퍼와 DB 트리거 파생 계약을 공유한다. 프로그램은 사람이 발급한 `read_write` 위임 API 토큰으로 세션 쿠키 없이 텍스트를 공급할 수 있다 (ADR-034·035).
 >
 > **모든 조회에 열람 범위가 걸린다.** 검색·관련 문서·링크·백링크·진단 집계·클러스터가 같은 `VISIBLE_TO_USER` 술어를 쓴다. 볼 수 없는 문서는 자리 표시조차 남기지 않는다 — 표시 자체가 존재와 개수를 누출한다 (ADR-027).
 >
