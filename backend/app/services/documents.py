@@ -12,7 +12,7 @@ import psycopg
 from psycopg.rows import dict_row
 
 from app.services.parsing import UnsupportedFileType, detect_content_type, extract_text
-from app.services.visibility import VISIBLE_TO_USER
+from app.services.visibility import VISIBILITY_VALUES, VISIBLE_TO_USER
 
 # 목록·요약 응답이 쓰는 컬럼. 네 곳에서 같은 나열을 반복하지 않도록 한 곳에 둔다.
 SUMMARY_COLUMNS = """id, title, filename, content_type, version, owner_id, visibility, tags,
@@ -47,6 +47,10 @@ class EmptyExtractedText(Exception):
 
 class ExtractedTextTooLarge(Exception):
     """추출 텍스트가 서비스와 DB가 허용하는 500KB 경계를 넘은 경우."""
+
+
+class InvalidVisibility(Exception):
+    """공개범위가 열람 술어가 아는 두 값(public, private) 밖인 경우."""
 
 
 class VersionConflict(Exception):
@@ -191,6 +195,8 @@ async def _insert_document(
         raise ExtractedTextTooLarge(
             f"{text_label(filename)}는 500KB를 넘을 수 없습니다."
         )
+    if visibility not in VISIBILITY_VALUES:
+        raise InvalidVisibility("공개범위는 public, private 중 하나여야 합니다.")
 
     cur = conn.cursor(row_factory=dict_row)
     await cur.execute(

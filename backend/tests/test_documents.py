@@ -7,6 +7,7 @@ from app.services.documents import (
     MAX_EXTRACTED_TEXT_LENGTH,
     EmptyExtractedText,
     ExtractedTextTooLarge,
+    InvalidVisibility,
     create_document,
     create_text_document,
     update_extracted_text,
@@ -112,6 +113,50 @@ async def test_create_text_document_rejects_binary_content_type_without_saving(
         )
 
     assert await document_count(documents_conn) == 0
+
+
+@pytest.mark.parametrize("visibility", ["internal", "public "])
+async def test_create_text_document_rejects_invalid_visibility_without_saving(
+    documents_conn, visibility
+):
+    with pytest.raises(InvalidVisibility, match="public, private"):
+        await create_text_document(
+            documents_conn,
+            title="잘못된 공개범위",
+            content="문서 텍스트",
+            owner_id="alice",
+            visibility=visibility,
+        )
+
+    assert await document_count(documents_conn) == 0
+
+
+async def test_create_document_rejects_invalid_visibility_without_saving(documents_conn):
+    with pytest.raises(InvalidVisibility, match="public, private"):
+        await create_document(
+            documents_conn,
+            filename="invalid.md",
+            data="추출 텍스트".encode(),
+            owner_id="alice",
+            visibility="internal",
+        )
+
+    assert await document_count(documents_conn) == 0
+
+
+@pytest.mark.parametrize("visibility", ["public", "private"])
+async def test_create_text_document_accepts_visibility_values(
+    documents_conn, visibility
+):
+    document = await create_text_document(
+        documents_conn,
+        title="정상 공개범위",
+        content="문서 텍스트",
+        owner_id="alice",
+        visibility=visibility,
+    )
+
+    assert document["visibility"] == visibility
 
 
 async def test_create_text_document_normalizes_tags(documents_conn):
