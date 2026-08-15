@@ -24,6 +24,7 @@ CORE_TABLES = {
     "document_links",
     "users",
     "sessions",
+    "api_tokens",
 }
 
 # 임베딩 차원은 vector(1024) 고정이다 (ADR-003).
@@ -318,6 +319,132 @@ def test_deleting_a_user_cascades_to_sessions(conn: psycopg.Connection):
 
     (remaining,) = conn.execute("SELECT count(*) FROM sessions").fetchone()
     assert remaining == 0
+
+
+def test_api_token_columns_and_constraints_match_the_delegated_token_model(
+    conn: psycopg.Connection,
+):
+    rows = conn.execute(
+        """
+        SELECT column_name, data_type, is_nullable, column_default
+        FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'api_tokens'
+        ORDER BY ordinal_position
+        """
+    ).fetchall()
+
+    assert rows == [
+        ("id", "uuid", "NO", "gen_random_uuid()"),
+        ("user_id", "uuid", "NO", None),
+        ("name", "text", "NO", None),
+        ("token_hash", "text", "NO", None),
+        ("scope", "text", "NO", None),
+        ("created_at", "timestamp with time zone", "NO", "now()"),
+    ]
+
+    constraints = conn.execute(
+        """
+        SELECT tc.constraint_type,
+               array_agg(kcu.column_name::text ORDER BY kcu.ordinal_position)
+        FROM information_schema.table_constraints tc
+        JOIN information_schema.key_column_usage kcu
+          ON kcu.constraint_schema = tc.constraint_schema
+         AND kcu.constraint_name = tc.constraint_name
+        WHERE tc.table_schema = 'public'
+          AND tc.table_name = 'api_tokens'
+          AND tc.constraint_type IN ('PRIMARY KEY', 'UNIQUE', 'FOREIGN KEY')
+        GROUP BY tc.constraint_name, tc.constraint_type
+        ORDER BY tc.constraint_type, tc.constraint_name
+        """
+    ).fetchall()
+
+    assert constraints == [
+        ("FOREIGN KEY", ["user_id"]),
+        ("PRIMARY KEY", ["id"]),
+        ("UNIQUE", ["token_hash"]),
+    ]
+
+
+@pytest.mark.parametrize("scope", ["read", "read_write"])
+def test_api_token_accepts_supported_scopes(conn: psycopg.Connection, scope: str):
+    (user_id,) = conn.execute(
+        "INSERT INTO users (username, password_hash) VALUES (%s, 'scrypt-hash') RETURNING id",
+        (f"user-{scope}",),
+    ).fetchone()
+
+    conn.execute(
+        "INSERT INTO api_tokens (user_id, name, token_hash, scope) VALUES (%s, 'ci', %s, %s)",
+        (user_id, f"sha256:{scope}", scope),
+    )
+
+
+@pytest.mark.parametrize("scope", ["write", "admin", ""])
+def test_api_token_rejects_unsupported_scopes(conn: psycopg.Connection, scope: str):
+    (user_id,) = conn.execute(
+        "INSERT INTO users (username, password_hash) VALUES (%s, 'scrypt-hash') RETURNING id",
+        (f"user-{scope or 'empty'}",),
+    ).fetchone()
+
+    with pytest.raises(psycopg.errors.CheckViolation):
+        conn.execute(
+            "INSERT INTO api_tokens (user_id, name, token_hash, scope) VALUES (%s, 'ci', %s, %s)",
+            (user_id, f"sha256:{scope}", scope),
+        )
+
+
+def test_api_token_hash_is_globally_unique(conn: psycopg.Connection):
+    user_ids = conn.execute(
+        """
+        INSERT INTO users (username, password_hash)
+        VALUES ('alice', 'scrypt-hash'), ('bob', 'scrypt-hash')
+        RETURNING id
+        """
+    ).fetchall()
+    insert_token = """
+        INSERT INTO api_tokens (user_id, name, token_hash, scope)
+        VALUES (%s, %s, 'same-sha256-hash', 'read')
+    """
+    conn.execute(insert_token, (user_ids[0][0], "alice-token"))
+
+    with pytest.raises(psycopg.errors.UniqueViolation):
+        conn.execute(insert_token, (user_ids[1][0], "bob-token"))
+
+
+def test_deleting_a_user_cascades_to_api_tokens(conn: psycopg.Connection):
+    (user_id,) = conn.execute(
+        "INSERT INTO users (username, password_hash) VALUES ('alice', 'scrypt-hash') RETURNING id"
+    ).fetchone()
+    conn.execute(
+        """
+        INSERT INTO api_tokens (user_id, name, token_hash, scope)
+        VALUES (%s, 'ci-ingest', 'sha256:token', 'read_write')
+        """,
+        (user_id,),
+    )
+
+    conn.execute("DELETE FROM users WHERE id = %s", (user_id,))
+
+    (remaining,) = conn.execute("SELECT count(*) FROM api_tokens").fetchone()
+    assert remaining == 0
+
+
+def test_deleting_a_document_does_not_delete_api_tokens(conn: psycopg.Connection):
+    (user_id,) = conn.execute(
+        "INSERT INTO users (username, password_hash) VALUES ('alice', 'scrypt-hash') RETURNING id"
+    ).fetchone()
+    conn.execute(
+        """
+        INSERT INTO api_tokens (user_id, name, token_hash, scope)
+        VALUES (%s, 'ci-ingest', 'sha256:token', 'read_write')
+        """,
+        (user_id,),
+    )
+    document_id = insert_document(conn)
+
+    conn.execute("DELETE FROM documents WHERE id = %s", (document_id,))
+
+    (remaining,) = conn.execute("SELECT count(*) FROM api_tokens").fetchone()
+    assert remaining == 1
 
 
 def test_document_content_over_500kb_is_rejected(conn: psycopg.Connection):
