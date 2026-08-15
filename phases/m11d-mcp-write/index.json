@@ -8,7 +8,10 @@
       "type": "fix",
       "scope": "api",
       "desc": "코어가 공개범위 계약을 스스로 지킨다",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-08-15T15:04:13+0900",
+      "summary": "두 문서 생성 경로가 공유하는 코어 INSERT 경계에서 공개범위를 public/private로 강제하고 서비스 직접 호출 테스트로 고정",
+      "completed_at": "2026-08-15T15:07:13+0900"
     },
     {
       "step": 1,
@@ -26,5 +29,6 @@
       "desc": "MCP 쓰기 도구를 ADR-036으로 확정하고 코어 불변성 실측치를 기록한다",
       "status": "pending"
     }
-  ]
+  ],
+  "created_at": "2026-08-15T15:04:13+0900"
 }
