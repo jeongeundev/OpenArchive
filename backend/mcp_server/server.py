@@ -3,7 +3,7 @@
 from contextlib import asynccontextmanager
 from dataclasses import asdict
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 from mcp.server.fastmcp import FastMCP
@@ -11,6 +11,7 @@ from mcp.server.fastmcp import FastMCP
 from app.config import get_settings
 from app.db import close_pool, get_pool
 from app.embeddings import get_provider
+from app.services.documents import create_text_document
 from app.services.documents import get_document as get_document_service
 from app.services.documents import list_documents as list_documents_service
 from app.services.related import find_related
@@ -30,6 +31,10 @@ async def lifespan(server: FastMCP):
 
 
 mcp = FastMCP("OpenArchive", lifespan=lifespan)
+
+
+class MissingUserContext(Exception):
+    """MCP_USER_ID가 없어 공급 주체를 확정할 수 없는 경우."""
 
 
 def _json_value(value: Any) -> Any:
@@ -134,9 +139,38 @@ async def list_documents(tag: str | None = None, status: str | None = None) -> d
     return {"items": [_document_payload(document) for document in documents]}
 
 
+async def create_document(
+    title: str,
+    content: str,
+    content_type: Literal["txt", "md"] = "md",
+    tags: list[str] | None = None,
+    visibility: Literal["public", "private"] = "public",
+) -> dict:
+    """문서 텍스트를 저장하고 임베딩 파이프라인을 기동합니다.
+
+    기본 공개범위는 public입니다. 소유자는 서버의 MCP_USER_ID 환경이 정하며 인자로
+    지정할 수 없습니다. 임베딩은 비동기이므로 응답의 embedding_status가 pending일 수 있습니다.
+    """
+    user_id = get_settings().mcp_user_id
+    if user_id is None:
+        raise MissingUserContext("문서를 만들려면 MCP_USER_ID 환경변수를 설정해야 합니다.")
+    async with get_pool().connection() as conn:
+        document = await create_text_document(
+            conn,
+            title=title,
+            content=content,
+            content_type=content_type,
+            owner_id=user_id,
+            tags=tags,
+            visibility=visibility,
+        )
+    return _document_payload(document)
+
+
 mcp.tool()(search_documents)
 mcp.tool()(get_document)
 mcp.tool()(list_documents)
+mcp.tool()(create_document)
 
 
 def main() -> None:
