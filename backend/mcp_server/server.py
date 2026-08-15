@@ -107,7 +107,7 @@ def _document_payload(document: dict) -> dict:
 
 
 async def get_document(document_id: str) -> dict:
-    """문서의 추출 텍스트·텍스트 버전 목록·청크 상태를 반환합니다.
+    """문서 텍스트·텍스트 버전 목록·청크 상태를 반환합니다.
 
     검색 결과의 문서 전체 내용과 색인 기준 버전을 확인할 때 사용합니다.
     """
@@ -152,7 +152,9 @@ async def create_document(
     지정할 수 없습니다. 임베딩은 비동기이므로 응답의 embedding_status가 pending일 수 있습니다.
     """
     user_id = get_settings().mcp_user_id
-    if user_id is None:
+    # 빈 값·공백도 주체가 없는 상태다. `MCP_USER_ID=""`는 None이 아니라 빈 문자열로 들어오고,
+    # owner_id에는 FK도 CHECK도 없어 그대로 두면 소유자 없는 문서가 조용히 저장된다.
+    if not user_id or not user_id.strip():
         raise MissingUserContext("문서를 만들려면 MCP_USER_ID 환경변수를 설정해야 합니다.")
     async with get_pool().connection() as conn:
         document = await create_text_document(

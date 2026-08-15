@@ -9,6 +9,8 @@ from app.config import get_settings
 from app.db import close_pool, get_pool
 from app.embeddings import FakeProvider
 from app.main import app
+from app.services.documents import InvalidVisibility
+from app.services.parsing import UnsupportedFileType
 
 
 @pytest.fixture
@@ -68,6 +70,16 @@ async def _seed_documents(dsn: str):
     return public_id, private_id
 
 
+async def _document_count_by_title(dsn: str, title: str) -> int:
+    async with await psycopg.AsyncConnection.connect(dsn) as conn:
+        row = await (
+            await conn.execute(
+                "SELECT count(*) FROM documents WHERE title = %s", (title,)
+            )
+        ).fetchone()
+    return row[0]
+
+
 async def test_registers_exactly_four_document_tools():
     from mcp_server.server import mcp
 
@@ -81,8 +93,11 @@ async def test_registers_exactly_four_document_tools():
     }
 
 
+# 미설정뿐 아니라 빈 값·공백도 주체가 없는 상태다. pydantic은 `MCP_USER_ID=""`를 None이 아니라
+# 빈 문자열로 담고, owner_id에는 FK도 CHECK도 없어 그대로 두면 소유자 없는 문서가 조용히 생긴다.
+@pytest.mark.parametrize("env_value", [None, "", "   "])
 async def test_create_requires_user_context_without_changing_anonymous_reads(
-    monkeypatch, mcp_database
+    monkeypatch, mcp_database, env_value
 ):
     from mcp_server.server import (
         MissingUserContext,
@@ -92,7 +107,10 @@ async def test_create_requires_user_context_without_changing_anonymous_reads(
     )
 
     public_id, _ = await _seed_documents(mcp_database)
-    monkeypatch.delenv("MCP_USER_ID", raising=False)
+    if env_value is None:
+        monkeypatch.delenv("MCP_USER_ID", raising=False)
+    else:
+        monkeypatch.setenv("MCP_USER_ID", env_value)
     get_settings.cache_clear()
 
     with pytest.raises(MissingUserContext, match="MCP_USER_ID"):
@@ -105,14 +123,7 @@ async def test_create_requires_user_context_without_changing_anonymous_reads(
         item["document_id"]
         for item in (await search_documents("OpenSQL 공개 정합성"))["items"]
     } == {str(public_id)}
-    async with await psycopg.AsyncConnection.connect(mcp_database) as conn:
-        assert (
-            await (
-                await conn.execute(
-                    "SELECT count(*) FROM documents WHERE title = %s", ("주체 없는 문서",)
-                )
-            ).fetchone()
-        )[0] == 0
+    assert await _document_count_by_title(mcp_database, "주체 없는 문서") == 0
 
 
 async def test_create_uses_mcp_owner_and_starts_all_database_derivatives(
@@ -198,38 +209,25 @@ async def test_private_created_document_is_hidden_from_other_mcp_users(
 
 
 @pytest.mark.parametrize(
-    ("field", "value", "exception_name"),
+    ("field", "value", "expected_exception"),
     [
-        ("visibility", "organization", "InvalidVisibility"),
-        ("content_type", "pdf", "UnsupportedFileType"),
+        ("visibility", "organization", InvalidVisibility),
+        ("content_type", "pdf", UnsupportedFileType),
     ],
 )
 async def test_create_propagates_core_validation_without_saving_document(
-    monkeypatch, mcp_database, field, value, exception_name
+    monkeypatch, mcp_database, field, value, expected_exception
 ):
-    from app.services import documents as document_service
-    from app.services.parsing import UnsupportedFileType
     from mcp_server.server import create_document
 
-    exceptions = {
-        "InvalidVisibility": document_service.InvalidVisibility,
-        "UnsupportedFileType": UnsupportedFileType,
-    }
     monkeypatch.setenv("MCP_USER_ID", "alice")
     get_settings.cache_clear()
     kwargs = {field: value}
 
-    with pytest.raises(exceptions[exception_name]):
+    with pytest.raises(expected_exception):
         await create_document("거부 대상", "저장되면 안 되는 텍스트", **kwargs)
 
-    async with await psycopg.AsyncConnection.connect(mcp_database) as conn:
-        assert (
-            await (
-                await conn.execute(
-                    "SELECT count(*) FROM documents WHERE title = %s", ("거부 대상",)
-                )
-            ).fetchone()
-        )[0] == 0
+    assert await _document_count_by_title(mcp_database, "거부 대상") == 0
 
 
 async def _login(client, dsn: str, username: str, password: str = "test-password") -> None:

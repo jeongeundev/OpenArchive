@@ -109,7 +109,8 @@ import하지 않는 별도 프로세스가 HTTP만으로 완주하는 것은 **�
 코어 공개범위 보강은 `backend/app/` **2 files changed, 9 insertions(+), 1 deletion(-)**였고,
 그와 분리된 MCP 추가 step은 `backend/app/`·`backend/migrations/` **변경 0줄**로 기존 텍스트
 진입점을 재사용했다. 인터페이스·테스트 변경은 **3 files changed, 198 insertions(+), 2 deletions(-)**다
-(phase 전체 통계는 step 0 테스트를 포함해 **4 files changed, 243 insertions(+), 2 deletions(-)**).
+(step 0 테스트와 리뷰 대응까지 더한 `backend/mcp_server/`·`backend/tests/` 누적은
+**4 files changed, 244 insertions(+), 3 deletions(-)**이며, `backend/app/`의 9삽입·1삭제는 여기 포함되지 않는다).
 0줄은 코어 계약의 선행 결함 보강을 숨긴 수치가 아니라 두 step을 분리해 재측정한 값이다 (ADR-036).
 
 경계는 이렇게 긋는다. **코어는 "누가 말을 걸든 참이어야 하는 것"의 집합이다.**
@@ -203,8 +204,9 @@ import하지 않는 별도 프로세스가 HTTP만으로 완주하는 것은 **�
   > 우리의 책임은 **근거 공급**까지다.
 
 **공급** — Web UI의 파일 업로드(형식 4종), `POST /api/documents/text`의 JSON 텍스트 공급,
-MCP `create_document`(`txt`·`md`)가 구현됐고, 세 입력 경로의 임베딩·관계·링크 파생이 같은
-DB 계약을 따르는 것은 테스트가 단언한다 (ADR-035·036). 이로써 C4가 요구한 사람·프로그램·AI
+MCP `create_document`(`txt`·`md`)가 구현됐고, 세 입력 경로 모두 임베딩·관계·링크 파생을 테스트가
+단언한다 — 파일 업로드와 JSON 텍스트는 파생을 서로 대조하고, MCP 경로는 같은 파생 5종을 값으로
+고정한다 (ADR-035·036). 이로써 C4가 요구한 사람·프로그램·AI
 에이전트의 공급 경로가 모두 구현됐다. 예제(`examples/ingest_text.py`)는 `backend` 패키지를 import하지
 않고 표준 라이브러리만으로 로그인·공급·상태 폴링의 HTTP 경로를 보여주나, **그 예제가 실제
 서버에 붙어 완주하는지는 CI가 확인하지 않는다** (ADR-035 트레이드오프 1). 프로그램은 사람이
