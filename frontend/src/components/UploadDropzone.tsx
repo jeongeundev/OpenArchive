@@ -4,6 +4,7 @@ import { useRef, useState } from "react";
 
 import { ApiError, uploadDocument } from "@/lib/api";
 import { SUPPORTED_CONTENT_TYPES, type Visibility } from "@/lib/types";
+import { expandZip } from "@/lib/zip";
 
 // 백엔드 경계(backend/app/api/documents.py의 MAX_UPLOAD_BYTES)와 같은 값·문구.
 // 선검사는 대형 파일의 전송 비용을 아끼기 위한 것이고, 경계의 최종 권위는 백엔드의 413이다.
@@ -37,8 +38,31 @@ export function UploadDropzone({
   const fileCount = items.filter((item) => item.file !== undefined).length;
   const pendingCount = items.filter((item) => item.status === "대기").length;
 
-  function selectFiles(files: File[]): void {
-    setItems(files.map((file) => ({ file, name: file.name, status: "대기" as const })));
+  async function selectFiles(files: File[]): Promise<void> {
+    const selected: UploadItem[] = [];
+    try {
+      for (const file of files) {
+        if (file.name.toLowerCase().endsWith(".zip")) {
+          const expanded = await expandZip(file);
+          selected.push(
+            ...expanded.files.map((entry) => ({
+              file: entry,
+              name: entry.name,
+              status: "대기" as const,
+            })),
+            ...expanded.skipped.map((name) => ({ name, status: "건너뜀" as const })),
+          );
+        } else {
+          selected.push({ file, name: file.name, status: "대기" });
+        }
+      }
+    } catch {
+      setItems([]);
+      setMessage(null);
+      setError("ZIP 파일을 열 수 없습니다.");
+      return;
+    }
+    setItems(selected);
     setMessage(null);
     setError(null);
   }
@@ -127,7 +151,7 @@ export function UploadDropzone({
         onDrop={(event) => {
           event.preventDefault();
           setDragging(false);
-          if (!disabled) selectFiles(Array.from(event.dataTransfer.files));
+          if (!disabled) void selectFiles(Array.from(event.dataTransfer.files));
         }}
       >
         <span>
@@ -137,17 +161,17 @@ export function UploadDropzone({
         </span>
         <input
           ref={inputRef}
-          accept={SUPPORTED_CONTENT_TYPES.map((type) => `.${type}`).join(",")}
+          accept={`${SUPPORTED_CONTENT_TYPES.map((type) => `.${type}`).join(",")},.zip`}
           aria-label="업로드할 파일"
           className="sr-only"
           disabled={disabled}
           id="document-file"
           multiple
-          onChange={(event) => selectFiles(Array.from(event.target.files ?? []))}
+          onChange={(event) => void selectFiles(Array.from(event.target.files ?? []))}
           type="file"
         />
         <span className="mt-2 block text-neutral-500">
-          지원 형식: {SUPPORTED_CONTENT_TYPES.join(", ")}
+          지원 형식: {SUPPORTED_CONTENT_TYPES.join(", ")} · ZIP 안의 지원 문서도 선택할 수 있습니다.
         </span>
       </label>
 
