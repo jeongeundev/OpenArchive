@@ -1,0 +1,30 @@
+{
+  "project": "OpenArchive",
+  "phase": "m10-zip-ingest",
+  "steps": [
+    {
+      "step": 0,
+      "name": "zip-expand",
+      "type": "feat",
+      "scope": "frontend",
+      "desc": "브라우저에서 ZIP을 풀어 지원 문서만 골라내는 모듈",
+      "status": "pending"
+    },
+    {
+      "step": 1,
+      "name": "zip-dropzone",
+      "type": "feat",
+      "scope": "frontend",
+      "desc": "업로드 화면이 ZIP을 받아 단건 API로 투입한다",
+      "status": "pending"
+    },
+    {
+      "step": 2,
+      "name": "adr-zip",
+      "type": "docs",
+      "scope": "adr",
+      "desc": "브라우저 해제 결정을 ADR-033으로 기록한다",
+      "status": "pending"
+    }
+  ]
+}
