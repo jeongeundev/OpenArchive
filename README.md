@@ -70,7 +70,7 @@ document_chunks 교체 (단일 트랜잭션)
 하이브리드 검색 — 태그·유형·권한 필터 + 벡터 유사도를 단일 SQL로
    │
    ▼
-근거 소비 — Web UI · REST API · MCP (진입과 같은 services 계층)
+근거 소비·문서 공급 — Web UI · REST API · MCP (같은 services 계층)
 ```
 
 **핵심은 "애플리케이션이 임베딩 파이프라인을 조율하지 않는다"는 점입니다.** 업로드 API는 `INSERT`만 합니다. 나머지는 DB가 합니다. 그래서 문서를 공급하는 주체가 꼭 사람일 필요가 없습니다 — `documents`에 INSERT하는 클라이언트는 무엇이든 같은 파이프라인을 얻습니다 ([Roadmap](docs/ROADMAP.md)).
@@ -86,7 +86,7 @@ document_chunks 교체 (단일 트랜잭션)
 | 텍스트 버전 관리·자동 재임베딩 | Web UI에서 **추출 텍스트를 직접 편집**. 수정하면 이력이 쌓이고 재임베딩이 자동 기동. 처리 중에는 이전 벡터로 검색이 계속됨 |
 | 관련 문서·태그 추천 | 임베딩 완료 시 저장된 관계(edge)로 유사 문서를 찾고, 그 문서들의 태그를 추천. 검색과 동일한 권한 필터 적용 |
 | 장애 자동 복구 | **DB 프로세스** 장애 시 자동 재기동과 앱 재연결, 미처리 작업 무손실 재개. 노드 승격은 검증하지 않았습니다(Single 구성) |
-| MCP 근거 게이트웨이 | AI 에이전트에 발췌·출처·기준 버전을 공급. 답변 생성은 클라이언트가 수행 |
+| MCP 근거 게이트웨이 | AI 에이전트에 발췌·출처·기준 버전을 공급하고 `txt`·`md` 문서 텍스트를 생성. 답변 생성은 클라이언트가 수행 |
 
 > **원본 파일은 보관하지 않습니다.** 업로드된 PDF·DOCX에서 텍스트만 추출해 저장하며, 편집·버전 관리·임베딩의 대상은 그 **추출 텍스트**입니다. 원본 파일 다운로드는 지원하지 않습니다 ([ADR-017](docs/ADR.md)).
 
@@ -199,7 +199,10 @@ stdio 서버 설정에 백엔드 가상환경의 Python과 모듈을 등록한�
 }
 ```
 
-`DATABASE_URL`, `EMBEDDING_PROVIDER`, `MCP_USER_ID`를 MCP 프로세스에 함께 전달해야 한다. `MCP_USER_ID`를 생략하면 public 문서만 보인다. MCP 서버는 마이그레이션을 실행하지 않으므로 API 서버를 먼저 기동해 스키마가 적용된 상태여야 한다 (ADR-012).
+등록되는 도구는 `search_documents`, `get_document`, `list_documents`, `create_document` 네 개다.
+`DATABASE_URL`, `EMBEDDING_PROVIDER`, `MCP_USER_ID`를 MCP 프로세스에 함께 전달해야 한다.
+`MCP_USER_ID`를 생략하면 public 문서 읽기만 가능하고 `create_document` 쓰기는 거부된다. MCP 서버는
+마이그레이션을 실행하지 않으므로 API 서버를 먼저 기동해 스키마가 적용된 상태여야 한다 (ADR-012·036).
 
 ### API 확인
 
@@ -231,7 +234,7 @@ python3 examples/ingest_text.py \
 ```
 
 예제의 실제 서버 완주는 CI가 확인하지 않으므로 API·워커·DB를 함께 기동한 환경에서 실행해야 합니다.
-첫 커넥터와 MCP 쓰기 도구는 [Roadmap](docs/ROADMAP.md)의 다음 작업으로 남아 있습니다.
+첫 커넥터와 MCP update/delete·원격 transport는 [Roadmap](docs/ROADMAP.md)의 다음 작업으로 남아 있습니다.
 
 설계 의도와 각 엔드포인트의 근거는 [Architecture](docs/ARCHITECTURE.md#api-설계)에 있습니다.
 
