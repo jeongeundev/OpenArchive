@@ -1,0 +1,41 @@
+{
+  "project": "OpenArchive",
+  "phase": "m11d-mcp-write",
+  "steps": [
+    {
+      "step": 0,
+      "name": "visibility-guard",
+      "type": "fix",
+      "scope": "api",
+      "desc": "코어가 공개범위 계약을 스스로 지킨다",
+      "status": "completed",
+      "started_at": "2026-08-15T15:04:13+0900",
+      "summary": "두 문서 생성 경로가 공유하는 코어 INSERT 경계에서 공개범위를 public/private로 강제하고 서비스 직접 호출 테스트로 고정",
+      "completed_at": "2026-08-15T15:07:13+0900"
+    },
+    {
+      "step": 1,
+      "name": "mcp-create-tool",
+      "type": "feat",
+      "scope": "mcp",
+      "desc": "AI 에이전트가 문서를 공급하는 MCP 쓰기 도구",
+      "status": "completed",
+      "started_at": "2026-08-15T15:07:13+0900",
+      "summary": "MCP create_document 도구가 MCP_USER_ID 소유권으로 코어 텍스트 진입점을 재사용하고 DB 파생·열람 계약을 유지함; app/·migrations/ 코어 변경 0줄",
+      "completed_at": "2026-08-15T15:11:03+0900"
+    },
+    {
+      "step": 2,
+      "name": "adr-mcp-write",
+      "type": "docs",
+      "scope": "adr",
+      "desc": "MCP 쓰기 도구를 ADR-036으로 확정하고 코어 불변성 실측치를 기록한다",
+      "status": "completed",
+      "started_at": "2026-08-15T15:11:03+0900",
+      "summary": "ADR-036으로 MCP 쓰기 계약을 확정하고 step 0 코어 보강과 step 1 코어 변경 0줄 실측을 구분해 제품 문서 전반에 반영",
+      "completed_at": "2026-08-15T15:21:02+0900"
+    }
+  ],
+  "created_at": "2026-08-15T15:04:13+0900",
+  "completed_at": "2026-08-15T15:21:02+0900"
+}

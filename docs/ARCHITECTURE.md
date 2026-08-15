@@ -69,7 +69,7 @@ OpenArchive/
 │   │   │                         #   links, diagnostics, clusters, auth, system, visibility
 │   │   ├── embeddings/           # base.py(Protocol), local.py(bge-m3), fake.py
 │   │   └── worker.py             # 임베딩 워커 진입점
-│   ├── mcp_server/server.py      # FastMCP stdio 서버 — search_documents, get_document, list_documents
+│   ├── mcp_server/server.py      # FastMCP stdio — search_documents, get_document, list_documents, create_document
 │   └── tests/                    # test_chunking.py, test_triggers.py, test_worker.py, test_search_api.py ...
 └── frontend/
     └── src/
@@ -82,7 +82,7 @@ OpenArchive/
 
 `services/visibility.py`의 `VISIBLE_TO_USER`는 **모든 조회 경로가 공유하는 단일 열람 술어**다. 검색·관련 문서·그래프 순회·집계·위키링크 해석이 각자 조건을 쓰면 한 곳만 빠져도 비공개 문서가 새어 나간다 (ADR-018, ADR-027).
 
-MCP 서버는 `app.services`를 직접 재사용한다. `search_documents`는 발췌(`excerpt`)·출처(`document_id`, `title`, `filename`)·기준 버전(`based_on_version`)을 반환하고, `get_document`는 추출 텍스트와 텍스트 버전·청크 상태를, `list_documents`는 접근 가능한 문서 메타데이터를 반환한다. 사용자 컨텍스트는 툴 인자가 아니라 `MCP_USER_ID` 환경변수로 고정하며, 미설정 시 public 문서만 조회한다 (ADR-025).
+MCP 서버는 `app.services`를 직접 재사용한다. `search_documents`는 발췌(`excerpt`)·출처(`document_id`, `title`, `filename`)·기준 버전(`based_on_version`)을 반환하고, `get_document`는 문서 텍스트와 텍스트 버전·청크 상태를, `list_documents`는 접근 가능한 문서 메타데이터를 반환한다. `create_document`는 `title`·`content`·`content_type`(`txt`·`md`)·`tags`·`visibility`를 받아 기존 텍스트 진입점으로 공급한다. 사용자 컨텍스트는 툴 인자가 아니라 `MCP_USER_ID` 환경변수로 고정한다. 미설정 시 public 문서 읽기는 허용하지만 소유자를 확정할 수 없어 쓰기는 거부한다 (ADR-025, ADR-036).
 
 `POST /api/search`도 같은 근거 필드(`filename`·`based_on_version`)를 함께 내려준다. 서비스가 하나여도 두 경로의 응답 스키마가 갈라지면 "REST와 MCP의 결과가 같다"가 깨진다 — `tests/test_mcp_server.py`가 두 응답을 직접 비교해 이를 지킨다.
 

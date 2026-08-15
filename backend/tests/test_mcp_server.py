@@ -9,6 +9,8 @@ from app.config import get_settings
 from app.db import close_pool, get_pool
 from app.embeddings import FakeProvider
 from app.main import app
+from app.services.documents import InvalidVisibility
+from app.services.parsing import UnsupportedFileType
 
 
 @pytest.fixture
@@ -68,7 +70,17 @@ async def _seed_documents(dsn: str):
     return public_id, private_id
 
 
-async def test_registers_exactly_three_evidence_tools():
+async def _document_count_by_title(dsn: str, title: str) -> int:
+    async with await psycopg.AsyncConnection.connect(dsn) as conn:
+        row = await (
+            await conn.execute(
+                "SELECT count(*) FROM documents WHERE title = %s", (title,)
+            )
+        ).fetchone()
+    return row[0]
+
+
+async def test_registers_exactly_four_document_tools():
     from mcp_server.server import mcp
 
     tools = await mcp.list_tools()
@@ -77,7 +89,145 @@ async def test_registers_exactly_three_evidence_tools():
         "search_documents",
         "get_document",
         "list_documents",
+        "create_document",
     }
+
+
+# 미설정뿐 아니라 빈 값·공백도 주체가 없는 상태다. pydantic은 `MCP_USER_ID=""`를 None이 아니라
+# 빈 문자열로 담고, owner_id에는 FK도 CHECK도 없어 그대로 두면 소유자 없는 문서가 조용히 생긴다.
+@pytest.mark.parametrize("env_value", [None, "", "   "])
+async def test_create_requires_user_context_without_changing_anonymous_reads(
+    monkeypatch, mcp_database, env_value
+):
+    from mcp_server.server import (
+        MissingUserContext,
+        create_document,
+        list_documents,
+        search_documents,
+    )
+
+    public_id, _ = await _seed_documents(mcp_database)
+    if env_value is None:
+        monkeypatch.delenv("MCP_USER_ID", raising=False)
+    else:
+        monkeypatch.setenv("MCP_USER_ID", env_value)
+    get_settings.cache_clear()
+
+    with pytest.raises(MissingUserContext, match="MCP_USER_ID"):
+        await create_document("주체 없는 문서", "저장되면 안 되는 텍스트")
+
+    assert {item["document_id"] for item in (await list_documents())["items"]} == {
+        str(public_id)
+    }
+    assert {
+        item["document_id"]
+        for item in (await search_documents("OpenSQL 공개 정합성"))["items"]
+    } == {str(public_id)}
+    assert await _document_count_by_title(mcp_database, "주체 없는 문서") == 0
+
+
+async def test_create_uses_mcp_owner_and_starts_all_database_derivatives(
+    monkeypatch, mcp_database
+):
+    from mcp_server.server import create_document
+
+    monkeypatch.setenv("MCP_USER_ID", "alice")
+    get_settings.cache_clear()
+    async with await psycopg.AsyncConnection.connect(
+        mcp_database, autocommit=True
+    ) as conn:
+        await insert_test_document(conn, title="Target", content="target reference")
+        await process_all_embedding_jobs(conn, FakeProvider())
+
+    created = await create_document(
+        "MCP 공급 문서",
+        "shared pipeline text [[Target]]",
+        content_type="txt",
+        tags=[" mcp ", "mcp"],
+        visibility="private",
+    )
+    document_id = created["document_id"]
+
+    assert created["owner_id"] == "alice"
+    assert created["visibility"] == "private"
+    assert created["tags"] == ["mcp"]
+    assert created["embedding_status"] == "pending"
+
+    async with await psycopg.AsyncConnection.connect(
+        mcp_database, autocommit=True
+    ) as conn:
+        assert await process_all_embedding_jobs(conn, FakeProvider()) == 1
+        row = await (
+            await conn.execute(
+                """
+                SELECT d.owner_id,
+                       (SELECT count(*) FROM embedding_jobs WHERE document_id = d.id),
+                       (SELECT count(*) FROM document_versions WHERE document_id = d.id),
+                       (SELECT count(*) FROM document_chunks WHERE document_id = d.id),
+                       (SELECT array_agg(target_title ORDER BY target_title)
+                          FROM document_links WHERE src_document_id = d.id),
+                       (SELECT count(*) FROM document_edges WHERE src_document_id = d.id)
+                  FROM documents d WHERE d.id = %s
+                """,
+                (document_id,),
+            )
+        ).fetchone()
+
+    owner, jobs, versions, chunks, links, edges = row
+    assert owner == "alice"
+    assert (jobs, versions, links) == (1, 1, ["Target"])
+    assert chunks > 0
+    assert edges > 0
+
+
+async def test_private_created_document_is_hidden_from_other_mcp_users(
+    monkeypatch, mcp_database
+):
+    from mcp_server.server import create_document, list_documents, search_documents
+
+    monkeypatch.setenv("MCP_USER_ID", "alice")
+    get_settings.cache_clear()
+    created = await create_document(
+        "Alice private", "비공개 MCP 검색용 고유 문구", visibility="private"
+    )
+    async with await psycopg.AsyncConnection.connect(
+        mcp_database, autocommit=True
+    ) as conn:
+        await process_all_embedding_jobs(conn, FakeProvider())
+
+    monkeypatch.setenv("MCP_USER_ID", "bob")
+    get_settings.cache_clear()
+    listed = await list_documents()
+    searched = await search_documents("비공개 MCP 검색용 고유 문구")
+
+    assert created["document_id"] not in {
+        item["document_id"] for item in listed["items"]
+    }
+    assert created["document_id"] not in {
+        item["document_id"] for item in searched["items"]
+    }
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "expected_exception"),
+    [
+        ("visibility", "organization", InvalidVisibility),
+        ("content_type", "pdf", UnsupportedFileType),
+    ],
+)
+async def test_create_propagates_core_validation_without_saving_document(
+    monkeypatch, mcp_database, field, value, expected_exception
+):
+    from mcp_server.server import create_document
+
+    monkeypatch.setenv("MCP_USER_ID", "alice")
+    get_settings.cache_clear()
+    kwargs = {field: value}
+
+    with pytest.raises(expected_exception):
+        await create_document("거부 대상", "저장되면 안 되는 텍스트", **kwargs)
+
+    assert await _document_count_by_title(mcp_database, "거부 대상") == 0
 
 
 async def _login(client, dsn: str, username: str, password: str = "test-password") -> None:

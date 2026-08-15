@@ -48,6 +48,16 @@ def test_application_code_does_not_insert_into_derived_tables():
     assert not violations, "파생 테이블 직접 INSERT 금지 위반:\n" + "\n".join(violations)
 
 
+def test_mcp_server_does_not_execute_sql_directly():
+    violations = []
+    mcp_root = REPOSITORY_ROOT / "backend" / "mcp_server"
+    for path in mcp_root.rglob("*.py"):
+        if ".execute(" in path.read_text():
+            violations.append(str(path.relative_to(REPOSITORY_ROOT)))
+
+    assert not violations, "MCP 서버 SQL 직접 실행 금지 위반:\n" + "\n".join(violations)
+
+
 def test_services_do_not_import_http_frameworks():
     violations = []
     services_root = REPOSITORY_ROOT / "backend" / "app" / "services"
