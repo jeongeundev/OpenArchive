@@ -19,7 +19,10 @@
       "type": "feat",
       "scope": "frontend",
       "desc": "업로드 화면이 ZIP을 받아 단건 API로 투입한다",
-      "status": "pending"
+      "status": "completed",
+      "summary": "업로드 화면에서 ZIP을 선택·드롭 즉시 해제해 지원 문서를 순차 업로드하고 미지원 항목과 손상 오류를 표시",
+      "started_at": "2026-08-15T16:34:45+0900",
+      "completed_at": "2026-08-15T16:38:01+0900"
     },
     {
       "step": 2,
