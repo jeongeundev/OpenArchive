@@ -41,7 +41,10 @@
       "type": "feat",
       "scope": "api",
       "desc": "자기 토큰을 발급·조회·폐기하는 엔드포인트",
-      "status": "pending"
+      "status": "completed",
+      "summary": "세션 전용 API 토큰 발급·목록·폐기 엔드포인트와 원문 비노출·소유권 은닉·폐기 효력 통합 테스트를 추가했다.",
+      "started_at": "2026-08-15T12:54:52+0900",
+      "completed_at": "2026-08-15T12:58:33+0900"
     },
     {
       "step": 4,
