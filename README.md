@@ -205,18 +205,33 @@ stdio 서버 설정에 백엔드 가상환경의 Python과 모듈을 등록한�
 
 엔드포인트 목록과 요청·응답 스키마는 서버가 직접 제공합니다. 구현과 어긋날 수 없는 유일한 출처입니다.
 
-> **문서 관련 API는 읽기까지 전부 로그인 쿠키를 요구합니다** — 익명 요청은 401입니다 (ADR-028).
-> 위 3번에서 만든 계정으로 `POST /api/auth/login`을 먼저 호출하세요. MCP 서버는 HTTP를 거치지
+> **문서 관련 API는 읽기까지 전부 인증을 요구합니다** — 익명 요청은 401입니다 (ADR-028·034).
+> 사람은 위 3번에서 만든 계정으로 `POST /api/auth/login`을 호출하고, 프로그램은 위임 API 토큰을
+> Bearer로 보냅니다. MCP 서버는 HTTP를 거치지
 > 않고 서비스를 직접 호출하므로 이 경계와 무관하며, 열람 범위는 `MCP_USER_ID`가 정합니다.
 
 ```
 http://localhost:8000/docs
 ```
 
-스크립트나 외부 시스템에서 이 API를 쓸 때도 같은 경로입니다 — 쿠키를 유지하는 HTTP
-클라이언트로 `POST /api/auth/login`을 호출한 뒤 세션 쿠키를 동봉하면 업로드부터 검색까지 전부
-호출할 수 있습니다. 토큰 인증 같은 프로그래매틱 표면의 확장은 [Roadmap](docs/ROADMAP.md)의
-단계적 발전 경로에 있습니다.
+사람이 사용하는 클라이언트는 `POST /api/auth/login` 뒤 세션 쿠키를 동봉합니다. 프로그램은 로그인
+세션에서 `POST /api/auth/tokens`로 API 토큰을 한 번 발급한 뒤 Bearer 자격증명만 사용할 수 있습니다.
+기본 scope는 `read`이며 문서 공급에는 `read_write`가 필요합니다. 원문 토큰은 발급 응답에만 나오고,
+`GET /api/auth/tokens` 목록에는 다시 나타나지 않습니다. 발급·목록·폐기와 `/api/admin/*`는 세션
+전용입니다.
+
+독립 예제는 `backend` 패키지를 import하지 않고 토큰만으로 텍스트 공급과 상태 폴링을 수행합니다.
+
+```bash
+python3 examples/ingest_text.py \
+  --base-url http://localhost:8000 \
+  --token "$OPENARCHIVE_API_TOKEN" \
+  --title "API 문서" \
+  document.md
+```
+
+예제의 실제 서버 완주는 CI가 확인하지 않으므로 API·워커·DB를 함께 기동한 환경에서 실행해야 합니다.
+첫 커넥터와 MCP 쓰기 도구는 [Roadmap](docs/ROADMAP.md)의 다음 작업으로 남아 있습니다.
 
 설계 의도와 각 엔드포인트의 근거는 [Architecture](docs/ARCHITECTURE.md#api-설계)에 있습니다.
 

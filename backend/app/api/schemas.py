@@ -4,6 +4,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.services.auth import SCOPE_READ, TokenScope
 from app.services.search import MAX_K
 
 
@@ -63,6 +64,22 @@ class AuthStatus(BaseModel):
     authenticated: bool
     username: str | None
     is_admin: bool
+
+
+class CreateTokenRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    scope: TokenScope = SCOPE_READ
+
+
+class TokenSummary(BaseModel):
+    id: UUID
+    name: str
+    scope: TokenScope
+    created_at: datetime
+
+
+class TokenCreated(TokenSummary):
+    token: str
 
 
 class JobCounts(BaseModel):

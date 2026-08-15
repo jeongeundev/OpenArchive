@@ -5,6 +5,7 @@ import hashlib
 import hmac
 import secrets
 from datetime import UTC, datetime, timedelta
+from typing import Literal
 from uuid import UUID
 
 import psycopg
@@ -18,6 +19,13 @@ SCRYPT_R = 8
 SCRYPT_P = 1
 SCRYPT_DKLEN = 64
 SALT_BYTES = 16
+
+SCOPE_READ = "read"
+SCOPE_READ_WRITE = "read_write"
+TokenScope = Literal["read", "read_write"]
+
+CREDENTIAL_SESSION = "session"
+CREDENTIAL_TOKEN = "token"
 
 
 class UserAlreadyExists(Exception):
@@ -37,6 +45,10 @@ class AuthenticationFailed(Exception):
 
     def __init__(self) -> None:
         super().__init__("인증에 실패했습니다.")
+
+
+class TokenNotFound(Exception):
+    """폐기할 토큰이 없거나 요청한 주체의 것이 아니다."""
 
 
 def hash_password(password: str) -> str:
@@ -81,6 +93,11 @@ def verify_password(password: str, stored_hash: str) -> bool:
     except (ValueError, TypeError):
         return False
     return hmac.compare_digest(actual, expected)
+
+
+def hash_token(token: str) -> str:
+    """원문 토큰의 sha256 hexdigest. salt를 쓰지 않아 인덱스로 조회된다."""
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
 async def create_user(
@@ -174,6 +191,8 @@ async def validate_session(conn: psycopg.AsyncConnection, token: str) -> dict:
     user = await cur.fetchone()
     if user is None:
         raise AuthenticationFailed
+    user["scope"] = SCOPE_READ_WRITE
+    user["credential"] = CREDENTIAL_SESSION
     return user
 
 
@@ -181,3 +200,73 @@ async def logout(conn: psycopg.AsyncConnection, token: str) -> None:
     """세션 행을 삭제해 토큰을 즉시 무효화한다."""
     if token:
         await conn.execute("DELETE FROM sessions WHERE token = %s", (token,))
+
+
+async def create_token(
+    conn: psycopg.AsyncConnection,
+    user_id: UUID,
+    *,
+    name: str,
+    scope: TokenScope = SCOPE_READ,
+) -> dict:
+    """토큰을 발급하고 원문을 포함해 반환한다. DB에는 해시만 남는다."""
+    token = secrets.token_urlsafe(32)
+    cur = conn.cursor(row_factory=dict_row)
+    await cur.execute(
+        """
+        INSERT INTO api_tokens (user_id, name, token_hash, scope)
+        VALUES (%s, %s, %s, %s)
+        RETURNING id, name, scope, created_at
+        """,
+        (user_id, name, hash_token(token), scope),
+    )
+    issued = await cur.fetchone()
+    issued["token"] = token
+    return issued
+
+
+async def validate_token(conn: psycopg.AsyncConnection, token: str) -> dict:
+    """유효한 토큰의 주체를 반환한다. 실패는 AuthenticationFailed 하나로 표현한다."""
+    if not token:
+        raise AuthenticationFailed
+    cur = conn.cursor(row_factory=dict_row)
+    await cur.execute(
+        """
+        SELECT u.id, u.username, u.is_admin, t.scope
+        FROM api_tokens t
+        JOIN users u ON u.id = t.user_id
+        WHERE t.token_hash = %s
+        """,
+        (hash_token(token),),
+    )
+    user = await cur.fetchone()
+    if user is None:
+        raise AuthenticationFailed
+    user["credential"] = CREDENTIAL_TOKEN
+    return user
+
+
+async def list_tokens(conn: psycopg.AsyncConnection, user_id: UUID) -> list[dict]:
+    """자기 토큰 목록. 해시도 원문도 포함하지 않는다."""
+    cur = conn.cursor(row_factory=dict_row)
+    await cur.execute(
+        """
+        SELECT id, name, scope, created_at
+        FROM api_tokens
+        WHERE user_id = %s
+        ORDER BY created_at, id
+        """,
+        (user_id,),
+    )
+    return await cur.fetchall()
+
+
+async def revoke_token(
+    conn: psycopg.AsyncConnection, token_id: UUID, *, user_id: UUID
+) -> None:
+    """자기 토큰 한 건을 삭제한다. 대상이 없으면 TokenNotFound."""
+    deleted = await conn.execute(
+        "DELETE FROM api_tokens WHERE id = %s AND user_id = %s", (token_id, user_id)
+    )
+    if deleted.rowcount == 0:
+        raise TokenNotFound

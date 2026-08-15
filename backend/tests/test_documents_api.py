@@ -327,6 +327,52 @@ def test_upload_requires_user_id(db_client: TestClient):
     assert response.status_code == 401
 
 
+def test_read_token_can_read_but_cannot_use_any_document_write_endpoint(
+    db_client: TestClient, migrated_db: str
+):
+    document_id = upload(db_client).json()["id"]
+    token = "alice-read-token"
+    with psycopg.connect(migrated_db) as conn:
+        user_id = conn.execute(
+            "SELECT id FROM users WHERE username = 'alice'"
+        ).fetchone()[0]
+        conn.execute(
+            "INSERT INTO api_tokens (user_id, name, token_hash, scope) VALUES (%s, 'read-test', %s, 'read')",
+            (user_id, hashlib.sha256(token.encode()).hexdigest()),
+        )
+
+    db_client.cookies.clear()
+    headers = {"Authorization": f"Bearer {token}"}
+    assert db_client.get("/api/documents", headers=headers).status_code == 200
+
+    responses = [
+        db_client.post(
+            "/api/documents",
+            headers=headers,
+            files={"file": ("blocked.txt", b"blocked", "text/plain")},
+        ),
+        db_client.post(
+            "/api/documents/text",
+            headers=headers,
+            json={"title": "Blocked", "content": "blocked"},
+        ),
+        db_client.put(
+            f"/api/documents/{document_id}",
+            headers=headers,
+            json={"content": "blocked", "version": 1},
+        ),
+        db_client.put(
+            f"/api/documents/{document_id}/tags",
+            headers=headers,
+            json={"tags": ["blocked"]},
+        ),
+        db_client.delete(f"/api/documents/{document_id}", headers=headers),
+        db_client.post(f"/api/documents/{document_id}/reembed", headers=headers),
+    ]
+
+    assert [response.status_code for response in responses] == [403] * 6
+
+
 def test_upload_stores_sha256_of_extracted_text(db_client: TestClient, migrated_db: str):
     content = "해시 기준 텍스트"
     document_id = upload(db_client, content=content.encode()).json()["id"]

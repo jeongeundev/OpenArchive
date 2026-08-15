@@ -13,7 +13,7 @@ from fastapi import (
     status,
 )
 
-from app.api.deps import Connection, require_user_id
+from app.api.deps import Connection, require_user_id, require_write_user_id
 from app.api.schemas import (
     BacklinkItem,
     CreateTextDocumentRequest,
@@ -42,7 +42,7 @@ UPLOAD_TOO_LARGE = "업로드 파일은 10MB를 넘을 수 없습니다."
 @router.post("", response_model=DocumentSummary, status_code=status.HTTP_201_CREATED)
 async def upload_document(
     conn: Connection,
-    user_id: Annotated[str, Depends(require_user_id)],
+    user_id: Annotated[str, Depends(require_write_user_id)],
     file: Annotated[UploadFile, File()],
     title: Annotated[str | None, Form()] = None,
     tags: Annotated[list[str] | None, Form()] = None,
@@ -79,7 +79,7 @@ async def upload_document(
 async def create_text_document(
     body: CreateTextDocumentRequest,
     conn: Connection,
-    user_id: Annotated[str, Depends(require_user_id)],
+    user_id: Annotated[str, Depends(require_write_user_id)],
 ) -> DocumentSummary:
     document = await service.create_text_document(
         conn,
@@ -169,7 +169,7 @@ async def edit_document(
     document_id: UUID,
     body: EditDocumentRequest,
     conn: Connection,
-    user_id: Annotated[str, Depends(require_user_id)],
+    user_id: Annotated[str, Depends(require_write_user_id)],
 ) -> EditDocumentResponse:
     document = await service.update_extracted_text(
         conn,
@@ -186,7 +186,7 @@ async def update_tags(
     document_id: UUID,
     body: UpdateTagsRequest,
     conn: Connection,
-    user_id: Annotated[str, Depends(require_user_id)],
+    user_id: Annotated[str, Depends(require_write_user_id)],
 ) -> DocumentSummary:
     document = await service.update_tags(
         conn, document_id, user_id=user_id, tags=body.tags
@@ -198,7 +198,7 @@ async def update_tags(
 async def delete_document(
     document_id: UUID,
     conn: Connection,
-    user_id: Annotated[str, Depends(require_user_id)],
+    user_id: Annotated[str, Depends(require_write_user_id)],
 ) -> Response:
     await service.delete_document(conn, document_id, user_id=user_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
@@ -208,7 +208,7 @@ async def delete_document(
 async def reembed_document(
     document_id: UUID,
     conn: Connection,
-    user_id: Annotated[str, Depends(require_user_id)],
+    user_id: Annotated[str, Depends(require_write_user_id)],
 ) -> DocumentSummary:
     document = await service.request_reembedding(conn, document_id, user_id=user_id)
     return DocumentSummary.model_validate(document)

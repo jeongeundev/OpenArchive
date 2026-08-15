@@ -6,6 +6,7 @@
 (`test_seed.py`가 `scripts/`에 대해 쓰는 것과 같은 방식이다).
 """
 
+import argparse
 import sys
 from pathlib import Path
 
@@ -16,6 +17,7 @@ from fastapi.testclient import TestClient
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
+from examples import ingest_text
 from examples.ingest_text import DOCUMENT_PATH, INGEST_PATH, LOGIN_PATH, is_in_progress
 
 from app.main import app
@@ -63,3 +65,62 @@ def test_polling_waits_through_every_unfinished_status(
     finished = db_client.get(detail_path).json()
     assert finished["embedding_status"] == "ready"
     assert not is_in_progress(finished)
+
+
+def test_token_ingest_skips_login_and_sends_bearer_header(monkeypatch, tmp_path):
+    input_path = tmp_path / "document.md"
+    input_path.write_text("token supplied content")
+    calls = []
+
+    def fake_request(opener, url, **kwargs):
+        calls.append((url, kwargs))
+        if url.endswith(INGEST_PATH):
+            return {"id": "doc-1", "embedding_status": "ready"}
+        raise AssertionError(f"unexpected request: {url}")
+
+    monkeypatch.setattr(ingest_text, "_request_json", fake_request)
+    args = argparse.Namespace(
+        base_url="http://example.test",
+        token="secret-token",
+        username=None,
+        password=None,
+        title="Token document",
+        input=str(input_path),
+        content_type="md",
+        tags=[],
+        visibility="public",
+        timeout=0,
+        poll_interval=0,
+    )
+
+    result = ingest_text.ingest(args)
+
+    assert result["id"] == "doc-1"
+    assert [url for url, _ in calls] == ["http://example.test" + INGEST_PATH]
+    assert calls[0][1]["headers"] == {"Authorization": "Bearer secret-token"}
+
+
+def test_cli_requires_exactly_one_authentication_method(monkeypatch):
+    invalid_argvs = [
+        ["ingest_text.py", "--title", "Rejected"],
+        [
+            "ingest_text.py",
+            "--token",
+            "token",
+            "--username",
+            "alice",
+            "--password",
+            "secret",
+            "--title",
+            "Rejected",
+        ],
+    ]
+
+    for argv in invalid_argvs:
+        monkeypatch.setattr(sys, "argv", argv)
+        try:
+            ingest_text.parse_args()
+        except SystemExit as error:
+            assert error.code == 2
+        else:
+            raise AssertionError("exactly one authentication method is required")

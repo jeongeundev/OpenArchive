@@ -60,6 +60,11 @@
       "dir": "m11b-text-ingest",
       "status": "completed",
       "completed_at": "2026-08-15T01:21:57+0900"
+    },
+    {
+      "dir": "m11c-token-auth",
+      "status": "completed",
+      "completed_at": "2026-08-15T13:08:25+0900"
     }
   ]
 }
