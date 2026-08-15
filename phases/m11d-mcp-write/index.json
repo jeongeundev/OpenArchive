@@ -30,7 +30,10 @@
       "type": "docs",
       "scope": "adr",
       "desc": "MCP 쓰기 도구를 ADR-036으로 확정하고 코어 불변성 실측치를 기록한다",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-08-15T15:11:03+0900",
+      "summary": "ADR-036으로 MCP 쓰기 계약을 확정하고 step 0 코어 보강과 step 1 코어 변경 0줄 실측을 구분해 제품 문서 전반에 반영",
+      "completed_at": "2026-08-15T15:21:02+0900"
     }
   ],
   "created_at": "2026-08-15T15:04:13+0900"
