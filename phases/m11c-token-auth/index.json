@@ -1,0 +1,58 @@
+{
+  "project": "OpenArchive",
+  "phase": "m11c-token-auth",
+  "steps": [
+    {
+      "step": 0,
+      "name": "token-tables",
+      "type": "feat",
+      "scope": "db",
+      "desc": "API 토큰 테이블 — 해시 저장과 scope 제약",
+      "status": "completed",
+      "summary": "SHA-256 해시 저장, read/read_write scope 제약, 사용자 삭제 CASCADE를 갖춘 api_tokens 테이블과 실제 DB 스키마 테스트를 추가했다.",
+      "started_at": "2026-08-15T12:44:10+0900",
+      "completed_at": "2026-08-15T12:47:11+0900"
+    },
+    {
+      "step": 1,
+      "name": "token-service",
+      "type": "feat",
+      "scope": "api",
+      "desc": "토큰 발급·검증·폐기를 인증 서비스에 추가한다",
+      "status": "pending"
+    },
+    {
+      "step": 2,
+      "name": "bearer-auth",
+      "type": "feat",
+      "scope": "api",
+      "desc": "Bearer 토큰 인증과 쓰기·세션 전용 게이트",
+      "status": "pending"
+    },
+    {
+      "step": 3,
+      "name": "token-endpoints",
+      "type": "feat",
+      "scope": "api",
+      "desc": "자기 토큰을 발급·조회·폐기하는 엔드포인트",
+      "status": "pending"
+    },
+    {
+      "step": 4,
+      "name": "token-access-proof",
+      "type": "feat",
+      "scope": "api",
+      "desc": "토큰 단독 경로의 교차 검증과 공급 예제의 토큰 지원",
+      "status": "pending"
+    },
+    {
+      "step": 5,
+      "name": "adr-token-auth",
+      "type": "docs",
+      "scope": "adr",
+      "desc": "프로그래매틱 인증을 ADR-034로 확정하고 문서에 반영한다",
+      "status": "pending"
+    }
+  ],
+  "created_at": "2026-08-15T12:44:10+0900"
+}
