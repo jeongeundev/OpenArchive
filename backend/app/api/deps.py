@@ -32,10 +32,13 @@ async def current_user(
     authorization: Annotated[str | None, Header()] = None,
     token: Annotated[str | None, Cookie(alias=SESSION_COOKIE)] = None,
 ) -> dict | None:
-    """Bearer 토큰을 우선 해석하고, 없을 때만 쿠키 세션을 본다. 무효면 익명이다."""
-    if authorization is not None:
-        if not authorization.lower().startswith(BEARER_PREFIX.lower()):
-            return None
+    """Bearer 토큰을 우선 해석하고, 없을 때만 쿠키 세션을 본다. 무효면 익명이다.
+
+    Bearer가 아닌 스킴은 이 앱을 향한 토큰이 아니므로 쿠키 판정으로 넘어간다.
+    """
+    if authorization is not None and authorization.lower().startswith(
+        BEARER_PREFIX.lower()
+    ):
         try:
             return await validate_token(conn, authorization[len(BEARER_PREFIX) :])
         except AuthenticationFailed:
