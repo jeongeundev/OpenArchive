@@ -18,7 +18,7 @@ export async function expandZip(archive: File): Promise<ExpandedZip> {
     if (entry.dir) continue;
 
     const pathParts = entry.name.split("/");
-    const basename = pathParts.at(-1) ?? entry.name;
+    const basename = pathParts[pathParts.length - 1];
     if (
       pathParts.includes("__MACOSX") ||
       pathParts.some((part) => part.startsWith("."))
