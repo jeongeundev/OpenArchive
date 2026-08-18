@@ -40,9 +40,11 @@ export function UploadDropzone({
 
   async function selectFiles(files: File[]): Promise<void> {
     const selected: UploadItem[] = [];
-    try {
-      for (const file of files) {
-        if (file.name.toLowerCase().endsWith(".zip")) {
+    for (const file of files) {
+      if (file.name.toLowerCase().endsWith(".zip")) {
+        // 열리지 않는 아카이브는 그 파일의 실패 행으로만 알린다. 함께 고른 나머지까지
+        // 버리면 파일이 여럿일 때 어느 것이 문제였는지도 사라진다.
+        try {
           const expanded = await expandZip(file);
           selected.push(
             ...expanded.files.map((entry) => ({
@@ -52,15 +54,16 @@ export function UploadDropzone({
             })),
             ...expanded.skipped.map((name) => ({ name, status: "건너뜀" as const })),
           );
-        } else {
-          selected.push({ file, name: file.name, status: "대기" });
+        } catch {
+          selected.push({
+            name: file.name,
+            status: "실패",
+            detail: "ZIP 파일을 열 수 없습니다.",
+          });
         }
+      } else {
+        selected.push({ file, name: file.name, status: "대기" });
       }
-    } catch {
-      setItems([]);
-      setMessage(null);
-      setError("ZIP 파일을 열 수 없습니다.");
-      return;
     }
     setItems(selected);
     setMessage(null);
