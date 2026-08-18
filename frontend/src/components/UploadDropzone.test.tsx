@@ -385,6 +385,33 @@ describe("UploadDropzone", () => {
     expect(screen.getByRole("button", { name: "업로드" })).toBeDisabled();
   });
 
+  it("손상된 ZIP이 있어도 함께 고른 나머지 파일은 업로드한다", async () => {
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(jsonResponse()));
+    vi.stubGlobal("fetch", fetchMock);
+    const zip = new JSZip();
+    zip.file("inside.md", "inside");
+
+    render(<UploadDropzone onUploaded={vi.fn()} />);
+    fireEvent.change(screen.getByLabelText("업로드할 파일"), {
+      target: {
+        files: [
+          new File([new Uint8Array([1, 2, 3])], "broken.zip"),
+          await archiveFile(zip, "good.zip"),
+          new File(["plain"], "plain.txt"),
+        ],
+      },
+    });
+
+    expect(await screen.findByText("broken.zip — 실패")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "업로드" }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    const names = fetchMock.mock.calls.map(
+      (call) => ((call[1]?.body as FormData).get("file") as File).name,
+    );
+    expect(names).toEqual(["inside.md", "plain.txt"]);
+  });
+
   it("드롭한 ZIP의 지원 문서를 업로드한다", async () => {
     const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(jsonResponse()));
     vi.stubGlobal("fetch", fetchMock);
