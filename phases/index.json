@@ -70,6 +70,11 @@
       "dir": "m11d-mcp-write",
       "status": "completed",
       "completed_at": "2026-08-15T15:21:02+0900"
+    },
+    {
+      "dir": "m10-zip-ingest",
+      "status": "completed",
+      "completed_at": "2026-08-15T16:40:56+0900"
     }
   ]
 }

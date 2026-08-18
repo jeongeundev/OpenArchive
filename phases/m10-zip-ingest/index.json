@@ -1,0 +1,41 @@
+{
+  "project": "OpenArchive",
+  "phase": "m10-zip-ingest",
+  "steps": [
+    {
+      "step": 0,
+      "name": "zip-expand",
+      "type": "feat",
+      "scope": "frontend",
+      "desc": "브라우저에서 ZIP을 풀어 지원 문서만 골라내는 모듈",
+      "status": "completed",
+      "summary": "JSZip 기반 브라우저 ZIP 해제와 지원 문서 선별 순수 모듈 및 테스트 추가",
+      "started_at": "2026-08-15T16:31:40+0900",
+      "completed_at": "2026-08-15T16:34:44+0900"
+    },
+    {
+      "step": 1,
+      "name": "zip-dropzone",
+      "type": "feat",
+      "scope": "frontend",
+      "desc": "업로드 화면이 ZIP을 받아 단건 API로 투입한다",
+      "status": "completed",
+      "summary": "업로드 화면에서 ZIP을 선택·드롭 즉시 해제해 지원 문서를 순차 업로드하고 미지원 항목과 손상 오류를 표시",
+      "started_at": "2026-08-15T16:34:45+0900",
+      "completed_at": "2026-08-15T16:38:01+0900"
+    },
+    {
+      "step": 2,
+      "name": "adr-zip",
+      "type": "docs",
+      "scope": "adr",
+      "desc": "브라우저 해제 결정을 ADR-033으로 기록한다",
+      "status": "completed",
+      "summary": "브라우저 ZIP 해제 결정과 필터·중첩·부분 실패 원칙을 ADR-033에 기록하고 JSZip 의존성과 대량 투입 현황을 문서화",
+      "started_at": "2026-08-15T16:38:01+0900",
+      "completed_at": "2026-08-15T16:40:56+0900"
+    }
+  ],
+  "created_at": "2026-08-15T16:31:40+0900",
+  "completed_at": "2026-08-15T16:40:56+0900"
+}

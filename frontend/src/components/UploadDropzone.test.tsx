@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import JSZip from "jszip";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { UploadDropzone } from "./UploadDropzone";
@@ -9,6 +10,11 @@ function jsonResponse(body: string = "{}", status = 201): Response {
     status,
     headers: { "Content-Type": "application/json" },
   });
+}
+
+async function archiveFile(zip: JSZip, name = "documents.zip"): Promise<File> {
+  const blob = await zip.generateAsync({ type: "blob" });
+  return new File([blob], name, { type: "application/zip" });
 }
 
 describe("UploadDropzone", () => {
@@ -262,6 +268,167 @@ describe("UploadDropzone", () => {
     fireEvent.click(screen.getByRole("button", { name: "업로드" }));
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
     await screen.findByText("업로드했습니다. 임베딩이 끝나면 상태가 완료로 바뀝니다.");
+  });
+
+  it("ZIP의 지원 문서를 basename 파일명으로 업로드한다", async () => {
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(jsonResponse()));
+    vi.stubGlobal("fetch", fetchMock);
+    const zip = new JSZip();
+    zip.file("docs/guide.txt", "guide");
+    zip.file("notes/readme.md", "readme");
+
+    render(<UploadDropzone onUploaded={vi.fn()} />);
+    fireEvent.change(screen.getByLabelText("업로드할 파일"), {
+      target: { files: [await archiveFile(zip)] },
+    });
+    await screen.findByText("guide.txt — 대기");
+    fireEvent.click(screen.getByRole("button", { name: "업로드" }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    const names = fetchMock.mock.calls.map(
+      (call) => ((call[1]?.body as FormData).get("file") as File).name,
+    );
+    expect(names).toEqual(["guide.txt", "readme.md"]);
+  });
+
+  it("ZIP의 미지원 항목은 건너뜀으로 표시하고 요청하지 않는다", async () => {
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(jsonResponse()));
+    vi.stubGlobal("fetch", fetchMock);
+    const zip = new JSZip();
+    zip.file("guide.txt", "guide");
+    zip.file("images/logo.png", "image");
+
+    render(<UploadDropzone onUploaded={vi.fn()} />);
+    fireEvent.change(screen.getByLabelText("업로드할 파일"), {
+      target: { files: [await archiveFile(zip)] },
+    });
+    expect(await screen.findByText("images/logo.png — 건너뜀")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "업로드" }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+    expect(((fetchMock.mock.calls[0][1]?.body as FormData).get("file") as File).name).toBe(
+      "guide.txt",
+    );
+  });
+
+  it("ZIP과 일반 파일을 함께 선택하면 모두 업로드한다", async () => {
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(jsonResponse()));
+    vi.stubGlobal("fetch", fetchMock);
+    const zip = new JSZip();
+    zip.file("inside.md", "inside");
+
+    render(<UploadDropzone onUploaded={vi.fn()} />);
+    fireEvent.change(screen.getByLabelText("업로드할 파일"), {
+      target: { files: [await archiveFile(zip), new File(["plain"], "plain.txt")] },
+    });
+    await screen.findByText("inside.md — 대기");
+    fireEvent.click(screen.getByRole("button", { name: "업로드" }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    const names = fetchMock.mock.calls.map(
+      (call) => ((call[1]?.body as FormData).get("file") as File).name,
+    );
+    expect(names).toEqual(["inside.md", "plain.txt"]);
+  });
+
+  it("태그와 공개범위를 ZIP의 모든 문서 요청에 넣는다", async () => {
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(jsonResponse()));
+    vi.stubGlobal("fetch", fetchMock);
+    const zip = new JSZip();
+    zip.file("a.txt", "a");
+    zip.file("b.md", "b");
+
+    render(<UploadDropzone onUploaded={vi.fn()} />);
+    fireEvent.change(screen.getByLabelText("업로드할 파일"), {
+      target: { files: [await archiveFile(zip)] },
+    });
+    await screen.findByText("a.txt — 대기");
+    fireEvent.change(screen.getByLabelText("태그 (쉼표로 구분)"), {
+      target: { value: "규정, 운영" },
+    });
+    fireEvent.click(screen.getByLabelText("비공개"));
+    fireEvent.click(screen.getByRole("button", { name: "업로드" }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    for (const call of fetchMock.mock.calls) {
+      const body = call[1]?.body as FormData;
+      expect(body.getAll("tags")).toEqual(["규정", "운영"]);
+      expect(body.get("visibility")).toBe("private");
+    }
+  });
+
+  it("ZIP에서 지원 문서가 두 개 이상 나오면 제목 입력을 숨긴다", async () => {
+    const zip = new JSZip();
+    zip.file("a.txt", "a");
+    zip.file("b.md", "b");
+
+    render(<UploadDropzone onUploaded={vi.fn()} />);
+    fireEvent.change(screen.getByLabelText("업로드할 파일"), {
+      target: { files: [await archiveFile(zip)] },
+    });
+
+    await screen.findByText("2개 파일 선택됨");
+    expect(screen.queryByLabelText("제목 (선택)")).toBeNull();
+  });
+
+  it("손상된 ZIP은 오류를 표시하고 요청하지 않는다", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<UploadDropzone onUploaded={vi.fn()} />);
+    fireEvent.change(screen.getByLabelText("업로드할 파일"), {
+      target: { files: [new File([new Uint8Array([1, 2, 3])], "broken.zip")] },
+    });
+
+    expect(await screen.findByText("ZIP 파일을 열 수 없습니다.")).toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "업로드" })).toBeDisabled();
+  });
+
+  it("손상된 ZIP이 있어도 함께 고른 나머지 파일은 업로드한다", async () => {
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(jsonResponse()));
+    vi.stubGlobal("fetch", fetchMock);
+    const zip = new JSZip();
+    zip.file("inside.md", "inside");
+
+    render(<UploadDropzone onUploaded={vi.fn()} />);
+    fireEvent.change(screen.getByLabelText("업로드할 파일"), {
+      target: {
+        files: [
+          new File([new Uint8Array([1, 2, 3])], "broken.zip"),
+          await archiveFile(zip, "good.zip"),
+          new File(["plain"], "plain.txt"),
+        ],
+      },
+    });
+
+    expect(await screen.findByText("broken.zip — 실패")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "업로드" }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    const names = fetchMock.mock.calls.map(
+      (call) => ((call[1]?.body as FormData).get("file") as File).name,
+    );
+    expect(names).toEqual(["inside.md", "plain.txt"]);
+  });
+
+  it("드롭한 ZIP의 지원 문서를 업로드한다", async () => {
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(jsonResponse()));
+    vi.stubGlobal("fetch", fetchMock);
+    const zip = new JSZip();
+    zip.file("docs/dropped.txt", "dropped");
+
+    render(<UploadDropzone onUploaded={vi.fn()} />);
+    fireEvent.drop(screen.getByText("파일을 끌어놓거나 클릭해 선택하세요."), {
+      dataTransfer: { files: [await archiveFile(zip)] },
+    });
+    await screen.findByText("dropped.txt — 대기");
+    fireEvent.click(screen.getByRole("button", { name: "업로드" }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+    expect(((fetchMock.mock.calls[0][1]?.body as FormData).get("file") as File).name).toBe(
+      "dropped.txt",
+    );
   });
 
 });
