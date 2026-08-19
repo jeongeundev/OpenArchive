@@ -34,6 +34,7 @@ from app.worker import (
     finalize_job,
     load_document,
     process_once,
+    release_job,
     run_worker,
     sweep_zombies,
 )
@@ -554,6 +555,145 @@ async def test_sweep_waits_for_an_uncommitted_edit_before_deciding(conn, other_c
 
     assert await asyncio.wait_for(sweep, timeout=5) == 0  # 되돌린 것이 없다
     assert [j[0] for j in await job_rows(conn, doc_id)] == ["done", "pending"]
+
+
+async def test_sweep_errors_out_a_zombie_that_exhausted_its_budget(conn):
+    """재시도 예산을 소진한 좀비는 pending으로 되돌리지 않고 error로 격리한다.
+
+    이것이 없으면 재시도 상한이 `fail_job`(예외로 잡히는 실패)에만 걸리고, 워커
+    프로세스를 죽이는 잡은 좀비 회수 경로로 무한 재시도된다 — `claim_job`은
+    `attempts`를 보지 않기 때문이다. 결과는 `fail_job`의 소진 처리와 같아야 한다:
+    잡은 error, 문서 배지도 error.
+    """
+    doc_id = await insert_document(conn)
+    job = await claim_job(conn)
+    await conn.execute(
+        "UPDATE embedding_jobs SET attempts = %s, started_at = now() - interval '10 minutes'"
+        " WHERE id = %s",
+        (MAX_ATTEMPTS, job.job_id),
+    )
+
+    assert await sweep_zombies(conn) == 0  # 반환값은 pending으로 **회수한** 건수뿐이다
+
+    status, attempts, last_error = (await job_rows(conn, doc_id))[0]
+    assert status == "error"
+    assert attempts == MAX_ATTEMPTS  # 소진 사실이 남는다
+    assert last_error is not None  # 왜 격리됐는지 알 수 있어야 한다
+    assert (await document_state(conn, doc_id))[1] == "error"
+
+
+async def test_sweep_recovers_a_zombie_one_attempt_below_the_budget(conn):
+    """예산이 남은 좀비는 그대로 회수한다 — 경계값(MAX_ATTEMPTS - 1)을 고정한다."""
+    doc_id = await insert_document(conn)
+    job = await claim_job(conn)
+    await conn.execute(
+        "UPDATE embedding_jobs SET attempts = %s, started_at = now() - interval '10 minutes'"
+        " WHERE id = %s",
+        (MAX_ATTEMPTS - 1, job.job_id),
+    )
+
+    assert await sweep_zombies(conn) == 1
+
+    assert await job_rows(conn, doc_id) == [("pending", MAX_ATTEMPTS - 1, None)]
+    assert (await document_state(conn, doc_id))[1] != "error"
+
+
+async def test_sweep_completes_an_exhausted_zombie_whose_document_moved_on(conn, other_conn):
+    """소진된 좀비라도 문서가 이미 수정됐으면 error가 아니라 done으로 마감한다.
+
+    `fail_job`이 "재시도 소진 검사보다 새 pending 잡 검사를 **먼저**" 두는 것과 같은
+    순서다. 뒤집으면 최신 내용으로 처리될 문서가 error 배지를 달고, 새 잡이 ready로
+    되돌릴 때까지 거짓 상태가 노출된다.
+    """
+    doc_id = await insert_document(conn)
+    zombie = await claim_job(conn)
+    await edit_document(other_conn, doc_id, DOC_V2, "sha256:v2")  # 새 pending 잡
+    await conn.execute(
+        "UPDATE embedding_jobs SET attempts = %s, started_at = now() - interval '10 minutes'"
+        " WHERE id = %s",
+        (MAX_ATTEMPTS, zombie.job_id),
+    )
+
+    assert await sweep_zombies(conn) == 0
+
+    assert [j[0] for j in await job_rows(conn, doc_id)] == ["done", "pending"]
+    assert (await document_state(conn, doc_id))[1] != "error"
+
+
+async def test_pipeline_keeps_draining_while_a_zombie_waits_for_its_timeout(conn, other_conn):
+    """좀비가 임계를 기다리는 동안에도 다른 pending 잡은 계속 처리된다.
+
+    재기동한 워커는 좀비를 **즉시** 회수하지 않는다 — 죽음을 시간으로 판정하므로
+    임계(기본 5분)를 기다려야 한다. 이 대기가 파이프라인 전체를 멈추지 않는다는 것이
+    이 테스트의 주장이다: 좀비는 `processing`이라 `claim_job`의 대상이 아니고, 워커는
+    남은 pending 잡을 그대로 집어간다. 크래시의 영향은 그 잡 하나로 격리된다.
+    """
+    zombie_doc = await insert_document(conn, content_hash="sha256:zombie")
+    zombie = await claim_job(conn)  # 이 잡을 쥔 워커가 죽었다
+    assert zombie.document_id == zombie_doc
+
+    healthy_a = await insert_document(other_conn, content=DOC_V2, content_hash="sha256:a")
+    healthy_b = await insert_document(other_conn, content=DOC_V1, content_hash="sha256:b")
+
+    # 재기동한 워커의 첫 스윕 — 임계가 아직 안 지나 좀비는 회수 대상이 아니다
+    assert await sweep_zombies(conn) == 0
+
+    processed = await drain(conn, FakeProvider())
+
+    assert processed == 2  # 좀비를 뺀 나머지가 전부 처리됐다
+    assert (await document_state(conn, healthy_a))[1] == "ready"
+    assert (await document_state(conn, healthy_b))[1] == "ready"
+    assert [j[0] for j in await job_rows(conn, zombie_doc)] == ["processing"]  # 좀비는 그대로
+
+
+async def test_release_returns_the_job_and_refunds_the_attempt(conn):
+    """정상 종료(SIGTERM)의 반납 — pending 복귀 + attempts 원복.
+
+    배포로 워커를 세우는 것은 잡의 잘못이 아니다. 원복하지 않으면 배포를
+    MAX_ATTEMPTS번 반복하는 것만으로 멀쩡한 문서가 error로 격리된다.
+    """
+    doc_id = await insert_document(conn)
+    job = await claim_job(conn)
+    assert (await job_rows(conn, doc_id))[0][:2] == ("processing", 1)
+
+    await release_job(conn, job)
+
+    assert await job_rows(conn, doc_id) == [("pending", 0, None)]
+    # 반납은 실패가 아니다 — 백오프 없이 즉시 다시 집힌다
+    reclaimed = await claim_job(conn)
+    assert reclaimed is not None and reclaimed.job_id == job.job_id
+
+
+async def test_release_completes_the_job_when_the_document_moved_on(conn, other_conn):
+    """반납 대상 문서에 이미 새 pending 잡이 있으면 done으로 마감한다.
+
+    pending 복귀는 uq_pending_job_per_doc에 걸린다 — fail_job·sweep_zombies와 같은 처리다.
+    """
+    doc_id = await insert_document(conn)
+    job = await claim_job(conn)
+    await edit_document(other_conn, doc_id, DOC_V2, "sha256:v2")
+
+    await release_job(conn, job)
+
+    assert [j[0] for j in await job_rows(conn, doc_id)] == ["done", "pending"]
+
+
+async def test_drain_releases_the_claimed_job_when_shutdown_is_requested(conn):
+    """종료 신호를 받으면 새로 집은 잡을 반납하고 드레인을 멈춘다.
+
+    임베딩을 **시작하기 전에** 신호를 확인하므로, 배포로 세운 워커가 잡을 processing으로
+    붙든 채 사라지지 않는다 — 다음 워커가 좀비 임계 5분을 기다릴 필요가 없어진다.
+    """
+    doc_a = await insert_document(conn, content_hash="sha256:a")
+    doc_b = await insert_document(conn, content=DOC_V2, content_hash="sha256:b")
+    stop = asyncio.Event()
+    stop.set()
+
+    processed = await drain(conn, FakeProvider(), stop=stop)
+
+    assert processed == 0  # 하나도 완료하지 않았다
+    assert await job_rows(conn, doc_a) == [("pending", 0, None)]  # 집었다가 반납 + 원복
+    assert [j[0] for j in await job_rows(conn, doc_b)] == ["pending"]  # 아예 집지 않았다
 
 
 async def test_polling_drain_handles_multiple_documents_without_listen(conn):
