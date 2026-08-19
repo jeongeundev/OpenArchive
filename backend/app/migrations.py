@@ -17,6 +17,27 @@ import psycopg
 
 MIGRATIONS_DIR = Path(__file__).resolve().parent.parent / "migrations"
 
+# 이력 조회는 이 모듈이 정본이다. 적용 여부를 판정하는 곳이 둘로 갈리면 러너와 그것을
+# 부르는 쪽(`openarchive init`)이 서로 다른 목록을 보게 된다.
+HISTORY_TABLE_SQL = "SELECT to_regclass('public.schema_migrations')"
+APPLIED_SQL = "SELECT filename FROM schema_migrations"
+
+
+def migration_files(migrations_dir: Path = MIGRATIONS_DIR) -> list[Path]:
+    """적용 순서대로 정렬된 마이그레이션 파일.
+
+    파일명은 `001_`, `002_` 형태의 3자리 zero-padding을 규약으로 하므로 사전순이 곧
+    번호순이다.
+    """
+    return sorted(migrations_dir.glob("*.sql"), key=lambda path: path.name)
+
+
+def pending_filenames(
+    applied: set[str], migrations_dir: Path = MIGRATIONS_DIR
+) -> list[str]:
+    """아직 적용되지 않은 파일명을 순서대로 낸다."""
+    return [path.name for path in migration_files(migrations_dir) if path.name not in applied]
+
 # 이력 테이블은 러너가 만든다. 마이그레이션 파일로 두면 자기 자신을 기록할 테이블이
 # 없는 상태를 먼저 풀어야 한다.
 _CREATE_HISTORY = """
@@ -34,14 +55,14 @@ async def run_migrations(dsn: str, migrations_dir: Path = MIGRATIONS_DIR) -> lis
     번호순이다. 실패하면 예외를 그대로 올린다 — 부분 적용된 스키마 위에서 애플리케이션이
     도는 것이 기동 실패보다 훨씬 위험하다.
     """
-    files = sorted(migrations_dir.glob("*.sql"), key=lambda p: p.name)
+    files = migration_files(migrations_dir)
     applied: list[str] = []
 
     async with await psycopg.AsyncConnection.connect(dsn) as conn:
         await conn.execute(_CREATE_HISTORY)
         await conn.commit()
 
-        cur = await conn.execute("SELECT filename FROM schema_migrations")
+        cur = await conn.execute(APPLIED_SQL)
         done = {row[0] for row in await cur.fetchall()}
 
         for path in files:

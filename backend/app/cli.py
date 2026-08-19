@@ -20,7 +20,14 @@ from pathlib import Path
 import psycopg
 
 from app.config import ENV_FILE, get_settings
-from app.migrations import MIGRATIONS_DIR, run_migrations
+from app.migrations import (
+    APPLIED_SQL,
+    HISTORY_TABLE_SQL,
+    MIGRATIONS_DIR,
+    migration_files,
+    pending_filenames,
+    run_migrations,
+)
 from app.services.system import get_system_status
 
 # gen_random_uuid()가 코어에 들어온 버전. 그 아래에서는 002가 기동하지 못한다.
@@ -31,7 +38,15 @@ MINIMUM_SERVER_VERSION_NUM = 130000
 REQUIRED_EXTENSIONS = ("vector", "pg_trgm")
 
 _CREATE_TABLE_RE = re.compile(
-    r"^\s*CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?([a-z_]+)", re.IGNORECASE | re.MULTILINE
+    r'^\s*CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?"?([A-Za-z_][A-Za-z0-9_]*)',
+    re.IGNORECASE | re.MULTILINE,
+)
+
+# `IF NOT EXISTS` 없이 만드는 확장만 잡는다. 그런 문장은 확장이 이미 있으면 duplicate_object로
+# 죽고, ADR-005 관례상 마이그레이션은 멱등성을 schema_migrations에 맡겨 가드를 쓰지 않는다.
+_UNGUARDED_EXTENSION_RE = re.compile(
+    r'^\s*CREATE\s+EXTENSION\s+(?!IF\s+NOT\s+EXISTS)"?([A-Za-z_][A-Za-z0-9_]*)',
+    re.IGNORECASE | re.MULTILINE,
 )
 
 
@@ -42,7 +57,7 @@ def _owned_tables(migrations_dir: Path = MIGRATIONS_DIR) -> frozenset[str]:
     적어두면 새 테이블이 추가될 때 조용히 낡고, 그 이름을 쓰는 남의 테이블을 놓친다.
     """
     names: set[str] = set()
-    for path in sorted(migrations_dir.glob("*.sql")):
+    for path in migration_files(migrations_dir):
         names.update(match.lower() for match in _CREATE_TABLE_RE.findall(path.read_text("utf-8")))
     return frozenset(names)
 
@@ -57,6 +72,7 @@ class Capabilities:
     database: str
     username: str
     extensions: dict[str, bool]
+    installed_extensions: frozenset[str]
     can_create: bool
 
 
@@ -68,22 +84,26 @@ def probe_capabilities(conn: psycopg.Connection) -> Capabilities:
                current_setting('server_version_num')::int,
                current_database(),
                current_user,
-               has_database_privilege(current_user, current_database(), 'CREATE')
+               -- 테이블을 만들 수 있는지는 데이터베이스가 아니라 **스키마** 권한이 정한다.
+               -- has_database_privilege(..., 'CREATE')는 "DB 안에 스키마를 만들 권한"이라,
+               -- public에만 CREATE를 받은 롤에서 false가 되어 멀쩡한 DB를 거부한다.
+               has_schema_privilege(current_user, 'public', 'CREATE')
         """
     ).fetchone()
-    available = {
-        name
-        for (name,) in conn.execute(
-            "SELECT name FROM pg_available_extensions WHERE name = ANY(%s)",
-            (list(REQUIRED_EXTENSIONS),),
-        ).fetchall()
-    }
+    extension_rows = conn.execute(
+        "SELECT name, installed_version IS NOT NULL "
+        "FROM pg_available_extensions WHERE name = ANY(%s)",
+        (list(REQUIRED_EXTENSIONS),),
+    ).fetchall()
+    available = {name for name, _ in extension_rows}
+    installed = {name for name, is_installed in extension_rows if is_installed}
     return Capabilities(
         server_version=row[0],
         server_version_num=row[1],
         database=row[2],
         username=row[3],
         extensions={name: name in available for name in REQUIRED_EXTENSIONS},
+        installed_extensions=frozenset(installed),
         can_create=row[4],
     )
 
@@ -100,8 +120,8 @@ def _unmet_requirements(capabilities: Capabilities) -> list[str]:
             unmet.append(f"확장 '{name}'을 이 서버에서 설치할 수 없습니다")
     if not capabilities.can_create:
         unmet.append(
-            f"'{capabilities.username}'에게 데이터베이스 "
-            f"'{capabilities.database}'의 CREATE 권한이 없습니다"
+            f"'{capabilities.username}'에게 '{capabilities.database}'의 public 스키마에 대한 "
+            "CREATE 권한이 없습니다 (GRANT CREATE ON SCHEMA public TO ...)"
         )
     return unmet
 
@@ -112,7 +132,7 @@ def _conflicting_tables(conn: psycopg.Connection) -> list[str]:
     마이그레이션 009는 `ALTER TABLE documents`를, 012는 `DELETE FROM document_links`를
     실행한다. 같은 이름의 남의 테이블 위에 적용하면 그 데이터가 손상된다.
     """
-    if conn.execute("SELECT to_regclass('public.schema_migrations')").fetchone()[0] is not None:
+    if _has_history_table(conn):
         return []
     rows = conn.execute(
         "SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND tablename = ANY(%s)",
@@ -121,14 +141,31 @@ def _conflicting_tables(conn: psycopg.Connection) -> list[str]:
     return sorted(name for (name,) in rows)
 
 
+def _has_history_table(conn: psycopg.Connection) -> bool:
+    return conn.execute(HISTORY_TABLE_SQL).fetchone()[0] is not None
+
+
 def _pending_migrations(conn: psycopg.Connection) -> list[str]:
-    files = [path.name for path in sorted(MIGRATIONS_DIR.glob("*.sql"))]
-    if conn.execute("SELECT to_regclass('public.schema_migrations')").fetchone()[0] is None:
-        return files
-    done = {
-        name for (name,) in conn.execute("SELECT filename FROM schema_migrations").fetchall()
-    }
-    return [name for name in files if name not in done]
+    if not _has_history_table(conn):
+        return pending_filenames(set())
+    applied = {name for (name,) in conn.execute(APPLIED_SQL).fetchall()}
+    return pending_filenames(applied)
+
+
+def _blocking_extensions(pending: list[str], installed: frozenset[str]) -> dict[str, str]:
+    """이미 설치돼 있어 미적용 마이그레이션을 실패시킬 확장 → 그 마이그레이션 파일명.
+
+    적용을 시작한 뒤 중간 파일에서 죽으면 부분 적용 스키마가 남는다. "확인이 적용보다
+    먼저"라는 계약이 지켜지려면 이것을 미리 잡아야 한다.
+    """
+    blocking: dict[str, str] = {}
+    for path in migration_files():
+        if path.name not in pending:
+            continue
+        for name in _UNGUARDED_EXTENSION_RE.findall(path.read_text("utf-8")):
+            if name in installed:
+                blocking.setdefault(name, path.name)
+    return blocking
 
 
 async def _read_status(dsn: str):
@@ -148,16 +185,19 @@ def _write_dsn(env_file: Path, dsn: str) -> None:
         env_file.parent.mkdir(parents=True, exist_ok=True)
         env_file.write_text(line + "\n", encoding="utf-8")
         return
-    lines = env_file.read_text(encoding="utf-8").splitlines()
+    kept: list[str] = []
     replaced = False
-    for index, existing in enumerate(lines):
-        if existing.strip().startswith("DATABASE_URL="):
-            lines[index] = line
+    for existing in env_file.read_text(encoding="utf-8").splitlines():
+        if not existing.strip().startswith("DATABASE_URL="):
+            kept.append(existing)
+            continue
+        # 첫 줄만 갈고 나머지를 두면 뒤에 남은 옛 값이 이긴다.
+        if not replaced:
+            kept.append(line)
             replaced = True
-            break
     if not replaced:
-        lines.append(line)
-    env_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        kept.append(line)
+    env_file.write_text("\n".join(kept) + "\n", encoding="utf-8")
 
 
 def _ask(prompt: str, default: str) -> str:
@@ -169,6 +209,46 @@ def _confirm(prompt: str) -> bool:
     return input(f"{prompt} [y/N]: ").strip().lower() in {"y", "yes"}
 
 
+def _inspect(conn: psycopg.Connection) -> list[str] | None:
+    """설치할 수 있는 DB인지 확인하고 미적용 마이그레이션을 낸다. 막히면 None.
+
+    아무것도 바꾸지 않는다 — 이 단계가 적용보다 먼저 오는 것이 init의 존재 이유다.
+    """
+    capabilities = probe_capabilities(conn)
+    print(f"  연결됨 — PostgreSQL {capabilities.server_version}")
+    print(f"  데이터베이스 {capabilities.database} · 사용자 {capabilities.username}")
+
+    unmet = _unmet_requirements(capabilities)
+    if unmet:
+        print()
+        print("이 데이터베이스에는 설치할 수 없습니다:")
+        for item in unmet:
+            print(f"  - {item}")
+        return None
+    for name in capabilities.extensions:
+        state = "이미 설치됨" if name in capabilities.installed_extensions else "사용 가능"
+        print(f"  확장 {name} — {state}")
+
+    conflicts = _conflicting_tables(conn)
+    if conflicts:
+        print()
+        print("이미 다른 용도로 쓰이는 데이터베이스로 보입니다. 아무것도 바꾸지 않았습니다.")
+        print(f"  OpenArchive가 쓰는 이름과 겹치는 테이블: {', '.join(conflicts)}")
+        print("  빈 데이터베이스를 새로 만들어 다시 실행하십시오.")
+        return None
+
+    pending = _pending_migrations(conn)
+    blocking = _blocking_extensions(pending, capabilities.installed_extensions)
+    if blocking:
+        print()
+        print("확장이 이미 설치돼 있어 마이그레이션이 중간에 실패합니다. 아무것도 바꾸지 않았습니다.")
+        for name, filename in sorted(blocking.items()):
+            print(f"  - {filename}은 '{name}'을 IF NOT EXISTS 없이 만듭니다")
+        print("  DROP EXTENSION으로 걷어내거나, 빈 데이터베이스를 새로 만들어 다시 실행하십시오.")
+        return None
+    return pending
+
+
 def run_init(*, dsn: str | None, assume_yes: bool, env_file: Path) -> int:
     print("OpenArchive 설치 준비")
     print()
@@ -178,33 +258,17 @@ def run_init(*, dsn: str | None, assume_yes: bool, env_file: Path) -> int:
         print()
 
     try:
-        with psycopg.connect(dsn, connect_timeout=5) as conn:
-            capabilities = probe_capabilities(conn)
-            print(f"  연결됨 — PostgreSQL {capabilities.server_version}")
-            print(f"  데이터베이스 {capabilities.database} · 사용자 {capabilities.username}")
-
-            unmet = _unmet_requirements(capabilities)
-            if unmet:
-                print()
-                print("이 데이터베이스에는 설치할 수 없습니다:")
-                for item in unmet:
-                    print(f"  - {item}")
-                return 1
-            for name, available in capabilities.extensions.items():
-                print(f"  확장 {name} — 사용 가능{'' if available else ' 아님'}")
-
-            conflicts = _conflicting_tables(conn)
-            if conflicts:
-                print()
-                print("이미 다른 용도로 쓰이는 데이터베이스로 보입니다. 아무것도 바꾸지 않았습니다.")
-                print(f"  OpenArchive가 쓰는 이름과 겹치는 테이블: {', '.join(conflicts)}")
-                print("  빈 데이터베이스를 새로 만들어 다시 실행하십시오.")
-                return 1
-
-            pending = _pending_migrations(conn)
+        connection = psycopg.connect(dsn, connect_timeout=5)
     except psycopg.Error as error:
+        # 연결 실패만 여기서 잡는다. 더 넓게 감싸면 조회·판정 단계의 실패까지
+        # "연결하지 못했습니다"로 보고되어 원인을 가린다.
         print(f"연결하지 못했습니다: {str(error).strip()}")
         return 1
+
+    with connection as conn:
+        pending = _inspect(conn)
+        if pending is None:
+            return 1
 
     print()
     if pending:
@@ -252,9 +316,7 @@ def main(argv: list[str] | None = None) -> int:
         "--env-file", type=Path, default=ENV_FILE, help=f"DSN을 기록할 파일 (기본: {ENV_FILE})"
     )
     args = parser.parse_args(argv)
-    if args.command == "init":
-        return run_init(dsn=args.dsn, assume_yes=args.yes, env_file=args.env_file)
-    parser.error(f"알 수 없는 명령: {args.command}")
+    return run_init(dsn=args.dsn, assume_yes=args.yes, env_file=args.env_file)
 
 
 if __name__ == "__main__":
