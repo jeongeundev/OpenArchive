@@ -53,3 +53,22 @@ def test_unknown_embedding_provider_is_rejected(monkeypatch):
 
 def test_get_settings_is_cached():
     assert get_settings() is get_settings()
+
+
+def test_env_file_is_read_from_the_backend_package_not_the_cwd(tmp_path, monkeypatch):
+    """설정 파일 위치는 실행 디렉토리에 좌우되지 않는다.
+
+    API·워커는 `backend/`에서 실행되고 `scripts/create_admin.py`는 저장소 루트에서
+    실행된다. env_file이 cwd 상대 경로이면 **같은 .env 하나가 프로세스마다 다르게
+    해석돼**, 계정은 이쪽 DB에 문서는 저쪽 DB에 쌓이는 상태가 에러 없이 만들어진다.
+    """
+    (tmp_path / ".env").write_text(
+        "DATABASE_URL=postgresql://sentinel:sentinel@127.0.0.1:59999/sentinel\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+
+    settings = Settings()
+
+    assert "sentinel" not in settings.database_url
