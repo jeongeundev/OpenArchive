@@ -65,15 +65,31 @@ step "앱 3종 기동"
 pkill -f 'uvicorn app.main:app' 2>/dev/null || true
 pkill -f 'next-server' 2>/dev/null || true
 
-# 워커는 pkill 하지 않는다 — systemctl restart가 SIGTERM 경로로 세운다. pkill로 죽이면
-# Restart=always가 즉시 되살려 배포가 끝나지 않는다.
-sed -e "s|@APP_ROOT@|$APP_ROOT|g" -e "s|@RUN_USER@|$(id -un)|g" \
+# 워커는 pkill 하지 않는다 — systemctl stop이 SIGTERM 경로로 세운다. pkill로 죽이면
+# Restart=always가 즉시 되살려 낡은 코드의 워커가 배포 내내 되살아난다.
+#
+# **system 유닛이 아니라 user 유닛이다** — SELinux Enforcing에서 system 유닛(init_t)은
+# 홈 아래(user_home_t)의 venv를 실행하지 못한다(203/EXEC, 2026-08-19 실측). 자세한
+# 근거는 openarchive-worker.service 머리말과 ADR-038에 있다.
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+# 세션이 끊겨도 사용자 매니저가 살아 있어야 워커가 유지된다. 이 한 줄만 sudo를 쓴다.
+sudo loginctl enable-linger "$(id -un)"
+
+mkdir -p "$HOME/.config/systemd/user"
+sed -e "s|@APP_ROOT@|$APP_ROOT|g" \
   "$APP_ROOT/scripts/openarchive-worker.service" \
-  | sudo tee /etc/systemd/system/openarchive-worker.service >/dev/null
-sudo systemctl daemon-reload
-# restart는 stop+start다. 정지는 SIGTERM이라 워커가 처리 중인 잡을 마치고 스스로 멈추며,
-# 그 정지에는 Restart=always가 개입하지 않는다 (systemd가 의도된 정지로 구분한다).
-sudo systemctl restart openarchive-worker
+  > "$HOME/.config/systemd/user/openarchive-worker.service"
+systemctl --user daemon-reload
+
+# 세우는 것은 여기서, 띄우는 것은 **API가 준비된 뒤**다 (아래 "임베딩 워커 기동").
+# 마이그레이션 실행 주체는 API 서버 하나이므로(ADR-012), 워커를 먼저 띄우면 스키마가
+# 없는 동안 처리 루프가 예외로 돈다. 프로세스가 죽지는 않지만(run_worker가 예외를 삼키고
+# 다음 폴링에서 재시도한다) journald에 트레이스백만 쌓인다.
+# stop은 유닛이 inactive여도 성공한다 — 첫 배포에서도 안전하다.
+systemctl --user stop openarchive-worker
+# 직전 배포가 재시작 한도에 걸린 채 끝났다면 start가 거부된다 — 배포는 깨끗한 상태에서
+# 시작해야 하므로 실패 카운터를 지운다 (실측에서 이 상태에 걸렸다).
+systemctl --user reset-failed openarchive-worker 2>/dev/null || true
 
 cd "$APP_ROOT/backend"
 # API는 127.0.0.1에만 연다. 외부에 노출되는 것은 프론트뿐이고, /api/*는 Next.js가
@@ -87,22 +103,43 @@ setsid env BACKEND_URL=http://127.0.0.1:8000 PORT=3000 HOSTNAME=0.0.0.0 \
   nohup npm run start </dev/null > "$HOME/web.log" 2>&1 &
 
 # --- 확인 ------------------------------------------------------------------
-step "기동 확인"
+step "API·프론트 기동 확인"
 
-# 워커는 HTTP로 확인할 수 없다 — 프로세스 상태를 systemd에 직접 묻는다. 여기서 걸러야
-# "화면은 뜨는데 임베딩만 안 되는" 배포를 배포 시점에 잡는다.
-systemctl is-active --quiet openarchive-worker \
-  || fail "임베딩 워커가 기동하지 않았다: sudo journalctl -u openarchive-worker -n 50"
-
+# `/api/system/status`는 세션 인증을 요구하므로(ADR-028) 익명 요청에는 401을 준다.
+# `curl -f`로는 그 401이 실패로 잡혀 멀쩡한 배포가 통째로 실패한다 — 인증 도입 전에
+# 쓰던 검사가 그대로 남아 있던 자리다.
+#
+# 여기서 확인할 것은 "응답이 오는가"이고, 그것이 곧 마이그레이션 완료의 증거다:
+# uvicorn은 lifespan startup(= 마이그레이션, ADR-012)이 끝난 뒤에 리스닝을 시작한다.
+# 3000으로 물어보므로 Next.js의 `/api/*` rewrite까지 한 번에 검증된다.
+api_ready=""
 for _ in $(seq 1 20); do
   sleep 3
-  if curl -sf -m 5 http://127.0.0.1:3000/api/system/status >/dev/null 2>&1; then
-    curl -s http://127.0.0.1:3000/api/system/status; echo
-    echo
-    echo "완료: http://<공인 IP>:3000 (보안그룹에서 3000을 열어야 접근된다)"
-    echo "로그: ~/api.log ~/web.log · 워커는 sudo journalctl -u openarchive-worker -f"
-    exit 0
-  fi
+  code=$(curl -s -o /dev/null -w '%{http_code}' -m 5 http://127.0.0.1:3000/api/system/status || true)
+  case "$code" in
+    200 | 401)
+      api_ready=1
+      break
+      ;;
+  esac
 done
+[[ -n "$api_ready" ]] \
+  || fail "API·프론트가 60초 안에 응답하지 않았다(마지막 상태코드: ${code:-없음}). ~/api.log ~/web.log 를 확인한다"
 
-fail "API·프론트가 60초 안에 응답하지 않았다. ~/api.log ~/web.log 를 확인한다"
+# --- 워커 -----------------------------------------------------------------
+# 여기서 띄운다 — 위 응답이 곧 마이그레이션 완료의 증거다 (ADR-012).
+step "임베딩 워커 기동"
+systemctl --user start openarchive-worker
+
+# 워커는 HTTP로 확인할 수 없어 프로세스 상태를 systemd에 직접 묻는다. 여기서 걸러야
+# "화면은 뜨는데 임베딩만 안 되는" 배포를 배포 시점에 잡는다. `Type=simple`은 exec 직후
+# active가 되지만, 기동 실패로 재시작 중이면 `activating`이라 is-active가 실패를 낸다 —
+# RestartSec(10초)보다 넉넉히 두고 확인한다.
+sleep 12
+systemctl --user is-active --quiet openarchive-worker \
+  || fail "임베딩 워커가 기동하지 않았다: journalctl --user -u openarchive-worker -n 50"
+
+echo
+echo "완료: http://<공인 IP>:3000 (보안그룹에서 3000을 열어야 접근된다)"
+echo "  · 시스템 상태는 로그인 후 /admin/status에서 본다 — 익명 요청은 401이다 (ADR-028)"
+echo "로그: ~/api.log ~/web.log · 워커는 journalctl --user -u openarchive-worker -f"

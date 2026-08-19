@@ -664,10 +664,12 @@ aws ec2 revoke-security-group-ingress --region ap-northeast-2 \
 - **첫 검색만 느리다.** API 프로세스가 모델을 lazy load 하므로 재기동 후 첫 질의가 **16~19초**, 이후는 **0.4~0.5초**다. 시연 전에 질의를 한 번 흘려 예열한다
 - **재부팅 생존은 없다.** API·프론트는 `nohup` 맨 프로세스다. OpenSQL 자신이 그렇게 도는 설치라 앱만 부팅 시 살려도 붙을 DB가 없다. 인스턴스를 켤 때마다 `deploy_app_host.sh`를 돌린다
 - **임베딩 워커만 systemd 유닛이다 — 재부팅이 아니라 crash 복구용이다** (ADR-038). DB는 살아 있는데 워커만 죽는 경우가 문제이기 때문이다: 화면은 멀쩡한데 새 문서만 영원히 검색되지 않는다. BGE-M3가 2.2GB 상주하고 swap이 없어 워커는 OOM killer의 1순위 표적이다
-  - 상태·로그: `systemctl is-active openarchive-worker` · `sudo journalctl -u openarchive-worker -f`
-  - 세우고 켜기: `sudo systemctl stop|restart openarchive-worker` (`pkill`을 쓰지 않는다 — `Restart=always`가 즉시 되살린다)
-  - **`systemctl enable`은 일부러 실패한다.** 유닛에 `[Install]` 섹션이 없어 부팅 자동 기동을 켤 수 없다. 위 "재부팅 생존은 없다"를 파일 구조로 강제한 것이다
-  - 5분에 5회를 넘겨 재기동하면 systemd가 포기하고 failed로 남는다. 그때도 `/admin/status`의 `pending`·`recovery_pending`이 계속 올라 정지 사실은 화면에서 보인다
+  - **system 유닛이 아니라 user 유닛이다.** SELinux Enforcing에서 system 유닛(`init_t`)은 홈 아래(`user_home_t`)의 venv를 실행하지 못한다 — `203/EXEC Permission denied`. `SELinuxContext=`로 exec 도메인만 바꿔도 경로 탐색에서 걸린다. `systemctl --user`는 nohup으로 돌리던 때와 같은 도메인이라 보안 수준이 낮아지지 않는다. 세션이 끊겨도 유지되도록 `loginctl enable-linger`가 필요하고 `deploy_app_host.sh`가 해 둔다 (2026-08-19 실측)
+  - 상태·로그: `systemctl --user is-active openarchive-worker` · `journalctl --user -u openarchive-worker -f` (**sudo 불필요**)
+  - 세우고 켜기: `systemctl --user stop|restart openarchive-worker` (`pkill`을 쓰지 않는다 — `Restart=always`가 즉시 되살린다)
+  - **`systemctl --user enable`은 일부러 실패한다.** 유닛에 `[Install]` 섹션이 없어 부팅 자동 기동을 켤 수 없고 `is-enabled`가 `static`으로 남는다. 위 "재부팅 생존은 없다"를 파일 구조로 강제한 것이다
+  - 5분에 5회를 넘겨 재기동하면 systemd가 포기하고 failed로 남는다. 다시 띄우려면 `systemctl --user reset-failed openarchive-worker`가 필요하다. 그 상태에서도 `/admin/status`의 `pending`·`recovery_pending`이 계속 올라 정지 사실은 화면에서 보인다
+  - `XDG_RUNTIME_DIR`이 없는 비대화형 SSH에서는 `export XDG_RUNTIME_DIR=/run/user/$(id -u)`를 먼저 준다
 
 ### 측정값 (2026-08-09, t3.large 2 vCPU / 8GB)
 

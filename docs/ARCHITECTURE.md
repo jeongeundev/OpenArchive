@@ -333,7 +333,7 @@ COMMIT;
 
    반납하지 못하고 죽어도(SIGKILL·OOM) 정합성은 깨지지 않는다. 잡이 좀비로 남아 5번이 임계 후에 회수할 뿐이다. 반납은 그 5분을 없애는 최적화다.
 
-7. 프로세스 감독: 워커가 `SIGKILL`·OOM으로 사라지면 스스로 살아날 수 없고, **되살리지 않으면 임베딩 파이프라인이 통째로 멈춘다** — 새 문서는 영원히 검색되지 않고 수정된 문서는 옛 벡터로 검색된다. 배포 호스트에서는 systemd 유닛(`scripts/openarchive-worker.service`, `Restart=always`)이 이를 되살린다. 재부팅 생존은 여전히 없다 — 그건 DB도 함께 사라지는 문제라 워커만 살려도 붙을 곳이 없다 ([ADR-038](ADR.md)).
+7. 프로세스 감독: 워커가 `SIGKILL`·OOM으로 사라지면 스스로 살아날 수 없고, **되살리지 않으면 임베딩 파이프라인이 통째로 멈춘다** — 새 문서는 영원히 검색되지 않고 수정된 문서는 옛 벡터로 검색된다. 배포 호스트에서는 systemd **user** 유닛(`scripts/openarchive-worker.service` → `~/.config/systemd/user/`, `Restart=always`)이 이를 되살린다. system 유닛이 아닌 이유는 SELinux다 — Enforcing에서 `init_t`가 홈 아래 venv를 실행하지 못한다. 재부팅 생존은 여전히 없다 — 그건 DB도 함께 사라지는 문제라 워커만 살려도 붙을 곳이 없다 ([ADR-038](ADR.md)).
 
    **재기동 직후 좀비가 즉시 회수되지는 않는다.** 죽음을 시간으로 판정하므로 임계(기본 5분)를 기다린다. 그 대기가 파이프라인 전체를 멈추지는 않는다 — 좀비는 `processing`이라 `claim_job`의 대상이 아니고, 워커는 남은 `pending` 잡을 그대로 집어간다. 크래시의 영향은 그 잡 하나로 격리된다(`test_pipeline_keeps_draining_while_a_zombie_waits_for_its_timeout`).
 
