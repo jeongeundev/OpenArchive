@@ -586,6 +586,10 @@ bash scripts/install_opensql_host.sh ~/Tmax_OpenSQL_3.17.8.7_rockylinux9.7_build
 - **인스턴스를 정지했다 켜면 공인 IP가 바뀐다.** 심사용 링크를 유지하려면 Elastic IP나 도메인이 필요하다
   - 반면 **사설 IP는 보존된다**(실측: 정지·기동 후에도 `172.31.25.213`). `patroni.yml`·`openproxy.toml`이 사설 IP에 묶여 있으므로 재설정 없이 그대로 뜬다
 - **재부팅하면 `opensql-etcd.service` 하나만 살아난다.** Patroni·PostgreSQL·OpenProxy는 systemd 유닛이 없는 `nohup` 맨 프로세스라(#27) 인스턴스를 켤 때마다 수동 기동이 필요하다 (§15)
+- ⚠️ **`patronictl list`는 죽은 클러스터도 `Leader | running`으로 보여준다.** DCS(etcd)에 남은 마지막 기록을 출력하는 것이라, Patroni·PostgreSQL·OpenProxy가 전부 죽고 etcd만 살아 있는 상태(= 인스턴스를 켠 직후)에서도 정상처럼 보인다. **생사 판정에 쓰지 마라** — `deploy_app_host.sh`의 사전 검사가 이것 때문에 거짓 통과했다 (2026-08-19 실측, ADR-038)
+  - 판정은 **앱이 쓸 DSN으로 쿼리 하나**를 던져서 한다: `sudo -u opensql env PGCONNECT_TIMEOUT=5 /home/opensql/bin/psql "$DATABASE_URL" -tAXc 'select pg_is_in_recovery()'` → `f`
+  - 포트 리스닝(`ss -tln`)도 부족하다. OpenProxy는 커넥션 풀러라 백엔드 PostgreSQL이 죽어도 자기는 리스닝하고, 연결이 서더라도 Replica로 라우팅되면 마이그레이션이 read-only로 죽는다. 쿼리 한 번이 프로세스 생존·자격증명·풀 이름·쓰기 가능 여부를 함께 확인한다
+  - `pkill -f openproxy` 같은 명령은 **자기 자신의 셸도 죽인다**(명령줄에 그 문자열이 들어 있으면 매치된다). 프로세스 이름만 보는 `pgrep -x`/`pkill -x`를 쓴다
 - **CPU는 4개를 넘길 수 없다.** 라이선스 `<limit_cpu>` 상한이라 t3.xlarge(4 vCPU)가 최대다
 - 설치 파일과 라이선스 xml은 **저장소에 커밋하지 않는다.** 저장소는 규정상 public이어야 한다 (`PROJECT_CONTEXT.md` 제10조 ②)
 

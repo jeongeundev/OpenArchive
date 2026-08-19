@@ -23,13 +23,33 @@ command -v npm >/dev/null || fail "node가 없다: sudo dnf module install -y no
 
 # OpenSQL은 재부팅해도 etcd만 살아난다 — Patroni·PostgreSQL·OpenProxy는 systemd 유닛이
 # 없어 수동 기동이 필요하다. 앱만 띄우고 DB가 없는 상태를 여기서 끊는다.
-PATRONICTL=/home/opensql/bin/patronictl
-if ! sudo -u opensql "$PATRONICTL" -c /home/opensql/etc/patroni/patroni.yml list 2>/dev/null | grep -q running; then
-  fail "PostgreSQL이 기동하지 않았다. 먼저 아래를 실행한다:
+#
+# 판정은 **앱이 쓸 DSN으로 쓰기 가능한 연결이 서는가** 하나로 한다.
+#
+#   patronictl list로 판정하지 않는다 — 그 출력은 DCS(etcd)에 남은 마지막 기록이라
+#   Patroni·PostgreSQL·OpenProxy가 전부 죽어 있어도 `Leader | running`을 보여준다.
+#   2026-08-19 실측에서 인스턴스를 켠 직후가 정확히 그 상태였고, 이 검사가 거짓 통과했다.
+#
+#   포트 리스닝(ss -tln)만 보는 것도 부족하다. OpenProxy는 커넥션 풀러라 백엔드
+#   PostgreSQL이 죽어도 자기는 리스닝하고, dbname 자리가 풀 이름이라 설정이 어긋나면
+#   포트가 열린 채로 연결만 실패한다. 연결이 서더라도 Replica로 라우팅되면 마이그레이션이
+#   read-only로 죽는다.
+#
+# 쿼리 한 번이 프로세스 생존·네트워크·자격증명과 풀 이름·쓰기 가능 여부를 함께 확인한다.
+PSQL=/home/opensql/bin/psql
+db_probe=$(sudo -u opensql env PGCONNECT_TIMEOUT=5 "$PSQL" "$DATABASE_URL" \
+  -tAXc 'select pg_is_in_recovery()' 2>&1) || {
+  fail "DB에 연결하지 못했다 — 배포를 시작할 수 없다.
+  $db_probe
+  OpenSQL을 먼저 기동한다:
   sudo -u opensql -i bash -c 'export OPENSQL_HOME=/home/opensql; bash /home/opensql/scripts/start_patroni.sh'
   sudo -u opensql -i bash -c 'export OPENSQL_HOME=/home/opensql; bash /home/opensql/scripts/start_openproxy.sh'"
+}
+if [[ "$(echo "$db_probe" | tr -d '[:space:]')" != "f" ]]; then
+  fail "DB에 연결은 되지만 쓰기할 수 없다 (pg_is_in_recovery=$db_probe).
+  Replica로 라우팅됐거나 승격 전이다 — 마이그레이션이 read-only로 실패한다."
 fi
-echo "DB 접속: $DATABASE_URL"
+echo "DB 접속: $DATABASE_URL (쓰기 가능 확인)"
 
 # --- 백엔드 ----------------------------------------------------------------
 step "백엔드 의존성 설치"

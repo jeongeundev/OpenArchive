@@ -1818,7 +1818,17 @@ SELinux Enforcing이 기본이고 venv가 홈 아래(`user_home_t`)에 있어, s
 | 문서 INSERT → 임베딩 | 36초에 `ready`, 청크 2개 (BGE-M3 첫 로드 포함) |
 | 좀비 회수 (attempts=1) | `pending` 회수 → 재선점(attempts=2) → `ready`. 로그 "좀비 잡 1건을 pending으로 회수" |
 | 좀비 격리 (attempts=3) | `job=error` · `embedding_status=error` · `last_error=WorkerCrashLoop: …` · 청크 0 |
+| 배포 사전 검사 (DB 다운) | OpenProxy만 정지한 상태에서 **실패**. 같은 상태에서 옛 `patronictl \| grep -q running`은 매치 1건으로 **통과했을 것** |
+| 배포 사전 검사 (DB 정상) | "쓰기 가능 확인" 후 전체 관통 |
 
 좀비 두 건은 `started_at`을 임계 너머로 밀어 재현했다 — 5분을 기다리지 않기 위한 조작이며
 `test_worker.py`가 쓰는 방식과 같다. 회수 건수 반환값이 격리분을 세지 않는다는 계약도 로그에서
 확인됐다(2건 중 1건만 "회수"로 집계).
+
+**곁가지로 배포 사전 검사의 거짓 통과도 이 실측에서 닫았다.** 인스턴스를 켠 직후는
+Patroni·PostgreSQL·OpenProxy가 전부 죽고 etcd만 살아 있는 상태인데, `patronictl list`가
+DCS에 남은 마지막 기록으로 `Leader | running`을 보여주어 검사가 통과했다. 판정을 **앱이 쓸
+DSN으로 `select pg_is_in_recovery()`를 던지는 것**으로 바꿨다 — 쿼리 한 번이 프로세스 생존·
+네트워크·자격증명과 풀 이름·쓰기 가능 여부를 함께 확인한다. 포트 리스닝만 보는 방식은
+채택하지 않았다: OpenProxy는 풀러라 백엔드가 죽어도 리스닝하고, 연결이 서더라도 Replica로
+라우팅되면 마이그레이션이 read-only로 죽는다.
