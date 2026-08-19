@@ -21,6 +21,10 @@ export interface TextVersion {
   created_at: string;
 }
 
+export interface TextVersionDetail extends TextVersion {
+  content: string;
+}
+
 export interface DocumentDetail extends DocumentSummary {
   content: string;
   versions: TextVersion[];
