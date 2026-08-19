@@ -10,6 +10,7 @@ import pytest
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
 
 from app.cli import OWNED_TABLES, main, probe_capabilities
+from app.config import ENV_FILE
 from app.migrations import migration_files
 
 
@@ -253,3 +254,24 @@ def test_write_dsn_leaves_no_stale_database_url_behind(clean_db: str, tmp_path):
     assert written.count("DATABASE_URL=") == 1
     assert f"DATABASE_URL={clean_db}" in written
     assert "EMBEDDING_PROVIDER=local" in written
+
+
+def test_init_next_steps_name_the_directory_they_are_relative_to(
+    clean_db: str, capsys, tmp_path
+):
+    """다음 단계의 경로는 기준 디렉토리가 함께 적혀야 하고, 그 기준에서 실재해야 한다.
+
+    init은 실행 위치를 가리지 않는다 — venv의 실행 파일이고 --env-file 기본값도
+    절대경로다. 안내가 어느 디렉토리를 전제하는지 밝히지 않으면, README 절차대로
+    backend/에서 init을 돌린 사용자가 `python scripts/create_admin.py`를 그 자리에서
+    쳐서 파일을 찾지 못한다 (clean clone 실측).
+    """
+    main(["init", "--dsn", clean_db, "--yes", "--env-file", str(tmp_path / ".env")])
+
+    steps = capsys.readouterr().out.split("다음 단계")[1]
+    repo_root = ENV_FILE.parent.parent
+
+    assert "저장소 루트" in steps
+    for relative in ("backend", "frontend", "scripts/create_admin.py"):
+        assert relative in steps
+        assert (repo_root / relative).exists()
