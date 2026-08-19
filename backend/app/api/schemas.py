@@ -27,6 +27,16 @@ class TextVersion(BaseModel):
     created_at: datetime
 
 
+class TextVersionDetail(TextVersion):
+    content: str
+
+
+class RestoreVersionRequest(BaseModel):
+    # 되돌릴 과거 버전은 경로에 있다. 이 값은 호출자가 읽어온 **현재** 버전이며,
+    # 서버의 현재 버전과 다르면 409다 (ADR-037 결정 3).
+    current_version: int
+
+
 class DocumentDetail(DocumentSummary):
     content: str
     versions: list[TextVersion]

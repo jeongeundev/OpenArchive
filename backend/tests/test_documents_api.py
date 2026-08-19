@@ -723,3 +723,114 @@ def test_write_endpoints_return_404_for_missing_document(db_client: TestClient):
         f"/api/documents/{missing_id}/tags",
         json={"tags": ["database"]},
     ).status_code == 404
+
+
+def restore(
+    client: TestClient,
+    document_id: str,
+    *,
+    version: int,
+    current_version: int,
+    user_id="alice",
+):
+    if user_id is not None:
+        login_as(client, user_id)
+    return client.post(
+        f"/api/documents/{document_id}/versions/{version}/restore",
+        json={"current_version": current_version},
+    )
+
+
+def test_past_version_endpoint_returns_that_versions_text(db_client: TestClient):
+    login_as(db_client, "alice")
+    created = db_client.post(
+        "/api/documents/text", json={"title": "정책", "content": "처음 내용"}
+    ).json()
+    edit(db_client, created["id"], content="고친 내용", version=1)
+
+    response = db_client.get(f"/api/documents/{created['id']}/versions/1")
+
+    assert response.status_code == 200
+    assert response.json()["content"] == "처음 내용"
+    assert response.json()["version"] == 1
+
+
+def test_past_version_endpoint_hides_private_documents_from_others(
+    db_client: TestClient,
+):
+    """열람 범위 밖 문서의 버전은 404다 — 403이면 문서의 존재를 알려준다 (ADR-027)."""
+    login_as(db_client, "alice")
+    created = db_client.post(
+        "/api/documents/text",
+        json={"title": "비공개", "content": "숨은 내용", "visibility": "private"},
+    ).json()
+
+    login_as(db_client, "bob")
+    response = db_client.get(f"/api/documents/{created['id']}/versions/1")
+
+    assert response.status_code == 404
+
+
+def test_past_version_endpoint_rejects_a_version_that_never_existed(
+    db_client: TestClient,
+):
+    login_as(db_client, "alice")
+    created = db_client.post(
+        "/api/documents/text", json={"title": "정책", "content": "처음 내용"}
+    ).json()
+
+    assert db_client.get(f"/api/documents/{created['id']}/versions/2").status_code == 404
+
+
+def test_restore_endpoint_appends_a_new_version_and_requeues_embedding(
+    db_client: TestClient, migrated_db: str
+):
+    """되돌리기는 새 버전을 만들고 파이프라인을 다시 태운다 (ADR-037 결정 2)."""
+    login_as(db_client, "alice")
+    created = db_client.post(
+        "/api/documents/text", json={"title": "정책", "content": "처음 내용"}
+    ).json()
+    edit(db_client, created["id"], content="고친 내용", version=1)
+
+    response = restore(db_client, created["id"], version=1, current_version=2)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["version"] == 3
+    assert body["content"] == "처음 내용"
+    assert body["embedding_status"] == "pending"
+    with psycopg.connect(migrated_db) as conn:
+        assert conn.execute(
+            "SELECT version FROM document_versions"
+            " WHERE document_id = %s ORDER BY version",
+            (created["id"],),
+        ).fetchall() == [(1,), (2,), (3,)]
+
+
+def test_restore_endpoint_rejects_a_stale_current_version(db_client: TestClient):
+    login_as(db_client, "alice")
+    created = db_client.post(
+        "/api/documents/text", json={"title": "정책", "content": "처음 내용"}
+    ).json()
+    edit(db_client, created["id"], content="고친 내용", version=1)
+
+    response = restore(db_client, created["id"], version=1, current_version=1)
+
+    assert response.status_code == 409
+    assert response.json()["current_version"] == 2
+
+
+def test_restore_endpoint_refuses_a_non_owner_of_a_public_document(
+    db_client: TestClient,
+):
+    login_as(db_client, "alice")
+    created = db_client.post(
+        "/api/documents/text", json={"title": "공개 정책", "content": "처음 내용"}
+    ).json()
+    edit(db_client, created["id"], content="고친 내용", version=1)
+
+    response = restore(
+        db_client, created["id"], version=1, current_version=2, user_id="bob"
+    )
+
+    assert response.status_code == 403

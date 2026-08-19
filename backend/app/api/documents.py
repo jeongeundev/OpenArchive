@@ -7,6 +7,7 @@ from fastapi import (
     File,
     Form,
     HTTPException,
+    Path,
     Query,
     Response,
     UploadFile,
@@ -23,7 +24,9 @@ from app.api.schemas import (
     EditDocumentResponse,
     RelatedResponse,
     ResolvedLinkItem,
+    RestoreVersionRequest,
     TagSuggestionsResponse,
+    TextVersionDetail,
     UpdateTagsRequest,
 )
 from app.services import documents as service
@@ -162,6 +165,39 @@ async def get_tag_suggestions(
         conn, document_id=document_id, user_id=user_id, limit=limit
     )
     return TagSuggestionsResponse.model_validate(result)
+
+
+@router.get("/{document_id}/versions/{version}", response_model=TextVersionDetail)
+async def get_document_version(
+    document_id: UUID,
+    version: Annotated[int, Path(ge=1)],
+    conn: Connection,
+    user_id: Annotated[str, Depends(require_user_id)],
+) -> TextVersionDetail:
+    document_version = await service.get_document_version(
+        conn, document_id, version=version, user_id=user_id
+    )
+    return TextVersionDetail.model_validate(document_version)
+
+
+@router.post(
+    "/{document_id}/versions/{version}/restore", response_model=EditDocumentResponse
+)
+async def restore_document_version(
+    document_id: UUID,
+    version: Annotated[int, Path(ge=1)],
+    body: RestoreVersionRequest,
+    conn: Connection,
+    user_id: Annotated[str, Depends(require_write_user_id)],
+) -> EditDocumentResponse:
+    document = await service.restore_version(
+        conn,
+        document_id,
+        version=version,
+        user_id=user_id,
+        client_version=body.current_version,
+    )
+    return EditDocumentResponse.model_validate(document)
 
 
 @router.put("/{document_id}", response_model=EditDocumentResponse)

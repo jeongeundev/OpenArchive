@@ -5,11 +5,16 @@ import pytest
 
 from app.services.documents import (
     MAX_EXTRACTED_TEXT_LENGTH,
+    DocumentAccessDenied,
+    DocumentNotFound,
     EmptyExtractedText,
     ExtractedTextTooLarge,
     InvalidVisibility,
+    VersionConflict,
     create_document,
     create_text_document,
+    get_document_version,
+    restore_version,
     update_extracted_text,
 )
 from app.services.parsing import UnsupportedFileType
@@ -231,3 +236,200 @@ async def test_create_document_keeps_filename_stem_and_trigger_derivatives(
             (document["id"],),
         )
     ).fetchone() == (1,)
+
+
+async def test_get_document_version_returns_that_versions_own_text(documents_conn):
+    """과거 버전 조회는 그 시점의 본문을 준다 (ADR-037 결정 1).
+
+    현재 본문을 돌려주면 이력이 있다는 사실만 보여줄 뿐 아무것도 답하지 못한다.
+    """
+    document = await create_text_document(
+        documents_conn, title="정책", content="처음 내용", owner_id="alice"
+    )
+    await update_extracted_text(
+        documents_conn,
+        document["id"],
+        user_id="alice",
+        content="고친 내용",
+        client_version=document["version"],
+    )
+
+    first = await get_document_version(
+        documents_conn, document["id"], version=1, user_id="alice"
+    )
+    second = await get_document_version(
+        documents_conn, document["id"], version=2, user_id="alice"
+    )
+
+    assert first["content"] == "처음 내용"
+    assert first["version"] == 1
+    assert second["content"] == "고친 내용"
+
+
+async def test_get_document_version_hides_private_versions_from_others(documents_conn):
+    """볼 수 없는 문서의 버전은 존재하지 않는 것처럼 막힌다 (ADR-027).
+
+    버전 번호의 존재 여부만 알려줘도 문서가 있다는 사실과 수정 횟수가 새어 나간다.
+    """
+    private = await create_text_document(
+        documents_conn,
+        title="비공개",
+        content="남에게 보이면 안 되는 내용",
+        owner_id="alice",
+        visibility="private",
+    )
+    public = await create_text_document(
+        documents_conn, title="공개", content="누구나 보는 내용", owner_id="alice"
+    )
+
+    with pytest.raises(DocumentNotFound):
+        await get_document_version(
+            documents_conn, private["id"], version=1, user_id="bob"
+        )
+    visible = await get_document_version(
+        documents_conn, public["id"], version=1, user_id="bob"
+    )
+    assert visible["content"] == "누구나 보는 내용"
+
+
+async def test_get_document_version_rejects_version_that_never_existed(documents_conn):
+    document = await create_text_document(
+        documents_conn, title="정책", content="처음 내용", owner_id="alice"
+    )
+
+    with pytest.raises(DocumentNotFound):
+        await get_document_version(
+            documents_conn, document["id"], version=2, user_id="alice"
+        )
+
+
+async def test_restore_version_appends_a_new_version_instead_of_rewinding(
+    documents_conn,
+):
+    """복원은 되감기가 아니라 새 버전 생성이다 (ADR-037 결정 2).
+
+    이력이 append-only여야 정합성 검증 쿼리(`c.version <> d.version`)의 기준이
+    흔들리지 않는다. v1으로 되돌리면 v3이 생기고 v1·v2는 그대로 남아야 한다.
+    """
+    document = await create_text_document(
+        documents_conn, title="정책", content="처음 내용", owner_id="alice"
+    )
+    await update_extracted_text(
+        documents_conn,
+        document["id"],
+        user_id="alice",
+        content="고친 내용",
+        client_version=1,
+    )
+
+    restored = await restore_version(
+        documents_conn, document["id"], version=1, user_id="alice", client_version=2
+    )
+
+    assert restored["version"] == 3
+    assert restored["content"] == "처음 내용"
+    assert await (
+        await documents_conn.execute(
+            "SELECT version, content FROM document_versions"
+            " WHERE document_id = %s ORDER BY version",
+            (document["id"],),
+        )
+    ).fetchall() == [(1, "처음 내용"), (2, "고친 내용"), (3, "처음 내용")]
+
+
+async def test_restore_version_reruns_the_derivation_pipeline(documents_conn):
+    """복원도 편집과 같은 파생 계약을 탄다 — 잡이 생기고 상태가 pending으로 돌아간다."""
+    document = await create_text_document(
+        documents_conn, title="정책", content="처음 내용", owner_id="alice"
+    )
+    await update_extracted_text(
+        documents_conn,
+        document["id"],
+        user_id="alice",
+        content="고친 내용",
+        client_version=1,
+    )
+    await documents_conn.execute(
+        "UPDATE documents SET embedding_status = 'ready' WHERE id = %s",
+        (document["id"],),
+    )
+    await documents_conn.execute(
+        "UPDATE embedding_jobs SET status = 'done' WHERE document_id = %s",
+        (document["id"],),
+    )
+
+    await restore_version(
+        documents_conn, document["id"], version=1, user_id="alice", client_version=2
+    )
+
+    assert await (
+        await documents_conn.execute(
+            "SELECT embedding_status FROM documents WHERE id = %s", (document["id"],)
+        )
+    ).fetchone() == ("pending",)
+    assert await (
+        await documents_conn.execute(
+            "SELECT count(*) FROM embedding_jobs"
+            " WHERE document_id = %s AND status = 'pending'",
+            (document["id"],),
+        )
+    ).fetchone() == (1,)
+
+
+async def test_restore_version_rejects_a_stale_client_version(documents_conn):
+    """복원도 편집과 같은 낙관적 잠금을 쓴다 (ADR-037 결정 3).
+
+    복원은 파괴적으로 보이지 않지만 현재 내용을 밀어내므로 편집과 같은 무게다.
+    """
+    document = await create_text_document(
+        documents_conn, title="정책", content="처음 내용", owner_id="alice"
+    )
+    await update_extracted_text(
+        documents_conn,
+        document["id"],
+        user_id="alice",
+        content="고친 내용",
+        client_version=1,
+    )
+
+    with pytest.raises(VersionConflict):
+        await restore_version(
+            documents_conn, document["id"], version=1, user_id="alice", client_version=1
+        )
+    assert await (
+        await documents_conn.execute(
+            "SELECT content FROM documents WHERE id = %s", (document["id"],)
+        )
+    ).fetchone() == ("고친 내용",)
+
+
+async def test_restore_version_refuses_a_non_owner_of_a_visible_document(
+    documents_conn,
+):
+    """공개 문서라도 복원은 소유자만 한다 — 편집과 같은 쓰기 권한 규칙이다."""
+    document = await create_text_document(
+        documents_conn, title="공개 정책", content="처음 내용", owner_id="alice"
+    )
+    await update_extracted_text(
+        documents_conn,
+        document["id"],
+        user_id="alice",
+        content="고친 내용",
+        client_version=1,
+    )
+
+    with pytest.raises(DocumentAccessDenied):
+        await restore_version(
+            documents_conn, document["id"], version=1, user_id="bob", client_version=2
+        )
+
+
+async def test_restore_version_rejects_a_version_that_never_existed(documents_conn):
+    document = await create_text_document(
+        documents_conn, title="정책", content="처음 내용", owner_id="alice"
+    )
+
+    with pytest.raises(DocumentNotFound):
+        await restore_version(
+            documents_conn, document["id"], version=7, user_id="alice", client_version=1
+        )

@@ -324,6 +324,62 @@ async def update_extracted_text(
     return document
 
 
+async def get_document_version(
+    conn: psycopg.AsyncConnection,
+    document_id: UUID,
+    *,
+    version: int,
+    user_id: str,
+) -> dict:
+    """과거 텍스트 버전의 본문을 돌려준다 (ADR-037 결정 1).
+
+    열람 범위는 문서 본체와 같은 술어를 쓴다. 볼 수 없는 문서의 버전은 없는 것과 같이
+    다뤄야 한다 — 버전 번호의 존재만 알려줘도 문서의 존재와 수정 횟수가 새어 나간다.
+    """
+    cur = conn.cursor(row_factory=dict_row)
+    await cur.execute(
+        f"""
+        SELECT v.version, v.content, v.created_at
+        FROM document_versions v
+        JOIN documents d ON d.id = v.document_id
+        WHERE v.document_id = %(id)s
+          AND v.version = %(version)s
+          AND {VISIBLE_TO_USER}
+        """,
+        {"id": document_id, "version": version, "user": user_id},
+    )
+    document_version = await cur.fetchone()
+    if document_version is None:
+        raise DocumentNotFound
+    return document_version
+
+
+async def restore_version(
+    conn: psycopg.AsyncConnection,
+    document_id: UUID,
+    *,
+    version: int,
+    user_id: str,
+    client_version: int,
+) -> dict:
+    """과거 버전의 본문으로 **새 텍스트 버전을 만든다** — 되감기가 아니다 (ADR-037 결정 2).
+
+    편집 경로를 그대로 호출한다. 낙관적 잠금·길이 검증·`content_hash` 갱신·트리거 발화가
+    편집과 완전히 같아야 하고, 여기에 별도 UPDATE를 두면 한쪽만 고쳐지는 자리가 생긴다.
+    `version`을 감소시키거나 이력 행을 지우지 않으므로 정합성 검증 쿼리의 기준도 그대로다.
+    """
+    past = await get_document_version(
+        conn, document_id, version=version, user_id=user_id
+    )
+    return await update_extracted_text(
+        conn,
+        document_id,
+        user_id=user_id,
+        content=past["content"],
+        client_version=client_version,
+    )
+
+
 async def update_tags(
     conn: psycopg.AsyncConnection,
     document_id: UUID,
