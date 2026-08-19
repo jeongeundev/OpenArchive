@@ -2,12 +2,21 @@
 
 ## 개발 환경
 
+**OpenSQL 라이선스 없이 아래 절차와 `scripts/check.sh`가 그대로 완주합니다.** 무엇이 로컬로
+되고 무엇이 실 OpenSQL 환경을 요구하는지는 [README 「빠른 시작」](README.md#빠른-시작)의 표에
+있습니다.
+
 ```bash
 docker compose up -d                 # 로컬 DB (pgvector 컨테이너)
 
-cd backend && pip install -e ".[dev]"
+cd backend
+python3 -m venv .venv && source .venv/bin/activate   # scripts/check.sh가 backend/.venv를 찾는다
+pip install -e ".[dev]"
 uvicorn app.main:app --reload        # API — 마이그레이션이 여기서 실행된다
 python -m app.worker                 # 임베딩 워커 (별도 프로세스)
+
+# 최초 관리자 계정 — 자체 가입이 없으므로 UI 로그인 전에 한 번 실행한다
+cd .. && ADMIN_PASSWORD='<초기 비밀번호>' python scripts/create_admin.py admin --admin
 
 cd frontend && npm install && npm run dev
 ```
@@ -18,7 +27,13 @@ cd frontend && npm install && npm run dev
 bash scripts/check.sh
 ```
 
+> **가상환경 주의**: `scripts/check.sh`는 `backend/.venv/bin`의 실행 파일을 직접 부릅니다.
+> `.venv` 없이 의존성을 설치하면 검증이 "backend/.venv 없음"으로 실패합니다.
+
 > **기동 순서 주의**: 마이그레이션은 API 서버만 실행합니다 (ADR-012). 워커나 MCP 서버를 먼저 띄우면 스키마가 없어 실패합니다.
+
+> **환경변수 파일 주의**: `.env`를 만든다면 위치는 `backend/.env`입니다. 저장소 루트에 두면
+> 어느 프로세스도 읽지 않습니다 ([README 「환경변수 파일」](README.md#환경변수-파일은-backendenv-하나입니다)).
 
 ---
 

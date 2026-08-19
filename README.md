@@ -147,6 +147,24 @@ document_chunks 교체 (단일 트랜잭션)
 
 ## 빠른 시작
 
+### OpenSQL 라이선스는 필요하지 않습니다
+
+**아래 절차는 OpenSQL 없이 그대로 완주합니다.** 로컬 DB는 `pgvector/pgvector:pg17`
+컨테이너 한 대이고, 스키마·트리거·검색 SQL은 전부 표준 PostgreSQL 17 기능이라 OpenSQL
+전용 확장에 의존하지 않습니다. 애플리케이션이 OpenSQL과 만나는 지점은 `DATABASE_URL`
+환경변수 하나뿐입니다 ([ADR-006](docs/ADR.md), [ADR-007](docs/ADR.md)).
+
+| 로컬 컨테이너로 되는 것 | 실 OpenSQL 환경이 필요한 것 |
+|---|---|
+| 자동 임베딩 파이프라인 전 구간 — 트리거·아웃박스·`SKIP LOCKED`·청킹·임베딩 | OpenProxy 경유 세션 동작 ([ADR-009](docs/ADR.md)) |
+| 하이브리드 검색 · 관계 그래프 · 태그 추천 | 읽기/쓰기 분리와 복제 지연 ([ADR-010](docs/ADR.md)) |
+| 텍스트 버전·되돌리기, 권한 모델, API 토큰 | Patroni 리더 선출·승격 |
+| Web UI · REST API · MCP 서버 전체 | 장애 복구 데모 (`scripts/demo_recovery.sh`) |
+| `bash scripts/check.sh` 전체 통과 | 라이선스·번들 확장 실동작 |
+
+OpenSQL 자체를 세우려면 [OpenSQL 환경 구축](docs/SETUP_OPENSQL.md)을 따르십시오 — 설치
+파일과 라이선스가 따로 필요하고, x86-64 + Rocky Linux 9.7 전용입니다.
+
 ### 준비물
 - Docker · Docker Compose
 - Python 3.12+
@@ -181,11 +199,26 @@ cd frontend
 npm install && npm run dev
 
 # 6. MCP 서버 (Claude Desktop/Code가 기동한다. 수동 확인은 아래 커맨드)
+#    MCP_USER_ID는 3번에서 만든 계정명과 같아야 한다 — 아래 「MCP 서버 등록」 참조.
 cd backend && source .venv/bin/activate
-MCP_USER_ID=alice python -m mcp_server.server
+MCP_USER_ID=admin python -m mcp_server.server
 ```
 
 `http://localhost:3000` 접속.
+
+### 환경변수 파일은 `backend/.env` 하나입니다
+
+기본값만으로 위 절차가 완주하므로 `.env`는 **설정을 바꿀 때만** 만듭니다. 만들 때 위치는
+`backend/` 안입니다.
+
+```bash
+cd backend && cp .env.example .env
+```
+
+설정을 읽는 주체는 API·워커·MCP 서버와 `scripts/create_admin.py` 넷인데 실행 디렉토리가
+서로 다릅니다. `app/config.py`가 `backend/.env` 한 곳만 절대경로로 읽어 넷이 같은 값을 보게
+합니다. **저장소 루트에 `.env`를 두면 아무도 읽지 않습니다.** 환경변수를 직접 주는 방식
+(`DATABASE_URL=... uvicorn ...`)은 언제나 파일보다 우선합니다.
 
 ### 임베딩 프로바이더
 
@@ -235,7 +268,7 @@ stdio 서버 설정에 백엔드 가상환경의 Python과 모듈을 등록한�
       "env": {
         "DATABASE_URL": "postgresql://openarchive:openarchive@localhost:5433/openarchive",
         "EMBEDDING_PROVIDER": "fake",
-        "MCP_USER_ID": "alice"
+        "MCP_USER_ID": "admin"
       }
     }
   }
@@ -246,6 +279,10 @@ stdio 서버 설정에 백엔드 가상환경의 Python과 모듈을 등록한�
 `DATABASE_URL`, `EMBEDDING_PROVIDER`, `MCP_USER_ID`를 MCP 프로세스에 함께 전달해야 한다.
 `MCP_USER_ID`를 생략하면 public 문서 읽기만 가능하고 `create_document` 쓰기는 거부된다. MCP 서버는
 마이그레이션을 실행하지 않으므로 API 서버를 먼저 기동해 스키마가 적용된 상태여야 한다 (ADR-012·036).
+
+> ⚠️ **`MCP_USER_ID`는 실존 계정인지 검증되지 않는다.** 빈 값만 거부되고, 없는 이름을 넣어도
+> 그대로 문서 소유자가 된다 (ADR-036). 위 3번에서 만든 계정명과 **정확히 같게** 적어야
+> `create_document`로 만든 문서가 Web UI에서 자기 문서로 보인다.
 
 ### API 확인
 
@@ -308,11 +345,19 @@ SSH 공개키 인증과 원격 호스트의 비밀번호 없는 `sudo`가 필요
 
 ### 실 OpenSQL 클러스터에 연결
 
-애플리케이션은 OpenProxy VIP 단일 엔드포인트만 바라봅니다. 환경변수만 바꾸면 됩니다.
+애플리케이션은 OpenProxy VIP 단일 엔드포인트만 바라봅니다. 코드 변경 없이 환경변수만
+바꾸면 됩니다.
 
 ```bash
 DATABASE_URL="postgresql://app@<vip>:6432/<pool_name>"
 ```
+
+> ⚠️ **DSN을 바꾸기 전에 OpenProxy 풀이 어느 데이터베이스를 바라보는지 확인하십시오.**
+> 설치기는 `opensql` 데이터베이스를 만들어놓고 정작 풀은 관리용 `postgres`를 바라보게
+> 설정합니다. 클라이언트는 DSN에 **풀 이름**을 적으므로 실제 저장 위치가 드러나지 않아,
+> 그대로 두면 마이그레이션과 문서가 `postgres`에 쌓입니다. 교정 절차는
+> [OpenSQL 환경 구축](docs/SETUP_OPENSQL.md)의 §10 「풀이 바라보는 데이터베이스를
+> 교정한다」에 있습니다.
 
 ---
 
