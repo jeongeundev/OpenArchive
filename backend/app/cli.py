@@ -298,7 +298,7 @@ def run_init(*, dsn: str | None, assume_yes: bool, env_file: Path) -> int:
         print(f"  {env_file}에 DATABASE_URL을 기록했습니다")
 
     print()
-    print("다음 단계 — 이 명령은 프로세스를 기동하지 않습니다.")
+    print("다음 단계 — 저장소 루트에서 실행합니다. 이 명령은 프로세스를 기동하지 않습니다.")
     print("  1) API      cd backend && uvicorn app.main:app --reload")
     print("  2) 관리자    ADMIN_PASSWORD='<비밀번호>' python scripts/create_admin.py admin --admin")
     print("  3) 워커      cd backend && python -m app.worker")
