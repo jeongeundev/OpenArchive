@@ -309,38 +309,58 @@ async def sweep_zombies(conn: psycopg.AsyncConnection) -> int:
             (timeout_minutes,),
         )
 
-        # 문서가 이미 수정되어 새 pending 잡이 있는 좀비는 pending 복귀가 문서당
-        # pending 1개 제약에 걸린다 — 새 잡이 최신 내용으로 처리하므로 done으로 마감한다.
-        await conn.execute(
-            """
-            UPDATE embedding_jobs j
-               SET status = 'done', finished_at = now()
-             WHERE j.status = 'processing'
-               AND j.started_at < now() - make_interval(mins => %s)
-               AND EXISTS (SELECT 1 FROM embedding_jobs p
-                            WHERE p.document_id = j.document_id AND p.status = 'pending')
-            """,
-            (timeout_minutes,),
-        )
-
-        # 재시도 예산을 소진한 좀비는 회수하지 않고 격리한다. 위 done 마감보다 **뒤**에
-        # 두는 순서가 fail_job과 같다 — 문서가 이미 수정됐다면 그 잡은 실패한 것이 아니라
-        # 수명이 끝난 것이므로 error 배지를 달면 안 된다. NOT EXISTS를 여기서도 명시해
-        # 두 UPDATE의 순서에 정합성이 의존하지 않게 한다.
+        # 대상 좀비를 한 번만 뽑고 각 잡의 처분을 CTE에서 정한다. 조건을 UPDATE마다
+        # 반복하면 세 문장의 실행 순서에 정합성이 의존하게 되는데, 특히 **문서당 하나만
+        # pending으로 되돌린다**는 제약은 문장을 나눠서는 표현할 수 없다.
+        #
+        #   done    — 이미 새 pending 잡이 있어 최신 내용으로 처리될 잡(superseded), 또는
+        #             같은 문서의 좀비 중 두 번째 이후(rn > 1). 후자가 없으면 한 UPDATE가
+        #             두 행을 pending으로 만들어 uq_pending_job_per_doc 위반으로 스윕이
+        #             통째로 터지고, run_worker의 except가 그것을 삼켜 그 주기의 drain이
+        #             실행되지 않는다 — 매 폴링 반복되면 파이프라인이 영구 정지한다.
+        #             잡에는 페이로드가 없어 어느 것을 남겨도 같으므로 가장 오래된 것을
+        #             남긴다(작은 id). 감독자가 워커를 되살리는 경로에서만 생긴다:
+        #             워커1이 죽어 좀비 → 문서 수정으로 새 잡 → 워커2가 그것을 집고 죽음.
+        #   error   — 재시도 예산 소진. superseded 판정이 **먼저**라 낡은 내용을 보던 잡은
+        #             실패가 아니라 수명이 끝난 것으로 다뤄진다 (fail_job과 같은 순서).
+        #   pending — 그 외. 회수 대상이며 반환값이 세는 것은 이것뿐이다.
         cur = await conn.execute(
             """
+            WITH zombie AS (
+                SELECT j.id, j.document_id, j.attempts,
+                       row_number() OVER (PARTITION BY j.document_id ORDER BY j.id) AS rn,
+                       EXISTS (SELECT 1 FROM embedding_jobs p
+                                WHERE p.document_id = j.document_id
+                                  AND p.status = 'pending') AS superseded
+                  FROM embedding_jobs j
+                 WHERE j.status = 'processing'
+                   AND j.started_at < now() - make_interval(mins => %(mins)s)
+            ), decided AS (
+                SELECT id, document_id,
+                       CASE WHEN superseded OR rn > 1     THEN 'done'
+                            WHEN attempts >= %(max_attempts)s THEN 'error'
+                            ELSE 'pending' END AS next_status
+                  FROM zombie
+            )
             UPDATE embedding_jobs j
-               SET status = 'error', last_error = %s, finished_at = now()
-             WHERE j.status = 'processing'
-               AND j.started_at < now() - make_interval(mins => %s)
-               AND j.attempts >= %s
-               AND NOT EXISTS (SELECT 1 FROM embedding_jobs p
-                                WHERE p.document_id = j.document_id AND p.status = 'pending')
-         RETURNING j.document_id
+               SET status = d.next_status,
+                   last_error = CASE WHEN d.next_status = 'error'
+                                     THEN %(exhausted_error)s ELSE j.last_error END,
+                   finished_at = CASE WHEN d.next_status IN ('done', 'error')
+                                      THEN now() ELSE j.finished_at END
+              FROM decided d
+             WHERE j.id = d.id
+         RETURNING d.document_id, d.next_status
             """,
-            (ZOMBIE_EXHAUSTED_ERROR, timeout_minutes, MAX_ATTEMPTS),
+            {
+                "mins": timeout_minutes,
+                "max_attempts": MAX_ATTEMPTS,
+                "exhausted_error": ZOMBIE_EXHAUSTED_ERROR,
+            },
         )
-        exhausted = [row[0] for row in await cur.fetchall()]
+        decided = await cur.fetchall()
+
+        exhausted = [doc_id for doc_id, status in decided if status == "error"]
         if exhausted:
             # fail_job의 소진 처리와 같은 상태로 맞춘다. 청크는 지우지 않으므로 검색은
             # 이전 버전으로 계속되고, 정합성 카운터는 어긋난 채 남는다 — 격리했다고
@@ -351,18 +371,7 @@ async def sweep_zombies(conn: psycopg.AsyncConnection) -> int:
                 (exhausted,),
             )
 
-        cur = await conn.execute(
-            """
-            UPDATE embedding_jobs j
-               SET status = 'pending'
-             WHERE j.status = 'processing'
-               AND j.started_at < now() - make_interval(mins => %s)
-               AND NOT EXISTS (SELECT 1 FROM embedding_jobs p
-                                WHERE p.document_id = j.document_id AND p.status = 'pending')
-            """,
-            (timeout_minutes,),
-        )
-        return cur.rowcount
+        return sum(1 for _, status in decided if status == "pending")
 
 
 async def process_once(
@@ -482,11 +491,13 @@ async def run_worker() -> None:
         wake.set()
 
     loop = asyncio.get_running_loop()
+    registered: list[signal.Signals] = []
     for sig in (signal.SIGTERM, signal.SIGINT):
         # 시그널 핸들러를 지원하지 않는 환경(윈도우·비메인 스레드)에서는 조용히 건너뛴다.
         # 그 경우 정상 종료 경로가 없을 뿐, 좀비 회수가 여전히 뒤를 받친다.
         with contextlib.suppress(NotImplementedError, RuntimeError):
             loop.add_signal_handler(sig, request_stop)
+            registered.append(sig)
 
     listen_task = asyncio.create_task(_listen_for_jobs(get_settings().database_url, wake))
     try:
@@ -514,6 +525,11 @@ async def run_worker() -> None:
     finally:
         if stop.is_set():
             logger.info("종료 신호 — 처리 중인 잡을 마치고 멈춘다")
+        # 우리가 등록한 것만 되돌린다 — 루프가 이 함수보다 오래 사는 경우(테스트가 그렇다)
+        # 이미 끝난 워커의 핸들러가 남아 다음 신호를 가로채지 않게 한다.
+        for sig in registered:
+            with contextlib.suppress(NotImplementedError, RuntimeError):
+                loop.remove_signal_handler(sig)
         listen_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await listen_task

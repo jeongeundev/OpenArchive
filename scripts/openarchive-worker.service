@@ -26,8 +26,9 @@ Description=OpenArchive embedding worker
 # 메모리 압박으로 죽었다면 즉시 되살려도 또 죽는다. 5분에 5회를 넘으면 포기하고
 # failed로 남긴다 — 무한 재기동이 같은 호스트의 API까지 끌어내리는 것을 막는다.
 # t3.large 8GB에 BGE-M3가 워커·API 두 벌(합계 4.2GB)로 상주하고 swap이 없다
-# (SETUP_OPENSQL.md 측정값). 포기해도 /admin/status의 pending·recovery_pending이
-# 계속 올라가므로 정지 사실은 관측된다. 한도에 걸린 뒤 다시 띄우려면
+# (SETUP_OPENSQL.md 측정값). 포기해도 업로드는 계속 받으므로 /admin/status의 pending이
+# 계속 올라가 정지 사실은 관측된다 — recovery_pending은 방치된 processing 건수라 크래시
+# 시점의 값에서 멈춘다. 한도에 걸린 뒤 다시 띄우려면
 # `systemctl --user reset-failed openarchive-worker`가 필요하다 (실측 확인).
 StartLimitIntervalSec=300
 StartLimitBurst=5

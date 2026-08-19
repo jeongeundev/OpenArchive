@@ -15,6 +15,8 @@ UPDATE해 상황을 만든다. 5분을 기다리는 테스트는 존재할 수 �
 
 import asyncio
 import contextlib
+import os
+import signal
 import threading
 
 import psycopg
@@ -27,6 +29,7 @@ from app.services.chunking import chunk_text
 from app.worker import (
     CHANNEL,
     MAX_ATTEMPTS,
+    ZOMBIE_EXHAUSTED_ERROR,
     _listen_for_jobs,
     claim_job,
     drain,
@@ -578,7 +581,9 @@ async def test_sweep_errors_out_a_zombie_that_exhausted_its_budget(conn):
     status, attempts, last_error = (await job_rows(conn, doc_id))[0]
     assert status == "error"
     assert attempts == MAX_ATTEMPTS  # 소진 사실이 남는다
-    assert last_error is not None  # 왜 격리됐는지 알 수 있어야 한다
+    # fail_job이 남기는 `타입: 메시지` 형식이어야 한다 — UI가 두 경로의 실패를 같은
+    # 모양으로 보여준다는 계약이다. "무엇이든 채워져 있다"로는 그것을 지키지 못한다.
+    assert last_error == ZOMBIE_EXHAUSTED_ERROR
     assert (await document_state(conn, doc_id))[1] == "error"
 
 
@@ -618,6 +623,39 @@ async def test_sweep_completes_an_exhausted_zombie_whose_document_moved_on(conn,
 
     assert [j[0] for j in await job_rows(conn, doc_id)] == ["done", "pending"]
     assert (await document_state(conn, doc_id))[1] != "error"
+
+
+async def test_sweep_handles_two_processing_zombies_on_one_document(conn, other_conn):
+    """한 문서에 좀비가 둘이면 하나만 회수하고 나머지는 done으로 마감한다.
+
+    감독자가 워커를 되살리면서 생기는 경로다. 워커1이 job1을 집고 죽어 좀비가 남은 뒤,
+    문서가 수정되어 job2가 생기고, 재기동한 워커2가 job2를 집고 또 죽으면 **같은 문서에
+    processing 좀비가 둘** 있게 된다. 둘 다 `NOT EXISTS(pending)`을 만족하므로 한 UPDATE가
+    두 행을 pending으로 만들면 uq_pending_job_per_doc 위반으로 스윕 트랜잭션이 통째로
+    터진다. 그러면 run_worker의 except가 그것을 삼켜 **그 주기의 drain이 아예 실행되지
+    않고**, 매 폴링마다 같은 실패가 반복되어 파이프라인이 영구 정지한다.
+
+    잡에는 페이로드가 없어("이 문서는 재임베딩이 필요하다"는 신호뿐) 어느 것을 남겨도
+    결과가 같다. 가장 오래된 것(작은 id)을 남긴다.
+    """
+    doc_id = await insert_document(conn)
+    job1 = await claim_job(conn)
+    await edit_document(other_conn, doc_id, DOC_V2, "sha256:v2")  # job2 pending
+    job2 = await claim_job(conn)  # job2도 processing — 이제 좀비 후보가 둘이다
+    assert job2 is not None and job2.job_id != job1.job_id
+    await conn.execute(
+        "UPDATE embedding_jobs SET started_at = now() - interval '10 minutes'"
+        " WHERE document_id = %s",
+        (doc_id,),
+    )
+
+    assert await sweep_zombies(conn) == 1  # 회수는 정확히 하나
+
+    rows = await job_rows(conn, doc_id)
+    assert [r[0] for r in rows] == ["pending", "done"]  # 오래된 것을 남기고 뒤를 마감
+    # 회수된 잡이 다시 집히고, uq 위반 없이 파이프라인이 이어진다
+    reclaimed = await claim_job(conn)
+    assert reclaimed is not None and reclaimed.job_id == job1.job_id
 
 
 async def test_pipeline_keeps_draining_while_a_zombie_waits_for_its_timeout(conn, other_conn):
@@ -693,7 +731,18 @@ async def test_drain_releases_the_claimed_job_when_shutdown_is_requested(conn):
 
     assert processed == 0  # 하나도 완료하지 않았다
     assert await job_rows(conn, doc_a) == [("pending", 0, None)]  # 집었다가 반납 + 원복
-    assert [j[0] for j in await job_rows(conn, doc_b)] == ["pending"]  # 아예 집지 않았다
+    # doc_b는 **집히지도 않았다.** status·attempts로는 이것을 구분할 수 없다 — 반납이
+    # attempts를 원복하므로 claim+release한 잡도 ("pending", 0)으로 남는다. claim만이
+    # started_at을 채우고 반납은 그것을 되돌리지 않으므로, 그 컬럼이 유일한 판별자다.
+    cur = await conn.execute(
+        "SELECT status, attempts, started_at IS NULL FROM embedding_jobs WHERE document_id = %s",
+        (doc_b,),
+    )
+    assert await cur.fetchall() == [("pending", 0, True)]
+    cur = await conn.execute(
+        "SELECT started_at IS NOT NULL FROM embedding_jobs WHERE document_id = %s", (doc_a,)
+    )
+    assert (await cur.fetchone())[0] is True  # 대조: doc_a는 집혔다가 반납됐다
 
 
 async def test_polling_drain_handles_multiple_documents_without_listen(conn):
@@ -738,6 +787,46 @@ async def test_run_worker_drains_a_new_document_end_to_end(migrated_db, conn, mo
 
     assert [r[1] for r in await chunk_rows(conn, doc_id)] == chunk_text(DOC_V1)
     assert [j[0] for j in await job_rows(conn, doc_id)] == ["done"]
+
+
+async def test_run_worker_stops_itself_on_sigterm(migrated_db, conn, monkeypatch):
+    """SIGTERM에 루프를 빠져나와 **스스로** 종료한다 — 배포의 `systemctl stop` 경로다.
+
+    이 경로가 없으면 감독자가 워커를 세울 때마다 진행 중이던 잡이 좀비로 남아, 다음
+    워커가 임계(기본 5분)를 기다려야 처리가 이어진다. `worker.cancel()`로는 검증할 수
+    없다 — 취소는 바깥에서 태스크를 죽이는 것이고, 여기서 확인할 것은 워커가 자기
+    판단으로 루프를 빠져나오는가다. 그래서 취소하지 않고 끝나기를 기다린다.
+
+    run_worker가 SIGTERM 핸들러를 등록하므로 이 프로세스는 신호에 죽지 않는다. 등록
+    **전에** 발사하면 기본 동작이 살아 있어 pytest가 통째로 종료되므로, 워커가 한 건을
+    실제로 처리한 것을 확인한 뒤에 보낸다 — 그 시점이면 등록이 끝나 있다.
+    """
+    monkeypatch.setenv("DATABASE_URL", migrated_db)
+    monkeypatch.setenv("EMBEDDING_PROVIDER", "fake")
+    get_settings.cache_clear()
+    await close_pool()
+
+    doc_id = await insert_document(conn)
+    worker = asyncio.create_task(run_worker())
+    try:
+        await wait_until(
+            lambda: _is_ready(conn, doc_id),
+            message="워커가 기동해 한 건을 처리하지 못했다 — 신호를 보낼 시점이 아니다",
+        )
+
+        os.kill(os.getpid(), signal.SIGTERM)
+
+        # shield로 감싸 타임아웃이 태스크를 취소하지 않게 한다 — 취소로 끝나면 이 테스트가
+        # 증명하려는 것(스스로 종료)이 사라진다. 정리는 아래 finally가 맡는다.
+        await asyncio.wait_for(asyncio.shield(worker), timeout=15)
+        assert worker.done()
+        assert worker.exception() is None  # 예외로 죽은 것이 아니라 정상 반환이어야 한다
+    finally:
+        if not worker.done():
+            worker.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await worker
+        await close_pool()
 
 
 async def test_run_worker_holds_no_open_transaction_while_embedding(

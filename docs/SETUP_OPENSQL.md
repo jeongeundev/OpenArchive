@@ -672,7 +672,7 @@ aws ec2 revoke-security-group-ingress --region ap-northeast-2 \
   - 상태·로그: `systemctl --user is-active openarchive-worker` · `journalctl --user -u openarchive-worker -f` (**sudo 불필요**)
   - 세우고 켜기: `systemctl --user stop|restart openarchive-worker` (`pkill`을 쓰지 않는다 — `Restart=always`가 즉시 되살린다)
   - **`systemctl --user enable`은 일부러 실패한다.** 유닛에 `[Install]` 섹션이 없어 부팅 자동 기동을 켤 수 없고 `is-enabled`가 `static`으로 남는다. 위 "재부팅 생존은 없다"를 파일 구조로 강제한 것이다
-  - 5분에 5회를 넘겨 재기동하면 systemd가 포기하고 failed로 남는다. 다시 띄우려면 `systemctl --user reset-failed openarchive-worker`가 필요하다. 그 상태에서도 `/admin/status`의 `pending`·`recovery_pending`이 계속 올라 정지 사실은 화면에서 보인다
+  - 5분에 5회를 넘겨 재기동하면 systemd가 포기하고 failed로 남는다. 다시 띄우려면 `systemctl --user reset-failed openarchive-worker`가 필요하다. 그 상태에서도 업로드는 계속 받으므로 `/admin/status`의 `pending`이 계속 올라 정지 사실은 화면에서 보인다 (`recovery_pending`은 크래시 시점에 방치된 `processing` 건수라 더 늘지 않는다)
   - `XDG_RUNTIME_DIR`이 없는 비대화형 SSH에서는 `export XDG_RUNTIME_DIR=/run/user/$(id -u)`를 먼저 준다
 
 ### 측정값 (2026-08-09, t3.large 2 vCPU / 8GB)

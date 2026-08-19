@@ -37,10 +37,16 @@ command -v npm >/dev/null || fail "node가 없다: sudo dnf module install -y no
 #
 # 쿼리 한 번이 프로세스 생존·네트워크·자격증명과 풀 이름·쓰기 가능 여부를 함께 확인한다.
 PSQL=/home/opensql/bin/psql
+# rocky는 /home/opensql(drwx------)을 들여다볼 수 없으므로 존재 확인도 opensql로 한다.
+# 이 확인이 없으면 psql이 없을 때도 "DB에 연결하지 못했다"로 보여 원인을 헷갈리게 한다.
+sudo -u opensql test -x "$PSQL" || fail "psql을 찾을 수 없다: $PSQL — OpenSQL 설치를 확인한다"
+
+# stderr는 판정값에 섞지 않고 화면으로 흘린다. 2>&1로 받으면 psql이 NOTICE·WARNING을
+# 하나라도 내는 순간 값이 'f'가 아니게 되어, 정상 Primary에서 "쓰기할 수 없다"로 거짓
+# 실패한다. 진단 정보는 아래 오류 출력으로 그대로 보인다.
 db_probe=$(sudo -u opensql env PGCONNECT_TIMEOUT=5 "$PSQL" "$DATABASE_URL" \
-  -tAXc 'select pg_is_in_recovery()' 2>&1) || {
-  fail "DB에 연결하지 못했다 — 배포를 시작할 수 없다.
-  $db_probe
+  -tAXc 'select pg_is_in_recovery()') || {
+  fail "DB에 연결하지 못했다 — 배포를 시작할 수 없다 (psql 오류는 위에 출력됐다).
   OpenSQL을 먼저 기동한다:
   sudo -u opensql -i bash -c 'export OPENSQL_HOME=/home/opensql; bash /home/opensql/scripts/start_patroni.sh'
   sudo -u opensql -i bash -c 'export OPENSQL_HOME=/home/opensql; bash /home/opensql/scripts/start_openproxy.sh'"
@@ -152,11 +158,22 @@ step "임베딩 워커 기동"
 systemctl --user start openarchive-worker
 
 # 워커는 HTTP로 확인할 수 없어 프로세스 상태를 systemd에 직접 묻는다. 여기서 걸러야
-# "화면은 뜨는데 임베딩만 안 되는" 배포를 배포 시점에 잡는다. `Type=simple`은 exec 직후
-# active가 되지만, 기동 실패로 재시작 중이면 `activating`이라 is-active가 실패를 낸다 —
-# RestartSec(10초)보다 넉넉히 두고 확인한다.
-sleep 12
-systemctl --user is-active --quiet openarchive-worker \
+# "화면은 뜨는데 임베딩만 안 되는" 배포를 배포 시점에 잡는다.
+#
+# `Type=simple`은 exec 직후 active가 되므로 한 번 보는 것으로는 기동 실패를 잡지 못한다.
+# RestartSec(10초)를 넘겨 여러 번 확인해, 재시작 루프에 빠진 워커(예: 203/EXEC)를 걸러낸다.
+# **한계**: 모델 로드를 마친 뒤 OOM으로 죽는 경우는 이 창을 지나 발생하므로 여기서 잡지
+# 못한다. 그때는 감독자가 되살리고, 한도를 넘기면 /admin/status의 pending이 계속 올라간다.
+worker_ok=""
+for _ in $(seq 1 6); do
+  sleep 4
+  if ! systemctl --user is-active --quiet openarchive-worker; then
+    worker_ok=""
+    break
+  fi
+  worker_ok=1
+done
+[[ -n "$worker_ok" ]] \
   || fail "임베딩 워커가 기동하지 않았다: journalctl --user -u openarchive-worker -n 50"
 
 echo
