@@ -586,6 +586,10 @@ bash scripts/install_opensql_host.sh ~/Tmax_OpenSQL_3.17.8.7_rockylinux9.7_build
 - **인스턴스를 정지했다 켜면 공인 IP가 바뀐다.** 심사용 링크를 유지하려면 Elastic IP나 도메인이 필요하다
   - 반면 **사설 IP는 보존된다**(실측: 정지·기동 후에도 `172.31.25.213`). `patroni.yml`·`openproxy.toml`이 사설 IP에 묶여 있으므로 재설정 없이 그대로 뜬다
 - **재부팅하면 `opensql-etcd.service` 하나만 살아난다.** Patroni·PostgreSQL·OpenProxy는 systemd 유닛이 없는 `nohup` 맨 프로세스라(#27) 인스턴스를 켤 때마다 수동 기동이 필요하다 (§15)
+- ⚠️ **`patronictl list`는 죽은 클러스터도 `Leader | running`으로 보여준다.** DCS(etcd)에 남은 마지막 기록을 출력하는 것이라, Patroni·PostgreSQL·OpenProxy가 전부 죽고 etcd만 살아 있는 상태(= 인스턴스를 켠 직후)에서도 정상처럼 보인다. **생사 판정에 쓰지 마라** — `deploy_app_host.sh`의 사전 검사가 이것 때문에 거짓 통과했다 (2026-08-19 실측, ADR-038)
+  - 판정은 **앱이 쓸 DSN으로 쿼리 하나**를 던져서 한다: `sudo -u opensql env PGCONNECT_TIMEOUT=5 /home/opensql/bin/psql "$DATABASE_URL" -tAXc 'select pg_is_in_recovery()'` → `f`
+  - 포트 리스닝(`ss -tln`)도 부족하다. OpenProxy는 커넥션 풀러라 백엔드 PostgreSQL이 죽어도 자기는 리스닝하고, 연결이 서더라도 Replica로 라우팅되면 마이그레이션이 read-only로 죽는다. 쿼리 한 번이 프로세스 생존·자격증명·풀 이름·쓰기 가능 여부를 함께 확인한다
+  - `pkill -f openproxy` 같은 명령은 **자기 자신의 셸도 죽인다**(명령줄에 그 문자열이 들어 있으면 매치된다). 프로세스 이름만 보는 `pgrep -x`/`pkill -x`를 쓴다
 - **CPU는 4개를 넘길 수 없다.** 라이선스 `<limit_cpu>` 상한이라 t3.xlarge(4 vCPU)가 최대다
 - 설치 파일과 라이선스 xml은 **저장소에 커밋하지 않는다.** 저장소는 규정상 public이어야 한다 (`PROJECT_CONTEXT.md` 제10조 ②)
 
@@ -662,7 +666,14 @@ aws ec2 revoke-security-group-ingress --region ap-northeast-2 \
 - **CPU 전용 torch를 먼저 깐다.** PyPI 기본 wheel은 CUDA 빌드라 GPU 없는 인스턴스에 `nvidia-*` 2.7GB가 따라온다. 순서를 지키면 venv가 **5.1GB → 1.4GB**, 설치가 **2m37s → 1m16s**로 준다. `deploy_app_host.sh`가 이미 그렇게 한다
 - **BGE-M3가 두 벌 올라간다.** 워커(2233MB)와 API(2006MB)가 각각 모델을 로드한다 — 워커는 청크를, API는 검색 질의를 임베딩하기 때문이다. t3.large 8GB에서 **합계 4.2GB**로 여유가 좁고, swap이 없다. 모델 캐시는 디스크 4.3GB
 - **첫 검색만 느리다.** API 프로세스가 모델을 lazy load 하므로 재기동 후 첫 질의가 **16~19초**, 이후는 **0.4~0.5초**다. 시연 전에 질의를 한 번 흘려 예열한다
-- **재부팅 생존은 없다.** 앱도 `nohup` 맨 프로세스다. OpenSQL 자신이 그렇게 도는 설치라 앱만 systemd로 감싸도 DB가 없어 의미가 없다
+- **재부팅 생존은 없다.** API·프론트는 `nohup` 맨 프로세스다. OpenSQL 자신이 그렇게 도는 설치라 앱만 부팅 시 살려도 붙을 DB가 없다. 인스턴스를 켤 때마다 `deploy_app_host.sh`를 돌린다
+- **임베딩 워커만 systemd 유닛이다 — 재부팅이 아니라 crash 복구용이다** (ADR-038). DB는 살아 있는데 워커만 죽는 경우가 문제이기 때문이다: 화면은 멀쩡한데 새 문서만 영원히 검색되지 않는다. BGE-M3가 2.2GB 상주하고 swap이 없어 워커는 OOM killer의 1순위 표적이다
+  - **system 유닛이 아니라 user 유닛이다.** SELinux Enforcing에서 system 유닛(`init_t`)은 홈 아래(`user_home_t`)의 venv를 실행하지 못한다 — `203/EXEC Permission denied`. `SELinuxContext=`로 exec 도메인만 바꿔도 경로 탐색에서 걸린다. `systemctl --user`는 nohup으로 돌리던 때와 같은 도메인이라 보안 수준이 낮아지지 않는다. 세션이 끊겨도 유지되도록 `loginctl enable-linger`가 필요하고 `deploy_app_host.sh`가 해 둔다 (2026-08-19 실측)
+  - 상태·로그: `systemctl --user is-active openarchive-worker` · `journalctl --user -u openarchive-worker -f` (**sudo 불필요**)
+  - 세우고 켜기: `systemctl --user stop|restart openarchive-worker` (`pkill`을 쓰지 않는다 — `Restart=always`가 즉시 되살린다)
+  - **`systemctl --user enable`은 일부러 실패한다.** 유닛에 `[Install]` 섹션이 없어 부팅 자동 기동을 켤 수 없고 `is-enabled`가 `static`으로 남는다. 위 "재부팅 생존은 없다"를 파일 구조로 강제한 것이다
+  - 5분에 5회를 넘겨 재기동하면 systemd가 포기하고 failed로 남는다. 다시 띄우려면 `systemctl --user reset-failed openarchive-worker`가 필요하다. 그 상태에서도 업로드는 계속 받으므로 `/admin/status`의 `pending`이 계속 올라 정지 사실은 화면에서 보인다 (`recovery_pending`은 크래시 시점에 방치된 `processing` 건수라 더 늘지 않는다)
+  - `XDG_RUNTIME_DIR`이 없는 비대화형 SSH에서는 `export XDG_RUNTIME_DIR=/run/user/$(id -u)`를 먼저 준다
 
 ### 측정값 (2026-08-09, t3.large 2 vCPU / 8GB)
 

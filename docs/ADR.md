@@ -1676,3 +1676,160 @@ ADR-017이 인라인 편집을 도입하면서 `document_versions`에 이력이 
 있었겠지만, 그 대가로 이력의 append-only 성질과 정합성 기준을 잃는다. 임베딩 비용은 워커가
 비동기로 흡수하고 그 사이 검색은 이전 벡터로 계속되므로 (ADR-015), 사용자가 보는 지연은 배지
 상태뿐이다.
+
+### ADR-038: 워커 프로세스는 감독자가 되살리고, 재시도 예산은 크래시 경로에도 적용한다
+**상태**: 2026-08-19 신규.
+
+**배경 — 관측은 되는데 복구가 안 되는 구간이 있었다**
+
+ADR-020이 검증한 것은 **DB 프로세스** 장애 복구다. Patroni가 PostgreSQL을 재기동하고
+(감지 46ms · 접속 재개 5.85초), API·워커는 끊긴 연결을 재수립하며(ADR-023), 큐가 DB 안에
+있어 미처리 잡이 유실 없이 재개된다. 그런데 **워커 프로세스 자신이 죽는 경우**는 이 그림에
+없었다. 배포는 `nohup` 맨 프로세스이고 감독자가 없어, 워커가 SIGKILL·OOM으로 사라지면
+아무것도 되살리지 않는다.
+
+결과는 특정 문서 하나의 실패가 아니라 **임베딩 파이프라인 전면 정지**다. API는 살아 있어
+업로드를 계속 받으므로 `embedding_jobs`에 `pending`이 무한히 쌓이고, 새 문서는 영원히
+검색되지 않으며 수정된 문서는 옛 벡터로 검색된다. 다행히 조용히 죽지는 않는다 —
+`/admin/status`의 `pending`이 계속 오르고 `recovery_pending`·정합성 카운터가 0으로 돌아오지
+않아 **정지 사실은 관측된다.** (`recovery_pending`은 임계를 넘긴 `processing` 건수라 크래시
+시점의 값에서 멈춘다 — 계속 오르는 것은 `pending`이다.) ADR-015가 약속한 "어긋난 구간의 관측"은 정확히 작동했고,
+빠진 것은 복구뿐이었다.
+
+호스트 OOM은 가정이 아니다. t3.large 8GB에 BGE-M3가 워커(2233MB)·API(2006MB) 두 벌로
+상주하고 swap이 없다 (`SETUP_OPENSQL.md` 측정값). 워커는 OOM killer의 1순위 표적이다.
+
+**결정 1 — 감독은 systemd 유닛으로 하되, 재부팅 생존은 도입하지 않는다.**
+
+기존 결정이 systemd를 배제한 근거는 *"OpenSQL 자신이 nohup 맨 프로세스로 도는 설치라 앱만
+systemd로 감싸도 DB가 없어 의미가 없다"*였다. 이 논거는 **재부팅에 대한 것이지 crash에 대한
+것이 아니다.** 두 시나리오는 DB의 생사가 다르다.
+
+| 시나리오 | DB | 워커 재기동의 의미 |
+|---|---|---|
+| 호스트 재부팅 | Patroni·PostgreSQL·OpenProxy 전부 정지 | 없음 — 기존 논거 유효 |
+| 워커만 crash | **살아 있음** | 있음 — 기존 논거가 다루지 않던 칸 |
+
+그래서 기존 결정을 뒤집지 않고 빈 칸만 채운다. `scripts/openarchive-worker.service`는
+`Restart=always`를 갖되 **`[Install]` 섹션을 두지 않는다** — `systemctl --user enable`이
+거부되고 `is-enabled`가 `static`으로 남아, 부팅 자동 기동이 실수로 켜지는 것을 파일 구조가
+막는다. 인스턴스를 켤 때마다 `deploy_app_host.sh`를 돌리는 절차는 그대로다.
+
+`StartLimitIntervalSec=300` · `StartLimitBurst=5`로 재기동을 제한한다. 메모리 압박으로 죽었다면
+즉시 되살려도 또 죽고, 무한 재기동은 같은 호스트의 API까지 끌어내린다. 포기해도 상태 카운터가
+정지 사실을 계속 노출한다.
+
+**system 유닛이 아니라 user 유닛이다 — SELinux 때문이다.** 처음에는 `/etc/systemd/system/`에
+`User=rocky`로 두었으나 EC2 실측에서 `203/EXEC Permission denied`로 기동하지 못했다. Rocky 9는
+SELinux Enforcing이 기본이고 venv가 홈 아래(`user_home_t`)에 있어, system 유닛의 도메인(`init_t`)이
+실행 파일을 **찾는 단계**에서 막힌다. `SELinuxContext=`로 exec 도메인만 바꿔도 경로 탐색에서
+그대로 걸렸다. `~/.config/systemd/user/`의 user 유닛은 사용자 세션 매니저가 실행하므로 nohup으로
+돌리던 때와 같은 도메인이며 **보안 수준이 낮아지지 않는다.** 세션이 끊겨도 유지되도록
+`loginctl enable-linger`가 필요하고, 배포에서 sudo를 쓰는 곳은 그 한 줄뿐이다. 로그는
+`journalctl --user -u openarchive-worker`로 sudo 없이 읽는다.
+
+> 대안이던 "앱을 `/opt`로 옮긴다"는 채택하지 않았다. SELinux 관점에서는 정석이지만 rsync 대상과
+> 배포 절차 전체가 바뀌고, user 유닛으로 같은 목적이 달성된다.
+
+**적용 범위는 워커 하나로 좁힌다.** API·프론트는 죽으면 사용자가 즉시 알아차리지만, 워커는
+화면이 멀쩡한 채로 파이프라인만 멈춘다 — 감독이 필요한 비대칭이 여기에 있다.
+
+**결정 2 — 재시도 예산을 좀비 회수 경로에도 적용한다.**
+
+감독자를 붙이면 잠복해 있던 결함이 발현된다. `MAX_ATTEMPTS`는 `fail_job`(예외로 잡히는 실패)
+에서만 검사되고, `claim_job`의 WHERE에는 `attempts` 조건이 없으며, `sweep_zombies`는 `status`만
+되돌린다. 그래서 **워커를 반복적으로 죽이는 잡은 회수 → 재선점 → 재크래시를 무한 반복**하고,
+`attempts`는 4, 5, 6으로 올라가지만 아무도 보지 않는다. 감독자가 없을 때는 워커가 한 번 죽고
+끝이라 이 루프가 성립하지 않았다 — 결정 1이 발현 조건을 만든다.
+
+`sweep_zombies`가 임계를 넘긴 잡 중 예산을 소진한 것을 `pending`으로 되돌리지 않고 job `error`
++ `documents.embedding_status='error'`로 격리한다. `fail_job`의 소진 처리와 결과가 같아야
+`/admin/status`의 `error` 카운터와 UI 배지가 두 경로를 구분 없이 보여준다.
+
+판정 순서는 `fail_job`과 동일하다: **새 `pending` 잡 확인 → 예산 소진 확인 → 회수.** 문서가 이미
+수정됐다면 그 잡은 실패한 것이 아니라 수명이 끝난 것이므로 `done`으로 마감하고 `error` 배지를
+달지 않는다. 순서를 뒤집으면 새 잡이 곧 `ready`로 되돌릴 문서에 거짓 `error`가 뜬다.
+
+격리해도 청크는 지우지 않는다 — 검색은 이전 버전으로 계속되고 정합성 카운터는 어긋난 채
+남는다. **격리했다고 어긋남을 숨기면 계약이 거짓말이 된다.** 재개 수단은 문서 재수정이며,
+본문을 바꾸지 않고 다시 태우려면 `UPDATE documents SET content_hash = content_hash`를 쓴다.
+
+**결정 3 — 정상 종료는 선점을 반납하고 `attempts`를 원복한다.**
+
+`systemctl stop`이 보내는 SIGTERM에 워커가 처리 중인 잡을 마치고 멈춘다. 임베딩을 시작하기
+전이었다면 `pending`으로 반납하며, 이때 **`attempts`를 되돌린다.** 배포로 워커를 세우는 것은
+잡의 실패가 아니므로 예산을 소비하면 안 된다 — 원복하지 않으면 배포를 세 번 반복하는 것만으로
+멀쩡한 문서가 결정 2의 소진 판정에 걸려 `error`가 된다. 결정 2와 결정 3은 짝이며, 한쪽만
+도입하면 정상 문서를 격리하는 회귀가 생긴다.
+
+반납은 부수적으로 배포마다 발생하던 5분 좀비 대기도 없앤다. 반납하지 못하고 죽어도(SIGKILL)
+정합성은 깨지지 않는다 — 좀비로 남아 임계 후 회수될 뿐이다.
+
+**결정 4 — 크래시 복구는 기존 시간 기반 판정을 유지한다 (즉시 회수를 도입하지 않는다).**
+
+재기동한 워커가 좀비를 즉시 회수하는 방법을 검토했다. 워커는 자기 기동 시각을 알므로
+"내가 기동하기 전에 `started_at`이 찍힌 `processing` 잡"은 확실히 죽은 워커의 것이고, 그러면
+복구가 5분에서 재기동 시간(10초)으로 줄어든다. **채택하지 않는다** — 이 판정은 워커가 하나라는
+전제 위에서만 참이고, 그 전제를 correctness 로직과 설정에 심는 비용이 5분을 줄이는 이득보다
+크다. 멀티 워커로 확장할 때 반드시 걷어내야 하는 종류의 가정이다.
+
+`pg_try_advisory_lock`으로 세션 종료를 즉시 감지하는 방안도 검토했으나 **기각한다.** OpenProxy는
+풀 백엔드를 넘길 때 `RESET ALL`만 하고 `DISCARD ALL`은 하지 않아 advisory lock이 다음
+클라이언트로 누수된다 — 임시 테이블과 같은 경로이며 ADR-022가 이미 실측한 함정이다.
+
+그래서 복구 흐름은 이렇게 확정된다.
+
+```
+워커 crash → systemd 자동 재기동 → 정상 pending 잡 처리 지속
+          → 기존 processing 좀비는 임계(5분) 후 회수
+          → 재시도 예산 확인 → 재시도 또는 error 격리
+```
+
+**임계를 기다리는 동안에도 파이프라인은 멈추지 않는다.** 좀비는 `processing`이라 `claim_job`의
+대상이 아니고, 워커는 남은 `pending` 잡을 그대로 집어간다 — 크래시의 영향은 그 잡 하나로
+격리된다. 이 동작은 `test_pipeline_keeps_draining_while_a_zombie_waits_for_its_timeout`이
+단언한다. 진술이 아니라 테스트가 지키는 계약이다.
+
+**트레이드오프**
+
+1. **크래시 복구가 최대 5분 늦다.** 결정 4의 대가다. poison job의 격리는 최대
+   3 × (5분 + 재기동 10초) ≒ 15분 30초가 걸리고, 그동안 워커는 5분 주기로 죽는다. 그 사이
+   다른 잡은 계속 처리되므로 처리량 손실에 그친다.
+2. **배포 호스트에 systemd와 lingering이 필요해졌다.** user 유닛이라 sudo는
+   `loginctl enable-linger` 한 줄에만 쓴다. 로컬 개발(`python -m app.worker`)과
+   `demo_recovery.sh`(자체 워커를 띄우고 `kill -STOP`으로 세운다 — 프로세스가 죽지 않으므로
+   감독자가 개입하지 않는다)는 영향을 받지 않는다.
+3. **재부팅 생존은 여전히 없다.** 결정 1이 의도적으로 남긴 구멍이며, OpenSQL 자체가 그렇게
+   도는 설치라 여기만 메워도 관통되지 않는다.
+4. **감독자가 포기한 뒤에는 자동 복구가 없다.** `StartLimitBurst` 초과 시 유닛은 failed로
+   남고 사람이 개입해야 한다(`systemctl --user reset-failed`). 관측은 `/admin/status`와
+   `systemctl --user status` 양쪽에서 된다.
+5. **`MemoryMax` cgroup 상한은 도입하지 않았다.** 호스트 전체 OOM 대신 워커만 정확히 죽게
+   만들 수 있으나 임계값 실측이 선행되어야 한다. 미채택으로 남긴다.
+
+**실측 (2026-08-19, EC2 t3.large · Rocky 9.7 · SELinux Enforcing · systemd 252)**
+
+| 확인 | 결과 |
+|---|---|
+| 유닛 기동 | `active`. `.env`를 읽어 `provider=BAAI/bge-m3` — `WorkingDirectory`가 유효하다 |
+| `kill -9` → 자동 재기동 | **PID 2855 → 2901**, 15초 내 `active` 복귀 |
+| `systemctl --user stop` | 12초 후에도 `inactive` — 감독자가 개입하지 않는다. 워커 로그에 "종료 신호 — 처리 중인 잡을 마치고 멈춘다" |
+| `systemctl --user enable` | 거부, `is-enabled=static` — 결정 1의 부팅 자동 기동 차단이 강제된다 |
+| `StartLimitBurst` | 실제로 발동해 `Start request repeated too quickly`로 포기. 재개에 `reset-failed`가 필요했다 |
+| 문서 INSERT → 임베딩 | 36초에 `ready`, 청크 2개 (BGE-M3 첫 로드 포함) |
+| 좀비 회수 (attempts=1) | `pending` 회수 → 재선점(attempts=2) → `ready`. 로그 "좀비 잡 1건을 pending으로 회수" |
+| 좀비 격리 (attempts=3) | `job=error` · `embedding_status=error` · `last_error=WorkerCrashLoop: …` · 청크 0 |
+| 배포 사전 검사 (DB 다운) | OpenProxy만 정지한 상태에서 **실패**. 같은 상태에서 옛 `patronictl \| grep -q running`은 매치 1건으로 **통과했을 것** |
+| 배포 사전 검사 (DB 정상) | "쓰기 가능 확인" 후 전체 관통 |
+
+좀비 두 건은 `started_at`을 임계 너머로 밀어 재현했다 — 5분을 기다리지 않기 위한 조작이며
+`test_worker.py`가 쓰는 방식과 같다. 회수 건수 반환값이 격리분을 세지 않는다는 계약도 로그에서
+확인됐다(2건 중 1건만 "회수"로 집계).
+
+**곁가지로 배포 사전 검사의 거짓 통과도 이 실측에서 닫았다.** 인스턴스를 켠 직후는
+Patroni·PostgreSQL·OpenProxy가 전부 죽고 etcd만 살아 있는 상태인데, `patronictl list`가
+DCS에 남은 마지막 기록으로 `Leader | running`을 보여주어 검사가 통과했다. 판정을 **앱이 쓸
+DSN으로 `select pg_is_in_recovery()`를 던지는 것**으로 바꿨다 — 쿼리 한 번이 프로세스 생존·
+네트워크·자격증명과 풀 이름·쓰기 가능 여부를 함께 확인한다. 포트 리스닝만 보는 방식은
+채택하지 않았다: OpenProxy는 풀러라 백엔드가 죽어도 리스닝하고, 연결이 서더라도 Replica로
+라우팅되면 마이그레이션이 read-only로 죽는다.

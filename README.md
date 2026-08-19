@@ -14,6 +14,45 @@
 
 ---
 
+```mermaid
+flowchart LR
+    ui["Web UI<br/>Next.js"]
+    rest["REST Client<br/>스크립트 · 커넥터"]
+    mcpc["MCP Client<br/>AI 에이전트"]
+
+    subgraph svc["애플리케이션 — app/services 공유"]
+        api["FastAPI<br/>app/api"]
+        mcps["MCP Server<br/>FastMCP · stdio"]
+    end
+
+    proxy["OpenProxy<br/>VIP : 6432 — 단일 엔드포인트"]
+    db[("OpenSQL v3<br/>PostgreSQL 17 + pgvector")]
+    trg["AFTER 트리거<br/>같은 트랜잭션"]
+    worker["Embedding Worker<br/>python -m app.worker"]
+    model["BGE-M3 로컬 구동<br/>sentence-transformers"]
+
+    ui -->|"업로드 · 텍스트 편집 · 버전 되돌리기 (세션 쿠키)"| api
+    rest -->|"REST + Bearer 토큰"| api
+    mcpc -->|"search_documents · create_document"| mcps
+
+    api -->|"documents INSERT/UPDATE만 — 임베딩 호출 없음"| proxy
+    api -->|"권한·태그 필터 + 벡터 유사도를 단일 SQL로"| proxy
+    mcps -->|"HTTP 미경유 · 같은 services 재사용"| proxy
+
+    proxy -->|"커넥션 풀링 · Primary 추적 · 재연결"| db
+    db --> trg
+    trg -->|"버전 이력 · embedding_jobs · NOTIFY"| db
+
+    worker -->|"5초 폴링(주 경로) + FOR UPDATE SKIP LOCKED로 잡 점유"| proxy
+    worker -->|"청크 배치 임베딩"| model
+    worker -->|"해시 재확인 + 청크 교체 — 단일 트랜잭션"| proxy
+    api -.->|"질의 임베딩"| model
+```
+
+**애플리케이션은 `documents`에 쓰기만 합니다.** 텍스트 버전 이력·임베딩 작업·알림은 AFTER 트리거가 **같은 트랜잭션에서** 만들고, 워커는 그 작업을 집어가는 무상태 실행기입니다. Web UI·REST·MCP는 같은 `app/services`를 소비하는 대등한 인터페이스이며, DB 접속은 OpenProxy 단일 엔드포인트만 거칩니다 ([ADR-006](docs/ADR.md)).
+
+---
+
 ## 무엇을 해결하는가
 
 문서 검색에 벡터 DB를 붙이면 흔히 이런 문제가 생깁니다.
@@ -44,6 +83,8 @@ SELECT count(*) FROM documents d
 ```
 
 문서를 고치면 이 값이 잠깐 올랐다가 워커 처리 후 0으로 돌아옵니다. 장애를 일으켜도 결국 0으로 수렴합니다. `scripts/demo_recovery.sh`는 DB 프로세스가 죽어도 Patroni가 스스로 재기동하고, 앱이 재연결해 미처리 잡을 이어 처리하며, 정합성 카운터가 0으로 수렴하는지 실제로 검증합니다. **증명할 수 있는 주장을 하는 것**이 과장된 최신성 표현보다 낫다고 판단했습니다 ([ADR-015](docs/ADR.md)).
+
+워커 프로세스가 강제 종료되는 경우도 같은 원리로 복구됩니다. 배포 호스트에서는 systemd 유닛이 워커를 되살리고, 재기동한 워커가 방치된 잡을 회수합니다. 그 회수를 기다리는 동안에도 나머지 잡은 계속 처리되며, 워커를 반복적으로 죽이는 잡은 재시도 예산을 소진한 뒤 `error`로 격리되어 파이프라인을 막지 않습니다 ([ADR-038](docs/ADR.md)).
 
 ---
 
@@ -83,7 +124,7 @@ document_chunks 교체 (단일 트랜잭션)
 |---|---|
 | 자동 임베딩 파이프라인 | PDF·DOCX·TXT·MD 업로드 시 트리거가 작업 생성, 워커가 청킹·임베딩·저장 |
 | 하이브리드 검색 | 정형 필터(태그·유형·권한)와 벡터 유사도를 **하나의 SQL**로 결합 |
-| 텍스트 버전 관리·자동 재임베딩 | Web UI에서 **추출 텍스트를 직접 편집**. 수정하면 이력이 쌓이고 재임베딩이 자동 기동. 처리 중에는 이전 벡터로 검색이 계속됨 |
+| 텍스트 버전 관리·자동 재임베딩 | Web UI에서 **추출 텍스트를 직접 편집**. 수정하면 이력이 쌓이고 재임베딩이 자동 기동. 처리 중에는 이전 벡터로 검색이 계속됨. 과거 버전의 본문을 펼쳐 보고 **되돌리면 이력을 되감지 않고 새 텍스트 버전이 생김** ([ADR-037](docs/ADR.md)) |
 | 관련 문서·태그 추천 | 임베딩 완료 시 저장된 관계(edge)로 유사 문서를 찾고, 그 문서들의 태그를 추천. 검색과 동일한 권한 필터 적용 |
 | 장애 자동 복구 | **DB 프로세스** 장애 시 자동 재기동과 앱 재연결, 미처리 작업 무손실 재개. 노드 승격은 검증하지 않았습니다(Single 구성) |
 | MCP 근거 게이트웨이 | AI 에이전트에 발췌·출처·기준 버전을 공급하고 `txt`·`md` 문서 텍스트를 생성. 답변 생성은 클라이언트가 수행 |
@@ -130,6 +171,8 @@ ADMIN_PASSWORD='<초기 비밀번호>' python scripts/create_admin.py admin --ad
 # 4. 임베딩 워커 (별도 터미널) — API 서버를 먼저 기동해야 한다.
 #    마이그레이션은 API startup에서만 실행되므로(ADR-012), 순서를 바꾸면
 #    워커가 "스키마 없음"으로 실패한다.
+#    Ctrl-C로 세우면 처리 중인 잡을 마치고 멈춘다. 배포 호스트에서는 이 프로세스를
+#    systemd 유닛으로 돌려 강제 종료 시 자동 재기동한다 (ADR-038).
 cd backend && source .venv/bin/activate
 python -m app.worker
 
