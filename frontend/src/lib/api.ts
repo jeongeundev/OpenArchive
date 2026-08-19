@@ -12,6 +12,7 @@ import type {
   SearchResponse,
   SystemStatus,
   TagSuggestionsResponse,
+  TextVersionDetail,
   Visibility,
   UserSummary,
 } from "./types";
@@ -157,6 +158,31 @@ export function editDocument(
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(input),
+    },
+  );
+}
+
+export function getDocumentVersion(
+  id: string,
+  version: number,
+): Promise<TextVersionDetail> {
+  return request<TextVersionDetail>(
+    `/api/documents/${encodeURIComponent(id)}/versions/${version}`,
+  );
+}
+
+/** 되감기가 아니라 새 텍스트 버전을 만든다 (ADR-037). */
+export function restoreDocumentVersion(
+  id: string,
+  version: number,
+  currentVersion: number,
+): Promise<DocumentSummary & { content: string }> {
+  return request<DocumentSummary & { content: string }>(
+    `/api/documents/${encodeURIComponent(id)}/versions/${version}/restore`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ current_version: currentVersion }),
     },
   );
 }

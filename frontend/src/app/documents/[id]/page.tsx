@@ -134,7 +134,13 @@ export default function DocumentDetailPage({
         </section>
       ) : null}
 
-      <VersionHistory versions={document.versions} currentVersion={document.version} />
+      <VersionHistory
+        documentId={document.id}
+        versions={document.versions}
+        currentVersion={document.version}
+        disabled={anonymous}
+        onRestored={refresh}
+      />
 
       {relatedData.related !== null ? (
         <RelatedDocuments response={relatedData.related} />
