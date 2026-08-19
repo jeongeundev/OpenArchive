@@ -1,4 +1,4 @@
-"""`openarchive` 명령 — 설치를 준비하는 대화형 CLI (ADR-038).
+"""`openarchive` 명령 — 설치를 준비하는 대화형 CLI (ADR-039).
 
 Web UI·REST·MCP와 같은 자리의 인터페이스이며, 로직을 새로 쓰지 않고 코어를 재사용한다.
 마이그레이션 적용은 `app.migrations.run_migrations`, 준비 상태 판정은

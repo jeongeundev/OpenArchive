@@ -227,7 +227,7 @@ DSN을 확인한 뒤 `backend/.env`의 `DATABASE_URL` 줄만 갈아 끼웁니다
 > **기존 데이터베이스를 덮어쓰지 않습니다.** `schema_migrations`가 없는데 OpenArchive가 쓰는
 > 테이블 이름(`documents`·`users` 등)이 이미 있으면 **아무것도 바꾸지 않고 중단**합니다.
 > 마이그레이션에는 `ALTER TABLE documents`가 있어, 같은 이름의 다른 테이블 위에서 돌면 그
-> 데이터가 손상되기 때문입니다 ([ADR-038](docs/ADR.md)).
+> 데이터가 손상되기 때문입니다 ([ADR-039](docs/ADR.md)).
 
 **하지 않는 것**: API·워커·프론트 기동, DB 자동 탐색·설치, 문서 공급, 계정 생성. 마지막에 다음
 단계를 출력만 합니다. 이 명령을 건너뛰어도 API 서버가 startup에서 같은 마이그레이션을

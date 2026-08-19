@@ -1,4 +1,4 @@
-"""`openarchive init` — 설치 CLI (ADR-038).
+"""`openarchive init` — 설치 CLI (ADR-039).
 
 실제 pgvector 컨테이너에 붙는다. 이 CLI가 지켜야 하는 것 — 확장 가용성 판정,
 기존 스키마와의 충돌 감지, 마이그레이션 적용의 멱등성 — 은 전부 DB가 결정하므로
