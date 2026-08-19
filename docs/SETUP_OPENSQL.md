@@ -662,7 +662,12 @@ aws ec2 revoke-security-group-ingress --region ap-northeast-2 \
 - **CPU 전용 torch를 먼저 깐다.** PyPI 기본 wheel은 CUDA 빌드라 GPU 없는 인스턴스에 `nvidia-*` 2.7GB가 따라온다. 순서를 지키면 venv가 **5.1GB → 1.4GB**, 설치가 **2m37s → 1m16s**로 준다. `deploy_app_host.sh`가 이미 그렇게 한다
 - **BGE-M3가 두 벌 올라간다.** 워커(2233MB)와 API(2006MB)가 각각 모델을 로드한다 — 워커는 청크를, API는 검색 질의를 임베딩하기 때문이다. t3.large 8GB에서 **합계 4.2GB**로 여유가 좁고, swap이 없다. 모델 캐시는 디스크 4.3GB
 - **첫 검색만 느리다.** API 프로세스가 모델을 lazy load 하므로 재기동 후 첫 질의가 **16~19초**, 이후는 **0.4~0.5초**다. 시연 전에 질의를 한 번 흘려 예열한다
-- **재부팅 생존은 없다.** 앱도 `nohup` 맨 프로세스다. OpenSQL 자신이 그렇게 도는 설치라 앱만 systemd로 감싸도 DB가 없어 의미가 없다
+- **재부팅 생존은 없다.** API·프론트는 `nohup` 맨 프로세스다. OpenSQL 자신이 그렇게 도는 설치라 앱만 부팅 시 살려도 붙을 DB가 없다. 인스턴스를 켤 때마다 `deploy_app_host.sh`를 돌린다
+- **임베딩 워커만 systemd 유닛이다 — 재부팅이 아니라 crash 복구용이다** (ADR-038). DB는 살아 있는데 워커만 죽는 경우가 문제이기 때문이다: 화면은 멀쩡한데 새 문서만 영원히 검색되지 않는다. BGE-M3가 2.2GB 상주하고 swap이 없어 워커는 OOM killer의 1순위 표적이다
+  - 상태·로그: `systemctl is-active openarchive-worker` · `sudo journalctl -u openarchive-worker -f`
+  - 세우고 켜기: `sudo systemctl stop|restart openarchive-worker` (`pkill`을 쓰지 않는다 — `Restart=always`가 즉시 되살린다)
+  - **`systemctl enable`은 일부러 실패한다.** 유닛에 `[Install]` 섹션이 없어 부팅 자동 기동을 켤 수 없다. 위 "재부팅 생존은 없다"를 파일 구조로 강제한 것이다
+  - 5분에 5회를 넘겨 재기동하면 systemd가 포기하고 failed로 남는다. 그때도 `/admin/status`의 `pending`·`recovery_pending`이 계속 올라 정지 사실은 화면에서 보인다
 
 ### 측정값 (2026-08-09, t3.large 2 vCPU / 8GB)
 

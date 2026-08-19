@@ -53,13 +53,27 @@ npm ci --no-audit --no-fund
 BACKEND_URL=http://127.0.0.1:8000 npm run build
 
 # --- 기동 ------------------------------------------------------------------
-# systemd 유닛을 만들지 않는다. OpenSQL 자신도 nohup 맨 프로세스로 도는 설치라
-# 앱만 재부팅 생존시켜도 DB가 없어 의미가 없다. 인스턴스를 켤 때마다 이 스크립트를 돌린다.
+# **재부팅 생존은 여전히 없다.** OpenSQL 자신도 nohup 맨 프로세스로 도는 설치라 앱만
+# 부팅 시 살려도 붙을 DB가 없다. 인스턴스를 켤 때마다 이 스크립트를 돌린다.
+#
+# 다만 워커만은 systemd 유닛으로 돌린다 — 그건 재부팅이 아니라 **crash 복구**의 문제이고
+# (DB는 살아 있는데 워커만 죽는 경우), 되살리지 않으면 임베딩 파이프라인이 통째로 멈춰
+# 새 문서가 영원히 검색되지 않는다. API·프론트는 죽으면 사용자가 즉시 알아차리므로
+# nohup 그대로 둔다 (ADR-038).
 step "앱 3종 기동"
 
 pkill -f 'uvicorn app.main:app' 2>/dev/null || true
-pkill -f 'python -m app.worker' 2>/dev/null || true
 pkill -f 'next-server' 2>/dev/null || true
+
+# 워커는 pkill 하지 않는다 — systemctl restart가 SIGTERM 경로로 세운다. pkill로 죽이면
+# Restart=always가 즉시 되살려 배포가 끝나지 않는다.
+sed -e "s|@APP_ROOT@|$APP_ROOT|g" -e "s|@RUN_USER@|$(id -un)|g" \
+  "$APP_ROOT/scripts/openarchive-worker.service" \
+  | sudo tee /etc/systemd/system/openarchive-worker.service >/dev/null
+sudo systemctl daemon-reload
+# restart는 stop+start다. 정지는 SIGTERM이라 워커가 처리 중인 잡을 마치고 스스로 멈추며,
+# 그 정지에는 Restart=always가 개입하지 않는다 (systemd가 의도된 정지로 구분한다).
+sudo systemctl restart openarchive-worker
 
 cd "$APP_ROOT/backend"
 # API는 127.0.0.1에만 연다. 외부에 노출되는 것은 프론트뿐이고, /api/*는 Next.js가
@@ -67,8 +81,6 @@ cd "$APP_ROOT/backend"
 # (ADR-028), API를 직접 열면 로그인·쓰기 엔드포인트가 그대로 인터넷에 노출된다.
 setsid nohup .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 \
   </dev/null > "$HOME/api.log" 2>&1 &
-setsid nohup .venv/bin/python -m app.worker \
-  </dev/null > "$HOME/worker.log" 2>&1 &
 
 cd "$APP_ROOT/frontend"
 setsid env BACKEND_URL=http://127.0.0.1:8000 PORT=3000 HOSTNAME=0.0.0.0 \
@@ -76,15 +88,21 @@ setsid env BACKEND_URL=http://127.0.0.1:8000 PORT=3000 HOSTNAME=0.0.0.0 \
 
 # --- 확인 ------------------------------------------------------------------
 step "기동 확인"
+
+# 워커는 HTTP로 확인할 수 없다 — 프로세스 상태를 systemd에 직접 묻는다. 여기서 걸러야
+# "화면은 뜨는데 임베딩만 안 되는" 배포를 배포 시점에 잡는다.
+systemctl is-active --quiet openarchive-worker \
+  || fail "임베딩 워커가 기동하지 않았다: sudo journalctl -u openarchive-worker -n 50"
+
 for _ in $(seq 1 20); do
   sleep 3
   if curl -sf -m 5 http://127.0.0.1:3000/api/system/status >/dev/null 2>&1; then
     curl -s http://127.0.0.1:3000/api/system/status; echo
     echo
     echo "완료: http://<공인 IP>:3000 (보안그룹에서 3000을 열어야 접근된다)"
-    echo "로그: ~/api.log ~/worker.log ~/web.log"
+    echo "로그: ~/api.log ~/web.log · 워커는 sudo journalctl -u openarchive-worker -f"
     exit 0
   fi
 done
 
-fail "3종이 60초 안에 응답하지 않았다. ~/api.log ~/worker.log ~/web.log 를 확인한다"
+fail "API·프론트가 60초 안에 응답하지 않았다. ~/api.log ~/web.log 를 확인한다"

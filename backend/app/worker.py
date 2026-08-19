@@ -13,6 +13,11 @@
 경유 동작이 문서로 보장되지 않으므로 실패해도 워커는 폴링으로 계속 돈다 (ADR-009).
 마이그레이션은 실행하지 않는다 — 실행 주체는 API 서버 하나다 (ADR-012).
 
+**프로세스의 생사는 이 모듈의 책임이 아니다** (ADR-038). SIGKILL·OOM으로 죽으면
+스스로 살아날 수 없고, 배포 호스트에서는 systemd 유닛이 되살린다. 여기서 다루는 것은
+그 죽음이 남긴 상태뿐이다: 정상 종료(SIGTERM)는 선점을 반납하고, 비정상 종료가 남긴
+좀비는 다음 워커의 `sweep_zombies`가 재시도 예산과 함께 정리한다.
+
 잡 처리 함수들은 커넥션을 인자로 받는다 — 테스트가 커넥션 두 개로 워커 경쟁을
 재현하기 위함이다. 커넥션은 **autocommit이어야 한다**: 아니면 load의 SELECT가 연
 암묵 트랜잭션 탓에 이후 `transaction()` 블록이 SAVEPOINT로 바뀌어, claim의
@@ -22,6 +27,7 @@
 import asyncio
 import contextlib
 import logging
+import signal
 from dataclasses import dataclass
 from uuid import UUID
 
@@ -37,6 +43,12 @@ logger = logging.getLogger(__name__)
 
 POLL_INTERVAL_SECONDS = 5.0
 MAX_ATTEMPTS = 3
+
+# 좀비 회수로 예산을 소진한 잡의 last_error. fail_job이 남기는 `타입: 메시지` 형식을
+# 따라, UI가 두 경로의 실패를 같은 모양으로 보여줄 수 있게 한다.
+ZOMBIE_EXHAUSTED_ERROR = (
+    "WorkerCrashLoop: 워커가 반복적으로 비정상 종료해 재시도 예산을 소진했다"
+)
 
 CHANNEL = "embedding_jobs"
 
@@ -224,11 +236,57 @@ async def fail_job(conn: psycopg.AsyncConnection, job: ClaimedJob, error: Except
         )
 
 
+async def release_job(conn: psycopg.AsyncConnection, job: ClaimedJob) -> None:
+    """정상 종료(SIGTERM) 시 선점을 반납한다 — pending 복귀 + attempts 원복.
+
+    배포로 워커를 세우는 것은 잡의 실패가 아니다. attempts를 원복하지 않으면 배포를
+    MAX_ATTEMPTS번 반복하는 것만으로 멀쩡한 문서가 sweep_zombies의 소진 판정에 걸려
+    error로 격리된다. 백오프도 걸지 않는다 — 다음 워커가 곧바로 이어받아야 한다.
+
+    반납하지 않고 죽어도 정합성은 깨지지 않는다. 다만 잡이 좀비로 남아 다음 워커가
+    임계(기본 5분)를 기다리게 되므로, 배포마다 그만큼 파이프라인이 늦어진다.
+    """
+    async with conn.transaction():
+        # fail_job·sweep_zombies와 같은 잠금 순서다 — 판정과 기록 사이에 새 pending
+        # 잡이 커밋되면 pending 복귀가 uq_pending_job_per_doc 위반으로 터진다.
+        cur = await conn.execute(
+            "SELECT 1 FROM documents WHERE id = %s FOR UPDATE", (job.document_id,)
+        )
+        if await cur.fetchone() is None:
+            return  # 문서 삭제 — 잡도 CASCADE로 소멸했으니 반납할 곳이 없다
+
+        cur = await conn.execute(
+            "SELECT 1 FROM embedding_jobs WHERE document_id = %s AND status = 'pending'",
+            (job.document_id,),
+        )
+        if await cur.fetchone() is not None:
+            # 처리 중 문서가 수정됐다 — 새 잡이 최신 내용으로 처리하므로 마감한다.
+            await conn.execute(
+                "UPDATE embedding_jobs SET status = 'done', finished_at = now() WHERE id = %s",
+                (job.job_id,),
+            )
+            return
+
+        # documents.embedding_status는 되돌리지 않는다 — fail_job과 같은 이유다.
+        # 곧 다른 워커가 집어가므로 사용자에게는 처리 중이 맞다.
+        await conn.execute(
+            "UPDATE embedding_jobs SET status = 'pending', attempts = attempts - 1"
+            " WHERE id = %s",
+            (job.job_id,),
+        )
+
+
 async def sweep_zombies(conn: psycopg.AsyncConnection) -> int:
     """죽은 워커가 processing으로 방치한 잡을 회수한다. pending으로 복귀시킨 건수 반환.
 
-    attempts는 초기화하지 않는다 — 매번 초기화하면 계속 죽는 잡이 영원히 재시도되어
-    MAX_ATTEMPTS가 무의미해진다.
+    반환값은 **회수한 건수만** 센다 — 예산을 소진해 error로 격리한 잡과, 문서가 이미
+    수정되어 done으로 마감한 잡은 포함하지 않는다.
+
+    attempts는 초기화하지 않는다 — 매번 초기화하면 계속 죽는 잡이 영원히 재시도된다.
+    다만 유지하는 것만으로는 부족하다: `claim_job`은 attempts를 보지 않으므로, 예산을
+    실제로 강제하는 것은 아래 error 마감 하나뿐이다. 그것이 없으면 재시도 상한이
+    `fail_job`(예외로 잡히는 실패)에만 걸리고, 워커 프로세스를 죽이는 잡은 회수 →
+    재선점 → 재크래시를 무한히 반복한다.
     """
     timeout_minutes = get_settings().zombie_timeout_minutes
 
@@ -264,6 +322,35 @@ async def sweep_zombies(conn: psycopg.AsyncConnection) -> int:
             """,
             (timeout_minutes,),
         )
+
+        # 재시도 예산을 소진한 좀비는 회수하지 않고 격리한다. 위 done 마감보다 **뒤**에
+        # 두는 순서가 fail_job과 같다 — 문서가 이미 수정됐다면 그 잡은 실패한 것이 아니라
+        # 수명이 끝난 것이므로 error 배지를 달면 안 된다. NOT EXISTS를 여기서도 명시해
+        # 두 UPDATE의 순서에 정합성이 의존하지 않게 한다.
+        cur = await conn.execute(
+            """
+            UPDATE embedding_jobs j
+               SET status = 'error', last_error = %s, finished_at = now()
+             WHERE j.status = 'processing'
+               AND j.started_at < now() - make_interval(mins => %s)
+               AND j.attempts >= %s
+               AND NOT EXISTS (SELECT 1 FROM embedding_jobs p
+                                WHERE p.document_id = j.document_id AND p.status = 'pending')
+         RETURNING j.document_id
+            """,
+            (ZOMBIE_EXHAUSTED_ERROR, timeout_minutes, MAX_ATTEMPTS),
+        )
+        exhausted = [row[0] for row in await cur.fetchall()]
+        if exhausted:
+            # fail_job의 소진 처리와 같은 상태로 맞춘다. 청크는 지우지 않으므로 검색은
+            # 이전 버전으로 계속되고, 정합성 카운터는 어긋난 채 남는다 — 격리했다고
+            # 어긋남을 숨기면 계약이 거짓말이 된다. 재개 수단은 문서 재수정이다
+            # (003_triggers.sql의 `SET content_hash = content_hash` 경로).
+            await conn.execute(
+                "UPDATE documents SET embedding_status = 'error' WHERE id = ANY(%s)",
+                (exhausted,),
+            )
+
         cur = await conn.execute(
             """
             UPDATE embedding_jobs j
@@ -278,14 +365,26 @@ async def sweep_zombies(conn: psycopg.AsyncConnection) -> int:
         return cur.rowcount
 
 
-async def process_once(conn: psycopg.AsyncConnection, provider: EmbeddingProvider) -> bool:
+async def process_once(
+    conn: psycopg.AsyncConnection,
+    provider: EmbeddingProvider,
+    stop: asyncio.Event | None = None,
+) -> bool:
     """잡 하나를 처리한다. 집어간 잡이 있었으면 True, 없으면 False.
 
     처리 실패도 True다 — fail_job이 재시도를 예약했고, drain의 반복 조건은 "이번에
     할 일이 있었는가"이기 때문이다.
+
+    `stop`은 정상 종료 신호다. **임베딩을 시작하기 전에** 확인해 반납하므로, 배포로
+    세운 워커가 잡을 processing으로 붙든 채 사라지지 않는다. 이미 임베딩에 들어간
+    잡은 끝까지 처리한다 — 중간에 끊어도 할 수 있는 일이 반납뿐이고, 완료가 더 나은
+    결과다. 반납한 주기는 "할 일이 있었다"로 세지 않으므로 False를 돌려준다.
     """
     job = await claim_job(conn)
     if job is None:
+        return False
+    if stop is not None and stop.is_set():
+        await release_job(conn, job)
         return False
     try:
         document = await load_document(conn, job.document_id)
@@ -310,11 +409,20 @@ async def process_once(conn: psycopg.AsyncConnection, provider: EmbeddingProvide
     return True
 
 
-async def drain(conn: psycopg.AsyncConnection, provider: EmbeddingProvider) -> int:
-    """잡이 없을 때까지 처리하고 건수를 반환한다 — 폴링 주 경로의 본체 (ADR-009)."""
+async def drain(
+    conn: psycopg.AsyncConnection,
+    provider: EmbeddingProvider,
+    stop: asyncio.Event | None = None,
+) -> int:
+    """잡이 없을 때까지 처리하고 건수를 반환한다 — 폴링 주 경로의 본체 (ADR-009).
+
+    `stop`이 서면 처리 중이던 잡을 마친 뒤 새 잡을 집지 않는다.
+    """
     processed = 0
-    while await process_once(conn, provider):
+    while await process_once(conn, provider, stop):
         processed += 1
+        if stop is not None and stop.is_set():
+            break
     return processed
 
 
@@ -351,7 +459,14 @@ async def _listen_for_jobs(dsn: str, wake: asyncio.Event) -> None:
 
 
 async def run_worker() -> None:
-    """폴링 루프 — 매 주기 좀비 회수 후 잡을 드레인한다. LISTEN은 주기를 앞당길 뿐이다."""
+    """폴링 루프 — 매 주기 좀비 회수 후 잡을 드레인한다. LISTEN은 주기를 앞당길 뿐이다.
+
+    SIGTERM(배포의 `systemctl stop`)과 SIGINT(Ctrl-C)를 받으면 처리 중인 잡을 마치고
+    루프를 빠져나온다. 프로세스가 SIGKILL·OOM으로 사라지는 경우는 이 경로를 타지
+    못하므로, 그때는 잡이 좀비로 남고 다음 워커의 sweep_zombies가 임계 후에 회수한다.
+    감독자(systemd)가 워커를 되살리는 것과 이 정상 종료는 구분되어야 한다 — 배포로
+    세운 워커를 감독자가 즉시 되살리면 배포가 끝나지 않는다.
+    """
     provider = get_provider()
     logger.info(
         "임베딩 워커 기동 — provider=%s, 폴링 주기=%.0fs", provider.name, POLL_INTERVAL_SECONDS
@@ -359,9 +474,23 @@ async def run_worker() -> None:
     pool = get_pool()
     await pool.open()
     wake = asyncio.Event()
+    stop = asyncio.Event()
+
+    def request_stop() -> None:
+        # wake도 함께 세운다 — 폴링 대기 중이면 남은 주기를 기다리지 않고 즉시 깬다.
+        stop.set()
+        wake.set()
+
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        # 시그널 핸들러를 지원하지 않는 환경(윈도우·비메인 스레드)에서는 조용히 건너뛴다.
+        # 그 경우 정상 종료 경로가 없을 뿐, 좀비 회수가 여전히 뒤를 받친다.
+        with contextlib.suppress(NotImplementedError, RuntimeError):
+            loop.add_signal_handler(sig, request_stop)
+
     listen_task = asyncio.create_task(_listen_for_jobs(get_settings().database_url, wake))
     try:
-        while True:
+        while not stop.is_set():
             try:
                 async with pool.connection() as conn:
                     # 풀 커넥션은 autocommit이 아니다 — 워커 함수들의 계약에 맞춘다
@@ -371,16 +500,20 @@ async def run_worker() -> None:
                     recovered = await sweep_zombies(conn)
                     if recovered:
                         logger.info("좀비 잡 %d건을 pending으로 회수", recovered)
-                    processed = await drain(conn, provider)
+                    processed = await drain(conn, provider, stop)
                     if processed:
                         logger.info("잡 %d건 처리", processed)
             except Exception:
                 # 연결 끊김 등 — 처리 중이던 잡은 processing으로 남고 좀비 스윕이 되살린다.
                 logger.exception("처리 루프 실패 — 다음 폴링에서 재시도한다")
+            if stop.is_set():
+                break
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(wake.wait(), timeout=POLL_INTERVAL_SECONDS)
             wake.clear()
     finally:
+        if stop.is_set():
+            logger.info("종료 신호 — 처리 중인 잡을 마치고 멈춘다")
         listen_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await listen_task
