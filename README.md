@@ -182,8 +182,9 @@ python3 -m venv .venv && source .venv/bin/activate   # scripts/check.sh가 backe
 pip install -e ".[dev]"          # 기본은 가짜 임베딩이다. 실제 BGE-M3는 아래 「임베딩 프로바이더」
 uvicorn app.main:app --reload
 
-# 3. 최초 관리자 계정 — 자체 가입이 없으므로 첫 로그인 전에 한 번 실행한다
-cd ..
+# 3. 최초 관리자 계정 (별도 터미널) — 자체 가입이 없으므로 첫 로그인 전에 한 번 실행한다
+#    2번의 uvicorn이 터미널을 점유하므로 여기서부터는 새 터미널이다.
+cd backend && source .venv/bin/activate && cd ..
 ADMIN_PASSWORD='<초기 비밀번호>' python scripts/create_admin.py admin --admin
 
 # 4. 임베딩 워커 (별도 터미널) — API 서버를 먼저 기동해야 한다.
@@ -215,10 +216,16 @@ MCP_USER_ID=admin python -m mcp_server.server
 cd backend && cp .env.example .env
 ```
 
-설정을 읽는 주체는 API·워커·MCP 서버와 `scripts/create_admin.py` 넷인데 실행 디렉토리가
-서로 다릅니다. `app/config.py`가 `backend/.env` 한 곳만 절대경로로 읽어 넷이 같은 값을 보게
-합니다. **저장소 루트에 `.env`를 두면 아무도 읽지 않습니다.** 환경변수를 직접 주는 방식
-(`DATABASE_URL=... uvicorn ...`)은 언제나 파일보다 우선합니다.
+애플리케이션 설정을 읽는 주체는 API·워커·MCP 서버와 `scripts/create_admin.py` 넷인데 실행
+디렉토리가 서로 다릅니다. `app/config.py`가 `backend/.env` 한 곳만 절대경로로 읽어 넷이 같은
+값을 보게 합니다. 환경변수를 직접 주는 방식(`DATABASE_URL=... uvicorn ...`)은 언제나 파일보다
+우선합니다.
+
+> **저장소 루트의 `.env`는 다른 파일입니다.** 애플리케이션은 그 파일을 읽지 않지만
+> **`docker compose`가 읽습니다** — `docker-compose.yml`의 `${POSTGRES_USER:-openarchive}`
+> 세 자리를 채우는 것이 그 파일입니다. 로컬 DB의 자격증명·DB 이름을 바꾸려면 루트 `.env`에
+> `POSTGRES_*`를 두고, 앱이 붙을 주소는 `backend/.env`의 `DATABASE_URL`에 둡니다. 둘은 역할이
+> 다르므로 한쪽에 몰아 쓰면 컨테이너와 앱이 서로 다른 DB를 가리킵니다.
 
 ### 임베딩 프로바이더
 
@@ -280,8 +287,8 @@ stdio 서버 설정에 백엔드 가상환경의 Python과 모듈을 등록한�
 `MCP_USER_ID`를 생략하면 public 문서 읽기만 가능하고 `create_document` 쓰기는 거부된다. MCP 서버는
 마이그레이션을 실행하지 않으므로 API 서버를 먼저 기동해 스키마가 적용된 상태여야 한다 (ADR-012·036).
 
-> ⚠️ **`MCP_USER_ID`는 실존 계정인지 검증되지 않는다.** 빈 값만 거부되고, 없는 이름을 넣어도
-> 그대로 문서 소유자가 된다 (ADR-036). 위 3번에서 만든 계정명과 **정확히 같게** 적어야
+> ⚠️ **`MCP_USER_ID`는 실존 계정인지 검증되지 않는다.** 미설정·빈 값·공백은 거부되지만,
+> 그 검사를 통과한 이름은 users 테이블에 없어도 그대로 문서 소유자가 된다 (ADR-036). 위 3번에서 만든 계정명과 **정확히 같게** 적어야
 > `create_document`로 만든 문서가 Web UI에서 자기 문서로 보인다.
 
 ### API 확인

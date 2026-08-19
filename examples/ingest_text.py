@@ -6,7 +6,7 @@
 실행 예시::
 
     python examples/ingest_text.py --base-url http://localhost:8000 \
-      --username alice --password secret --title "API 문서" document.md
+      --username admin --password '<비밀번호>' --title "API 문서" document.md
     python examples/ingest_text.py --base-url http://localhost:8000 \
       --token "$OPENARCHIVE_API_TOKEN" --title "API 문서" document.md
 """
