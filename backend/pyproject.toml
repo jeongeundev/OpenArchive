@@ -21,6 +21,10 @@ dependencies = [
 
 # 상용 임베딩 API 클라이언트는 넣지 않는다 — 대회 규정상 사용할 수 없다 (ADR-003).
 
+[project.scripts]
+# 설치 준비 CLI (ADR-038). Web UI·REST·MCP와 같은 자리의 인터페이스이며 코어를 재사용한다.
+openarchive = "app.cli:main"
+
 [project.optional-dependencies]
 dev = [
     "pytest",
