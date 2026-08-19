@@ -176,36 +176,62 @@ OpenSQL 자체를 세우려면 [OpenSQL 환경 구축](docs/SETUP_OPENSQL.md)을
 # 1. 로컬 DB (pgvector 컨테이너)
 docker compose up -d
 
-# 2. 백엔드 — 마이그레이션이 여기서 실행되므로 가장 먼저 띄운다
+# 2. 백엔드 설치
 cd backend
 python3 -m venv .venv && source .venv/bin/activate   # scripts/check.sh가 backend/.venv를 찾는다
 pip install -e ".[dev]"          # 기본은 가짜 임베딩이다. 실제 BGE-M3는 아래 「임베딩 프로바이더」
+
+# 3. DB 준비 — 연결 확인·확장 점검·스키마 적용·준비 상태 확인을 한 번에 한다
+openarchive init                 # 아래 「openarchive init」 참조
+
+# 4. API 서버
 uvicorn app.main:app --reload
 
-# 3. 최초 관리자 계정 (별도 터미널) — 자체 가입이 없으므로 첫 로그인 전에 한 번 실행한다
-#    2번의 uvicorn이 터미널을 점유하므로 여기서부터는 새 터미널이다.
+# 5. 최초 관리자 계정 (별도 터미널) — 자체 가입이 없으므로 첫 로그인 전에 한 번 실행한다
+#    4번의 uvicorn이 터미널을 점유하므로 여기서부터는 새 터미널이다.
 cd backend && source .venv/bin/activate && cd ..
 ADMIN_PASSWORD='<초기 비밀번호>' python scripts/create_admin.py admin --admin
 
-# 4. 임베딩 워커 (별도 터미널) — API 서버를 먼저 기동해야 한다.
-#    마이그레이션은 API startup에서만 실행되므로(ADR-012), 순서를 바꾸면
-#    워커가 "스키마 없음"으로 실패한다.
+# 6. 임베딩 워커 (별도 터미널)
 #    Ctrl-C로 세우면 처리 중인 잡을 마치고 멈춘다. 배포 호스트에서는 이 프로세스를
 #    systemd 유닛으로 돌려 강제 종료 시 자동 재기동한다 (ADR-038).
 cd backend && source .venv/bin/activate
 python -m app.worker
 
-# 5. 프론트엔드 (별도 터미널)
+# 7. 프론트엔드 (별도 터미널)
 cd frontend
 npm install && npm run dev
 
-# 6. MCP 서버 (Claude Desktop/Code가 기동한다. 수동 확인은 아래 커맨드)
-#    MCP_USER_ID는 3번에서 만든 계정명과 같아야 한다 — 아래 「MCP 서버 등록」 참조.
+# 8. MCP 서버 (Claude Desktop/Code가 기동한다. 수동 확인은 아래 커맨드)
+#    MCP_USER_ID는 5번에서 만든 계정명과 같아야 한다 — 아래 「MCP 서버 등록」 참조.
 cd backend && source .venv/bin/activate
 MCP_USER_ID=admin python -m mcp_server.server
 ```
 
 `http://localhost:3000` 접속.
+
+### `openarchive init`
+
+도입할 DB를 준비 상태로 만드는 명령입니다. 하는 일은 넷입니다 — **연결 확인 → capability
+확인(PostgreSQL 버전·`vector`·`pg_trgm`·CREATE 권한) → 마이그레이션 적용 → 준비 상태 보고**.
+확인이 적용보다 먼저이므로, 확장이 없거나 권한이 모자라면 스키마를 건드리기 전에 무엇이
+왜 필요한지 알려주고 멈춥니다.
+
+```bash
+openarchive init                                   # 대화형 — DSN 한 줄만 입력
+openarchive init --dsn "postgresql://app@<vip>:6432/<pool_name>" --yes   # 비대화형
+```
+
+DSN을 확인한 뒤 `backend/.env`의 `DATABASE_URL` 줄만 갈아 끼웁니다. 다른 설정은 보존됩니다.
+
+> **기존 데이터베이스를 덮어쓰지 않습니다.** `schema_migrations`가 없는데 OpenArchive가 쓰는
+> 테이블 이름(`documents`·`users` 등)이 이미 있으면 **아무것도 바꾸지 않고 중단**합니다.
+> 마이그레이션에는 `ALTER TABLE documents`가 있어, 같은 이름의 다른 테이블 위에서 돌면 그
+> 데이터가 손상되기 때문입니다 ([ADR-039](docs/ADR.md)).
+
+**하지 않는 것**: API·워커·프론트 기동, DB 자동 탐색·설치, 문서 공급, 계정 생성. 마지막에 다음
+단계를 출력만 합니다. 이 명령을 건너뛰어도 API 서버가 startup에서 같은 마이그레이션을
+적용하므로([ADR-012](docs/ADR.md)), init은 **필수가 아니라 사전 점검**입니다.
 
 ### 환경변수 파일은 `backend/.env` 하나입니다
 
