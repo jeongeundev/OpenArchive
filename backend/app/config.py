@@ -1,11 +1,19 @@
 from functools import lru_cache
+from pathlib import Path
 from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# `.env`는 이 패키지 옆(`backend/.env`)에 두고, 실행 디렉토리와 무관하게 그 파일만 읽는다.
+# cwd 상대 경로로 두면 **같은 .env 하나가 프로세스마다 다르게 해석된다** — API·워커는
+# `backend/`에서, `scripts/create_admin.py`는 저장소 루트에서 실행되기 때문이다. 그러면
+# 계정은 이쪽 DB에 문서는 저쪽 DB에 쌓이는 상태가 에러 없이 만들어진다.
+# `scripts/deploy_app_host.sh`가 쓰는 위치도 여기다.
+ENV_FILE = Path(__file__).resolve().parent.parent / ".env"
+
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(env_file=ENV_FILE, extra="ignore")
 
     # 단일 엔드포인트 DSN. 실 클러스터에서는 OpenProxy VIP(:6432) 주소로 환경변수에서 덮어쓴다.
     # 멀티호스트 DSN이나 target_session_attrs를 여기에 두지 않는다 — 새 Primary 발견과
