@@ -62,7 +62,8 @@ OpenArchive/
 │   │   ├── main.py               # FastAPI 앱 조립
 │   │   ├── config.py             # pydantic-settings (DATABASE_URL, EMBEDDING_PROVIDER 등)
 │   │   ├── db.py                 # AsyncConnectionPool만 — import 시 부작용 없음
-│   │   ├── migrations.py         # 마이그레이션 러너 — API 서버 startup에서만 호출
+│   │   ├── migrations.py         # 마이그레이션 러너 — API startup과 `openarchive init`이 호출
+│   │   ├── cli.py                # `openarchive init` — 설치 준비 CLI (ADR-039)
 │   │   ├── api/                  # 라우터: documents, search, system, auth, admin,
 │   │   │                         #   diagnostics, clusters, retry (+ deps, schemas)
 │   │   ├── services/             # parsing, chunking, documents, search, related,
