@@ -63,7 +63,7 @@ OpenArchive/
 │   │   ├── config.py             # pydantic-settings (DATABASE_URL, EMBEDDING_PROVIDER 등)
 │   │   ├── db.py                 # AsyncConnectionPool만 — import 시 부작용 없음
 │   │   ├── migrations.py         # 마이그레이션 러너 — API startup과 `openarchive init`이 호출
-│   │   ├── cli.py                # `openarchive init` — 설치 준비 CLI (ADR-039)
+│   │   ├── cli.py                # `openarchive init`·`reset-password` — 운영자 CLI (ADR-039·040)
 │   │   ├── api/                  # 라우터: documents, search, system, auth, admin,
 │   │   │                         #   diagnostics, clusters, retry (+ deps, schemas)
 │   │   ├── services/             # parsing, chunking, documents, search, related,
@@ -492,6 +492,7 @@ OpenSQL `patroni.yml`의 PostgreSQL 파라미터는 `max_connections: 100`이다
 | `POST /api/search` | 하이브리드 검색 + 관계 순회 (아래) |
 | `POST /api/auth/login` · `logout` · `GET /api/auth/me` | 최소 로그인. 세션 토큰은 `sessions` 테이블에 저장 |
 | `POST /api/auth/tokens` · `GET /api/auth/tokens` · `DELETE /api/auth/tokens/{id}` | **세션 전용** API 토큰 발급·목록·폐기. 원문은 발급 응답에만 반환하며 기본 scope는 `read` |
+| `PUT /api/auth/password` | **세션 전용** 자기 비밀번호 변경. 현재 비밀번호를 확인하고, 바꾼 뒤 그 계정의 세션을 전부 무효화한다. 틀린 현재 비밀번호는 403(세션은 유효하므로 401이 아니다). API 토큰은 폐기하지 않는다 (ADR-040) |
 | `GET /api/diagnostics` | **진단.** 고아 문서·깨진 링크·중복 후보 등을 **열람 범위 기준**으로 집계 (ADR-027) |
 | `GET /api/clusters` | **주제 덩어리.** 관계 그래프의 연결 요소 |
 | `GET /api/admin/users` 등 | 관리자 전용 |
