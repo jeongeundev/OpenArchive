@@ -1,6 +1,6 @@
 "use client";
 
-import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
 import { useAuth } from "@/components/AuthProvider";
@@ -11,6 +11,7 @@ import {
   listTokens,
   revokeToken,
 } from "@/lib/api";
+import { markPasswordChanged } from "@/lib/passwordChangeNotice";
 import type { TokenCreated, TokenScope, TokenSummary } from "@/lib/types";
 
 const SCOPE_LABEL: Record<TokenScope, string> = {
@@ -26,6 +27,7 @@ function formatDate(value: string): string {
 }
 
 export default function SettingsPage(): React.ReactElement {
+  const router = useRouter();
   const { auth, loading: authLoading, setAuth } = useAuth();
   const [tokens, setTokens] = useState<TokenSummary[]>([]);
   const [name, setName] = useState("");
@@ -38,7 +40,6 @@ export default function SettingsPage(): React.ReactElement {
   const [newPassword, setNewPassword] = useState("");
   const [passwordError, setPasswordError] = useState<string | null>(null);
   const [passwordWorking, setPasswordWorking] = useState(false);
-  const [passwordChanged, setPasswordChanged] = useState(false);
 
   useEffect(() => {
     if (authLoading || !auth.authenticated) return;
@@ -98,8 +99,12 @@ export default function SettingsPage(): React.ReactElement {
     setPasswordWorking(true);
     setPasswordError(null);
     try {
-      setAuth(await changePassword(currentPassword, newPassword));
-      setPasswordChanged(true);
+      const status = await changePassword(currentPassword, newPassword);
+      // 이 화면은 보호 경로라 익명이 되는 순간 RequireAuth가 /login으로 밀어낸다.
+      // 성공 안내를 여기 두면 아무도 못 본다 — 안내를 넘기고 우리가 직접 보낸다.
+      markPasswordChanged();
+      setAuth(status);
+      router.replace("/login");
     } catch (reason: unknown) {
       setPasswordError(
         reason instanceof ApiError ? reason.detail : "비밀번호를 바꾸지 못했습니다.",
@@ -107,23 +112,6 @@ export default function SettingsPage(): React.ReactElement {
     } finally {
       setPasswordWorking(false);
     }
-  }
-
-  if (passwordChanged) {
-    return (
-      <section className="space-y-4">
-        <h1 className="text-4xl font-semibold text-white">비밀번호를 바꿨습니다</h1>
-        <p className="text-sm text-neutral-400">
-          이 계정으로 열려 있던 모든 기기의 로그인이 끊겼습니다. 새 비밀번호로 다시 로그인하세요.
-        </p>
-        <p className="text-sm text-neutral-500">
-          발급된 API 토큰은 그대로 유효합니다. 필요하면 다시 로그인해 이 화면에서 폐기하세요.
-        </p>
-        <Link className="inline-block text-sm text-[#0ea5e9] hover:text-white" href="/login">
-          로그인 화면으로
-        </Link>
-      </section>
-    );
   }
 
   if (authLoading) return <p className="text-sm text-neutral-500">불러오는 중…</p>;
@@ -142,9 +130,12 @@ export default function SettingsPage(): React.ReactElement {
         <div>
           <h2 className="text-xl font-semibold text-white">API 토큰</h2>
           <p className="mt-2 text-sm text-neutral-400">
-            프로그램이 이 저장소에 문서를 공급하거나 검색할 때 쓰는 자격증명입니다.
-            `Authorization: Bearer &lt;토큰&gt;` 헤더로 보냅니다. 발급은 로그인 세션에서만 할 수
-            있으므로 토큰이 다른 토큰을 만들 수는 없습니다.
+            프로그램이 이 저장소에 문서를 공급하거나 검색할 때 쓰는 자격증명입니다.{" "}
+            <code className="rounded border border-neutral-800 bg-neutral-900 px-1.5 py-0.5 font-mono text-xs text-neutral-300">
+              Authorization: Bearer &lt;토큰&gt;
+            </code>{" "}
+            헤더로 보냅니다. 발급은 로그인 세션에서만 할 수 있으므로 토큰이 다른 토큰을 만들 수는
+            없습니다.
           </p>
         </div>
 
@@ -158,6 +149,7 @@ export default function SettingsPage(): React.ReactElement {
               onChange={(event) => setName(event.target.value)}
               placeholder="배치 투입 스크립트"
               required
+              type="text"
               value={name}
             />
           </label>
