@@ -298,3 +298,125 @@ def test_token_management_endpoints_reject_anonymous_requests(
     assert db_client.post("/api/auth/tokens", json={"name": "anonymous"}).status_code == 401
     assert db_client.get("/api/auth/tokens").status_code == 401
     assert db_client.delete(f"/api/auth/tokens/{token_id}").status_code == 401
+
+
+def test_password_change_expires_the_cookie_and_only_the_new_password_logs_in(
+    db_client: TestClient, migrated_db: str
+):
+    create_user(migrated_db)
+    db_client.post("/api/auth/login", json={"username": "alice", "password": "secret"})
+
+    changed = db_client.put(
+        "/api/auth/password",
+        json={"current_password": "secret", "new_password": "new-secret"},
+    )
+
+    assert changed.status_code == 200
+    assert changed.json() == {"authenticated": False, "username": None, "is_admin": False}
+    assert db_client.get("/api/auth/me").json()["authenticated"] is False
+    assert (
+        db_client.post(
+            "/api/auth/login", json={"username": "alice", "password": "secret"}
+        ).status_code
+        == 401
+    )
+    assert (
+        db_client.post(
+            "/api/auth/login", json={"username": "alice", "password": "new-secret"}
+        ).status_code
+        == 200
+    )
+
+
+def test_password_change_invalidates_the_sessions_opened_elsewhere(
+    db_client: TestClient, migrated_db: str
+):
+    create_user(migrated_db)
+    db_client.post("/api/auth/login", json={"username": "alice", "password": "secret"})
+    elsewhere = db_client.cookies[SESSION_COOKIE]
+    db_client.post("/api/auth/login", json={"username": "alice", "password": "secret"})
+
+    db_client.put(
+        "/api/auth/password",
+        json={"current_password": "secret", "new_password": "new-secret"},
+    )
+
+    db_client.cookies.clear()
+    db_client.cookies.set(SESSION_COOKIE, elsewhere)
+    assert db_client.get("/api/auth/me").json()["authenticated"] is False
+
+
+def test_password_change_rejects_a_wrong_current_password_and_keeps_the_session(
+    db_client: TestClient, migrated_db: str
+):
+    create_user(migrated_db)
+    db_client.post("/api/auth/login", json={"username": "alice", "password": "secret"})
+
+    response = db_client.put(
+        "/api/auth/password",
+        json={"current_password": "wrong", "new_password": "new-secret"},
+    )
+
+    assert response.status_code == 403
+    assert db_client.get("/api/auth/me").json()["username"] == "alice"
+    assert (
+        db_client.post(
+            "/api/auth/login", json={"username": "alice", "password": "secret"}
+        ).status_code
+        == 200
+    )
+
+
+def test_password_change_requires_a_session_and_rejects_a_read_write_token(
+    db_client: TestClient, migrated_db: str
+):
+    create_user(migrated_db)
+    token = issue_token(migrated_db, "alice", scope="read_write")
+    body = {"current_password": "secret", "new_password": "new-secret"}
+
+    anonymous = db_client.put("/api/auth/password", json=body)
+    with_token = db_client.put(
+        "/api/auth/password", json=body, headers={"Authorization": f"Bearer {token}"}
+    )
+
+    assert anonymous.status_code == 401
+    assert with_token.status_code == 403
+    assert (
+        db_client.post(
+            "/api/auth/login", json={"username": "alice", "password": "secret"}
+        ).status_code
+        == 200
+    )
+
+
+def test_password_change_rejects_an_empty_new_password(
+    db_client: TestClient, migrated_db: str
+):
+    create_user(migrated_db)
+    db_client.post("/api/auth/login", json={"username": "alice", "password": "secret"})
+
+    response = db_client.put(
+        "/api/auth/password", json={"current_password": "secret", "new_password": ""}
+    )
+
+    assert response.status_code == 422
+    assert db_client.get("/api/auth/me").json()["username"] == "alice"
+
+
+def test_password_change_leaves_the_api_tokens_usable(
+    db_client: TestClient, migrated_db: str
+):
+    create_user(migrated_db)
+    db_client.post("/api/auth/login", json={"username": "alice", "password": "secret"})
+    issued = db_client.post("/api/auth/tokens", json={"name": "CLI"}).json()
+
+    db_client.put(
+        "/api/auth/password",
+        json={"current_password": "secret", "new_password": "new-secret"},
+    )
+
+    db_client.cookies.clear()
+    me = db_client.get(
+        "/api/auth/me", headers={"Authorization": f"Bearer {issued['token']}"}
+    )
+    assert me.json()["username"] == "alice"

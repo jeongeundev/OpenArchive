@@ -1,4 +1,4 @@
-"""`openarchive` 명령 — 설치를 준비하는 대화형 CLI (ADR-039).
+"""`openarchive` 명령 — 설치와 계정 복구를 담당하는 운영자 CLI (ADR-039·ADR-040).
 
 Web UI·REST·MCP와 같은 자리의 인터페이스이며, 로직을 새로 쓰지 않고 코어를 재사용한다.
 마이그레이션 적용은 `app.migrations.run_migrations`, 준비 상태 판정은
@@ -6,12 +6,17 @@ Web UI·REST·MCP와 같은 자리의 인터페이스이며, 로직을 새로 �
 
 **하지 않는 것**: API·워커·프론트 기동, DB 자동 탐색, 문서 공급. init은 DB를 준비된
 상태로 만들고 다음 단계를 안내하는 데서 끝난다.
+
+`reset-password`는 비밀번호를 잊은 계정의 유일한 탈출구다. 웹에는 두지 않는다 — 남의
+비밀번호를 바꾸는 권한을 만들면 is_admin이 계정 관리를 넘어 문서 열람으로 번진다
+(ADR-027·ADR-040). 서버 셸 접근자는 이미 DB를 만질 수 있으므로 권한이 늘지 않는다.
 """
 
 from __future__ import annotations
 
 import argparse
 import asyncio
+import getpass
 import re
 import sys
 from dataclasses import dataclass
@@ -28,6 +33,7 @@ from app.migrations import (
     pending_filenames,
     run_migrations,
 )
+from app.services.auth import UserNotFound, reset_password
 from app.services.system import get_system_status
 
 # gen_random_uuid()가 코어에 들어온 버전. 그 아래에서는 002가 기동하지 못한다.
@@ -306,6 +312,31 @@ def run_init(*, dsn: str | None, assume_yes: bool, env_file: Path) -> int:
     return 0
 
 
+async def _reset(dsn: str, username: str, new_password: str) -> None:
+    async with await psycopg.AsyncConnection.connect(dsn, autocommit=True) as conn:
+        await reset_password(conn, username, new_password)
+
+
+def run_reset_password(*, dsn: str | None, username: str) -> int:
+    """비밀번호를 잊은 계정을 다시 열어준다. 확인 절차 없이 갈아끼운다."""
+    dsn = dsn or get_settings().database_url
+    password = getpass.getpass(f"'{username}'의 새 비밀번호: ")
+    if not password:
+        print("비밀번호가 비어 있어 아무것도 바꾸지 않았습니다.")
+        return 2
+    try:
+        asyncio.run(_reset(dsn, username, password))
+    except UserNotFound:
+        print(f"'{username}' 계정이 없습니다. 아무것도 바꾸지 않았습니다.")
+        return 1
+    except psycopg.Error as error:
+        print(f"연결하지 못했습니다: {str(error).strip()}")
+        return 1
+    print(f"'{username}'의 비밀번호를 재설정하고 그 계정의 로그인 세션을 모두 끊었습니다.")
+    print("발급된 API 토큰은 그대로 유효합니다 — 폐기는 계정 설정 화면에서 합니다.")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="openarchive", description="OpenArchive 운영 CLI")
     subcommands = parser.add_subparsers(dest="command", required=True)
@@ -315,7 +346,14 @@ def main(argv: list[str] | None = None) -> int:
     init.add_argument(
         "--env-file", type=Path, default=ENV_FILE, help=f"DSN을 기록할 파일 (기본: {ENV_FILE})"
     )
+    reset = subcommands.add_parser(
+        "reset-password", help="비밀번호를 잊은 계정의 비밀번호를 재설정합니다."
+    )
+    reset.add_argument("username")
+    reset.add_argument("--dsn", help="DB 연결 문자열. 생략하면 DATABASE_URL을 씁니다.")
     args = parser.parse_args(argv)
+    if args.command == "reset-password":
+        return run_reset_password(dsn=args.dsn, username=args.username)
     return run_init(dsn=args.dsn, assume_yes=args.yes, env_file=args.env_file)
 
 

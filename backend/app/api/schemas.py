@@ -76,6 +76,11 @@ class AuthStatus(BaseModel):
     is_admin: bool
 
 
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str = Field(min_length=1)
+
+
 class CreateTokenRequest(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     scope: TokenScope = SCOPE_READ
