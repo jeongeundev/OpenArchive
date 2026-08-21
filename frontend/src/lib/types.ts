@@ -2,6 +2,20 @@ export type EmbeddingStatus = "pending" | "processing" | "ready" | "error";
 export type ContentType = "pdf" | "docx" | "txt" | "md";
 export type Visibility = "public" | "private";
 
+export type TokenScope = "read" | "read_write";
+
+export interface TokenSummary {
+  id: string;
+  name: string;
+  scope: TokenScope;
+  created_at: string;
+}
+
+/** 원문 `token`은 발급 응답에만 있다. 목록에는 없다. */
+export interface TokenCreated extends TokenSummary {
+  token: string;
+}
+
 export interface DocumentSummary {
   id: string;
   title: string;

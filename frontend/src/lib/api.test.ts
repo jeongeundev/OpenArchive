@@ -2,10 +2,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   ApiError,
+  changePassword,
+  createToken,
   deleteDocument,
   editDocument,
   getAuthStatus,
   listDocuments,
+  listTokens,
+  revokeToken,
   search,
   updateTags,
   uploadDocument,
@@ -123,6 +127,66 @@ describe("API responses", () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(null, { status: 204 })));
 
     await expect(deleteDocument("doc-1")).resolves.toBeUndefined();
+  });
+
+  it("issues a token with its name and scope and returns the one-time plaintext", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          id: "token-1",
+          name: "CLI",
+          scope: "read_write",
+          created_at: "2026-08-21T00:00:00Z",
+          token: "plaintext-once",
+        }),
+        { status: 201, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const issued = await createToken({ name: "CLI", scope: "read_write" });
+
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/auth/tokens");
+    expect(fetchMock.mock.calls[0][1]?.method).toBe("POST");
+    expect(JSON.parse(fetchMock.mock.calls[0][1]?.body as string)).toEqual({
+      name: "CLI",
+      scope: "read_write",
+    });
+    expect(issued.token).toBe("plaintext-once");
+  });
+
+  it("lists tokens and revokes one by id", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("[]"))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await listTokens();
+    await expect(revokeToken("token/1")).resolves.toBeUndefined();
+
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/auth/tokens");
+    expect(fetchMock.mock.calls[1][0]).toBe("/api/auth/tokens/token%2F1");
+    expect(fetchMock.mock.calls[1][1]?.method).toBe("DELETE");
+  });
+
+  it("sends both passwords to the password endpoint as a PUT", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({ authenticated: false, username: null, is_admin: false }),
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const status = await changePassword("old-secret", "new-secret");
+
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/auth/password");
+    expect(fetchMock.mock.calls[0][1]?.method).toBe("PUT");
+    expect(JSON.parse(fetchMock.mock.calls[0][1]?.body as string)).toEqual({
+      current_password: "old-secret",
+      new_password: "new-secret",
+    });
+    expect(status.authenticated).toBe(false);
   });
 
   it("replaces the full tag list through the tag endpoint", async () => {

@@ -39,7 +39,9 @@ export function SiteHeader(): React.ReactElement {
         </div>
         {!loading && auth.authenticated ? (
           <div className="flex items-center gap-3 text-sm">
-            <span className="text-neutral-400">{auth.username}</span>
+            <Link className="text-neutral-400 hover:text-[#0ea5e9]" href="/settings">
+              {auth.username}
+            </Link>
             <button
               className="text-neutral-500 hover:text-neutral-300 disabled:text-neutral-600"
               disabled={loggingOut}
