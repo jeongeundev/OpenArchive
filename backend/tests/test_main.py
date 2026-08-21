@@ -3,6 +3,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.config import get_settings
+from app.embeddings import FakeProvider
 from app.main import app
 
 
@@ -45,3 +46,44 @@ def test_startup_fails_loudly_when_migrations_cannot_run(monkeypatch):
 
     with pytest.raises(psycopg.OperationalError), TestClient(app):
         pass
+
+
+class _RecordingProvider:
+    """embed 호출을 세는 프로바이더 — 예열은 호출로만 관측된다.
+
+    FakeProvider는 로딩이 없어 예열해도 겉으로 아무 일도 일어나지 않는다. 그래서
+    지연이 아니라 호출을 센다.
+    """
+
+    name = "recording"
+    dimension = 1024
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        self.calls += 1
+        return FakeProvider().embed(texts)
+
+
+def test_startup_warms_up_the_embedding_provider(monkeypatch, clean_db: str):
+    """기동 시 임베딩 모델을 예열한다 — 검색 요청이 한 건도 없어도.
+
+    lifespan은 프로바이더 **인스턴스**만 만들고, `LocalProvider`는 첫 `embed()`까지
+    모델(~2GB) 로딩을 미룬다. 예열이 없으면 그 로딩이 통째로 **첫 검색 요청**에 붙는다 —
+    2026-08-21 실측으로 갓 기동한 API의 첫 검색이 12.5초, 두 번째가 0.34초였다.
+    워커의 예열과 같은 결함이지만 이쪽이 사용자에게 더 가깝다: 백그라운드 처리 지연이
+    아니라, 사용자가 검색 버튼을 누르고 화면 앞에서 기다리는 시간이다.
+
+    요청을 보내지 않고 확인하는 이유: 검색을 한 번이라도 태우면 그 요청의 embed와
+    구분되지 않아 예열이 있었는지 증명할 수 없다.
+    """
+    monkeypatch.setenv("DATABASE_URL", clean_db)
+    get_settings.cache_clear()
+    provider = _RecordingProvider()
+    monkeypatch.setattr("app.main.get_provider", lambda: provider)
+
+    with TestClient(app):
+        pass  # 기동과 종료만 — 요청은 보내지 않는다
+
+    assert provider.calls == 1

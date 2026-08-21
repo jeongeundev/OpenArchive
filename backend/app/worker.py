@@ -35,7 +35,7 @@ import psycopg
 
 from app.config import get_settings
 from app.db import close_pool, get_pool
-from app.embeddings import EmbeddingProvider, get_provider
+from app.embeddings import EmbeddingProvider, get_provider, warm_up
 from app.services.chunking import chunk_text
 from app.vectors import to_pgvector_literal
 
@@ -467,29 +467,6 @@ async def _listen_for_jobs(dsn: str, wake: asyncio.Event) -> None:
         delay = min(delay * 2, 60.0)
 
 
-async def _warm_up(provider: EmbeddingProvider) -> None:
-    """첫 잡을 기다리게 하지 않으려고 모델을 미리 로드한다 (ADR-003 "워커 예열").
-
-    `LocalProvider`는 첫 `embed()`까지 모델(~2GB) 로딩을 미룬다 — 기동을 그만큼 막지
-    않으려는 설계다. 대신 예열이 없으면 그 로딩이 통째로 **첫 업로드의 지연**이 되어,
-    사용자가 문서를 올린 뒤에야 모델을 받기 시작한다. 아무도 기다리지 않는 기동 때
-    한 번 치르는 편이 낫다.
-
-    실패해도 넘어간다 — 예열은 최적화이지 새 실패 지점이 아니다 (LISTEN과 같은 원칙,
-    ADR-009). 모델을 못 받는 상황이라면 **기존 실패 경로가 더 나은 진단을 준다**:
-    잡을 집어 `fail_job`이 `last_error`에 이유를 남기고 문서가 error로 격리되므로
-    사용자가 화면에서 원인을 본다. 여기서 죽으면 감독자가 되살리는 부팅 루프일 뿐이다.
-    """
-    logger.info("모델을 미리 로드한다 — 처음이라면 내려받느라 시간이 걸린다")
-    try:
-        # 내용은 무엇이든 상관없다. 로딩을 일으키는 것이 목적이다.
-        await asyncio.to_thread(provider.embed, ["예열"])
-    except Exception:
-        logger.warning("모델 예열 실패 — 첫 잡에서 다시 시도한다", exc_info=True)
-    else:
-        logger.info("모델 준비 완료")
-
-
 async def run_worker() -> None:
     """폴링 루프 — 매 주기 좀비 회수 후 잡을 드레인한다. LISTEN은 주기를 앞당길 뿐이다.
 
@@ -503,7 +480,7 @@ async def run_worker() -> None:
     logger.info(
         "임베딩 워커 기동 — provider=%s, 폴링 주기=%.0fs", provider.name, POLL_INTERVAL_SECONDS
     )
-    await _warm_up(provider)
+    await warm_up(provider)
     pool = get_pool()
     await pool.open()
     wake = asyncio.Event()
