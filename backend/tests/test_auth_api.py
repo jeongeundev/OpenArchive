@@ -358,6 +358,7 @@ def test_password_change_rejects_a_wrong_current_password_and_keeps_the_session(
     )
 
     assert response.status_code == 403
+    assert response.json()["detail"] == "현재 비밀번호가 올바르지 않습니다."
     assert db_client.get("/api/auth/me").json()["username"] == "alice"
     assert (
         db_client.post(
@@ -380,7 +381,9 @@ def test_password_change_requires_a_session_and_rejects_a_read_write_token(
     )
 
     assert anonymous.status_code == 401
+    # 같은 403이라도 이건 경계 거부다 — 현재 비밀번호는 맞았으니 문구로 갈린다.
     assert with_token.status_code == 403
+    assert with_token.json()["detail"] == "로그인 세션이 필요합니다."
     assert (
         db_client.post(
             "/api/auth/login", json={"username": "alice", "password": "secret"}

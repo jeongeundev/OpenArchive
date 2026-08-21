@@ -114,11 +114,10 @@ export default function SettingsPage(): React.ReactElement {
     }
   }
 
-  if (authLoading) return <p className="text-sm text-neutral-500">불러오는 중…</p>;
-  if (!auth.authenticated) return <p className="text-sm text-neutral-500">로그인이 필요합니다.</p>;
-
+  // 로그인 확인과 익명 차단은 layout의 RequireAuth가 한다. 여기서 또 걸면 도달하지 않는
+  // 분기가 되고, RequireAuth 없이 마운트하는 테스트만 그 죽은 경로를 지난다.
   return (
-    <section className="space-y-10">
+    <section className="space-y-8">
       <div>
         <h1 className="text-4xl font-semibold text-white">계정 설정</h1>
         <p className="mt-3 text-sm text-neutral-400">
@@ -128,7 +127,7 @@ export default function SettingsPage(): React.ReactElement {
 
       <div className="space-y-4">
         <div>
-          <h2 className="text-xl font-semibold text-white">API 토큰</h2>
+          <h2 className="text-sm font-medium text-neutral-400">API 토큰</h2>
           <p className="mt-2 text-sm text-neutral-400">
             프로그램이 이 저장소에 문서를 공급하거나 검색할 때 쓰는 자격증명입니다.{" "}
             <code className="rounded border border-neutral-800 bg-neutral-900 px-1.5 py-0.5 font-mono text-xs text-neutral-300">
@@ -227,7 +226,7 @@ export default function SettingsPage(): React.ReactElement {
 
       <div className="space-y-4">
         <div>
-          <h2 className="text-xl font-semibold text-white">비밀번호</h2>
+          <h2 className="text-sm font-medium text-neutral-400">비밀번호</h2>
           <p className="mt-2 text-sm text-neutral-400">
             바꾸면 이 계정으로 열려 있던 모든 기기의 로그인이 끊기고 다시 로그인해야 합니다.
             발급한 API 토큰은 영향을 받지 않습니다.

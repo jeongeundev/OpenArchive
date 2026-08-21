@@ -18,6 +18,16 @@ from app.services import auth as service
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 
+def _clear_session_cookie(response: Response) -> None:
+    """로그아웃과 비밀번호 변경이 같은 속성으로 지운다. 속성이 어긋나면 브라우저가 쿠키를 남긴다."""
+    response.delete_cookie(
+        SESSION_COOKIE,
+        httponly=True,
+        secure=get_settings().session_cookie_secure,
+        samesite="lax",
+    )
+
+
 @router.post("/login", response_model=AuthStatus)
 async def login(body: LoginRequest, response: Response, conn: Connection) -> AuthStatus:
     try:
@@ -43,12 +53,7 @@ async def logout(
     token: Annotated[str | None, Cookie(alias=SESSION_COOKIE)] = None,
 ) -> AuthStatus:
     await service.logout(conn, token or "")
-    response.delete_cookie(
-        SESSION_COOKIE,
-        httponly=True,
-        secure=get_settings().session_cookie_secure,
-        samesite="lax",
-    )
+    _clear_session_cookie(response)
     return AuthStatus(authenticated=False, username=None, is_admin=False)
 
 
@@ -79,12 +84,7 @@ async def change_password(
         raise HTTPException(
             status_code=403, detail="현재 비밀번호가 올바르지 않습니다."
         ) from error
-    response.delete_cookie(
-        SESSION_COOKIE,
-        httponly=True,
-        secure=get_settings().session_cookie_secure,
-        samesite="lax",
-    )
+    _clear_session_cookie(response)
     return AuthStatus(authenticated=False, username=None, is_admin=False)
 
 

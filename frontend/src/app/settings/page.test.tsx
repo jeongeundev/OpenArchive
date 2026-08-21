@@ -202,23 +202,4 @@ describe("계정 설정 화면", () => {
       "text",
     );
   });
-
-  it("로그인하지 않았으면 아무 자격증명도 보이지 않는다", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue(
-        response({ authenticated: false, username: null, is_admin: false }),
-      ),
-    );
-
-    render(
-      <AuthProvider>
-        <SettingsPage />
-      </AuthProvider>,
-    );
-
-    expect(await screen.findByText("로그인이 필요합니다.")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "토큰 발급" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "비밀번호 변경" })).not.toBeInTheDocument();
-  });
 });

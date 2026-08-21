@@ -312,8 +312,21 @@ def run_init(*, dsn: str | None, assume_yes: bool, env_file: Path) -> int:
     return 0
 
 
+class _ConnectionFailed(Exception):
+    """DSN으로 붙지 못했다. 붙은 뒤의 실패와 구분해 보고하려고 따로 둔다."""
+
+
 async def _reset(dsn: str, username: str, new_password: str) -> None:
-    async with await psycopg.AsyncConnection.connect(dsn, autocommit=True) as conn:
+    """해시 교체와 세션 무효화를 한 트랜잭션에 담는다. 둘 사이에서 끊기면 안 된다.
+
+    연결 실패만 여기서 잡는다 — `run_init`과 같은 이유다. 더 넓게 감싸면 UPDATE·DELETE의
+    실패까지 "연결하지 못했습니다"로 보고되어 원인을 가린다.
+    """
+    try:
+        connection = await psycopg.AsyncConnection.connect(dsn, connect_timeout=5)
+    except psycopg.Error as error:
+        raise _ConnectionFailed(str(error).strip()) from error
+    async with connection as conn:
         await reset_password(conn, username, new_password)
 
 
@@ -326,11 +339,11 @@ def run_reset_password(*, dsn: str | None, username: str) -> int:
         return 2
     try:
         asyncio.run(_reset(dsn, username, password))
+    except _ConnectionFailed as error:
+        print(f"연결하지 못했습니다: {error}")
+        return 1
     except UserNotFound:
         print(f"'{username}' 계정이 없습니다. 아무것도 바꾸지 않았습니다.")
-        return 1
-    except psycopg.Error as error:
-        print(f"연결하지 못했습니다: {str(error).strip()}")
         return 1
     print(f"'{username}'의 비밀번호를 재설정하고 그 계정의 로그인 세션을 모두 끊었습니다.")
     print("발급된 API 토큰은 그대로 유효합니다 — 폐기는 계정 설정 화면에서 합니다.")

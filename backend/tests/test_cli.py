@@ -12,6 +12,7 @@ from psycopg.conninfo import conninfo_to_dict, make_conninfo
 from app.cli import OWNED_TABLES, main, probe_capabilities
 from app.config import ENV_FILE
 from app.migrations import migration_files
+from app.services.auth import hash_password, verify_password
 
 
 def table_names(dsn: str) -> set[str]:
@@ -278,8 +279,6 @@ def test_init_next_steps_name_the_directory_they_are_relative_to(
 
 
 def _insert_user(dsn: str, username: str, password: str) -> str:
-    from app.services.auth import hash_password
-
     with psycopg.connect(dsn) as conn:
         return conn.execute(
             "INSERT INTO users (username, password_hash) VALUES (%s, %s) RETURNING id",
@@ -291,8 +290,6 @@ def test_reset_password_lets_a_locked_out_user_log_in_again(
     migrated_db: str, monkeypatch, capsys
 ):
     """분실 복구 경로. 현재 비밀번호를 모르는 채로 갈아끼운다."""
-    from app.services.auth import verify_password
-
     _insert_user(migrated_db, "alice", "forgotten")
     monkeypatch.setattr("app.cli.getpass.getpass", lambda _prompt: "recovered")
 
@@ -343,8 +340,6 @@ def test_reset_password_reports_an_unknown_user_without_changing_anything(
 
 
 def test_reset_password_refuses_an_empty_password(migrated_db: str, monkeypatch, capsys):
-    from app.services.auth import verify_password
-
     _insert_user(migrated_db, "alice", "forgotten")
     monkeypatch.setattr("app.cli.getpass.getpass", lambda _prompt: "")
 
@@ -368,3 +363,15 @@ def test_reset_password_reports_a_connection_failure_without_traceback(monkeypat
 
     assert exit_code == 1
     assert "Traceback" not in capsys.readouterr().out
+
+
+def test_reset_password_does_not_report_a_query_failure_as_a_connection_failure(
+    clean_db: str, monkeypatch, capsys
+):
+    """연결은 되지만 스키마가 없는 DB. 넓은 except가 이 실패를 "연결하지 못했습니다"로 가렸다."""
+    monkeypatch.setattr("app.cli.getpass.getpass", lambda _prompt: "recovered")
+
+    with pytest.raises(psycopg.Error):
+        main(["reset-password", "alice", "--dsn", clean_db])
+
+    assert "연결하지 못했습니다" not in capsys.readouterr().out
