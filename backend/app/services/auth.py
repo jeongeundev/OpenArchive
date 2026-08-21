@@ -33,7 +33,7 @@ class UserAlreadyExists(Exception):
 
 
 class UserNotFound(Exception):
-    """삭제할 사용자가 존재하지 않는다."""
+    """대상 사용자가 존재하지 않는다."""
 
 
 class UserOwnsDocuments(Exception):
@@ -139,6 +139,49 @@ async def delete_user(conn: psycopg.AsyncConnection, user_id: UUID) -> None:
     deleted = await conn.execute("DELETE FROM users WHERE id = %s", (user_id,))
     if deleted.rowcount == 0:
         raise UserNotFound
+
+
+async def _replace_password(
+    conn: psycopg.AsyncConnection, user_id: UUID, new_password: str
+) -> None:
+    """해시를 갈아끼우고 그 계정의 세션을 전부 무효화한다.
+
+    API 토큰은 남긴다 — ADR-034에서 토큰은 비밀번호와 독립한 위임 자격증명이고,
+    폐기 수단이 계정 설정 화면의 목록에 따로 있다 (ADR-040).
+    """
+    await conn.execute(
+        "UPDATE users SET password_hash = %s WHERE id = %s",
+        (hash_password(new_password), user_id),
+    )
+    await conn.execute("DELETE FROM sessions WHERE user_id = %s", (user_id,))
+
+
+async def change_password(
+    conn: psycopg.AsyncConnection,
+    user_id: UUID,
+    *,
+    current_password: str,
+    new_password: str,
+) -> None:
+    """본인이 현재 비밀번호를 확인받고 바꾼다. 실패하면 아무것도 바꾸지 않는다."""
+    stored = await (
+        await conn.execute("SELECT password_hash FROM users WHERE id = %s", (user_id,))
+    ).fetchone()
+    if stored is None or not verify_password(current_password, stored[0]):
+        raise AuthenticationFailed
+    await _replace_password(conn, user_id, new_password)
+
+
+async def reset_password(
+    conn: psycopg.AsyncConnection, username: str, new_password: str
+) -> None:
+    """현재 비밀번호 없이 갈아끼우는 분실 복구 경로. 운영자 CLI 전용이다 (ADR-040)."""
+    row = await (
+        await conn.execute("SELECT id FROM users WHERE username = %s", (username,))
+    ).fetchone()
+    if row is None:
+        raise UserNotFound
+    await _replace_password(conn, row[0], new_password)
 
 
 async def authenticate_user(

@@ -78,6 +78,37 @@ describe("SiteHeader", () => {
     );
   });
 
+  it("사용자명이 계정 설정으로 가는 링크다", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response({
+      authenticated: true,
+      username: "alice",
+      is_admin: false,
+    })));
+
+    render(<AuthProvider><SiteHeader /></AuthProvider>);
+
+    expect(await screen.findByRole("link", { name: "alice" })).toHaveAttribute(
+      "href",
+      "/settings",
+    );
+  });
+
+  it("익명에게는 계정 설정 진입점을 주지 않는다", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response({
+      authenticated: false,
+      username: null,
+      is_admin: false,
+    })));
+
+    render(<AuthProvider><SiteHeader /></AuthProvider>);
+
+    await screen.findByRole("link", { name: "로그인" });
+    const hrefs = Array.from(document.querySelectorAll("a")).map((link) =>
+      link.getAttribute("href"),
+    );
+    expect(hrefs).not.toContain("/settings");
+  });
+
   it("로그아웃하면 즉시 익명 내비게이션으로 돌아간다", async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(response({ authenticated: true, username: "alice", is_admin: false }))

@@ -12,6 +12,7 @@ from psycopg.conninfo import conninfo_to_dict, make_conninfo
 from app.cli import OWNED_TABLES, main, probe_capabilities
 from app.config import ENV_FILE
 from app.migrations import migration_files
+from app.services.auth import hash_password, verify_password
 
 
 def table_names(dsn: str) -> set[str]:
@@ -275,3 +276,102 @@ def test_init_next_steps_name_the_directory_they_are_relative_to(
     for relative in ("backend", "frontend", "scripts/create_admin.py"):
         assert relative in steps
         assert (repo_root / relative).exists()
+
+
+def _insert_user(dsn: str, username: str, password: str) -> str:
+    with psycopg.connect(dsn) as conn:
+        return conn.execute(
+            "INSERT INTO users (username, password_hash) VALUES (%s, %s) RETURNING id",
+            (username, hash_password(password)),
+        ).fetchone()[0]
+
+
+def test_reset_password_lets_a_locked_out_user_log_in_again(
+    migrated_db: str, monkeypatch, capsys
+):
+    """분실 복구 경로. 현재 비밀번호를 모르는 채로 갈아끼운다."""
+    _insert_user(migrated_db, "alice", "forgotten")
+    monkeypatch.setattr("app.cli.getpass.getpass", lambda _prompt: "recovered")
+
+    exit_code = main(["reset-password", "alice", "--dsn", migrated_db])
+
+    assert exit_code == 0
+    with psycopg.connect(migrated_db) as conn:
+        stored = conn.execute(
+            "SELECT password_hash FROM users WHERE username = 'alice'"
+        ).fetchone()[0]
+    assert verify_password("recovered", stored)
+    assert not verify_password("forgotten", stored)
+    # 재설정한 비밀번호를 화면에 되비추지 않는다 — 셸 스크롤백에 평문이 남는다.
+    assert "recovered" not in capsys.readouterr().out
+
+
+def test_reset_password_invalidates_the_sessions_of_that_user(migrated_db: str, monkeypatch):
+    user_id = _insert_user(migrated_db, "alice", "forgotten")
+    other_id = _insert_user(migrated_db, "bob", "bob secret")
+    with psycopg.connect(migrated_db, autocommit=True) as conn:
+        for token, owner in (("alice-session", user_id), ("bob-session", other_id)):
+            conn.execute(
+                "INSERT INTO sessions (token, user_id, expires_at) "
+                "VALUES (%s, %s, now() + interval '1 hour')",
+                (token, owner),
+            )
+    monkeypatch.setattr("app.cli.getpass.getpass", lambda _prompt: "recovered")
+
+    main(["reset-password", "alice", "--dsn", migrated_db])
+
+    with psycopg.connect(migrated_db) as conn:
+        remaining = conn.execute("SELECT token FROM sessions").fetchall()
+    assert remaining == [("bob-session",)]
+
+
+def test_reset_password_reports_an_unknown_user_without_changing_anything(
+    migrated_db: str, monkeypatch, capsys
+):
+    _insert_user(migrated_db, "alice", "forgotten")
+    monkeypatch.setattr("app.cli.getpass.getpass", lambda _prompt: "recovered")
+
+    exit_code = main(["reset-password", "nobody", "--dsn", migrated_db])
+
+    assert exit_code == 1
+    assert "nobody" in capsys.readouterr().out
+    with psycopg.connect(migrated_db) as conn:
+        assert conn.execute("SELECT count(*) FROM users").fetchone() == (1,)
+
+
+def test_reset_password_refuses_an_empty_password(migrated_db: str, monkeypatch, capsys):
+    _insert_user(migrated_db, "alice", "forgotten")
+    monkeypatch.setattr("app.cli.getpass.getpass", lambda _prompt: "")
+
+    exit_code = main(["reset-password", "alice", "--dsn", migrated_db])
+
+    assert exit_code == 2
+    with psycopg.connect(migrated_db) as conn:
+        stored = conn.execute(
+            "SELECT password_hash FROM users WHERE username = 'alice'"
+        ).fetchone()[0]
+    assert verify_password("forgotten", stored)
+    assert capsys.readouterr().out.strip() != ""
+
+
+def test_reset_password_reports_a_connection_failure_without_traceback(monkeypatch, capsys):
+    monkeypatch.setattr("app.cli.getpass.getpass", lambda _prompt: "recovered")
+
+    exit_code = main(
+        ["reset-password", "alice", "--dsn", "postgresql://nobody@127.0.0.1:1/none"]
+    )
+
+    assert exit_code == 1
+    assert "Traceback" not in capsys.readouterr().out
+
+
+def test_reset_password_does_not_report_a_query_failure_as_a_connection_failure(
+    clean_db: str, monkeypatch, capsys
+):
+    """연결은 되지만 스키마가 없는 DB. 넓은 except가 이 실패를 "연결하지 못했습니다"로 가렸다."""
+    monkeypatch.setattr("app.cli.getpass.getpass", lambda _prompt: "recovered")
+
+    with pytest.raises(psycopg.Error):
+        main(["reset-password", "alice", "--dsn", clean_db])
+
+    assert "연결하지 못했습니다" not in capsys.readouterr().out

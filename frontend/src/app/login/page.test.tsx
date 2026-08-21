@@ -2,6 +2,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { AuthProvider } from "@/components/AuthProvider";
+import { markPasswordChanged } from "@/lib/passwordChangeNotice";
 import LoginPage from "./page";
 
 const replace = vi.fn();
@@ -72,5 +73,35 @@ describe("로그인 화면", () => {
     fireEvent.click(screen.getByRole("button", { name: "로그인" }));
 
     expect(await screen.findByText("사용자명 또는 비밀번호를 확인하세요.")).toBeInTheDocument();
+  });
+
+  it("비밀번호를 바꾸고 밀려온 사람에게 그 사실을 알린다", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response({
+      authenticated: false,
+      username: null,
+      is_admin: false,
+    })));
+    markPasswordChanged();
+
+    render(<AuthProvider><LoginPage /></AuthProvider>);
+
+    expect(await screen.findByText(/비밀번호를 바꿨습니다/)).toBeInTheDocument();
+  });
+
+  it("그 안내는 한 번만 뜬다", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response({
+      authenticated: false,
+      username: null,
+      is_admin: false,
+    })));
+    markPasswordChanged();
+
+    const first = render(<AuthProvider><LoginPage /></AuthProvider>);
+    await screen.findByText(/비밀번호를 바꿨습니다/);
+    first.unmount();
+    render(<AuthProvider><LoginPage /></AuthProvider>);
+
+    await screen.findByRole("button", { name: "로그인" });
+    expect(screen.queryByText(/비밀번호를 바꿨습니다/)).not.toBeInTheDocument();
   });
 });

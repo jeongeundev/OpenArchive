@@ -8,12 +8,15 @@ from conftest import login_as
 from app.services.auth import (
     AuthenticationFailed,
     TokenNotFound,
+    UserNotFound,
     authenticate_user,
+    change_password,
     create_session,
     create_token,
     hash_password,
     list_tokens,
     logout,
+    reset_password,
     revoke_token,
     validate_session,
     validate_token,
@@ -358,3 +361,80 @@ def test_deleting_user_with_owned_documents_is_rejected(db_client, migrated_db):
         assert conn.execute("SELECT id FROM users WHERE id = %s", (user_id,)).fetchone() == (
             user_id,
         )
+
+
+async def test_change_password_rejects_a_wrong_current_password(conn):
+    user_id = await _create_user(conn, "correct horse")
+
+    with pytest.raises(AuthenticationFailed):
+        await change_password(
+            conn, user_id, current_password="wrong horse", new_password="new staple"
+        )
+
+    assert (await authenticate_user(conn, "alice", "correct horse"))["id"] == user_id
+
+
+async def test_change_password_replaces_the_hash_so_only_the_new_password_works(conn):
+    user_id = await _create_user(conn, "correct horse")
+
+    await change_password(
+        conn, user_id, current_password="correct horse", new_password="new staple"
+    )
+
+    assert (await authenticate_user(conn, "alice", "new staple"))["id"] == user_id
+    with pytest.raises(AuthenticationFailed):
+        await authenticate_user(conn, "alice", "correct horse")
+
+
+async def test_change_password_invalidates_every_session_of_that_user_only(conn):
+    alice_id = await _create_user(conn, "correct horse")
+    bob_id = (
+        await (
+            await conn.execute(
+                "INSERT INTO users (username, password_hash) VALUES ('bob', %s) RETURNING id",
+                (hash_password("bob secret"),),
+            )
+        ).fetchone()
+    )[0]
+    laptop = await create_session(conn, alice_id)
+    phone = await create_session(conn, alice_id)
+    bob_session = await create_session(conn, bob_id)
+
+    await change_password(
+        conn, alice_id, current_password="correct horse", new_password="new staple"
+    )
+
+    for revoked in (laptop, phone):
+        with pytest.raises(AuthenticationFailed):
+            await validate_session(conn, revoked)
+    assert (await validate_session(conn, bob_session))["id"] == bob_id
+
+
+async def test_change_password_keeps_the_api_tokens_it_did_not_revoke(conn):
+    """토큰은 비밀번호와 독립한 위임 자격증명이다 (ADR-034). 폐기는 목록에서 개별로 한다."""
+    user_id = await _create_user(conn, "correct horse")
+    issued = await create_token(conn, user_id, name="automation")
+
+    await change_password(
+        conn, user_id, current_password="correct horse", new_password="new staple"
+    )
+
+    assert (await validate_token(conn, issued["token"]))["id"] == user_id
+
+
+async def test_reset_password_replaces_the_hash_without_the_current_one(conn):
+    user_id = await _create_user(conn, "forgotten")
+    session = await create_session(conn, user_id)
+
+    await reset_password(conn, "alice", "recovered")
+
+    assert (await authenticate_user(conn, "alice", "recovered"))["id"] == user_id
+    with pytest.raises(AuthenticationFailed):
+        await authenticate_user(conn, "alice", "forgotten")
+    with pytest.raises(AuthenticationFailed):
+        await validate_session(conn, session)
+
+
+async def test_reset_password_reports_an_unknown_username(conn):
+    with pytest.raises(UserNotFound):
+        await reset_password(conn, "nobody", "recovered")

@@ -13,6 +13,9 @@ import type {
   SystemStatus,
   TagSuggestionsResponse,
   TextVersionDetail,
+  TokenCreated,
+  TokenScope,
+  TokenSummary,
   Visibility,
   UserSummary,
 } from "./types";
@@ -78,6 +81,39 @@ export function login(username: string, password: string): Promise<AuthStatus> {
 
 export function logout(): Promise<AuthStatus> {
   return request<AuthStatus>("/api/auth/logout", { method: "POST" });
+}
+
+export function changePassword(
+  currentPassword: string,
+  newPassword: string,
+): Promise<AuthStatus> {
+  return request<AuthStatus>("/api/auth/password", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      current_password: currentPassword,
+      new_password: newPassword,
+    }),
+  });
+}
+
+export function listTokens(): Promise<TokenSummary[]> {
+  return request<TokenSummary[]>("/api/auth/tokens");
+}
+
+export function createToken(input: {
+  name: string;
+  scope: TokenScope;
+}): Promise<TokenCreated> {
+  return request<TokenCreated>("/api/auth/tokens", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export function revokeToken(id: string): Promise<void> {
+  return request<void>(`/api/auth/tokens/${encodeURIComponent(id)}`, { method: "DELETE" }, false);
 }
 
 export function listUsers(): Promise<UserSummary[]> {

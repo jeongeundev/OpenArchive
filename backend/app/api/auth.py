@@ -6,6 +6,7 @@ from fastapi import APIRouter, Cookie, Depends, HTTPException, Response, status
 from app.api.deps import SESSION_COOKIE, Connection, current_user, require_session_user
 from app.api.schemas import (
     AuthStatus,
+    ChangePasswordRequest,
     CreateTokenRequest,
     LoginRequest,
     TokenCreated,
@@ -15,6 +16,16 @@ from app.config import get_settings
 from app.services import auth as service
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
+
+
+def _clear_session_cookie(response: Response) -> None:
+    """로그아웃과 비밀번호 변경이 같은 속성으로 지운다. 속성이 어긋나면 브라우저가 쿠키를 남긴다."""
+    response.delete_cookie(
+        SESSION_COOKIE,
+        httponly=True,
+        secure=get_settings().session_cookie_secure,
+        samesite="lax",
+    )
 
 
 @router.post("/login", response_model=AuthStatus)
@@ -42,12 +53,7 @@ async def logout(
     token: Annotated[str | None, Cookie(alias=SESSION_COOKIE)] = None,
 ) -> AuthStatus:
     await service.logout(conn, token or "")
-    response.delete_cookie(
-        SESSION_COOKIE,
-        httponly=True,
-        secure=get_settings().session_cookie_secure,
-        samesite="lax",
-    )
+    _clear_session_cookie(response)
     return AuthStatus(authenticated=False, username=None, is_admin=False)
 
 
@@ -56,6 +62,30 @@ async def me(user: Annotated[dict | None, Depends(current_user)]) -> AuthStatus:
     if user is None:
         return AuthStatus(authenticated=False, username=None, is_admin=False)
     return AuthStatus(authenticated=True, username=user["username"], is_admin=user["is_admin"])
+
+
+@router.put("/password", response_model=AuthStatus)
+async def change_password(
+    body: ChangePasswordRequest,
+    response: Response,
+    conn: Connection,
+    user: Annotated[dict, Depends(require_session_user)],
+) -> AuthStatus:
+    """자기 비밀번호를 바꾸고 모든 세션에서 로그아웃시킨다 (ADR-040)."""
+    try:
+        await service.change_password(
+            conn,
+            user["id"],
+            current_password=body.current_password,
+            new_password=body.new_password,
+        )
+    except service.AuthenticationFailed as error:
+        # 세션은 유효하므로 401이 아니다. 401이면 클라이언트가 "세션 만료"로 읽는다.
+        raise HTTPException(
+            status_code=403, detail="현재 비밀번호가 올바르지 않습니다."
+        ) from error
+    _clear_session_cookie(response)
+    return AuthStatus(authenticated=False, username=None, is_admin=False)
 
 
 @router.post("/tokens", response_model=TokenCreated, status_code=status.HTTP_201_CREATED)
