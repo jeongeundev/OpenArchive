@@ -63,11 +63,13 @@ class BlockingProvider:
 
     embed는 asyncio.to_thread로 도는 동기 함수라 threading.Event로 막는다.
 
-    기동 시 예열(`_warm_up`)은 막지 않고 통과시킨다. 여기서 붙잡으려는 것은 잡을
+    기동 시 예열(`warm_up`)은 막지 않고 통과시킨다. 여기서 붙잡으려는 것은 잡을
     처리하는 워커인데, 예열까지 막으면 잡을 집기도 전에 멈춰 서서 `entered`가
-    "임베딩에 진입했다"를 더 이상 뜻하지 못한다. 예열이 잡보다 먼저 정확히 한 번
-    일어난다는 계약은 test_run_worker_warms_up_the_model_before_taking_any_job이
-    고정한다.
+    "임베딩에 진입했다"를 더 이상 뜻하지 못한다.
+
+    "첫 호출이 예열"이라는 가정의 근거는 두 테스트다 — 잡 없이도 예열이 일어남은
+    test_run_worker_warms_up_the_model_before_taking_any_job이, 그것이 **한 번뿐**임은
+    test_main.py의 test_startup_warms_up_the_embedding_provider가 고정한다.
     """
 
     name = "blocking"
@@ -84,44 +86,6 @@ class BlockingProvider:
             return FakeProvider().embed(texts)
         self.entered.set()
         self.release.wait(timeout=10)
-        return FakeProvider().embed(texts)
-
-
-class RecordingProvider:
-    """embed 호출을 기록하는 프로바이더 — "예열이 있었는가"는 호출로만 관측된다.
-
-    FakeProvider는 로딩이 없어 예열해도 겉으로 아무 일도 일어나지 않는다. 그래서
-    지연이 아니라 호출 자체를 센다.
-    """
-
-    name = "recording"
-    dimension = 1024
-
-    def __init__(self) -> None:
-        self.calls: list[list[str]] = []
-
-    def embed(self, texts: list[str]) -> list[list[float]]:
-        self.calls.append(texts)
-        return FakeProvider().embed(texts)
-
-
-class WarmupFailingProvider:
-    """**첫** embed만 실패하는 프로바이더 — 예열이 깨진 상태를 재현한다.
-
-    ExplodingProvider로는 이 상황을 만들 수 없다. 모든 호출이 실패하면 잡 처리도
-    함께 실패해, "예열이 실패해도 잡은 처리된다"를 구분해 볼 수 없다.
-    """
-
-    name = "warmup-failing"
-    dimension = 1024
-
-    def __init__(self) -> None:
-        self.failed_once = False
-
-    def embed(self, texts: list[str]) -> list[list[float]]:
-        if not self.failed_once:
-            self.failed_once = True
-            raise RuntimeError("모델을 내려받지 못한 상황을 재현한다")
         return FakeProvider().embed(texts)
 
 
@@ -934,7 +898,9 @@ async def test_listen_wakes_the_worker_on_the_trigger_notify(migrated_db, conn):
             await listener
 
 
-async def test_run_worker_warms_up_the_model_before_taking_any_job(migrated_db, monkeypatch):
+async def test_run_worker_warms_up_the_model_before_taking_any_job(
+    migrated_db, monkeypatch, recording_provider
+):
     """기동 직후 모델을 한 번 예열한다 — 처리할 잡이 하나도 없어도.
 
     `LocalProvider`는 첫 `embed()`까지 모델(~2GB) 로딩을 미룬다. 예열이 없으면 그
@@ -949,13 +915,12 @@ async def test_run_worker_warms_up_the_model_before_taking_any_job(migrated_db, 
     monkeypatch.setenv("DATABASE_URL", migrated_db)
     get_settings.cache_clear()
     await close_pool()  # 앞선 테스트가 다른 DSN으로 열어둔 풀을 물려받지 않는다
-    provider = RecordingProvider()
-    monkeypatch.setattr("app.worker.get_provider", lambda: provider)
+    monkeypatch.setattr("app.worker.get_provider", lambda: recording_provider)
 
     worker = asyncio.create_task(run_worker())
     try:
         await wait_until(
-            lambda: _warmed_up(provider),
+            lambda: _warmed_up(recording_provider),
             message="잡이 없는데도 예열이 일어나지 않았다 — 첫 업로드가 모델 로딩을 기다린다",
         )
     finally:
@@ -965,7 +930,9 @@ async def test_run_worker_warms_up_the_model_before_taking_any_job(migrated_db, 
         await close_pool()
 
 
-async def test_run_worker_survives_a_failed_warmup(migrated_db, conn, monkeypatch):
+async def test_run_worker_survives_a_failed_warmup(
+    migrated_db, conn, monkeypatch, warmup_failing_provider
+):
     """예열이 실패해도 워커는 계속 돈다 — 예열은 최적화이지 새 실패 지점이 아니다.
 
     모델을 못 받는 상황(의존성 미설치·다운로드 실패)에서 워커가 기동조차 못 하면
@@ -978,7 +945,7 @@ async def test_run_worker_survives_a_failed_warmup(migrated_db, conn, monkeypatc
     monkeypatch.setenv("DATABASE_URL", migrated_db)
     get_settings.cache_clear()
     await close_pool()
-    provider = WarmupFailingProvider()
+    provider = warmup_failing_provider
     monkeypatch.setattr("app.worker.get_provider", lambda: provider)
 
     doc_id = await insert_document(conn)
@@ -1026,5 +993,5 @@ async def _listen_is_registered(conn) -> bool:
     return (await cur.fetchone())[0] > 0
 
 
-async def _warmed_up(provider: "RecordingProvider") -> bool:
+async def _warmed_up(provider) -> bool:
     return bool(provider.calls)

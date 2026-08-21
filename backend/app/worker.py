@@ -480,9 +480,11 @@ async def run_worker() -> None:
     logger.info(
         "임베딩 워커 기동 — provider=%s, 폴링 주기=%.0fs", provider.name, POLL_INTERVAL_SECONDS
     )
-    await warm_up(provider)
     pool = get_pool()
     await pool.open()
+    # 풀을 연 뒤에 예열한다 — API lifespan과 같은 순서다. 반대로 하면 DSN 오설정이
+    # 모델 로딩 시간만큼 늦게 드러난다.
+    await warm_up(provider)
     wake = asyncio.Event()
     stop = asyncio.Event()
 

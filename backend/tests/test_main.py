@@ -3,7 +3,6 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.config import get_settings
-from app.embeddings import FakeProvider
 from app.main import app
 
 
@@ -48,25 +47,7 @@ def test_startup_fails_loudly_when_migrations_cannot_run(monkeypatch):
         pass
 
 
-class _RecordingProvider:
-    """embed 호출을 세는 프로바이더 — 예열은 호출로만 관측된다.
-
-    FakeProvider는 로딩이 없어 예열해도 겉으로 아무 일도 일어나지 않는다. 그래서
-    지연이 아니라 호출을 센다.
-    """
-
-    name = "recording"
-    dimension = 1024
-
-    def __init__(self) -> None:
-        self.calls = 0
-
-    def embed(self, texts: list[str]) -> list[list[float]]:
-        self.calls += 1
-        return FakeProvider().embed(texts)
-
-
-def test_startup_warms_up_the_embedding_provider(monkeypatch, clean_db: str):
+def test_startup_warms_up_the_embedding_provider(monkeypatch, clean_db: str, recording_provider):
     """기동 시 임베딩 모델을 예열한다 — 검색 요청이 한 건도 없어도.
 
     lifespan은 프로바이더 **인스턴스**만 만들고, `LocalProvider`는 첫 `embed()`까지
@@ -80,10 +61,27 @@ def test_startup_warms_up_the_embedding_provider(monkeypatch, clean_db: str):
     """
     monkeypatch.setenv("DATABASE_URL", clean_db)
     get_settings.cache_clear()
-    provider = _RecordingProvider()
-    monkeypatch.setattr("app.main.get_provider", lambda: provider)
+    monkeypatch.setattr("app.main.get_provider", lambda: recording_provider)
 
     with TestClient(app):
-        pass  # 기동과 종료만 — 요청은 보내지 않는다
+        # 단언은 **블록 안에서** 한다. 밖에서 보면 예열이 startup이 아니라 shutdown에
+        # 있어도 통과해, 이 테스트의 이름이 주장하는 "기동 시"가 고정되지 않는다.
+        # 요청은 보내지 않는다 — 검색을 태우면 그 요청의 embed와 구분되지 않는다.
+        assert len(recording_provider.calls) == 1
 
-    assert provider.calls == 1
+
+def test_startup_survives_a_failed_warmup(monkeypatch, clean_db: str, warmup_failing_provider):
+    """예열이 실패해도 API는 기동한다 — 예열은 최적화이지 새 실패 지점이 아니다.
+
+    모델을 받을 수 없는 상황에서 API가 기동조차 못 하면 감독자가 되살리는 부팅 루프가
+    된다. 삼키고 계속하면 검색 요청이 그 자리에서 실패해 원인이 호출자에게 그대로 간다.
+    워커 쪽 같은 계약은 test_worker.py의 test_run_worker_survives_a_failed_warmup이 본다.
+    """
+    monkeypatch.setenv("DATABASE_URL", clean_db)
+    get_settings.cache_clear()
+    monkeypatch.setattr("app.main.get_provider", lambda: warmup_failing_provider)
+
+    with TestClient(app) as started:
+        assert started.get("/api/health").json() == {"status": "ok"}
+
+    assert warmup_failing_provider.failed_once  # 예열이 실제로 실패한 상태를 지나왔다

@@ -665,7 +665,7 @@ aws ec2 revoke-security-group-ingress --region ap-northeast-2 \
 
 - **CPU 전용 torch를 먼저 깐다.** PyPI 기본 wheel은 CUDA 빌드라 GPU 없는 인스턴스에 `nvidia-*` 2.7GB가 따라온다. 순서를 지키면 venv가 **5.1GB → 1.4GB**, 설치가 **2m37s → 1m16s**로 준다. `deploy_app_host.sh`가 이미 그렇게 한다
 - **BGE-M3가 두 벌 올라간다.** 워커(2233MB)와 API(2006MB)가 각각 모델을 로드한다 — 워커는 청크를, API는 검색 질의를 임베딩하기 때문이다. t3.large 8GB에서 **합계 4.2GB**로 여유가 좁고, swap이 없다. 모델 캐시는 디스크 4.3GB
-- **첫 검색만 느리다.** API 프로세스가 모델을 lazy load 하므로 재기동 후 첫 질의가 **16~19초**, 이후는 **0.4~0.5초**다. 시연 전에 질의를 한 번 흘려 예열한다
+- **느린 것은 첫 검색이 아니라 기동이다.** API·워커가 기동 시 모델을 예열하므로(ADR-003 보강) 첫 질의부터 **0.4~0.5초**다. 예전에는 lazy load라 재기동 후 첫 질의가 **16~19초**였고 시연 전에 질의를 한 번 흘려야 했는데, 그 대응은 더 이상 필요 없다. 대신 **기동이 그만큼 걸린다** — 가중치가 캐시된 호스트에서 12~13초, 캐시가 없으면 내려받는 시간이 더해진다. `deploy_app_host.sh`의 헬스체크 여유(300초)가 이 때문이다
 - **재부팅 생존은 없다.** API·프론트는 `nohup` 맨 프로세스다. OpenSQL 자신이 그렇게 도는 설치라 앱만 부팅 시 살려도 붙을 DB가 없다. 인스턴스를 켤 때마다 `deploy_app_host.sh`를 돌린다
 - **임베딩 워커만 systemd 유닛이다 — 재부팅이 아니라 crash 복구용이다** (ADR-038). DB는 살아 있는데 워커만 죽는 경우가 문제이기 때문이다: 화면은 멀쩡한데 새 문서만 영원히 검색되지 않는다. BGE-M3가 2.2GB 상주하고 swap이 없어 워커는 OOM killer의 1순위 표적이다
   - **system 유닛이 아니라 user 유닛이다.** SELinux Enforcing에서 system 유닛(`init_t`)은 홈 아래(`user_home_t`)의 venv를 실행하지 못한다 — `203/EXEC Permission denied`. `SELinuxContext=`로 exec 도메인만 바꿔도 경로 탐색에서 걸린다. `systemctl --user`는 nohup으로 돌리던 때와 같은 도메인이라 보안 수준이 낮아지지 않는다. 세션이 끊겨도 유지되도록 `loginctl enable-linger`가 필요하고 `deploy_app_host.sh`가 해 둔다 (2026-08-19 실측)
