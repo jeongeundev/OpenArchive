@@ -45,3 +45,43 @@ def test_startup_fails_loudly_when_migrations_cannot_run(monkeypatch):
 
     with pytest.raises(psycopg.OperationalError), TestClient(app):
         pass
+
+
+def test_startup_warms_up_the_embedding_provider(monkeypatch, clean_db: str, recording_provider):
+    """기동 시 임베딩 모델을 예열한다 — 검색 요청이 한 건도 없어도.
+
+    lifespan은 프로바이더 **인스턴스**만 만들고, `LocalProvider`는 첫 `embed()`까지
+    모델(~2GB) 로딩을 미룬다. 예열이 없으면 그 로딩이 통째로 **첫 검색 요청**에 붙는다 —
+    2026-08-21 실측으로 갓 기동한 API의 첫 검색이 12.5초, 두 번째가 0.34초였다.
+    워커의 예열과 같은 결함이지만 이쪽이 사용자에게 더 가깝다: 백그라운드 처리 지연이
+    아니라, 사용자가 검색 버튼을 누르고 화면 앞에서 기다리는 시간이다.
+
+    요청을 보내지 않고 확인하는 이유: 검색을 한 번이라도 태우면 그 요청의 embed와
+    구분되지 않아 예열이 있었는지 증명할 수 없다.
+    """
+    monkeypatch.setenv("DATABASE_URL", clean_db)
+    get_settings.cache_clear()
+    monkeypatch.setattr("app.main.get_provider", lambda: recording_provider)
+
+    with TestClient(app):
+        # 단언은 **블록 안에서** 한다. 밖에서 보면 예열이 startup이 아니라 shutdown에
+        # 있어도 통과해, 이 테스트의 이름이 주장하는 "기동 시"가 고정되지 않는다.
+        # 요청은 보내지 않는다 — 검색을 태우면 그 요청의 embed와 구분되지 않는다.
+        assert len(recording_provider.calls) == 1
+
+
+def test_startup_survives_a_failed_warmup(monkeypatch, clean_db: str, warmup_failing_provider):
+    """예열이 실패해도 API는 기동한다 — 예열은 최적화이지 새 실패 지점이 아니다.
+
+    모델을 받을 수 없는 상황에서 API가 기동조차 못 하면 감독자가 되살리는 부팅 루프가
+    된다. 삼키고 계속하면 검색 요청이 그 자리에서 실패해 원인이 호출자에게 그대로 간다.
+    워커 쪽 같은 계약은 test_worker.py의 test_run_worker_survives_a_failed_warmup이 본다.
+    """
+    monkeypatch.setenv("DATABASE_URL", clean_db)
+    get_settings.cache_clear()
+    monkeypatch.setattr("app.main.get_provider", lambda: warmup_failing_provider)
+
+    with TestClient(app) as started:
+        assert started.get("/api/health").json() == {"status": "ok"}
+
+    assert warmup_failing_provider.failed_once  # 예열이 실제로 실패한 상태를 지나왔다

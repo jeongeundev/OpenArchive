@@ -62,6 +62,14 @@ class BlockingProvider:
     """embed에서 멈춰 서는 프로바이더 — 워커를 처리 **도중**에 붙잡아 둔다.
 
     embed는 asyncio.to_thread로 도는 동기 함수라 threading.Event로 막는다.
+
+    기동 시 예열(`warm_up`)은 막지 않고 통과시킨다. 여기서 붙잡으려는 것은 잡을
+    처리하는 워커인데, 예열까지 막으면 잡을 집기도 전에 멈춰 서서 `entered`가
+    "임베딩에 진입했다"를 더 이상 뜻하지 못한다.
+
+    "첫 호출이 예열"이라는 가정의 근거는 두 테스트다 — 잡 없이도 예열이 일어남은
+    test_run_worker_warms_up_the_model_before_taking_any_job이, 그것이 **한 번뿐**임은
+    test_main.py의 test_startup_warms_up_the_embedding_provider가 고정한다.
     """
 
     name = "blocking"
@@ -70,8 +78,12 @@ class BlockingProvider:
     def __init__(self) -> None:
         self.entered = threading.Event()
         self.release = threading.Event()
+        self.warmed_up = False
 
     def embed(self, texts: list[str]) -> list[list[float]]:
+        if not self.warmed_up:
+            self.warmed_up = True
+            return FakeProvider().embed(texts)
         self.entered.set()
         self.release.wait(timeout=10)
         return FakeProvider().embed(texts)
@@ -886,6 +898,74 @@ async def test_listen_wakes_the_worker_on_the_trigger_notify(migrated_db, conn):
             await listener
 
 
+async def test_run_worker_warms_up_the_model_before_taking_any_job(
+    migrated_db, monkeypatch, recording_provider
+):
+    """기동 직후 모델을 한 번 예열한다 — 처리할 잡이 하나도 없어도.
+
+    `LocalProvider`는 첫 `embed()`까지 모델(~2GB) 로딩을 미룬다. 예열이 없으면 그
+    로딩이 통째로 **첫 업로드의 지연**이 된다 — 사용자가 문서를 올린 뒤에야 모델을
+    받기 시작한다. ADR-003이 "워커 예열로 해결한다"고 적어둔 것이 이 호출이다.
+
+    잡을 넣지 않고 확인하는 이유: 잡이 있으면 그 처리 과정의 `embed`와 구분되지 않아
+    예열이 있었는지를 증명할 수 없다. 운영 프로바이더로는 이 차이가 "첫 업로드가
+    수십 초 걸린다"로만 드러나는데, 테스트는 `FakeProvider` 위에서 도므로 지연이
+    아니라 호출을 센다.
+    """
+    monkeypatch.setenv("DATABASE_URL", migrated_db)
+    get_settings.cache_clear()
+    await close_pool()  # 앞선 테스트가 다른 DSN으로 열어둔 풀을 물려받지 않는다
+    monkeypatch.setattr("app.worker.get_provider", lambda: recording_provider)
+
+    worker = asyncio.create_task(run_worker())
+    try:
+        await wait_until(
+            lambda: _warmed_up(recording_provider),
+            message="잡이 없는데도 예열이 일어나지 않았다 — 첫 업로드가 모델 로딩을 기다린다",
+        )
+    finally:
+        worker.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await worker
+        await close_pool()
+
+
+async def test_run_worker_survives_a_failed_warmup(
+    migrated_db, conn, monkeypatch, warmup_failing_provider
+):
+    """예열이 실패해도 워커는 계속 돈다 — 예열은 최적화이지 새 실패 지점이 아니다.
+
+    모델을 못 받는 상황(의존성 미설치·다운로드 실패)에서 워커가 기동조차 못 하면
+    감독자가 되살리는 부팅 루프가 된다. 삼키고 계속하면 **기존 실패 경로가 더 나은
+    진단을 준다** — 잡을 집어 `fail_job`이 `last_error`에 이유를 남기고 문서가
+    error로 격리되므로, 사용자가 화면에서 원인을 본다.
+
+    `_listen_for_jobs`가 LISTEN 실패를 다루는 것과 같은 원칙이다 (ADR-009).
+    """
+    monkeypatch.setenv("DATABASE_URL", migrated_db)
+    get_settings.cache_clear()
+    await close_pool()
+    provider = warmup_failing_provider
+    monkeypatch.setattr("app.worker.get_provider", lambda: provider)
+
+    doc_id = await insert_document(conn)
+
+    worker = asyncio.create_task(run_worker())
+    try:
+        await wait_until(
+            lambda: _is_ready(conn, doc_id),
+            message="예열 실패가 워커를 세웠다 — 이후 잡이 처리되지 않는다",
+        )
+    finally:
+        worker.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await worker
+        await close_pool()
+
+    assert provider.failed_once  # 예열이 실제로 실패한 상태를 지나왔다
+    assert [j[0] for j in await job_rows(conn, doc_id)] == ["done"]
+
+
 async def _is_ready(conn, doc_id) -> bool:
     return (await document_state(conn, doc_id))[1] == "ready"
 
@@ -911,3 +991,7 @@ async def _listen_is_registered(conn) -> bool:
         (f"LISTEN {CHANNEL}",),
     )
     return (await cur.fetchone())[0] > 0
+
+
+async def _warmed_up(provider) -> bool:
+    return bool(provider.calls)

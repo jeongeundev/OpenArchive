@@ -13,7 +13,7 @@ from app.api.search import router as search_router
 from app.api.system import router as system_router
 from app.config import get_settings
 from app.db import close_pool, get_pool
-from app.embeddings import get_provider
+from app.embeddings import get_provider, warm_up
 from app.migrations import run_migrations
 from app.services import documents as documents_service
 
@@ -27,6 +27,8 @@ async def lifespan(app: FastAPI):
     pool = get_pool()
     await pool.open()
     app.state.provider = get_provider()
+    # 예열하지 않으면 이 로딩이 통째로 첫 검색 요청에 붙는다 (실측 12.5초).
+    await warm_up(app.state.provider)
     try:
         yield
     finally:

@@ -229,3 +229,51 @@ def login_as(client: TestClient, username: str, password: str = "test-password")
         "/api/auth/login", json={"username": username, "password": password}
     )
     assert response.status_code == 200
+
+
+class RecordingProvider:
+    """embed 호출을 기록하는 프로바이더 — 예열은 호출로만 관측된다.
+
+    FakeProvider는 로딩이 없어 예열해도 겉으로 아무 일도 일어나지 않는다. 그래서
+    지연이 아니라 호출을 센다. API(lifespan)와 워커가 같은 것을 확인하므로 여기 둔다.
+    """
+
+    name = "recording"
+    dimension = 1024
+
+    def __init__(self) -> None:
+        self.calls: list[list[str]] = []
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        self.calls.append(texts)
+        return FakeProvider().embed(texts)
+
+
+class WarmupFailingProvider:
+    """**첫** embed만 실패하는 프로바이더 — 예열이 깨진 상태를 재현한다.
+
+    모든 호출이 실패하는 대역으로는 이 상황을 만들 수 없다. 잡 처리·검색까지 함께
+    실패해 "예열이 실패해도 나머지는 동작한다"를 구분해 볼 수 없기 때문이다.
+    """
+
+    name = "warmup-failing"
+    dimension = 1024
+
+    def __init__(self) -> None:
+        self.failed_once = False
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        if not self.failed_once:
+            self.failed_once = True
+            raise RuntimeError("모델을 내려받지 못한 상황을 재현한다")
+        return FakeProvider().embed(texts)
+
+
+@pytest.fixture
+def recording_provider() -> RecordingProvider:
+    return RecordingProvider()
+
+
+@pytest.fixture
+def warmup_failing_provider() -> WarmupFailingProvider:
+    return WarmupFailingProvider()

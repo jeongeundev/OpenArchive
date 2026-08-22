@@ -35,7 +35,7 @@ import psycopg
 
 from app.config import get_settings
 from app.db import close_pool, get_pool
-from app.embeddings import EmbeddingProvider, get_provider
+from app.embeddings import EmbeddingProvider, get_provider, warm_up
 from app.services.chunking import chunk_text
 from app.vectors import to_pgvector_literal
 
@@ -482,6 +482,9 @@ async def run_worker() -> None:
     )
     pool = get_pool()
     await pool.open()
+    # 풀을 연 뒤에 예열한다 — API lifespan과 같은 순서다. 반대로 하면 DSN 오설정이
+    # 모델 로딩 시간만큼 늦게 드러난다.
+    await warm_up(provider)
     wake = asyncio.Event()
     stop = asyncio.Event()
 
