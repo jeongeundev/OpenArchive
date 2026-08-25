@@ -18,7 +18,9 @@ import argparse
 import asyncio
 import getpass
 import re
+import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -299,6 +301,101 @@ def _inspect(conn: psycopg.Connection) -> list[str] | None:
     return pending
 
 
+# Ctrl-C 뒤 자식이 스스로 정리할 시간. 워커는 처리 중인 잡을 마치고 멈춘다 (ADR-004).
+SHUTDOWN_GRACE_SECONDS = 10.0
+
+
+def _serve_processes(host: str, port: int) -> list[tuple[str, list[str]]]:
+    """함께 띄울 프로세스. 같은 인터프리터로 부르므로 가상환경·sys.path가 그대로 이어진다."""
+    return [
+        (
+            "API",
+            [sys.executable, "-m", "uvicorn", "app.main:app", "--host", host, "--port", str(port)],
+        ),
+        ("워커", [sys.executable, "-m", "app.worker"]),
+    ]
+
+
+def _all_stopped(running: list[tuple[str, subprocess.Popen]]) -> bool:
+    return all(process.poll() is not None for _name, process in running)
+
+
+def _first_stopped(running: list[tuple[str, subprocess.Popen]]) -> tuple[str, int] | None:
+    """먼저 멈춘 프로세스와 그 종료 코드. 하나라도 멈추면 나머지를 내리는 판정 기준이다."""
+    for name, process in running:
+        code = process.poll()
+        if code is not None:
+            return name, code
+    return None
+
+
+def _stop(running: list[tuple[str, subprocess.Popen]], *, already_signalled: bool) -> None:
+    """살아 있는 자식을 내린다.
+
+    Ctrl-C는 프로세스 그룹 전체에 가므로 자식은 이미 SIGINT를 받았다. 그 경우 먼저
+    스스로 정리할 시간을 준다 — 곧바로 terminate를 겹쳐 보내면 워커가 처리 중인 잡을
+    마치지 못한다. 그 시간이 지나도 남아 있거나, 애초에 신호를 받지 않은 경우에만
+    SIGTERM을, 그래도 남으면 SIGKILL을 보낸다.
+    """
+    if already_signalled:
+        deadline = time.monotonic() + SHUTDOWN_GRACE_SECONDS
+        while time.monotonic() < deadline and not _all_stopped(running):
+            time.sleep(0.1)
+        if _all_stopped(running):
+            return
+    for _name, process in running:
+        if process.poll() is None:
+            process.terminate()
+    for _name, process in running:
+        try:
+            process.wait(timeout=SHUTDOWN_GRACE_SECONDS)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+
+
+def run_serve(*, host: str, port: int) -> int:
+    """API 서버와 임베딩 워커를 함께 띄운다 (ADR-039 결정 2 개정).
+
+    묶는 것은 **기동과 종료뿐**이다. 죽은 프로세스를 되살리지 않는다 — 재시작은
+    systemd의 일이고(ADR-038), 여기서 되살리기 시작하면 프로세스 매니저를 새로 만드는
+    별개 문제가 된다. 한쪽이 멈추면 나머지도 내린다: 워커 없이 API만 남으면 업로드가
+    성공한 뒤 검색에 잡히지 않아, 아무 에러 없이 조용히 안 되는 상태가 된다.
+    """
+    # 자식 프로세스와 같은 stdout을 쓴다. 파이프로 나갈 때 블록 버퍼링이 걸리면 이
+    # 안내가 통째로 맨 끝으로 밀려 안내 구실을 못 한다.
+    sys.stdout.reconfigure(line_buffering=True)
+    print("OpenArchive 실행")
+    print(f"  API   http://{host}:{port}")
+    print("  워커  임베딩 잡 처리")
+    print("  Ctrl-C로 둘 다 멈춥니다.")
+    print()
+
+    running: list[tuple[str, subprocess.Popen]] = []
+    try:
+        for name, command in _serve_processes(host, port):
+            running.append((name, subprocess.Popen(command)))
+    except OSError as error:
+        print(f"프로세스를 띄우지 못했습니다: {error}")
+        _stop(running, already_signalled=False)
+        return 1
+
+    try:
+        while (stopped := _first_stopped(running)) is None:
+            time.sleep(0.2)
+    except KeyboardInterrupt:
+        print()
+        print("멈추는 중입니다...")
+        _stop(running, already_signalled=True)
+        return 0
+
+    name, code = stopped
+    print()
+    print(f"{name}가 종료됐습니다 (코드 {code}). 나머지도 함께 내립니다.")
+    _stop(running, already_signalled=False)
+    return code or 1
+
+
 def run_init(*, dsn: str | None, assume_yes: bool, env_file: Path) -> int:
     print("OpenArchive 설치 준비")
     print()
@@ -403,12 +500,19 @@ def main(argv: list[str] | None = None) -> int:
     init.add_argument(
         "--env-file", type=Path, default=ENV_FILE, help=f"DSN을 기록할 파일 (기본: {ENV_FILE})"
     )
+    serve = subcommands.add_parser(
+        "serve", help="API 서버와 임베딩 워커를 함께 실행합니다."
+    )
+    serve.add_argument("--host", default="127.0.0.1", help="API가 바인드할 주소 (기본: 127.0.0.1)")
+    serve.add_argument("--port", type=int, default=8000, help="API 포트 (기본: 8000)")
     reset = subcommands.add_parser(
         "reset-password", help="비밀번호를 잊은 계정의 비밀번호를 재설정합니다."
     )
     reset.add_argument("username")
     reset.add_argument("--dsn", help="DB 연결 문자열. 생략하면 DATABASE_URL을 씁니다.")
     args = parser.parse_args(argv)
+    if args.command == "serve":
+        return run_serve(host=args.host, port=args.port)
     if args.command == "reset-password":
         return run_reset_password(dsn=args.dsn, username=args.username)
     return run_init(dsn=args.dsn, assume_yes=args.yes, env_file=args.env_file)

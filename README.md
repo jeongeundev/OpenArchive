@@ -185,26 +185,19 @@ pip install -e ".[dev]"          # 기본은 가짜 임베딩이다. 실제 BGE-
 # 3. DB 준비 — 연결 확인·확장 점검·스키마 적용·준비 상태 확인을 한 번에 한다
 openarchive init                 # 아래 「openarchive init」 참조
 
-# 4. API 서버
-uvicorn app.main:app --reload
+# 4. 최초 관리자 계정 — 자체 가입이 없으므로 첫 로그인 전에 한 번 실행한다
+cd .. && ADMIN_PASSWORD='<초기 비밀번호>' python scripts/create_admin.py admin --admin
+cd backend
 
-# 5. 최초 관리자 계정 (별도 터미널) — 자체 가입이 없으므로 첫 로그인 전에 한 번 실행한다
-#    4번의 uvicorn이 터미널을 점유하므로 여기서부터는 새 터미널이다.
-cd backend && source .venv/bin/activate && cd ..
-ADMIN_PASSWORD='<초기 비밀번호>' python scripts/create_admin.py admin --admin
+# 5. API 서버 + 임베딩 워커 — 한 명령이 둘 다 띄우고 Ctrl-C에 둘 다 멈춘다
+openarchive serve                # 아래 「openarchive serve」 참조
 
-# 6. 임베딩 워커 (별도 터미널)
-#    Ctrl-C로 세우면 처리 중인 잡을 마치고 멈춘다. 배포 호스트에서는 이 프로세스를
-#    systemd 유닛으로 돌려 강제 종료 시 자동 재기동한다 (ADR-038).
-cd backend && source .venv/bin/activate
-python -m app.worker
-
-# 7. 프론트엔드 (별도 터미널)
+# 6. 프론트엔드 (별도 터미널)
 cd frontend
 npm install && npm run dev
 
-# 8. MCP 서버 (Claude Desktop/Code가 기동한다. 수동 확인은 아래 커맨드)
-#    MCP_USER_ID는 5번에서 만든 계정명과 같아야 한다 — 아래 「MCP 서버 등록」 참조.
+# 7. MCP 서버 (Claude Desktop/Code가 기동한다. 수동 확인은 아래 커맨드)
+#    MCP_USER_ID는 4번에서 만든 계정명과 같아야 한다 — 아래 「MCP 서버 등록」 참조.
 cd backend && source .venv/bin/activate
 MCP_USER_ID=admin python -m mcp_server.server
 ```
@@ -236,6 +229,29 @@ DSN을 확인한 뒤 `backend/.env`의 `DATABASE_URL` 줄만 갈아 끼웁니다
 
 `openarchive`의 다른 하위 명령은 `reset-password` 하나이며, 비밀번호를 잊은 계정을 여는 데 씁니다
 (아래 「인증 환경변수」).
+
+### `openarchive serve`
+
+API 서버와 임베딩 워커를 함께 띄웁니다. **워커를 따로 켜는 것을 잊을 수 없게 하는 것**이
+목적입니다 — 워커가 없으면 업로드는 성공하는데 검색에 잡히지 않고, 에러가 나지 않아
+원인을 짐작하기 어렵습니다.
+
+```bash
+openarchive serve                              # 127.0.0.1:8000
+openarchive serve --host 0.0.0.0 --port 9000
+```
+
+- Ctrl-C 한 번에 둘 다 멈춥니다. 워커는 **처리 중인 잡을 마치고** 종료합니다.
+- 한쪽이 멈추면 나머지도 내리고 0이 아닌 코드로 끝납니다 — 반쪽만 도는 상태를 만들지 않습니다.
+- **죽은 프로세스를 되살리지는 않습니다.** 배포 호스트에서는 systemd가 그 역할을 합니다
+  ([ADR-038](docs/ADR.md) · `scripts/openarchive-worker.service`).
+
+코드를 고치며 개발할 때는 자동 재시작(`--reload`)이 필요하므로 두 프로세스를 따로 띄웁니다.
+
+```bash
+uvicorn app.main:app --reload                  # 터미널 1
+python -m app.worker                           # 터미널 2
+```
 
 ### 환경변수 파일은 `backend/.env` 하나입니다
 
