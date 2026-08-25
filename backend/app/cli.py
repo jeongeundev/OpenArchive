@@ -39,8 +39,9 @@ from app.services.system import get_system_status
 # gen_random_uuid()가 코어에 들어온 버전. 그 아래에서는 002가 기동하지 못한다.
 MINIMUM_SERVER_VERSION_NUM = 130000
 
-# 001과 005가 요구한다. 설치 여부가 아니라 **설치 가능 여부**를 본다 — 아직 없는
-# 확장은 마이그레이션이 만들지만, 배포판에 아예 없으면 그때 가서 실패한다.
+# 001과 005가 요구한다. 설치 여부만이 아니라 **이 롤이 만들 수 있는지**까지 본다 —
+# 아직 없는 확장은 마이그레이션이 만들지만, 배포판에 아예 없거나 롤에 권한이 없으면
+# 적용 도중에 실패한다.
 REQUIRED_EXTENSIONS = ("vector", "pg_trgm")
 
 _CREATE_TABLE_RE = re.compile(
@@ -79,6 +80,7 @@ class Capabilities:
     username: str
     extensions: dict[str, bool]
     installed_extensions: frozenset[str]
+    creatable_extensions: frozenset[str]
     can_create: bool
 
 
@@ -93,37 +95,79 @@ def probe_capabilities(conn: psycopg.Connection) -> Capabilities:
                -- 테이블을 만들 수 있는지는 데이터베이스가 아니라 **스키마** 권한이 정한다.
                -- has_database_privilege(..., 'CREATE')는 "DB 안에 스키마를 만들 권한"이라,
                -- public에만 CREATE를 받은 롤에서 false가 되어 멀쩡한 DB를 거부한다.
-               has_schema_privilege(current_user, 'public', 'CREATE')
+               has_schema_privilege(current_user, 'public', 'CREATE'),
+               current_setting('is_superuser') = 'on',
+               -- 반대로 **확장**을 만들 권한은 데이터베이스가 정하는 자리다. trusted
+               -- 확장은 이 권한만으로 만들 수 있고, untrusted 확장은 이것으로도 안 된다.
+               has_database_privilege(current_user, current_database(), 'CREATE')
         """
     ).fetchone()
-    extension_rows = conn.execute(
-        "SELECT name, installed_version IS NOT NULL "
-        "FROM pg_available_extensions WHERE name = ANY(%s)",
-        (list(REQUIRED_EXTENSIONS),),
-    ).fetchall()
-    available = {name for name, _ in extension_rows}
-    installed = {name for name, is_installed in extension_rows if is_installed}
+    server_version_num, is_superuser, creates_in_database = row[1], row[5], row[6]
+    # `trusted` 컬럼은 PostgreSQL 13에서 생겼다. 그 아래 버전은 어차피 거부되므로
+    # 조회하지 않는다 — 하면 UndefinedColumn으로 죽어, "13 이상이 필요합니다"라는
+    # 안내가 나갈 자리에 traceback이 나간다.
+    extension_rows = (
+        conn.execute(
+            """
+            SELECT available.name,
+                   available.installed_version IS NOT NULL,
+                   versions.trusted
+              FROM pg_available_extensions available
+              JOIN pg_available_extension_versions versions
+                ON versions.name = available.name
+               AND versions.version = available.default_version
+             WHERE available.name = ANY(%s)
+            """,
+            (list(REQUIRED_EXTENSIONS),),
+        ).fetchall()
+        if server_version_num >= MINIMUM_SERVER_VERSION_NUM
+        else []
+    )
+    available = {name for name, _, _ in extension_rows}
     return Capabilities(
         server_version=row[0],
-        server_version_num=row[1],
+        server_version_num=server_version_num,
         database=row[2],
         username=row[3],
         extensions={name: name in available for name in REQUIRED_EXTENSIONS},
-        installed_extensions=frozenset(installed),
+        installed_extensions=frozenset(
+            name for name, is_installed, _ in extension_rows if is_installed
+        ),
+        # CREATE EXTENSION의 실제 규칙이다 (로컬 컨테이너 실측): 슈퍼유저는 무엇이든
+        # 만들고, 비슈퍼유저는 trusted 확장만 그것도 DB CREATE 권한이 있을 때 만든다.
+        creatable_extensions=frozenset(
+            name
+            for name, _, trusted in extension_rows
+            if is_superuser or (trusted and creates_in_database)
+        ),
         can_create=row[4],
     )
 
 
 def _unmet_requirements(capabilities: Capabilities) -> list[str]:
-    unmet = []
     if capabilities.server_version_num < MINIMUM_SERVER_VERSION_NUM:
-        unmet.append(
-            f"PostgreSQL {capabilities.server_version} — 13 이상이 필요합니다 "
-            "(gen_random_uuid()를 코어에서 씁니다)"
-        )
+        # 버전이 미달이면 나머지 판정은 의미가 없다. probe도 확장을 조회하지 않는다.
+        return [
+            (
+                f"PostgreSQL {capabilities.server_version} — 13 이상이 필요합니다 "
+                "(gen_random_uuid()를 코어에서 씁니다)"
+            )
+        ]
+    unmet = []
     for name, available in capabilities.extensions.items():
         if not available:
             unmet.append(f"확장 '{name}'을 이 서버에서 설치할 수 없습니다")
+        elif (
+            name not in capabilities.installed_extensions
+            and name not in capabilities.creatable_extensions
+        ):
+            # 이미 설치돼 있으면 만들 권한은 필요 없다 — 001은 IF NOT EXISTS로 넘어가고,
+            # 005처럼 가드 없는 파일은 _blocking_extensions가 따로 잡는다.
+            unmet.append(
+                f"'{capabilities.username}'에게 확장 '{name}' 생성 권한이 없습니다 "
+                "— 슈퍼유저로 실행하거나, DBA에게 미리 설치를 요청하십시오 "
+                f"(CREATE EXTENSION {name};)"
+            )
     if not capabilities.can_create:
         unmet.append(
             f"'{capabilities.username}'에게 '{capabilities.database}'의 public 스키마에 대한 "

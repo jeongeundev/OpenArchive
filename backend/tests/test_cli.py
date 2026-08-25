@@ -217,6 +217,89 @@ def test_init_refuses_when_a_guarded_extension_is_already_installed(
         assert conn.execute("SELECT to_regclass('public.schema_migrations')").fetchone() == (None,)
 
 
+@pytest.fixture
+def non_superuser_dsn(clean_db: str):
+    """DBA가 내준 앱 전용 롤로 붙는 DSN — OpenSQL 기사용자의 실제 도입 형태다.
+
+    설치기가 만든 postgres 슈퍼유저로만 검증하면 이 경로가 통째로 가려진다. 롤에는
+    테이블 생성(스키마 CREATE)과 trusted 확장 생성(DB CREATE)까지 주고 슈퍼유저 권한만
+    주지 않는다 — 실측상 이 롤은 pg_trgm은 만들 수 있고 vector는 만들 수 없다.
+    """
+    params = conninfo_to_dict(clean_db)
+    dbname = params["dbname"]
+    with psycopg.connect(clean_db, autocommit=True) as conn:
+        conn.execute("DROP ROLE IF EXISTS cli_app_role")
+        conn.execute("CREATE ROLE cli_app_role LOGIN PASSWORD 'app-role'")
+        conn.execute(f'GRANT CONNECT, CREATE ON DATABASE "{dbname}" TO cli_app_role')
+        # clean_db가 public을 새로 만들어 PUBLIC 롤의 기본 USAGE가 없다. 실제 DB에는
+        # 있으므로 판정 대상(확장 생성 권한)만 남기려면 여기서 되돌려 놓아야 한다.
+        conn.execute("GRANT USAGE, CREATE ON SCHEMA public TO cli_app_role")
+    try:
+        yield make_conninfo(**{**params, "user": "cli_app_role", "password": "app-role"})
+    finally:
+        with psycopg.connect(clean_db, autocommit=True) as conn:
+            conn.execute("DROP OWNED BY cli_app_role CASCADE")
+            conn.execute("DROP ROLE IF EXISTS cli_app_role")
+
+
+def test_capability_probe_sees_that_an_untrusted_extension_needs_a_superuser(
+    non_superuser_dsn: str,
+):
+    """`vector`는 trusted=false라 슈퍼유저만 만들 수 있다 (로컬 컨테이너 실측).
+
+    설치 **가능** 여부(pg_available_extensions)만 보면 이 롤도 통과한다. 그 판정으로는
+    001의 CREATE EXTENSION vector가 적용 단계에 가서야 InsufficientPrivilege로 죽는다.
+    """
+    with psycopg.connect(non_superuser_dsn) as conn:
+        capabilities = probe_capabilities(conn)
+
+    assert capabilities.extensions["vector"] is True
+    assert "vector" not in capabilities.installed_extensions
+    assert "vector" not in capabilities.creatable_extensions
+    # trusted 확장은 DB CREATE 권한만으로 만들 수 있다. 함께 거부하면 과잉 거부다.
+    assert "pg_trgm" in capabilities.creatable_extensions
+
+
+def test_init_stops_before_applying_when_the_role_cannot_create_an_extension(
+    non_superuser_dsn: str, clean_db: str, capsys, tmp_path
+):
+    """"확인이 적용보다 먼저"(ADR-039)가 비슈퍼유저 경로에서 깨져 있었다.
+
+    capability 점검이 통과시킨 뒤 001에서 traceback이 나고 schema_migrations만 남았다.
+    """
+    exit_code = main(
+        ["init", "--dsn", non_superuser_dsn, "--yes", "--env-file", str(tmp_path / ".env")]
+    )
+
+    assert exit_code == 1
+    output = capsys.readouterr().out
+    assert "vector" in output
+    assert "Traceback" not in output
+    # 아무것도 적용하지 않았어야 한다 — 이력 테이블 하나도 남기지 않는다.
+    with psycopg.connect(clean_db) as conn:
+        assert conn.execute("SELECT to_regclass('public.schema_migrations')").fetchone() == (None,)
+
+
+def test_init_proceeds_when_a_dba_preinstalled_the_untrusted_extension(
+    non_superuser_dsn: str, clean_db: str, tmp_path
+):
+    """DBA가 vector만 미리 깔아주는 것이 기사용자의 정상 경로다.
+
+    권한이 없다고 일괄 거부하면 이 경로까지 막힌다 — 이미 설치된 확장은 001이
+    IF NOT EXISTS로 넘어가므로 만들 권한이 필요 없다.
+    """
+    with psycopg.connect(clean_db) as conn:  # 슈퍼유저(DBA) 자격으로 미리 설치한다
+        conn.execute("CREATE EXTENSION vector")
+        conn.commit()
+
+    exit_code = main(
+        ["init", "--dsn", non_superuser_dsn, "--yes", "--env-file", str(tmp_path / ".env")]
+    )
+
+    assert exit_code == 0
+    assert applied_migrations(non_superuser_dsn) == [path.name for path in migration_files()]
+
+
 def test_init_asks_for_the_dsn_when_it_is_not_given(clean_db: str, monkeypatch, tmp_path):
     """대화형 경로 — 프롬프트 응답만 바꿔 끼운다."""
     answers = iter([clean_db, "y", "y"])

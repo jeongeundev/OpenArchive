@@ -1926,7 +1926,7 @@ DSN으로 `select pg_is_in_recovery()`를 던지는 것**으로 바꿨다 — �
 테이블이 추가될 때 조용히 낡고, 낡은 목록은 보호에 구멍을 뚫는다. 추출 결과는 테스트가 9개
 이름으로 고정한다(`tests/test_cli.py`).
 
-**결정 3-2 — capability 판정의 두 자리는 실측으로 정했다.**
+**결정 3-2 — capability 판정의 세 자리는 실측으로 정했다.**
 
 - **CREATE 권한은 스키마 단위로 본다.** `has_database_privilege(user, db, 'CREATE')`는 "DB 안에
   **스키마를** 만들 권한"이지 테이블을 만들 권한이 아니다. 컨테이너 실측에서 `public`에만
@@ -1936,6 +1936,31 @@ DSN으로 `select pg_is_in_recovery()`를 던지는 것**으로 바꿨다 — �
   관례에 따라 `IF NOT EXISTS` 없이 `CREATE EXTENSION pg_trgm`을 실행한다. DBA가 미리 깔아둔
   DB에서는 001~004가 적용된 뒤 005가 `duplicate_object`로 죽어 **부분 적용 스키마가 남는다.**
   미적용 마이그레이션이 가드 없이 만드는 확장이 이미 있으면 적용 전에 멈춘다.
+- **확장을 만들 권한은 데이터베이스 단위로 본다.** (2026-08-26 보강 — 도입 경로 실측에서
+  드러난 결함) `pg_available_extensions`는 **배포판에 그 확장이 있는지**만 말한다. 실제로
+  만들 수 있는지는 `CREATE EXTENSION`의 권한 규칙이 정하며, 로컬 컨테이너 실측은 이렇다.
+
+  | 롤 | `pg_trgm` (trusted) | `vector` (untrusted) |
+  |---|---|---|
+  | 비슈퍼유저 · DB CREATE 없음 | ⛔ | ⛔ |
+  | 비슈퍼유저 · DB CREATE 있음 | ✅ | ⛔ |
+  | 슈퍼유저 | ✅ | ✅ |
+
+  판정식은 `슈퍼유저 or (trusted and has_database_privilege(current_user, current_database(),
+  'CREATE'))`다. 앞 항목이 바로 그 함수를 테이블 판정에서 물리쳤는데 여기서 다시 쓰는 것이
+  모순처럼 보이지만 **대상이 다르다** — 테이블을 만들 권한은 스키마가, 확장을 만들 권한은
+  데이터베이스가 정한다. `trusted` 컬럼(`pg_available_extension_versions`)은 PostgreSQL 13에서
+  생겼고 그 아래 버전은 어차피 거부되므로, 버전 미달이면 확장 조회 자체를 하지 않는다.
+
+  이 자리가 비어 있던 이유는 검증이 전부 설치기가 만든 `postgres` 슈퍼유저로 이뤄졌기
+  때문이다. DBA가 앱 전용 롤을 내주는 실제 도입 형태에서는 점검이 `vector`를 "사용 가능"으로
+  통과시킨 뒤 001이 `InsufficientPrivilege`로 죽어 `schema_migrations`만 남았다 — **"확인이
+  적용보다 먼저"라는 이 ADR의 계약이 정확히 그 경로에서 깨졌다.** 회귀는 비슈퍼유저 롤을
+  실제로 만들어 고정한다(`tests/test_cli.py`).
+
+  **이미 설치된 확장에는 이 판정을 걸지 않는다.** 001은 `IF NOT EXISTS`라 권한 없이
+  통과하고, 005처럼 가드 없는 파일은 앞 항목이 따로 막는다. 권한만 보고 일괄 거부하면
+  "DBA가 `vector`만 미리 깔아준 DB"라는 정상 도입 경로까지 막힌다.
 
 **결정 4 — DSN을 `backend/.env`에 기록한다.** `DATABASE_URL` 줄만 갈아 끼우고 나머지 설정은
 보존한다. 기록하지 않으면 "준비 완료"가 다음 프로세스로 이어지지 않는다 — 앱이 기본값(로컬
