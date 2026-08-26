@@ -356,9 +356,14 @@ def test_init_next_steps_name_the_directory_they_are_relative_to(
     repo_root = ENV_FILE.parent.parent
 
     assert "저장소 루트" in steps
-    for relative in ("backend", "frontend", "scripts/create_admin.py"):
+    for relative in ("scripts/create_admin.py",):
         assert relative in steps
         assert (repo_root / relative).exists()
+    # 기동은 `openarchive serve` 하나다 (ADR-041 — 웹 화면은 동봉 빌드). uvicorn·워커·npm을
+    # 따로 띄우라는 옛 안내가 남아 있으면 README와 화면이 서로 다른 말을 한다.
+    assert "openarchive serve" in steps
+    assert "uvicorn" not in steps
+    assert "npm" not in steps
 
 
 def _insert_user(dsn: str, username: str, password: str) -> str:

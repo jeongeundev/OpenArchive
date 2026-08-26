@@ -138,6 +138,23 @@ def test_serve_stops_both_processes_on_ctrl_c(serve_env, spawn_serve):
     assert _wait_for(lambda: _group_is_gone(group), timeout=SHUTDOWN_TIMEOUT), log_path.read_text()
 
 
+def test_serve_stops_both_processes_on_sigterm_to_itself(serve_env, spawn_serve):
+    """부모만 SIGTERM을 받아도 자식이 고아로 남지 않는다.
+
+    Ctrl-C는 그룹 전체에 가지만 `kill <pid>`·컨테이너 진입점·감독자의 stop은 부모 하나에만
+    온다. 부모가 KeyboardInterrupt만 처리하면 uvicorn과 워커가 살아남아, 포트를 쥔 채
+    다음 기동을 막고 잡을 계속 집어간다 — 실측으로 확인한 상태다.
+    """
+    port = _free_port()
+    process, group, log_path = spawn_serve(serve_env, port)
+    _wait_for_api(process, port, log_path)
+
+    os.kill(process.pid, signal.SIGTERM)
+
+    assert process.wait(timeout=SHUTDOWN_TIMEOUT) == 0
+    assert _wait_for(lambda: _group_is_gone(group), timeout=SHUTDOWN_TIMEOUT), log_path.read_text()
+
+
 def test_serve_exits_when_the_api_cannot_start(serve_env, spawn_serve):
     """반쪽만 도는 상태를 만들지 않는다.
 
