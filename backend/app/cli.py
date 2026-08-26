@@ -18,6 +18,7 @@ import argparse
 import asyncio
 import getpass
 import re
+import signal
 import subprocess
 import sys
 import time
@@ -371,6 +372,15 @@ def run_serve(*, host: str, port: int) -> int:
     print("  Ctrl-C로 둘 다 멈춥니다.")
     print()
 
+    # Ctrl-C(SIGINT)는 터미널이 프로세스 그룹 전체에 보내므로 KeyboardInterrupt만으로
+    # 충분하지만, `kill <pid>`·컨테이너 진입점·감독자의 stop은 부모 하나에만 SIGTERM을
+    # 보낸다. 그것을 무시하면 부모만 죽고 uvicorn과 워커가 고아로 남아 포트를 쥔 채
+    # 잡을 계속 집어간다 (실측).
+    def _on_sigterm(_signum, _frame):
+        raise _Terminated
+
+    signal.signal(signal.SIGTERM, _on_sigterm)
+
     running: list[tuple[str, subprocess.Popen]] = []
     try:
         for name, command in _serve_processes(host, port):
@@ -387,6 +397,13 @@ def run_serve(*, host: str, port: int) -> int:
         print()
         print("멈추는 중입니다...")
         _stop(running, already_signalled=True)
+        return 0
+    except _Terminated:
+        print()
+        print("멈추는 중입니다...")
+        # 그룹째 SIGTERM이 온 경우(systemd 기본)에는 자식이 한 번 더 받지만, 둘 다
+        # 두 번째 신호를 종료 요청의 반복으로 다루므로 정리를 건너뛰지 않는다.
+        _stop(running, already_signalled=False)
         return 0
 
     name, code = stopped
@@ -446,11 +463,13 @@ def run_init(*, dsn: str | None, assume_yes: bool, env_file: Path) -> int:
 
     print()
     print("다음 단계 — 저장소 루트에서 실행합니다. 이 명령은 프로세스를 기동하지 않습니다.")
-    print("  1) API      cd backend && uvicorn app.main:app --reload")
-    print("  2) 관리자    ADMIN_PASSWORD='<비밀번호>' python scripts/create_admin.py admin --admin")
-    print("  3) 워커      cd backend && python -m app.worker")
-    print("  4) 프론트    cd frontend && npm install && npm run dev")
+    print("  1) 관리자    ADMIN_PASSWORD='<비밀번호>' python scripts/create_admin.py admin --admin")
+    print("  2) 실행      EMBEDDING_PROVIDER=local openarchive serve    (API + 워커 + 웹 화면)")
     return 0
+
+
+class _Terminated(Exception):
+    """부모만 SIGTERM을 받았다. 자식은 신호를 받지 않았으므로 직접 내려야 한다."""
 
 
 class _ConnectionFailed(Exception):
