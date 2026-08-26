@@ -19,7 +19,10 @@
       "type": "feat",
       "scope": "frontend",
       "desc": "주제 덩어리 화면 문구를 관계 기반 군집에 맞추고 동봉 정적 산출물을 갱신한다",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-08-26T11:32:37+0900",
+      "summary": "관계 기반 추천 설명과 미분류 보조 문구를 추가하고 동봉 정적 프론트 산출물을 갱신",
+      "completed_at": "2026-08-26T11:36:00+0900"
     },
     {
       "step": 2,
