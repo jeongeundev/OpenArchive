@@ -55,64 +55,100 @@ AI 에이전트는 MCP로 같은 문서와 같은 권한 규칙 위에서 접근
 ## 아키텍처
 
 ```mermaid
-flowchart LR
-    ui["Web UI<br/>Next.js (동봉 정적 빌드)"]
-    rest["REST Client<br/>스크립트 · 커넥터"]
-    mcpc["MCP Client<br/>AI 에이전트"]
-
-    subgraph svc["애플리케이션 — app/services 공유"]
-        api["FastAPI<br/>app/api"]
-        mcps["MCP Server<br/>FastMCP · stdio"]
+flowchart TB
+    subgraph iface["소비·공급 인터페이스 — 대등한 3면"]
+        direction LR
+        ui["Web UI<br/>동봉 정적 빌드 · 세션 쿠키"]
+        rest["REST API<br/>위임 토큰 (Bearer)"]
+        mcps["MCP Server<br/>stdio · AI 에이전트"]
     end
 
-    proxy["OpenProxy<br/>VIP : 6432 — 단일 엔드포인트"]
-    db[("OpenSQL v3<br/>PostgreSQL 17 + pgvector")]
-    trg["AFTER 트리거<br/>같은 트랜잭션"]
-    worker["Embedding Worker"]
-    model["BGE-M3 로컬 구동<br/>sentence-transformers"]
+    svc["backend/app/services<br/>모든 인터페이스가 공유하는 단일 진입점 · VISIBLE_TO_USER 술어"]
+    proxy["OpenProxy — VIP:6432<br/>커넥션 풀 · Primary 추적 · 재연결"]
 
-    ui -->|"세션 쿠키"| api
-    rest -->|"Bearer 토큰"| api
-    mcpc -->|"search_documents · create_document"| mcps
+    subgraph db["OpenSQL v3 — PostgreSQL 17.8 + pgvector 0.8.1"]
+        direction TB
+        docs["documents"]
+        trg1{{"AFTER 트리거<br/>같은 트랜잭션"}}
+        ver["document_versions<br/>텍스트 버전 이력 (append-only)"]
+        jobs["embedding_jobs<br/>트랜잭셔널 아웃박스 · 문서당 pending 1건"]
+        links["document_links<br/>위키링크 해석"]
+        chunks["document_chunks<br/>vector(1024) · HNSW"]
+        trg2{{"AFTER 트리거<br/>청크 교체와 같은 트랜잭션"}}
+        edges["document_edges<br/>overlaps · related (kNN, 순수 SQL)"]
 
-    api -->|"documents INSERT/UPDATE만 — 임베딩 호출 없음"| proxy
-    api -->|"필터 + 벡터 + 관계를 단일 SQL로"| proxy
-    mcps -->|"HTTP 미경유 · 같은 services 재사용"| proxy
+        docs --> trg1
+        trg1 --> ver
+        trg1 --> jobs
+        trg1 --> links
+        chunks --> trg2 --> edges
+    end
 
-    proxy -->|"커넥션 풀링 · Primary 추적 · 재연결"| db
-    db --> trg
-    trg -->|"버전 이력 · embedding_jobs · 문서 관계 · NOTIFY"| db
+    worker["Embedding Worker — 무상태 실행기<br/>SKIP LOCKED claim → 청킹 → 임베딩 →<br/>해시 재확인 + 청크 교체 + job done (단일 트랜잭션)"]
+    model["BGE-M3<br/>sentence-transformers 로컬 구동"]
 
-    worker -->|"5초 폴링 + FOR UPDATE SKIP LOCKED"| proxy
+    ui --> svc
+    rest --> svc
+    mcps --> svc
+    svc -->|"documents INSERT/UPDATE만 — 임베딩 호출 없음<br/>필터 + 벡터 + 관계를 단일 SQL로"| proxy
+    proxy --> db
+    jobs -.->|"5초 폴링 (주 경로) + NOTIFY (최적화)"| worker
     worker -->|"청크 배치 임베딩"| model
-    worker -->|"해시 재확인 + 청크 교체 — 단일 트랜잭션"| proxy
-    api -.->|"질의 임베딩"| model
+    worker -->|"청크 교체 + ready 전이"| chunks
 ```
 
-**핵심은 책임의 위치입니다.** 애플리케이션은 `documents`에 쓰기만 하고, 파생 데이터는 DB가
-만듭니다.
+### 책임의 경계 — 무엇이 DB 안에 있는가
+
+이 아키텍처의 핵심은 **DB 안에 있는 것과 밖에 있는 것의 경계**입니다.
 
 | DB 계층이 보장하는 것 | 수단 |
 |---|---|
-| 문서가 저장되면 임베딩 작업도 반드시 생긴다 | AFTER 트리거 — 문서 저장과 **같은 트랜잭션** (트랜잭셔널 아웃박스) |
-| 연속 수정이 하나의 작업으로 합쳐진다 | 파셜 유니크 인덱스 |
-| 두 워커가 같은 작업을 집지 않는다 | `FOR UPDATE SKIP LOCKED` |
-| 텍스트 버전 이력이 빠짐없이 쌓인다 | 트리거가 기록 |
-| 문서 사이 관계가 원본에서 파생된다 | 임베딩 완료 트랜잭션 안에서 트리거가 순수 SQL로 생성 |
-| 문서를 지우면 작업·청크·관계도 사라진다 | FK CASCADE |
+| 문서가 저장되면 잡도 반드시 생긴다 | AFTER 트리거 (문서 UPDATE와 **같은 트랜잭션**) |
+| 연속 수정이 하나의 잡으로 합쳐진다 | 파셜 유니크 인덱스 `uq_pending_job_per_doc` |
+| 문서를 지우면 잡·청크·관계도 사라진다 | FK CASCADE |
+| 두 워커가 같은 잡을 집지 않는다 | `FOR UPDATE SKIP LOCKED` |
+| 텍스트 버전 이력이 빠짐없이 쌓인다 | 트리거가 기록 (앱은 `document_versions`에 직접 INSERT하지 않는다) |
+| 문서 사이 관계가 원본에서 파생된다 | `embedding_status='ready'` 트리거가 순수 SQL로 생성 |
+| 빈 본문 문서가 저장되지 않는다 | `CHECK` 제약 |
 
-워커는 DB가 만들어 둔 작업을 집어가는 **무상태 실행기**입니다. 워커를 통째로 지워도 작업은 DB에
-남고, 다시 띄우면 이어서 처리합니다. 알림(`NOTIFY`)은 최적화일 뿐이며 **5초 폴링**이 주 경로입니다
-([ADR-009](docs/ADR.md)).
+**DB 밖 연산은 임베딩 모델 추론 하나뿐입니다.** 워커는 "DB가 만들어 둔 잡을 집어가는 무상태
+실행기"이며, 워커를 통째로 지워도 잡은 DB에 남고 다시 띄우면 이어서 처리합니다.
 
-원본과 벡터가 어긋난 문서 수는 쿼리 한 줄로 셀 수 있습니다. 문서를 고치면 잠깐 올랐다가 워커
-처리 후 0으로 돌아오고, 장애를 일으켜도 결국 0으로 수렴합니다.
+원본과 벡터가 어긋난 문서 수는 쿼리 한 줄로 셉니다. 문서를 고치면 잠깐 올랐다가 워커 처리 후
+0으로 돌아오고, 장애를 일으켜도 결국 0으로 수렴합니다.
 
 ```sql
 SELECT count(*) FROM documents d
   JOIN document_chunks c ON c.document_id = d.id
  WHERE c.version <> d.version;
 ```
+
+### 핵심 데이터 흐름
+
+1. **공급** — 웹 업로드 / `POST /api/documents(/text)` / MCP `create_document` → 서비스가
+   `documents`에 INSERT → 트리거가 `document_versions`·`embedding_jobs`·`document_links`를
+   같은 트랜잭션에 기록.
+2. **파생** — 워커가 `SKIP LOCKED`로 잡을 집어 청킹·임베딩 → 청크 교체와 `ready` 전이를 한
+   트랜잭션에 → 그 안에서 트리거가 `document_edges`(kNN 기반 `overlaps`·`related`)를 재생성.
+3. **소비** — 검색·관련 문서·태그 추천·군집·진단이 저장된 관계와 `VISIBLE_TO_USER` 술어를
+   공유. 조회 시점에 벡터를 다시 계산하지 않는다.
+
+### 설계 결정 셋
+
+**① 기동 방식은 정합성의 일부가 아니다 ([ADR-009](docs/ADR.md)).** 트리거가 `pg_notify`를
+발행하지만 워커는 **5초 폴링을 주 경로**로 삼습니다. 알림은 휘발성이라 수신자가 없는 순간의 것은
+사라지므로, 연결이 끊긴 구간에 생성된 잡은 폴링만이 회수합니다. 실측에서 OpenProxy 경유 LISTEN이
+정상 동작함을 확인했으나 결정을 바꾸지 않았습니다 — 유실·중복을 막는 것은 알림이 아니라 아웃박스와
+`SKIP LOCKED`이기 때문입니다.
+
+**② 검색은 단일 SQL입니다.** 권한·태그 필터가 벡터 정렬 서브쿼리 **안쪽**에 들어가고, 문서당
+1건 축소(`DISTINCT ON`)와 관계 그래프 확장(`WITH RECURSIVE`, 깊이 2)까지 한 쿼리에 있습니다.
+DB에서 넓게 가져와 애플리케이션에서 후처리 필터링하지 않습니다 ([ADR-011](docs/ADR.md)·[018](docs/ADR.md)).
+
+**③ 볼 수 없는 문서는 존재하지 않는 것처럼 보입니다 ([ADR-018](docs/ADR.md)·[027](docs/ADR.md)).**
+`VISIBLE_TO_USER`라는 단일 열람 술어를 검색·관련 문서·태그 추천·그래프 순회·집계·위키링크 해석·
+군집이 모두 공유합니다. `🔒` 같은 자리 표시도 남기지 않습니다 — 표시 자체가 존재와 개수를
+누출하기 때문입니다.
 
 상세는 [Architecture](docs/ARCHITECTURE.md), 각 결정의 근거는 [ADR](docs/ADR.md)에 있습니다.
 
