@@ -3,6 +3,10 @@
 실제 프로세스를 띄운다. 이 명령이 지켜야 하는 것 — 두 프로세스가 함께 뜨고, Ctrl-C에
 함께 내려가며, 한쪽이 못 뜨면 나머지도 남지 않는다 — 은 전부 프로세스 수명주기가
 결정하므로 Mock으로는 확인할 수 없다.
+
+신호가 오는 **순간**을 겨냥해야 하는 두 가지 — 기동 중, 정리 중 — 만 `run_serve`를 같은
+프로세스에서 부른다. 그 구간은 순식간이라 밖에서 신호를 보내 맞출 수 없다. 자식은 여기서도
+실제 프로세스다.
 """
 
 import os
@@ -16,6 +20,8 @@ import urllib.request
 from pathlib import Path
 
 import pytest
+
+from app import cli
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 STARTUP_TIMEOUT = 40.0
@@ -138,6 +144,23 @@ def test_serve_stops_both_processes_on_ctrl_c(serve_env, spawn_serve):
     assert _wait_for(lambda: _group_is_gone(group), timeout=SHUTDOWN_TIMEOUT), log_path.read_text()
 
 
+def test_serve_stops_both_processes_on_sigterm_to_itself(serve_env, spawn_serve):
+    """부모만 SIGTERM을 받아도 자식이 고아로 남지 않는다.
+
+    Ctrl-C는 그룹 전체에 가지만 `kill <pid>`·컨테이너 진입점·감독자의 stop은 부모 하나에만
+    온다. 부모가 KeyboardInterrupt만 처리하면 uvicorn과 워커가 살아남아, 포트를 쥔 채
+    다음 기동을 막고 잡을 계속 집어간다 — 실측으로 확인한 상태다.
+    """
+    port = _free_port()
+    process, group, log_path = spawn_serve(serve_env, port)
+    _wait_for_api(process, port, log_path)
+
+    os.kill(process.pid, signal.SIGTERM)
+
+    assert process.wait(timeout=SHUTDOWN_TIMEOUT) == 0
+    assert _wait_for(lambda: _group_is_gone(group), timeout=SHUTDOWN_TIMEOUT), log_path.read_text()
+
+
 def test_serve_exits_when_the_api_cannot_start(serve_env, spawn_serve):
     """반쪽만 도는 상태를 만들지 않는다.
 
@@ -155,3 +178,83 @@ def test_serve_exits_when_the_api_cannot_start(serve_env, spawn_serve):
         assert _wait_for(lambda: _group_is_gone(group), timeout=SHUTDOWN_TIMEOUT), (
             log_path.read_text()
         )
+
+
+def _sleeper() -> list[str]:
+    """신호를 스스로 처리하지 않는 자식. 부모가 내리지 않으면 끝까지 살아남는다."""
+    return [sys.executable, "-c", "import time; time.sleep(60)"]
+
+
+@pytest.fixture
+def restore_sigterm():
+    """`run_serve`를 같은 프로세스에서 부르므로 핸들러를 되돌려 다음 테스트를 오염시키지 않는다."""
+    previous = signal.getsignal(signal.SIGTERM)
+    yield
+    signal.signal(signal.SIGTERM, previous)
+
+
+def test_serve_stops_children_when_sigterm_arrives_during_startup(monkeypatch, restore_sigterm):
+    """자식을 띄우는 도중에 SIGTERM이 와도 이미 뜬 자식이 고아로 남지 않는다.
+
+    통합 테스트는 API가 응답한 뒤에 신호를 보내므로 이 구간을 밟지 못한다. 기동은 순식간이라
+    실제 신호로 이 창을 겨냥할 수 없어, 두 번째 자식을 띄우기 직전을 monkeypatch로 고정한다.
+    """
+    monkeypatch.setattr(
+        cli, "_serve_processes", lambda host, port: [("첫째", _sleeper()), ("둘째", _sleeper())]
+    )
+    spawned: list[subprocess.Popen] = []
+    real_popen = subprocess.Popen
+
+    def popen_signalling_after_the_first(command, **kwargs):
+        process = real_popen(command, **kwargs)
+        if len(spawned) == 0:
+            # 자식은 떴는데 아직 목록에 담기지 않은 순간. 여기서 예외로 탈출하면 그 자식을
+            # 아무도 모르게 된다.
+            os.kill(os.getpid(), signal.SIGTERM)
+        spawned.append(process)
+        return process
+
+    monkeypatch.setattr(cli.subprocess, "Popen", popen_signalling_after_the_first)
+
+    try:
+        assert cli.run_serve(host="127.0.0.1", port=_free_port()) == 0
+        assert len(spawned) == 1, "신호를 받고도 자식을 더 띄웠다"
+        assert spawned[0].poll() is not None, "기동 중에 뜬 자식이 고아로 남았다"
+    finally:
+        for process in spawned:
+            if process.poll() is None:
+                process.kill()
+                process.wait()
+
+
+def test_serve_finishes_the_shutdown_when_a_second_sigterm_arrives(monkeypatch, restore_sigterm):
+    """정리 도중 감독자가 재촉으로 SIGTERM을 한 번 더 보내도 정리를 끝까지 마친다.
+
+    두 번째 신호가 정리를 끊으면, 고아를 막으려던 처리가 오히려 고아를 만든다.
+    """
+    monkeypatch.setattr(cli, "_serve_processes", lambda host, port: [("첫째", _sleeper())])
+    spawned: list[subprocess.Popen] = []
+    real_popen = subprocess.Popen
+    real_stop = cli._stop
+
+    def popen_signalling_after(command, **kwargs):
+        process = real_popen(command, **kwargs)
+        spawned.append(process)
+        os.kill(os.getpid(), signal.SIGTERM)
+        return process
+
+    def stop_signalling_again(running, *, already_signalled):
+        os.kill(os.getpid(), signal.SIGTERM)
+        real_stop(running, already_signalled=already_signalled)
+
+    monkeypatch.setattr(cli.subprocess, "Popen", popen_signalling_after)
+    monkeypatch.setattr(cli, "_stop", stop_signalling_again)
+
+    try:
+        assert cli.run_serve(host="127.0.0.1", port=_free_port()) == 0
+        assert spawned[0].poll() is not None, "두 번째 신호가 정리를 끊었다"
+    finally:
+        for process in spawned:
+            if process.poll() is None:
+                process.kill()
+                process.wait()

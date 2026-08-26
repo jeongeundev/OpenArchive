@@ -18,6 +18,7 @@ import argparse
 import asyncio
 import getpass
 import re
+import signal
 import subprocess
 import sys
 import time
@@ -371,22 +372,50 @@ def run_serve(*, host: str, port: int) -> int:
     print("  Ctrl-C로 둘 다 멈춥니다.")
     print()
 
+    # Ctrl-C(SIGINT)는 터미널이 프로세스 그룹 전체에 보내므로 KeyboardInterrupt만으로
+    # 충분하지만, `kill <pid>`·컨테이너 진입점·감독자의 stop은 부모 하나에만 SIGTERM을
+    # 보낸다. 그것을 무시하면 부모만 죽고 uvicorn과 워커가 고아로 남아 포트를 쥔 채
+    # 잡을 계속 집어간다 (실측).
+    #
+    # 예외로 던지지 않고 플래그만 세운다. 자식을 띄우는 중이나 내리는 중에 신호가 와도
+    # 그 자리를 끊지 않으려는 것이다 — 끊으면 방금 뜬 자식을 놓치거나 정리를 하다 만다.
+    # 감독자가 재촉으로 신호를 한 번 더 보내는 경우가 후자다.
+    terminated = False
+
+    def _on_sigterm(_signum, _frame) -> None:
+        nonlocal terminated
+        terminated = True
+
+    signal.signal(signal.SIGTERM, _on_sigterm)
+
     running: list[tuple[str, subprocess.Popen]] = []
     try:
         for name, command in _serve_processes(host, port):
+            if terminated:
+                break
             running.append((name, subprocess.Popen(command)))
     except OSError as error:
         print(f"프로세스를 띄우지 못했습니다: {error}")
         _stop(running, already_signalled=False)
         return 1
 
+    stopped: tuple[str, int] | None = None
     try:
-        while (stopped := _first_stopped(running)) is None:
+        while not terminated and (stopped := _first_stopped(running)) is None:
             time.sleep(0.2)
     except KeyboardInterrupt:
         print()
         print("멈추는 중입니다...")
         _stop(running, already_signalled=True)
+        return 0
+
+    if stopped is None:
+        # 루프를 빠져나오는 다른 길은 SIGTERM뿐이다. 그룹째 온 경우(systemd 기본)에는
+        # 자식이 한 번 더 받지만, uvicorn도 워커도 두 번째 신호를 종료 요청의 반복으로
+        # 다루므로 정리를 건너뛰지 않는다.
+        print()
+        print("멈추는 중입니다...")
+        _stop(running, already_signalled=False)
         return 0
 
     name, code = stopped
@@ -445,11 +474,13 @@ def run_init(*, dsn: str | None, assume_yes: bool, env_file: Path) -> int:
         print(f"  {env_file}에 DATABASE_URL을 기록했습니다")
 
     print()
-    print("다음 단계 — 저장소 루트에서 실행합니다. 이 명령은 프로세스를 기동하지 않습니다.")
-    print("  1) API      cd backend && uvicorn app.main:app --reload")
-    print("  2) 관리자    ADMIN_PASSWORD='<비밀번호>' python scripts/create_admin.py admin --admin")
-    print("  3) 워커      cd backend && python -m app.worker")
-    print("  4) 프론트    cd frontend && npm install && npm run dev")
+    print("다음 단계 — 이 명령은 프로세스를 기동하지 않습니다.")
+    # 스크립트는 절대경로로 적는다. init은 실행 위치를 가리지 않는데(venv 실행 파일이고
+    # --env-file 기본값도 절대경로다) 상대경로를 적으면 어느 디렉토리를 전제하는지가
+    # 안내의 일부가 되고, README 빠른 시작이 서 있는 backend/와 어긋난다.
+    admin_script = Path(__file__).resolve().parents[2] / "scripts" / "create_admin.py"
+    print(f"  1) 관리자    ADMIN_PASSWORD='<비밀번호>' python {admin_script} admin --admin")
+    print("  2) 실행      EMBEDDING_PROVIDER=local openarchive serve    (API + 워커 + 웹 화면)")
     return 0
 
 

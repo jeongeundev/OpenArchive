@@ -340,25 +340,25 @@ def test_write_dsn_leaves_no_stale_database_url_behind(clean_db: str, tmp_path):
     assert "EMBEDDING_PROVIDER=local" in written
 
 
-def test_init_next_steps_name_the_directory_they_are_relative_to(
-    clean_db: str, capsys, tmp_path
-):
-    """다음 단계의 경로는 기준 디렉토리가 함께 적혀야 하고, 그 기준에서 실재해야 한다.
+def test_init_next_steps_can_be_pasted_from_any_directory(clean_db: str, capsys, tmp_path):
+    """다음 단계는 실행 위치를 묻지 않는다 — 스크립트를 절대경로로 적고, 그 파일이 실재한다.
 
-    init은 실행 위치를 가리지 않는다 — venv의 실행 파일이고 --env-file 기본값도
-    절대경로다. 안내가 어느 디렉토리를 전제하는지 밝히지 않으면, README 절차대로
-    backend/에서 init을 돌린 사용자가 `python scripts/create_admin.py`를 그 자리에서
-    쳐서 파일을 찾지 못한다 (clean clone 실측).
+    init은 실행 위치를 가리지 않는다 — venv의 실행 파일이고 --env-file 기본값도 절대경로다.
+    기준 디렉토리를 문장으로 밝히는 것만으로는 부족했다: README 빠른 시작은 backend/에서
+    돌리는데 안내가 "저장소 루트"를 전제하면, 그 자리에서 친 사용자가 파일을 찾지 못한다.
     """
     main(["init", "--dsn", clean_db, "--yes", "--env-file", str(tmp_path / ".env")])
 
     steps = capsys.readouterr().out.split("다음 단계")[1]
-    repo_root = ENV_FILE.parent.parent
 
-    assert "저장소 루트" in steps
-    for relative in ("backend", "frontend", "scripts/create_admin.py"):
-        assert relative in steps
-        assert (repo_root / relative).exists()
+    admin_script = ENV_FILE.parent.parent / "scripts" / "create_admin.py"
+    assert admin_script.exists()
+    assert str(admin_script) in steps
+    # 기동은 `openarchive serve` 하나다 (ADR-041 — 웹 화면은 동봉 빌드). uvicorn·워커·npm을
+    # 따로 띄우라는 옛 안내가 남아 있으면 README와 화면이 서로 다른 말을 한다.
+    assert "openarchive serve" in steps
+    assert "uvicorn" not in steps
+    assert "npm" not in steps
 
 
 def _insert_user(dsn: str, username: str, password: str) -> str:
