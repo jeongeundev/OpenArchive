@@ -14,6 +14,7 @@ from app.api.system import router as system_router
 from app.config import get_settings
 from app.db import close_pool, get_pool
 from app.embeddings import get_provider, warm_up
+from app.frontend import mount_frontend
 from app.migrations import run_migrations
 from app.services import documents as documents_service
 
@@ -81,3 +82,9 @@ async def _version_conflict(
 @app.get("/api/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+# 빌드된 프론트를 같은 오리진에서 내려준다 (ADR-041). catch-all 라우트를 더하므로
+# 반드시 API 라우트를 전부 등록한 **뒤에** 호출해야 한다 — 먼저 부르면 /api/*까지
+# 삼킨다. 산출물이 없는 개발 환경에서는 아무것도 하지 않는다.
+mount_frontend(app)

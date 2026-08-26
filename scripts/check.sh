@@ -35,8 +35,10 @@ if [ -f "$ROOT/frontend/package.json" ]; then
   npm run lint || FAILED=1
   echo "== frontend: test =="
   npm run test || FAILED=1
-  echo "== frontend: build =="
-  npm run build || FAILED=1
+  # 정적 export로 빌드해 backend/app/static까지 갱신한다. 일반 build로 검증하면
+  # 동봉 산출물이 소스와 조용히 어긋난다 — 갱신분은 git diff에 그대로 드러난다.
+  echo "== frontend: build (static export + 백엔드 동봉) =="
+  npm run build:static || FAILED=1
 else
   echo "== frontend: 건너뜀 (frontend/package.json 없음) =="
 fi
