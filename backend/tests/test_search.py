@@ -179,6 +179,109 @@ async def test_graph_search_stops_at_depth_two_and_does_not_repeat_a_cycle(
     assert max(hit.via.depth for hit in hits if hit.via is not None) == 2
 
 
+async def test_expanded_hit_excerpt_follows_the_edge_target_chunk(worker_conn, search_conn):
+    """관계로 도달한 문서의 발췌 선택 규칙을 고정한다.
+
+    `dst_chunk_index`가 NULL인 edge는 대상 문서에서 **질의에 가장 가까운 청크**를, 명시된
+    edge는 **그 청크**를 발췌로 삼는다. 같은 문서에 두 edge가 닿으면 발췌가 다른 두 결과가
+    된다. 청크 선택을 순회 행마다 하든 문서 축소 뒤에 하든(ADR-011 보강 6) 이 규칙은 같아야
+    한다 — 다른 그래프 테스트는 전부 `dst_chunk_index = 0`이라 이 규칙을 보지 않는다.
+    """
+    provider = FakeProvider()
+    entry_id = await insert_test_document(
+        worker_conn,
+        title="직접 진입점",
+        content=("발췌 선택 직접 질의 " * 2000),
+    )
+    # 문단마다 질의 어휘 비중이 달라 청크별 거리가 서로 다르다. 그래도 진입 문서보다는
+    # 멀어서 벡터 후보(LIMIT k*5)에는 들지 못하고 관계로만 도달한다.
+    target_id = await insert_test_document(
+        worker_conn,
+        title="관계로만 도달",
+        content="\n\n".join(
+            ("질의 " * (2 * index + 1)) + ("대목 고유 어휘 " * 60) for index in range(4)
+        ),
+    )
+    await process_all_embedding_jobs(worker_conn, provider)
+    await worker_conn.execute("DELETE FROM document_edges")
+
+    qvec = to_pgvector_literal(provider.embed(["발췌 선택 직접 질의"])[0])
+    cur = await worker_conn.execute(
+        """
+        SELECT chunk_index, embedding <=> %s::vector AS dist
+        FROM document_chunks WHERE document_id = %s ORDER BY dist
+        """,
+        (qvec, target_id),
+    )
+    by_distance = await cur.fetchall()
+    distances = [row[1] for row in by_distance]
+    assert len(by_distance) >= 2 and len(set(distances)) == len(distances), by_distance
+    nearest, farthest = by_distance[0][0], by_distance[-1][0]
+
+    await worker_conn.execute(
+        """
+        INSERT INTO document_edges
+            (src_document_id, dst_document_id, kind,
+             src_chunk_index, dst_chunk_index, score)
+        VALUES (%s, %s, 'related', 0, NULL, 0.9),
+               (%s, %s, 'related', 0, %s, 0.8)
+        """,
+        (entry_id, target_id, entry_id, target_id, farthest),
+    )
+
+    hits = await search_documents(search_conn, provider, query="발췌 선택 직접 질의", k=4)
+
+    assert {hit.document_id for hit in hits if hit.via is None} == {entry_id}
+    expanded = {(hit.document_id, hit.chunk_index) for hit in hits if hit.via is not None}
+    assert expanded == {(target_id, nearest), (target_id, farthest)}
+
+
+async def test_edges_converging_on_one_excerpt_keep_the_stronger_kind(worker_conn, search_conn):
+    """같은 경유 문서의 두 관계가 같은 발췌로 수렴하면 관계 종류의 우선순위로 하나를 남긴다.
+
+    트리거가 만드는 `overlaps`는 문서 단위라 대상 청크가 NULL이고, 위키링크 `refers`도
+    NULL이다. 둘이 같은 경유 문서에서 같은 대상에 닿으면 거리·깊이·발췌가 완전히 같아
+    동점이 된다. 우선순위(overlaps → related → refers → revision)가 최종 정렬에만 있고
+    문서 축소에는 없으면 어느 쪽이 남는지가 물리 행 순서에 달린다 — 실 코퍼스에서 청크
+    선택 순서를 바꾸자 같은 결과의 `via_kind`가 뒤집혔다 (ADR-011 보강 6).
+    """
+    provider = FakeProvider()
+    target_id = await insert_test_document(
+        worker_conn,
+        title="관계로만 도달",
+        content="\n\n".join(
+            ("질의 " * (2 * index + 1)) + ("대목 고유 어휘 " * 60) for index in range(4)
+        ),
+    )
+    # 위키링크가 refers 관계를, 아래 INSERT가 overlaps 관계를 같은 대상에 만든다.
+    entry_id = await insert_test_document(
+        worker_conn,
+        title="직접 진입점",
+        content=("수렴 발췌 직접 질의 " * 2000) + "\n\n[[관계로만 도달]]",
+    )
+    await process_all_embedding_jobs(worker_conn, provider)
+    await worker_conn.execute("DELETE FROM document_edges")
+    await worker_conn.execute(
+        """
+        INSERT INTO document_edges
+            (src_document_id, dst_document_id, kind,
+             src_chunk_index, dst_chunk_index, score)
+        VALUES (%s, %s, 'overlaps', NULL, NULL, 1.0)
+        """,
+        (entry_id, target_id),
+    )
+    link_cur = await worker_conn.execute(
+        "SELECT count(*) FROM document_links WHERE src_document_id = %s", (entry_id,)
+    )
+    assert (await link_cur.fetchone())[0] == 1
+
+    hits = await search_documents(search_conn, provider, query="수렴 발췌 직접 질의", k=4)
+
+    expanded = [hit for hit in hits if hit.via is not None]
+    assert [hit.document_id for hit in expanded] == [target_id]
+    assert expanded[0].via.kind == "overlaps"
+
+
 async def test_search_adds_adjacent_context_for_an_entry_chunk(worker_conn, search_conn):
     provider = FakeProvider()
     document_id = await insert_test_document(

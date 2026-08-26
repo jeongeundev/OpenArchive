@@ -593,12 +593,23 @@ traversal_edges AS (                 -- ③ 저장된 관계 ∪ 해석된 링�
     UNION ALL
     SELECT … FROM resolved_links
 ),
-walk AS (                            -- ④ 깊이 2까지 순회. 한 단계마다 거리에 +2.0
-    SELECT …, 0 AS depth FROM candidates          -- 시작점
+walk_ids AS (                        -- ④ 깊이 2까지 순회. 한 단계마다 거리에 +2.0
+    SELECT document_id, dist, …, 0 AS depth FROM candidates   -- 시작점
     UNION ALL
-    SELECT …, w.dist + 2.0, w.depth + 1
-    FROM walk w JOIN traversal_edges e ON e.src_document_id = w.document_id
-    …                                             -- path 배열로 순환을 막는다
+    SELECT e.dst_document_id, w.dist + 2.0, …, w.depth + 1, e.dst_chunk_index
+    FROM walk_ids w JOIN traversal_edges e ON e.src_document_id = w.document_id
+    …                                             -- path 배열로 순환을 막는다.
+),                                                --   문서 id·거리만 나른다 — 청크는 아직 고르지 않는다
+walk_targets AS (                    -- ④' 문서·대상 청크 단위로 접는다 (가장 가까운 경로, <kind 순서>)
+    SELECT DISTINCT ON (document_id, COALESCE(target_chunk_index, -1)) … FROM walk_ids WHERE depth > 0
+),
+walk AS (                            -- ④'' 접힌 행에서만 발췌 청크를 고른다 (ADR-011 보강 6)
+    SELECT … FROM candidates
+    UNION ALL
+    SELECT … FROM walk_targets w
+    JOIN LATERAL (SELECT … FROM document_chunks WHERE document_id = w.document_id
+                  AND (w.target_chunk_index IS NULL OR chunk_index = w.target_chunk_index)
+                  ORDER BY embedding <=> %(qvec)s::vector LIMIT 1) target ON true
 ),
 expanded AS (                        -- ⑤ 직전 텍스트 버전을 revision으로 더한다
     SELECT … FROM walk
@@ -622,7 +633,9 @@ COMMIT;
 
 정형 필터·권한 술어·벡터 정렬·관계 순회가 한 쿼리에 결합된다(가산점 포인트).
 
-**`<kind 순서>`는 동점 타이브레이커다** — `overlaps`(0) · `related`(1) · `refers`(2) · `revision`(3). 사람이 본문에 직접 쓴 링크가 같은 문서의 과거 판본보다 앞선다 (ADR-030).
+**`<kind 순서>`는 동점 타이브레이커다** — `overlaps`(0) · `related`(1) · `refers`(2) · `revision`(3). 사람이 본문에 직접 쓴 링크가 같은 문서의 과거 판본보다 앞선다 (ADR-030). 최종 정렬뿐 아니라 ④'·⑥에서 같은 문서·같은 발췌로 수렴한 행을 하나로 접을 때도 이 순서를 쓴다 — 문서 단위 `overlaps`와 위키링크 `refers`가 같은 경유 문서에서 닿으면 거리·깊이까지 같은 동점이 실제로 생긴다 (ADR-011 보강 6).
+
+**순회 행에서는 청크를 고르지 않는다 (④ → ④' → ④'').** 순회가 발췌 청크까지 골라 나르면 촘촘한 그래프에서 깊이 2 순회 행(시연 코퍼스 76문서·관계 1,704건에서 13k행)마다 청크 정렬이 돌아 그것이 검색 비용의 전부가 된다. 문서·대상 청크 단위로 접은 뒤(204행)에만 청크를 고르면 결과는 같고 실 OpenSQL VM에서 SQL이 3.5~11.6초 → 0.35~0.81초가 된다.
 
 **한 단계마다 거리에 `GRAPH_DISTANCE_PENALTY = 2.0`을 더한다.** 코사인 거리의 최대값이 2이므로, 관계로 닿은 문서가 직접 벡터 결과를 절대 앞지르지 못한다. `score = 1 - dist` 정렬 의미를 그대로 두면서 층을 가르는 방법이다.
 
