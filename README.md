@@ -71,10 +71,10 @@ EMBEDDING_PROVIDER=local openarchive serve
 브라우저에서 http://localhost:8000 을 열고 `admin` / `change-me`로 로그인합니다. 비밀번호는 설정
 화면에서 바로 바꿉니다.
 
-> ⚠️ 설치기는 `opensql` 데이터베이스를 만들어 놓고 OpenProxy 풀은 관리용 `postgres`를 바라보게
-> 설정합니다. DSN을 주기 전에 풀이 어느 DB를 가리키는지 확인하세요 —
-> [OpenSQL 환경 구축 §10](docs/SETUP_OPENSQL.md#10-설치-확인). OpenSQL 자체를 세우는 절차도 그
-> 문서에 있습니다.
+> ⚠️ 풀 이름과 계정은 OpenProxy 설정(`openproxy.toml`)에서 확인합니다. 설치기는 `opensql`
+> 데이터베이스를 만들어 놓고 정작 풀은 관리용 `postgres`를 바라보게 설정하니, DSN을 주기 전에
+> 풀이 어느 DB를 가리키는지 확인하세요 — 파일 위치와 교정 절차는
+> [OpenSQL 환경 구축 §10](docs/SETUP_OPENSQL.md#10-설치-확인)에 있습니다.
 
 ### 각 단계가 하는 일
 
