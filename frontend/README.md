@@ -11,7 +11,7 @@ Web UI는 여러 소비 인터페이스 중 하나입니다 — REST API·MCP �
 **API 서버를 먼저 띄워야 합니다.** 이 앱은 `/api/*`를 백엔드로 프록시할 뿐이고
 (`next.config.ts`), 스키마 마이그레이션은 API startup에서만 실행됩니다
 ([ADR-012](../docs/ADR.md)). DB·백엔드·워커를 포함한 전체 기동 순서는
-[루트 README 「빠른 시작」](../README.md#빠른-시작)에 있습니다.
+[루트 README 「시작하기」](../README.md#시작하기)에 있습니다.
 
 ```bash
 npm install

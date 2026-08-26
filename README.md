@@ -1,22 +1,62 @@
 # OpenArchive
 
-**문서를 고치면 DB가 벡터를 따라 맞추는, AI를 위한 문서 데이터 플랫폼**
-
-> AI에게 주는 근거가 어느 시점에도 **하나의 일관된 버전**이고, **최신 버전으로 수렴**함을 데이터베이스가 보장합니다.
+**문서를 고치면 DB가 벡터를 따라 맞추는, AI를 위한 문서관리 플랫폼**
 
 [![CI](https://github.com/jeongeundev/OpenArchive/actions/workflows/ci.yml/badge.svg)](https://github.com/jeongeundev/OpenArchive/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![PostgreSQL](https://img.shields.io/badge/OpenSQL-PostgreSQL%2017-336791.svg)](https://docs.tibero.com/tmaxopensql/overview)
 [![Embedding](https://img.shields.io/badge/embedding-BGE--M3%20(MIT)-orange.svg)](https://huggingface.co/BAAI/bge-m3)
 
-> 2026년 오픈소스 개발자대회 기업 지정과제 출품작
-> **현재 상태**: DB 계층(트리거·잡 큐·워커), 백엔드 API·하이브리드 검색, 관련 문서·태그 추천, MCP 서버와 프론트엔드(문서 목록·상세·검색·클러스터·진단과 관리 화면)가 동작합니다.
+> 2026년 오픈소스 개발자대회 기업 지정과제 「OpenSQL 기반 AI 문서관리 플랫폼」 출품작
 
 ---
 
+## 소개
+
+OpenArchive는 조직의 문서를 올리면 **텍스트 추출 → 청킹 → 임베딩 → 벡터 저장 → 문서 관계
+생성**이 자동으로 일어나고, 정형 필터(태그·유형·권한)와 벡터 유사도와 문서 관계를 **하나의
+SQL**로 결합해 검색하는 문서관리 플랫폼입니다. 사람은 웹 화면으로, 프로그램은 REST API로,
+AI 에이전트는 MCP로 같은 문서와 같은 권한 규칙 위에서 접근합니다.
+
+[Tmax OpenSQL](https://docs.tibero.com/tmaxopensql/overview)(PostgreSQL 17 + pgvector) 위에서
+동작하며, 기업 과제가 제시한 두 문제를 **DB 계층에서** 풉니다.
+
+- **원본과 벡터의 정합성** — 문서를 저장하면 DB 트리거가 **같은 트랜잭션 안에서** 임베딩
+  작업·버전 이력·문서 관계를 만듭니다. 애플리케이션 코드에는 임베딩 호출이 없고, "문서만
+  저장되고 벡터 갱신은 유실되는" 상태가 구조적으로 존재하지 않습니다.
+- **장애 자동 복구** — 장애 감지·재기동·재연결은 OpenSQL(Patroni·OpenProxy)이 맡고,
+  애플리케이션은 단일 엔드포인트로만 접속합니다. 미처리 작업은 DB 테이블에 남아 복구 뒤
+  그대로 재개됩니다.
+
+보장 범위는 **버전 일관성 + 최신 수렴**입니다 — 검색되는 청크는 어느 시점에도 하나의 텍스트
+버전이며, 변경은 유한 시간 안에 최신으로 수렴합니다. 즉시 반영은 약속하지 않습니다
+([ADR-015](docs/ADR.md)).
+
+---
+
+## 주요 기능
+
+| 기능 | 설명 |
+|---|---|
+| 자동 임베딩 파이프라인 | PDF·DOCX·TXT·MD 업로드(ZIP 일괄 포함) 시 트리거가 작업을 만들고 워커가 청킹·임베딩·저장 |
+| 하이브리드 검색 | 태그·유형·권한 필터 + 벡터 유사도 + 저장된 문서 관계(깊이 2)를 **단일 SQL**로 결합. 결과에 "왜 나왔는지"를 함께 표시 |
+| 텍스트 버전 관리 | 추출 텍스트를 직접 편집하면 이력이 쌓이고 재임베딩이 자동 기동. 처리 중에는 이전 벡터로 검색이 계속됨. 되돌리기는 새 버전을 만듦 |
+| 자동 정리 | 관계 그래프의 Louvain 군집으로 주제 덩어리를 태그 없이 묶고, 관련 문서·태그 추천, 고아·중복·깨진 위키링크 진단 |
+| 권한 | 볼 수 없는 문서는 검색·관련 문서·그래프·집계 어디에도 나타나지 않음. 웹·REST·MCP가 같은 열람 규칙을 공유 |
+| MCP 근거 게이트웨이 | AI 에이전트에 발췌·출처·기준 버전을 공급하고(`search_documents` 등), `create_document`로 문서를 공급받음. 답변 생성은 클라이언트가 수행 |
+| 위임 API 토큰 | 계정 설정에서 프로그램용 토큰을 발급·폐기. scope는 `read`·`read_write` |
+| 장애 자동 복구 | DB 프로세스 장애 시 자동 재기동·앱 재연결·미처리 작업 무손실 재개를 실 OpenSQL에서 검증 |
+
+> **원본 파일은 보관하지 않습니다.** 업로드된 파일에서 텍스트만 추출해 저장하며, 편집·버전·임베딩의
+> 대상은 그 **추출 텍스트**입니다 ([ADR-017](docs/ADR.md)).
+
+---
+
+## 아키텍처
+
 ```mermaid
 flowchart LR
-    ui["Web UI<br/>Next.js"]
+    ui["Web UI<br/>Next.js (동봉 정적 빌드)"]
     rest["REST Client<br/>스크립트 · 커넥터"]
     mcpc["MCP Client<br/>AI 에이전트"]
 
@@ -28,330 +68,187 @@ flowchart LR
     proxy["OpenProxy<br/>VIP : 6432 — 단일 엔드포인트"]
     db[("OpenSQL v3<br/>PostgreSQL 17 + pgvector")]
     trg["AFTER 트리거<br/>같은 트랜잭션"]
-    worker["Embedding Worker<br/>python -m app.worker"]
+    worker["Embedding Worker"]
     model["BGE-M3 로컬 구동<br/>sentence-transformers"]
 
-    ui -->|"업로드 · 텍스트 편집 · 버전 되돌리기 (세션 쿠키)"| api
-    rest -->|"REST + Bearer 토큰"| api
+    ui -->|"세션 쿠키"| api
+    rest -->|"Bearer 토큰"| api
     mcpc -->|"search_documents · create_document"| mcps
 
     api -->|"documents INSERT/UPDATE만 — 임베딩 호출 없음"| proxy
-    api -->|"권한·태그 필터 + 벡터 유사도를 단일 SQL로"| proxy
+    api -->|"필터 + 벡터 + 관계를 단일 SQL로"| proxy
     mcps -->|"HTTP 미경유 · 같은 services 재사용"| proxy
 
     proxy -->|"커넥션 풀링 · Primary 추적 · 재연결"| db
     db --> trg
-    trg -->|"버전 이력 · embedding_jobs · NOTIFY"| db
+    trg -->|"버전 이력 · embedding_jobs · 문서 관계 · NOTIFY"| db
 
-    worker -->|"5초 폴링(주 경로) + FOR UPDATE SKIP LOCKED로 잡 점유"| proxy
+    worker -->|"5초 폴링 + FOR UPDATE SKIP LOCKED"| proxy
     worker -->|"청크 배치 임베딩"| model
     worker -->|"해시 재확인 + 청크 교체 — 단일 트랜잭션"| proxy
     api -.->|"질의 임베딩"| model
 ```
 
-**애플리케이션은 `documents`에 쓰기만 합니다.** 텍스트 버전 이력·임베딩 작업·알림은 AFTER 트리거가 **같은 트랜잭션에서** 만들고, 워커는 그 작업을 집어가는 무상태 실행기입니다. Web UI·REST·MCP는 같은 `app/services`를 소비하는 대등한 인터페이스이며, DB 접속은 OpenProxy 단일 엔드포인트만 거칩니다 ([ADR-006](docs/ADR.md)).
+**핵심은 책임의 위치입니다.** 애플리케이션은 `documents`에 쓰기만 하고, 파생 데이터는 DB가
+만듭니다.
 
----
-
-## 무엇을 해결하는가
-
-문서 검색에 벡터 DB를 붙이면 흔히 이런 문제가 생깁니다.
-
-1. **원본과 벡터가 어긋난다.** 문서를 고쳤는데 임베딩 갱신을 깜빡하거나, 별도 파이프라인이 실패하면 검색 결과가 옛날 내용을 가리킵니다.
-2. **DB가 죽으면 서비스가 죽는다.** 단일 DB 장애가 곧 전체 장애입니다.
-
-OpenArchive는 이 둘을 **DB 계층에서** 해결합니다.
-
-- **정합성**: 문서를 수정하면 트리거가 **같은 트랜잭션 안에서** 재임베딩 작업을 만듭니다. 애플리케이션 코드에는 임베딩 호출이 없습니다. "문서만 저장되고 벡터 갱신은 유실되는" 상태가 구조적으로 불가능합니다.
-- **장애 자동 복구**: [OpenSQL](https://docs.tibero.com/tmaxopensql/overview) 위에서 동작합니다. **DB 프로세스 장애 자동 복구를 검증했습니다** — Patroni가 감지해 스스로 재기동하고, 애플리케이션이 재연결하며, 미처리 임베딩 작업은 `embedding_jobs`에 남아 그대로 재개되고 정합성 카운터가 0으로 수렴합니다. **노드 사망은 복구되지 않으며, 이는 사무국 지시에 따른 Single 구성의 제약입니다.** HA 설계는 유지하되 노드 승격은 검증하지 못했습니다 ([ADR-020](docs/ADR.md)).
-
-### 무엇을 보장하고, 무엇을 보장하지 않는가
-
-즉시 반영을 약속하지 않습니다. 재임베딩 중에는 이전 버전 벡터로 검색되고, 워커 폴링 주기(5초)와 임베딩 소요만큼 반영이 늦으며, 장애 복구 구간에는 요청이 실패합니다.
-
-| 보장한다 | 보장하지 않는다 |
+| DB 계층이 보장하는 것 | 수단 |
 |---|---|
-| **버전 일관성** — 검색되는 청크는 어느 시점에도 하나의 버전이며 섞이지 않습니다 | 즉시 반영 |
-| **최신으로 수렴** — 지연은 있어도 결국 최신 버전에 도달합니다 | 요청 실패 없는 복구 |
-| **관측 가능성** — 어긋난 구간을 쿼리 한 줄로 셀 수 있습니다 | |
+| 문서가 저장되면 임베딩 작업도 반드시 생긴다 | AFTER 트리거 — 문서 저장과 **같은 트랜잭션** (트랜잭셔널 아웃박스) |
+| 연속 수정이 하나의 작업으로 합쳐진다 | 파셜 유니크 인덱스 |
+| 두 워커가 같은 작업을 집지 않는다 | `FOR UPDATE SKIP LOCKED` |
+| 텍스트 버전 이력이 빠짐없이 쌓인다 | 트리거가 기록 |
+| 문서 사이 관계가 원본에서 파생된다 | 임베딩 완료 트랜잭션 안에서 트리거가 순수 SQL로 생성 |
+| 문서를 지우면 작업·청크·관계도 사라진다 | FK CASCADE |
+
+워커는 DB가 만들어 둔 작업을 집어가는 **무상태 실행기**입니다. 워커를 통째로 지워도 작업은 DB에
+남고, 다시 띄우면 이어서 처리합니다. 알림(`NOTIFY`)은 최적화일 뿐이며 **5초 폴링**이 주 경로입니다
+([ADR-009](docs/ADR.md)).
+
+원본과 벡터가 어긋난 문서 수는 쿼리 한 줄로 셀 수 있습니다. 문서를 고치면 잠깐 올랐다가 워커
+처리 후 0으로 돌아오고, 장애를 일으켜도 결국 0으로 수렴합니다.
 
 ```sql
--- 원본과 벡터가 어긋난 문서. 파이프라인이 정상이면 0으로 수렴한다.
 SELECT count(*) FROM documents d
   JOIN document_chunks c ON c.document_id = d.id
  WHERE c.version <> d.version;
 ```
 
-문서를 고치면 이 값이 잠깐 올랐다가 워커 처리 후 0으로 돌아옵니다. 장애를 일으켜도 결국 0으로 수렴합니다. `scripts/demo_recovery.sh`는 DB 프로세스가 죽어도 Patroni가 스스로 재기동하고, 앱이 재연결해 미처리 잡을 이어 처리하며, 정합성 카운터가 0으로 수렴하는지 실제로 검증합니다. **증명할 수 있는 주장을 하는 것**이 과장된 최신성 표현보다 낫다고 판단했습니다 ([ADR-015](docs/ADR.md)).
+상세는 [Architecture](docs/ARCHITECTURE.md), 각 결정의 근거는 [ADR](docs/ADR.md)에 있습니다.
 
-워커 프로세스가 강제 종료되는 경우도 같은 원리로 복구됩니다. 배포 호스트에서는 systemd 유닛이 워커를 되살리고, 재기동한 워커가 방치된 잡을 회수합니다. 그 회수를 기다리는 동안에도 나머지 잡은 계속 처리되며, 워커를 반복적으로 죽이는 잡은 재시도 예산을 소진한 뒤 `error`로 격리되어 파이프라인을 막지 않습니다 ([ADR-038](docs/ADR.md)).
-
----
-
-## 동작 방식
-
-```
-문서 업로드 — Web UI · REST API · documents에 INSERT하는 모든 클라이언트
-   │
-   ▼
-documents 테이블 INSERT/UPDATE
-   │
-   ├─ AFTER 트리거 (같은 트랜잭션)
-   │     ├─ 버전 이력 기록
-   │     ├─ 임베딩 작업 생성  ← 트랜잭셔널 아웃박스
-   │     └─ 워커 깨우기 (NOTIFY)
-   ▼
-Embedding Worker
-   │  SKIP LOCKED로 작업 선점 → 청킹 → 임베딩
-   │  커밋 직전 content_hash 재확인 (낡은 결과 폐기)
-   ▼
-document_chunks 교체 (단일 트랜잭션)
-   │
-   ▼
-하이브리드 검색 — 태그·유형·권한 필터 + 벡터 유사도를 단일 SQL로
-   │
-   ▼
-근거 소비·문서 공급 — Web UI · REST API · MCP (같은 services 계층)
-```
-
-**핵심은 "애플리케이션이 임베딩 파이프라인을 조율하지 않는다"는 점입니다.** 업로드 API는 `INSERT`만 합니다. 나머지는 DB가 합니다. 그래서 문서를 공급하는 주체가 꼭 사람일 필요가 없습니다 — `documents`에 INSERT하는 클라이언트는 무엇이든 같은 파이프라인을 얻습니다 ([Roadmap](docs/ROADMAP.md)).
-
----
-
-## 주요 기능
-
-| 기능 | 설명 |
-|---|---|
-| 자동 임베딩 파이프라인 | PDF·DOCX·TXT·MD 업로드 시 트리거가 작업 생성, 워커가 청킹·임베딩·저장 |
-| 하이브리드 검색 | 정형 필터(태그·유형·권한)와 벡터 유사도를 **하나의 SQL**로 결합 |
-| 텍스트 버전 관리·자동 재임베딩 | Web UI에서 **추출 텍스트를 직접 편집**. 수정하면 이력이 쌓이고 재임베딩이 자동 기동. 처리 중에는 이전 벡터로 검색이 계속됨. 과거 버전의 본문을 펼쳐 보고 **되돌리면 이력을 되감지 않고 새 텍스트 버전이 생김** ([ADR-037](docs/ADR.md)) |
-| 관련 문서·태그 추천 | 임베딩 완료 시 저장된 관계(edge)로 유사 문서를 찾고, 그 문서들의 태그를 추천. 검색과 동일한 권한 필터 적용 |
-| 주제 덩어리 | 관계 그래프의 군집으로 문서를 묶어 그래프로 보여줌. 태그가 없어도 묶이며, 열람 범위 안에서만 계산 ([ADR-042](docs/ADR.md)) |
-| 장애 자동 복구 | **DB 프로세스** 장애 시 자동 재기동과 앱 재연결, 미처리 작업 무손실 재개. 노드 승격은 검증하지 않았습니다(Single 구성) |
-| MCP 근거 게이트웨이 | AI 에이전트에 발췌·출처·기준 버전을 공급하고 `txt`·`md` 문서 텍스트를 생성. 답변 생성은 클라이언트가 수행 |
-| 위임 API 토큰 | 계정 설정 화면에서 프로그램용 토큰을 직접 발급·폐기. scope는 `read`·`read_write` 둘이고 원문은 발급 직후 한 번만 보임 ([ADR-034](docs/ADR.md)·[040](docs/ADR.md)) |
-
-> **원본 파일은 보관하지 않습니다.** 업로드된 PDF·DOCX에서 텍스트만 추출해 저장하며, 편집·버전 관리·임베딩의 대상은 그 **추출 텍스트**입니다. 원본 파일 다운로드는 지원하지 않습니다 ([ADR-017](docs/ADR.md)).
-
----
-
-## 기술 스택
+### 기술 스택
 
 | 영역 | 사용 기술 |
 |---|---|
-| DB | [Tmax OpenSQL v3](https://docs.tibero.com/tmaxopensql/overview) (PostgreSQL 17 + pgvector) · OpenHA(Patroni) · OpenHA DCS(etcd) · OpenProxy |
-| 백엔드 | Python 3.12+ · FastAPI · psycopg3 |
-| 임베딩 | [`BAAI/bge-m3`](https://huggingface.co/BAAI/bge-m3) (MIT, 1024차원) — 로컬 구동 |
-| 프론트엔드 | Next.js (App Router) · TypeScript · Tailwind CSS · [JSZip 3.10.1](https://stuk.github.io/jszip/) (MIT) |
+| DB | [Tmax OpenSQL v3](https://docs.tibero.com/tmaxopensql/overview) — PostgreSQL 17 + pgvector 0.8.1 · OpenHA(Patroni) · OpenHA DCS(etcd) · OpenProxy |
+| 백엔드 | Python 3.12+ · FastAPI · psycopg3 · `openarchive` CLI |
+| 임베딩 | [`BAAI/bge-m3`](https://huggingface.co/BAAI/bge-m3) (MIT, 1024차원) — `sentence-transformers`로 로컬 구동 |
+| 프론트엔드 | Next.js (App Router) · TypeScript · Tailwind CSS · JSZip — 정적 빌드를 백엔드에 동봉 |
+| 군집 | `networkx` Louvain |
 | MCP | Python `mcp` SDK (FastMCP, stdio) |
 
 ---
 
-## 빠른 시작
+## 시작하기
 
-### 어디서 도는가 — 그리고 OpenSQL이 무엇을 더하는가
+세 단계입니다 — **설치 → DB 연결 → 실행**. 배포 패키지는 없으므로 소스에서 설치합니다.
 
-OpenArchive는 **표준 PostgreSQL 17 + pgvector** 인터페이스에만 의존합니다. 스키마·트리거·
-검색 SQL은 전부 표준 기능이고, 애플리케이션이 DB와 만나는 지점은 `DATABASE_URL` 환경변수
-하나뿐입니다 ([ADR-006](docs/ADR.md), [ADR-007](docs/ADR.md)). 그래서 같은 코드가 로컬
-`pgvector/pgvector:pg17` 컨테이너와 실 OpenSQL 클러스터 양쪽에서 그대로 동작합니다.
-
-**Tmax OpenSQL 위에서 더해지는 것** — 애플리케이션 코드는 한 줄도 바뀌지 않습니다.
-
-- **Patroni** — 장애 자동 감지, 리더 선출과 승격 ([ADR-020](docs/ADR.md))
-- **OpenProxy** — VIP 단일 엔드포인트와 커넥션 풀링. 새 프라이머리 발견과 재연결을 앱 대신
-  수행하므로, 애플리케이션에 멀티호스트 DSN이나 재연결 로직을 두지 않습니다 ([ADR-006](docs/ADR.md))
-- **번들 확장** — pgvector 0.8.1 · pgvectorscale 0.9.0
-
-따라서 아래 절차는 **OpenSQL 라이선스 없이 그대로 완주합니다.** 라이선스가 있다면
-[실 OpenSQL 클러스터에 연결](#실-opensql-클러스터에-연결)에서 DSN만 바꾸면 됩니다.
-
-| 라이선스 없이 검증할 수 있는 범위 | 실 OpenSQL 환경이 필요한 검증 |
-|---|---|
-| 자동 임베딩 파이프라인 전 구간 — 트리거·아웃박스·`SKIP LOCKED`·청킹·임베딩 | OpenProxy 경유 세션 동작 ([ADR-009](docs/ADR.md)) |
-| 하이브리드 검색 · 관계 그래프 · 태그 추천 | 읽기/쓰기 분리와 복제 지연 ([ADR-010](docs/ADR.md)) |
-| 텍스트 버전·되돌리기, 권한 모델, API 토큰 | Patroni 리더 선출·승격 |
-| Web UI · REST API · MCP 서버 전체 | 장애 복구 데모 (`scripts/demo_recovery.sh`) |
-| `bash scripts/check.sh` 전체 통과 | 라이선스·번들 확장 실동작 |
-
-OpenSQL 자체를 세우려면 [OpenSQL 환경 구축](docs/SETUP_OPENSQL.md)을 따르십시오 — 설치
-파일과 라이선스가 따로 필요하고, x86-64 + Rocky Linux 9.7 전용입니다.
-
-### 준비물
-- Docker · Docker Compose
-- Python 3.12+
-- Node.js 20+
-
-### 실행
+### 1. 설치
 
 ```bash
-# 1. 로컬 DB (pgvector 컨테이너)
-docker compose up -d
-
-# 2. 백엔드 설치
-cd backend
-python3 -m venv .venv && source .venv/bin/activate   # scripts/check.sh가 backend/.venv를 찾는다
-pip install -e ".[dev]"          # 기본은 가짜 임베딩이다. 실제 BGE-M3는 아래 「임베딩 프로바이더」
-
-# 3. DB 준비 — 연결 확인·확장 점검·스키마 적용·준비 상태 확인을 한 번에 한다
-openarchive init                 # 아래 「openarchive init」 참조
-
-# 4. 최초 관리자 계정 — 자체 가입이 없으므로 첫 로그인 전에 한 번 실행한다
-cd .. && ADMIN_PASSWORD='<초기 비밀번호>' python scripts/create_admin.py admin --admin
-cd backend
-
-# 5. API + 임베딩 워커 + 웹 화면 — 한 명령이 전부 띄운다
-openarchive serve                # 아래 「openarchive serve」 참조
-
-# 6. MCP 서버 (Claude Desktop/Code가 기동한다. 수동 확인은 아래 커맨드)
-#    MCP_USER_ID는 4번에서 만든 계정명과 같아야 한다 — 아래 「MCP 서버 등록」 참조.
-MCP_USER_ID=admin python -m mcp_server.server
+git clone https://github.com/jeongeundev/OpenArchive.git
+cd OpenArchive/backend
+python3 -m venv .venv && source .venv/bin/activate
+pip install -e ".[dev,local]"      # local = BGE-M3 임베딩 모델 (torch 포함, 수 GB)
 ```
 
-`http://localhost:8000` 접속. **웹 화면은 API와 같은 주소에서 나옵니다** — 빌드된
-프론트가 백엔드 패키지에 동봉돼 있어 Node.js가 필요하지 않습니다 ([ADR-041](docs/ADR.md)).
-프론트 코드를 고칠 때만 아래 「프론트엔드를 고칠 때」를 보십시오.
+동작만 빠르게 확인하려면 `".[dev]"`로 설치해도 됩니다 — 가짜 벡터로 파이프라인 전 구간이
+돌지만 **검색 결과에 의미가 없으므로** 실제 사용에는 `local`이 필요합니다.
 
-### `openarchive init`
+### 2. DB 연결
 
-도입할 DB를 준비 상태로 만드는 명령입니다. 하는 일은 넷입니다 — **연결 확인 → capability
-확인(PostgreSQL 버전·`vector`·`pg_trgm`·CREATE 권한) → 마이그레이션 적용 → 준비 상태 보고**.
-확인이 적용보다 먼저이므로, 확장이 없거나 권한이 모자라면 스키마를 건드리기 전에 무엇이
-왜 필요한지 알려주고 멈춥니다.
+OpenArchive는 표준 PostgreSQL 17 + pgvector 인터페이스에만 의존합니다. 연결 대상은 둘 중 하나입니다.
+
+**이미 OpenSQL(또는 PostgreSQL + pgvector)을 운영 중이라면** — OpenProxy 엔드포인트를 줍니다.
 
 ```bash
-openarchive init                                   # 대화형 — DSN 한 줄만 입력
-openarchive init --dsn "postgresql://app@<vip>:6432/<pool_name>" --yes   # 비대화형
+openarchive init --dsn "postgresql://app@<vip>:6432/<pool_name>"
 ```
 
-DSN을 확인한 뒤 `backend/.env`의 `DATABASE_URL` 줄만 갈아 끼웁니다. 다른 설정은 보존됩니다.
-
-> **기존 데이터베이스를 덮어쓰지 않습니다.** `schema_migrations`가 없는데 OpenArchive가 쓰는
-> 테이블 이름(`documents`·`users` 등)이 이미 있으면 **아무것도 바꾸지 않고 중단**합니다.
-> 마이그레이션에는 `ALTER TABLE documents`가 있어, 같은 이름의 다른 테이블 위에서 돌면 그
-> 데이터가 손상되기 때문입니다 ([ADR-039](docs/ADR.md)).
-
-**하지 않는 것**: API·워커·프론트 기동, DB 자동 탐색·설치, 문서 공급, 계정 생성. 마지막에 다음
-단계를 출력만 합니다. 이 명령을 건너뛰어도 API 서버가 startup에서 같은 마이그레이션을
-적용하므로([ADR-012](docs/ADR.md)), init은 **필수가 아니라 사전 점검**입니다.
-
-`openarchive`의 다른 하위 명령은 `reset-password` 하나이며, 비밀번호를 잊은 계정을 여는 데 씁니다
-(아래 「인증 환경변수」).
-
-### `openarchive serve`
-
-API 서버와 임베딩 워커를 함께 띄웁니다. **워커를 따로 켜는 것을 잊을 수 없게 하는 것**이
-목적입니다 — 워커가 없으면 업로드는 성공하는데 검색에 잡히지 않고, 에러가 나지 않아
-원인을 짐작하기 어렵습니다.
+**없다면** — 저장소에 든 로컬 컨테이너를 씁니다 (Docker 필요).
 
 ```bash
-openarchive serve                              # 127.0.0.1:8000
-openarchive serve --host 0.0.0.0 --port 9000
+docker compose up -d               # 저장소 루트에서. 호스트 포트 5433
+openarchive init                   # 대화형 — 기본 DSN을 그대로 Enter
 ```
 
-- 웹 화면·API·워커가 한 주소에서 나옵니다. 별도 프론트 서버가 필요 없습니다.
-- Ctrl-C 한 번에 둘 다 멈춥니다. 워커는 **처리 중인 잡을 마치고** 종료합니다.
-- 한쪽이 멈추면 나머지도 내리고 0이 아닌 코드로 끝납니다 — 반쪽만 도는 상태를 만들지 않습니다.
-- **죽은 프로세스를 되살리지는 않습니다.** 배포 호스트에서는 systemd가 그 역할을 합니다
-  ([ADR-038](docs/ADR.md) · `scripts/openarchive-worker.service`).
+`init`은 **연결 확인 → 확장·권한 점검 → 스키마 적용 → 준비 상태 보고**를 한 번에 합니다.
+확인이 적용보다 먼저라 `vector` 확장이 없거나 권한이 모자라면 스키마를 건드리기 전에 무엇이
+왜 필요한지 알려주고 멈추고, 기존 테이블이 있으면 아무것도 바꾸지 않습니다
+([ADR-039](docs/ADR.md)). 확인한 DSN은 `backend/.env`에 기록됩니다.
 
-코드를 고치며 개발할 때는 자동 재시작(`--reload`)이 필요하므로 두 프로세스를 따로 띄웁니다.
+> ⚠️ **실 OpenSQL**: 설치기는 `opensql` 데이터베이스를 만들어 놓고 OpenProxy 풀은 관리용
+> `postgres`를 바라보게 설정합니다. DSN을 주기 전에 풀이 어느 DB를 가리키는지 확인하세요 —
+> [OpenSQL 환경 구축 §10](docs/SETUP_OPENSQL.md#10-설치-확인). OpenSQL 자체를 세우는 절차도
+> 그 문서에 있습니다.
+
+### 3. 실행
 
 ```bash
-uvicorn app.main:app --reload                  # 터미널 1
-python -m app.worker                           # 터미널 2
+# 최초 관리자 계정 — 자체 가입이 없으므로 첫 로그인 전에 한 번
+ADMIN_PASSWORD='<초기 비밀번호>' python ../scripts/create_admin.py admin --admin
+
+# API + 임베딩 워커 + 웹 화면을 한 명령으로
+EMBEDDING_PROVIDER=local openarchive serve     # ".[dev]"로 설치했다면 환경변수 생략
 ```
 
-### 프론트엔드를 고칠 때
+`http://localhost:8000`에서 방금 만든 계정으로 로그인합니다. 웹 화면은 백엔드에 동봉된 정적
+빌드라 Node.js가 필요 없습니다. 최초 1회는 모델 다운로드(약 2GB)로 기동이 오래 걸립니다.
 
-웹 화면은 `backend/app/static/`에 동봉된 빌드 산출물입니다(1.5MB). 프론트 소스를 고쳤다면
-**다시 빌드해 산출물을 갱신하고 함께 커밋해야** 화면에 반영됩니다.
+실 OpenSQL 위에서는 이 절차 그대로 Patroni의 장애 복구와 OpenProxy의 커넥션 풀링이 더해집니다 —
+코드 변경도, 추가 설정도 없습니다 ([ADR-006](docs/ADR.md)).
+
+---
+
+## 사용 방법
+
+### 문서 올리기
+
+로그인 후 첫 화면(`/`)의 드롭존에 **PDF·DOCX·TXT·MD 파일이나 ZIP**을 끌어다 놓습니다
+(파일당 10MB). 올린 문서는 목록에 **임베딩 중**으로 나타나고, 워커가 텍스트 추출·청킹·임베딩을
+마치면 완료로 바뀝니다 — 보통 문서 하나에 몇 초입니다. 원본 파일은 보관하지 않으며 추출된
+텍스트만 저장됩니다.
+
+프로그램에서 올리려면 `/settings`에서 발급한 API 토큰(`read_write` scope)을 씁니다.
 
 ```bash
-cd frontend
-npm install
-npm run dev            # 개발 서버 — http://localhost:3000, /api/*는 8000으로 프록시된다
-npm run build:static   # 정적 export + backend/app/static 갱신
+# 파일 업로드
+curl -X POST http://localhost:8000/api/documents \
+  -H "Authorization: Bearer $OPENARCHIVE_API_TOKEN" \
+  -F "file=@guide.pdf" -F "title=설치 가이드" -F "tags=opensql" -F "visibility=private"
+
+# 텍스트 직접 공급 — 임베딩이 끝날 때까지 폴링하는 독립 예제 (백엔드 패키지 불필요)
+python3 examples/ingest_text.py notes.md --base-url http://localhost:8000 \
+  --token "$OPENARCHIVE_API_TOKEN" --title "회의록 8/27" --tags 회의
 ```
 
-`bash scripts/check.sh`가 `build:static`을 돌리므로, 검증만 통과시켜도 산출물이 최신이
-됩니다 — 갱신분은 `git diff`에 드러납니다.
+`visibility`는 `public`(로그인한 모두) 또는 `private`(나만)입니다. 볼 수 없는 문서는 다른
+사용자의 검색·관련 문서·그래프·집계 어디에도 나타나지 않습니다.
 
+### 검색하기
 
-### 환경변수 파일은 `backend/.env` 하나입니다
+`/search`에서 **검색어**를 입력하고, 필요하면 **태그**(쉼표 구분)·**문서 유형**·**결과 수**로
+좁힙니다. 필터는 벡터 정렬 안쪽에서 적용되므로, 필터에 걸리거나 볼 수 없는 문서가 후보 자리를
+차지하지 않습니다.
 
-기본값만으로 위 절차가 완주하므로 `.env`는 **설정을 바꿀 때만** 만듭니다. 만들 때 위치는
-`backend/` 안입니다.
+결과는 문서마다 발췌와 함께 **왜 나왔는지**를 보여줍니다 — 직접 맞은 결과는 `유사도 0.xxx`,
+저장된 관계를 타고 온 결과는 *「설치 가이드」에서 「여러 대목에서 만난다」로 이어짐*처럼
+출발 문서와 관계 종류가 붙습니다. 편집 직후에는 재임베딩이 끝날 때까지 이전 텍스트 버전으로
+검색됩니다.
 
 ```bash
-cd backend && cp .env.example .env
+curl -X POST http://localhost:8000/api/search \
+  -H "Authorization: Bearer $OPENARCHIVE_API_TOKEN" -H "Content-Type: application/json" \
+  -d '{"query": "OpenProxy 풀 설정", "tags": ["opensql"], "content_type": "pdf", "k": 10}'
 ```
 
-애플리케이션 설정을 읽는 주체는 API·워커·MCP 서버와 `scripts/create_admin.py` 넷인데 실행
-디렉토리가 서로 다릅니다. `app/config.py`가 `backend/.env` 한 곳만 절대경로로 읽어 넷이 같은
-값을 보게 합니다. 환경변수를 직접 주는 방식(`DATABASE_URL=... uvicorn ...`)은 언제나 파일보다
-우선합니다.
+### 문서 다듬기
 
-> **저장소 루트의 `.env`는 다른 파일입니다.** 애플리케이션은 그 파일을 읽지 않지만
-> **`docker compose`가 읽습니다** — `docker-compose.yml`의 `${POSTGRES_USER:-openarchive}`
-> 세 자리를 채우는 것이 그 파일입니다. 로컬 DB의 자격증명·DB 이름을 바꾸려면 루트 `.env`에
-> `POSTGRES_*`를 두고, 앱이 붙을 주소는 `backend/.env`의 `DATABASE_URL`에 둡니다. 둘은 역할이
-> 다르므로 한쪽에 몰아 쓰면 컨테이너와 앱이 서로 다른 DB를 가리킵니다.
+문서 상세(`/documents/[id]`)에서 **추출 텍스트를 직접 편집**하면 텍스트 버전이 하나 쌓이고
+재임베딩이 자동으로 기동합니다. 과거 버전을 펼쳐 보고 **되돌리기**를 누르면 이력을 되감는 것이
+아니라 새 버전이 생겨 같은 파이프라인을 다시 탑니다. 같은 화면에서 **관련 문서**와 **태그
+추천**(관련 문서들의 태그)을 보고 태그를 붙일 수 있습니다. 본문의 `[[제목]]`은 위키링크로
+해석되어 백링크가 만들어집니다.
 
-### 임베딩 프로바이더
+문서가 쌓이면 두 화면이 정리를 돕습니다.
 
-**기본값은 `fake`입니다.** 의존성이 가볍고 테스트가 빨라 개발·검증 기본값으로 둔 것인데, 이
-상태에서도 업로드·검색이 **동작하기 때문에** 알아채기 어렵습니다. 가짜 벡터는 의미를 담지
-않으므로 **검색 품질을 이 상태로 판단하지 마세요.**
+- `/clusters` — 태그 없이도 **주제 덩어리**로 묶입니다 (저장된 관계 그래프의 Louvain 군집).
+- `/diagnostics` — 고아 문서 · 동일 텍스트 · 깨진 위키링크.
 
-실제 `BAAI/bge-m3`로 돌리려면 설치와 환경변수가 **둘 다** 필요합니다.
+### AI 에이전트 연결 (MCP)
 
-```bash
-pip install -e ".[dev,local]"                      # sentence-transformers + torch (수 GB)
-
-EMBEDDING_PROVIDER=local uvicorn app.main:app --reload   # API — 검색 질의를 임베딩한다
-EMBEDDING_PROVIDER=local python -m app.worker            # 워커 — 문서를 임베딩한다
-```
-
-| 환경변수 | 기본값 | 값 |
-|---|---:|---|
-| `EMBEDDING_PROVIDER` | `fake` | `local` — `BAAI/bge-m3`(MIT, 1024차원) · `fake` — 테스트용 |
-
-**API·워커·MCP 서버는 각자 프로바이더를 생성하므로 세 프로세스에 같은 값을 주어야 합니다.**
-값이 엇갈리면 질의 벡터와 문서 벡터가 다른 공간에 놓여, 에러 없이 검색 결과만 무의미해집니다.
-모델은 **API·워커가 기동할 때** 내려받아 캐시하므로 최초 1회는 기동이 오래 걸립니다(ADR-003 보강). 대신 첫 검색·첫 업로드가 로딩을 기다리지 않습니다.
-
-### 인증 환경변수
-
-| 환경변수 | 기본값 | 설명 |
-|---|---:|---|
-| `SESSION_LIFETIME_HOURS` | `24` | 서버 세션과 로그인 쿠키의 수명(시간) |
-| `SESSION_COOKIE_SECURE` | `false` | 로컬 HTTP에서는 `false`. HTTPS 상시 배포에서는 반드시 `true` |
-
-초기 계정은 환경변수로 자동 생성되지 않는다. API 서버를 먼저 기동해 마이그레이션을 적용한 뒤 위의
-`scripts/create_admin.py`를 실행한다. 비밀번호를 셸 기록에 남기고 싶지 않으면 `ADMIN_PASSWORD`를
-생략하면 대화형으로 입력받는다. 이후 관리자는 `/admin/users`에서 일반 사용자나 다른 관리자를
-발급할 수 있다. 관리자 권한은 계정 관리 전용이며 다른 사용자의 private 문서를 열람하게 하지는 않는다.
-
-각 사용자는 헤더의 사용자명을 눌러 **계정 설정**(`/settings`)에서 자기 비밀번호를 바꾸고 API
-토큰을 발급·폐기한다. 비밀번호를 바꾸면 그 계정으로 열려 있던 모든 기기의 로그인이 끊기고
-다시 로그인해야 한다. 발급한 API 토큰은 영향을 받지 않는다 ([ADR-040](docs/ADR.md)).
-
-**비밀번호를 잊어 로그인조차 못 하는 계정**은 운영자가 서버에서 재설정한다. 관리 화면에는 남의
-비밀번호를 바꾸는 경로를 두지 않는다 — 관리자가 남의 계정을 탈취해 그 사람의 private 문서를 읽게
-되면 "관리자 권한은 계정 관리 전용"이라는 경계가 무너지기 때문이다.
-
-```bash
-cd backend && source .venv/bin/activate
-openarchive reset-password alice     # 새 비밀번호는 화면에 남지 않게 입력받는다
-```
-
-재설정하면 그 계정의 로그인 세션이 모두 끊긴다. 발급된 API 토큰은 그대로 유효하므로, 자격증명까지
-갈아야 하면 다시 로그인해 `/settings`에서 폐기한다.
-
-### Claude Code/Desktop에 MCP 서버 등록
-
-stdio 서버 설정에 백엔드 가상환경의 Python과 모듈을 등록한다. `<REPOSITORY>`는 이 저장소의 절대 경로로 바꾼다.
+Claude Desktop / Claude Code의 MCP 설정에 stdio 서버로 등록합니다. `<REPOSITORY>`는 이
+저장소의 절대 경로, `DATABASE_URL`은 `backend/.env`와 같은 값입니다.
 
 ```json
 {
@@ -361,7 +258,7 @@ stdio 서버 설정에 백엔드 가상환경의 Python과 모듈을 등록한�
       "args": ["-m", "mcp_server.server"],
       "env": {
         "DATABASE_URL": "postgresql://openarchive:openarchive@localhost:5433/openarchive",
-        "EMBEDDING_PROVIDER": "fake",
+        "EMBEDDING_PROVIDER": "local",
         "MCP_USER_ID": "admin"
       }
     }
@@ -369,90 +266,46 @@ stdio 서버 설정에 백엔드 가상환경의 Python과 모듈을 등록한�
 }
 ```
 
-등록되는 도구는 `search_documents`, `get_document`, `list_documents`, `create_document` 네 개다.
-`DATABASE_URL`, `EMBEDDING_PROVIDER`, `MCP_USER_ID`를 MCP 프로세스에 함께 전달해야 한다.
-`MCP_USER_ID`를 생략하면 public 문서 읽기만 가능하고 `create_document` 쓰기는 거부된다. MCP 서버는
-마이그레이션을 실행하지 않으므로 API 서버를 먼저 기동해 스키마가 적용된 상태여야 한다 (ADR-012·036).
+에이전트는 `search_documents`로 발췌·출처·기준 버전을 받아 근거로 쓰고, `get_document` ·
+`list_documents`로 읽으며, `create_document`로 문서를 공급합니다. 답변 생성은 에이전트 쪽입니다.
+`MCP_USER_ID`가 열람 범위와 문서 소유자를 정하므로 **실제 계정명과 정확히 같게** 적습니다
+(실존 여부는 검증되지 않습니다 — [ADR-036](docs/ADR.md)). `EMBEDDING_PROVIDER`는 `serve`에
+준 값과 같아야 합니다 — 다르면 에러 없이 검색 결과만 무의미해집니다.
 
-> ⚠️ **`MCP_USER_ID`는 실존 계정인지 검증되지 않는다.** 미설정·빈 값·공백은 거부되지만,
-> 그 검사를 통과한 이름은 users 테이블에 없어도 그대로 문서 소유자가 된다 (ADR-036). 위 3번에서 만든 계정명과 **정확히 같게** 적어야
-> `create_document`로 만든 문서가 Web UI에서 자기 문서로 보인다.
+### 계정과 토큰
 
-### API 확인
+- `/settings` — 내 비밀번호 변경 · API 토큰 발급·폐기. 토큰 원문은 발급 직후 한 번만 보입니다.
+- `/admin/users` · `/admin/status` — 사용자 발급 · 시스템 상태(임베딩 작업 카운터, 원본과 어긋난
+  문서 수). 관리자 전용이며, 관리자라도 남의 비공개 문서는 볼 수 없습니다.
+- `openarchive reset-password <user>` — 비밀번호를 잊은 계정을 서버에서 재설정. 웹에는 이 경로를
+  두지 않습니다 ([ADR-040](docs/ADR.md)).
 
-엔드포인트 목록과 요청·응답 스키마는 서버가 직접 제공합니다. 구현과 어긋날 수 없는 유일한 출처입니다.
+REST 전체 목록과 스키마는 `http://localhost:8000/docs`(OpenAPI)에 있습니다. 환경변수·프로세스
+구성·복구 데모 등 운영 세부는 [운영 가이드](docs/OPERATIONS.md)를 보십시오.
 
-> **문서 관련 API는 읽기까지 전부 인증을 요구합니다** — 익명 요청은 401입니다 (ADR-028·034).
-> 사람은 위 3번에서 만든 계정으로 `POST /api/auth/login`을 호출하고, 프로그램은 위임 API 토큰을
-> Bearer로 보냅니다. MCP 서버는 HTTP를 거치지
-> 않고 서비스를 직접 호출하므로 이 경계와 무관하며, 열람 범위는 `MCP_USER_ID`가 정합니다.
+---
 
-```
-http://localhost:8000/docs
-```
-
-사람이 사용하는 클라이언트는 `POST /api/auth/login` 뒤 세션 쿠키를 동봉합니다. 프로그램은 로그인
-세션에서 발급한 API 토큰을 Bearer 자격증명으로 씁니다. 발급은 웹의 **계정 설정**(`/settings`)에서
-하며, `POST /api/auth/tokens`를 직접 호출해도 됩니다.
-기본 scope는 `read`이며 문서 공급에는 `read_write`가 필요합니다. 원문 토큰은 발급 응답에만 나오고,
-`GET /api/auth/tokens` 목록에는 다시 나타나지 않습니다. 발급·목록·폐기와 `/api/admin/*`는 세션
-전용입니다.
-
-독립 예제는 `backend` 패키지를 import하지 않고 토큰만으로 텍스트 공급과 상태 폴링을 수행합니다.
+## 개발
 
 ```bash
-python3 examples/ingest_text.py \
-  --base-url http://localhost:8000 \
-  --token "$OPENARCHIVE_API_TOKEN" \
-  --title "API 문서" \
-  document.md
+bash scripts/check.sh              # 백엔드 ruff+pytest, 프론트엔드 lint+test+build — 한 번에
 ```
 
-예제의 실제 서버 완주는 CI가 확인하지 않으므로 API·워커·DB를 함께 기동한 환경에서 실행해야 합니다.
-첫 커넥터와 MCP update/delete·원격 transport는 [Roadmap](docs/ROADMAP.md)의 다음 작업으로 남아 있습니다.
+DB 의존 테스트는 Mock이 아니라 실제 pgvector 컨테이너 위에서 돕니다 — 트리거·`NOTIFY`·`vector`
+연산자는 Mock으로 검증할 수 없기 때문입니다.
 
-설계 의도와 각 엔드포인트의 근거는 [Architecture](docs/ARCHITECTURE.md#api-설계)에 있습니다.
-
-### 검증
+개발 중에는 자동 재시작이 필요하므로 두 프로세스를 따로 띄웁니다.
 
 ```bash
-bash scripts/check.sh    # 백엔드 lint+test, 프론트엔드 lint+test+build
+uvicorn app.main:app --reload      # backend/ — API
+python -m app.worker               # backend/ — 워커
 ```
 
-복구 데모에는 마이그레이션이 적용된 **실 OpenSQL VM**과 `backend/.venv`의 개발 의존성이 필요합니다. 로컬 Docker DB에서는 실행할 수 없습니다. 스크립트가 API와 워커를 직접 띄우므로 별도로 실행해 둘 필요는 없습니다.
+프론트 소스를 고쳤다면 `frontend/`에서 `npm install && npm run dev`(개발 서버, `/api/*`를
+8000으로 프록시)로 작업하고, `npm run build:static`으로 `backend/app/static/`의 동봉 빌드를 갱신해
+함께 커밋합니다 ([ADR-041](docs/ADR.md)). `check.sh`가 이 빌드를 포함합니다.
 
-```bash
-# 기본값은 OPENSQL_HOST=192.168.64.4, OPENSQL_SSH=$OPENSQL_HOST,
-# PATRONI_URL=http://$OPENSQL_HOST:8008,
-# PATRONI_LOG=/home/opensql/logs/patroni.log, API_PORT=18000이다.
-OPENSQL_HOST=<vm-ip> \
-OPENSQL_SSH=<ssh-host> \
-DATABASE_URL="postgresql://postgres:pg_password@<vm-ip>:6432/opensql" \
-PATRONI_URL="http://<vm-ip>:8008" \
-PATRONI_LOG="/home/opensql/logs/patroni.log" \
-API_PORT=18000 \
-bash scripts/demo_recovery.sh
-```
-
-SSH 공개키 인증과 원격 호스트의 비밀번호 없는 `sudo`가 필요합니다. 데모는 postmaster 부모 프로세스에 `SIGKILL`을 한 번 보내고 Patroni의 자동 재기동, 앱 연결 예외와 재접속, 미처리 잡 재개, 정합성 수렴을 단일 타임라인으로 확인합니다.
-
-**DB 프로세스 장애 자동 복구를 검증했다. 노드 사망은 복구되지 않으며, 이는 사무국 지시에 따른 Single 구성의 제약이다. HA 설계는 유지하되 노드 승격은 검증하지 못했고, 애플리케이션 측 재연결·잡 재개·정합성 수렴을 함께 검증했다.**
-
-### 실 OpenSQL 클러스터에 연결
-
-애플리케이션은 OpenProxy VIP 단일 엔드포인트만 바라봅니다. 코드 변경 없이 환경변수만
-바꾸면 됩니다.
-
-```bash
-DATABASE_URL="postgresql://app@<vip>:6432/<pool_name>"
-```
-
-> ⚠️ **DSN을 바꾸기 전에 OpenProxy 풀이 어느 데이터베이스를 바라보는지 확인하십시오.**
-> 설치기는 `opensql` 데이터베이스를 만들어놓고 정작 풀은 관리용 `postgres`를 바라보게
-> 설정합니다. 클라이언트는 DSN에 **풀 이름**을 적으므로 실제 저장 위치가 드러나지 않아,
-> 그대로 두면 마이그레이션과 문서가 `postgres`에 쌓입니다. 교정 절차는
-> [OpenSQL 환경 구축](docs/SETUP_OPENSQL.md)의 §10 「풀이 바라보는 데이터베이스를
-> 교정한다」에 있습니다.
+브랜치·커밋 규약과 TDD 훅은 [Contributing](CONTRIBUTING.md)에 있습니다.
 
 ---
 
@@ -460,35 +313,30 @@ DATABASE_URL="postgresql://app@<vip>:6432/<pool_name>"
 
 | 문서 | 내용 |
 |---|---|
-| [PRD](docs/PRD.md) | 제품 요구사항, MVP 범위 |
-| [Roadmap](docs/ROADMAP.md) | 확장점 지도와 단계적 발전 경로 — 지금 하지 않는 것과 그 이유 |
 | [Architecture](docs/ARCHITECTURE.md) | 스키마·트리거·워커·검색·고가용성 상세 |
-| [ADR](docs/ADR.md) | 설계 결정과 각각의 근거·트레이드오프 |
-| [OpenSQL 조사](docs/OPENSQL_RESEARCH.md) | 배포판 확정 사항, 공식 문서 조사 결과, 검증 계획 |
-| [OpenSQL 환경 구축](docs/SETUP_OPENSQL.md) | Rocky Linux 9.7 VM 준비부터 single 모드 설치·검증까지 |
+| [ADR](docs/ADR.md) | 설계 결정과 각각의 근거·트레이드오프 — 재보고 물러난 결정 포함 |
+| [PRD](docs/PRD.md) | 제품 요구사항, 하지 않는 것 |
+| [Roadmap](docs/ROADMAP.md) | 확장점 지도와 단계적 발전 경로 |
+| [운영 가이드](docs/OPERATIONS.md) | 환경변수, 프로세스 구성, 인증, 복구 데모 |
+| [OpenSQL 조사](docs/OPENSQL_RESEARCH.md) | 배포판 확정 사항, 공식 문서 조사, 실측 기록 |
+| [OpenSQL 환경 구축](docs/SETUP_OPENSQL.md) | Rocky Linux 9.7 VM 준비부터 설치·검증까지 |
 | [UI Guide](docs/UI_GUIDE.md) | 디자인 원칙, 화면 구성 |
 | [Contributing](CONTRIBUTING.md) | 개발 규약, 브랜치·커밋 컨벤션 |
-
-설계 결정에 의문이 생기면 [ADR](docs/ADR.md)을 보십시오. 왜 그렇게 했는지, 무엇을 포기했는지가 적혀 있습니다.
 
 ---
 
 ## AI 모델 활용
 
-이 프로젝트는 문서 임베딩 생성에 **공개 가중치 모델을 로컬에서 구동**합니다. 외부 API 전용 모델은 사용하지 않습니다.
+문서·질의 임베딩에 **공개 가중치 모델을 로컬에서 구동**합니다. 외부 API 전용 모델은 사용하지 않으며,
+답변을 생성하는 LLM은 탑재하지 않습니다.
 
 | 항목 | 내용 |
 |---|---|
-| 모델 | [`BAAI/bge-m3`](https://huggingface.co/BAAI/bge-m3) |
-| 개발사 | Beijing Academy of Artificial Intelligence (BAAI) |
+| 모델 | [`BAAI/bge-m3`](https://huggingface.co/BAAI/bge-m3) — Beijing Academy of Artificial Intelligence |
 | 라이선스 | MIT |
-| 활용 방식 | 사전학습 가중치를 추가 학습 없이 그대로 사용 (외부 모델 그대로 활용) |
-| 구동 환경 | 로컬 — `sentence-transformers`. 외부 API 호출 없음 |
-
----
+| 활용 방식 | 사전학습 가중치를 추가 학습 없이 그대로 사용 |
+| 구동 환경 | 로컬 `sentence-transformers`. 외부 API 호출 없음 |
 
 ## 라이선스
 
-[MIT License](LICENSE)
-
-의존하는 오픈소스의 출처와 라이선스는 SBOM으로 함께 공개합니다.
+[MIT License](LICENSE). 의존하는 오픈소스의 출처와 라이선스는 SBOM으로 함께 공개합니다.
