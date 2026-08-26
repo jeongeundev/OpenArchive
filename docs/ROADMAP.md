@@ -100,6 +100,25 @@ DB 계층에 있고, 애플리케이션 코드에는 파이프라인을 조율�
 | **3. 지식 큐레이션 최소형** | 이미 있는 프리미티브를 워크플로로 승격한다 — 중복 판정(`content_hash`·`overlaps`)→병합, inbox 태그 검토, 버전 해소. ADR-029 노선대로 벡터+SQL로, 생성 LLM 없이. 군집(#85, ADR-042)은 조회 시점 Louvain으로 들어갔다. 키워드 라벨은 미착수 | `UI_GUIDE.md`의 "자동 병합하지 않는다" 제동 재검토 |
 | **4. Knowledge Base / Living LLM Wiki** | 문서 소스를 연결하면 선별·정리·관계화된 지식이 지속 갱신되는 위키에 도달한다 | ADR-015 결정 3(생성 LLM 미탑재) 재검토 — 생성을 밖에 둘지(MCP 경유 외부 AI) 옵션 레이어로 내장할지 |
 
+## 배포와 설치 — open-webui 형태로
+
+> 2026-08-27 결정. **1차 제출 후 착수한다.** 프리즈 뒤에 발견한 결함 하나를 포함하므로 순서가 정해져 있다.
+
+목표는 `pipx install openarchive-backend[local]` → `openarchive init` → `openarchive serve`, 또는
+`docker run … -e DATABASE_URL=…` 한 줄이다. 제품 형태(`init`·`serve` + 동봉 UI, ADR-039·041)는
+이미 그 모양이고 **남은 것은 포장이다.**
+
+| 순서 | 할 일 | 근거·주의 |
+|---|---|---|
+| 1 | `backend/migrations/`를 `app/` 안으로 옮기고 `package-data`에 넣는다 | **비편집 설치에서 `init`·API startup이 실패한다**(2026-08-27 확인). `app/migrations.py`가 `parent.parent / "migrations"`를 찾는데 site-packages에는 그 자리가 없다. `config.py`의 `.env` 경로도 같은 방식이라 설치 위치가 아니라 작업 디렉토리(또는 `~/.openarchive`) 기준으로 바꾼다. CLAUDE.md의 마이그레이션 규칙·tdd-guard 훅·`SETUP_OPENSQL.md`가 경로를 참조하므로 함께 고친다 |
+| 2 | PyPI 배포 | 이름 `openarchive-backend` 확보를 먼저 확인한다. 그 전 단계로, 저장소 public 전환 뒤에는 `pip install "openarchive-backend[local] @ git+https://github.com/jeongeundev/OpenArchive#subdirectory=backend"`가 clone 없이 동작한다 — 1번이 선행돼야 한다 |
+| 3 | 앱 컨테이너 이미지 (API·워커·UI) | **DB는 넣지 않는다.** 앱은 OpenSQL에 붙는 클라이언트라 컨테이너에 넣어도 실제 대상을 우회하지 않는다 — 8/9에 반려된 "컨테이너로 복구 데모"와는 다른 문제다 |
+| 4 | `init`이 최초 관리자 계정까지 만든다 | `scripts/create_admin.py`를 흡수한다. 첫 가입자가 관리자가 되는 방식은 두지 않는다 — 자체 가입이 없는 것은 결정이다 (ADR-028) |
+
+**여기서 하지 않는 것** — sqlite 같은 무설정 DB 기본값. 트리거 아웃박스가 제품이라 DB를
+대체하면 제품이 사라진다. `init`이 DSN 한 줄을 받는 것이 최소형이다. 플러그인 런타임도 두지
+않는다 — 확장은 HTTP·MCP로 **밖에** 둔다(위 「확장점과 후보」).
+
 ## 하지 않는 것
 
 > 제품 차원의 전체 목록은 **PRD 「하지 않는 것」 절이 정본**이다 (ADR-032). 아래는
