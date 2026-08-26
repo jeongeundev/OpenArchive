@@ -218,47 +218,37 @@ REST 전체 목록과 스키마는 `http://localhost:8000/docs`(OpenAPI)에 있�
 실행기입니다. **DB 밖 연산은 임베딩 모델 추론 하나뿐이라**, 워커를 통째로 지워도 잡은 DB에 남고
 다시 띄우면 이어서 처리합니다.
 
-```mermaid
-flowchart TB
-    subgraph iface["소비·공급 인터페이스 — 대등한 3면"]
-        direction LR
-        ui["Web UI<br/>동봉 정적 빌드 · 세션 쿠키"]
-        rest["REST API<br/>위임 토큰 (Bearer)"]
-        mcps["MCP Server<br/>stdio · AI 에이전트"]
-    end
-
-    svc["backend/app/services<br/>모든 인터페이스가 공유하는 단일 진입점 · VISIBLE_TO_USER 술어"]
-    proxy["OpenProxy — VIP:6432<br/>커넥션 풀 · Primary 추적 · 재연결"]
-
-    subgraph db["OpenSQL v3 — PostgreSQL 17.8 + pgvector 0.8.1"]
-        direction TB
-        docs["documents"]
-        trg1{{"AFTER 트리거<br/>같은 트랜잭션"}}
-        ver["document_versions<br/>텍스트 버전 이력 (append-only)"]
-        jobs["embedding_jobs<br/>트랜잭셔널 아웃박스 · 문서당 pending 1건"]
-        links["document_links<br/>위키링크 해석"]
-        chunks["document_chunks<br/>vector(1024) · HNSW"]
-        trg2{{"AFTER 트리거<br/>청크 교체와 같은 트랜잭션"}}
-        edges["document_edges<br/>overlaps · related (kNN, 순수 SQL)"]
-
-        docs --> trg1
-        trg1 --> ver
-        trg1 --> jobs
-        trg1 --> links
-        chunks --> trg2 --> edges
-    end
-
-    worker["Embedding Worker — 무상태 실행기<br/>SKIP LOCKED claim → 청킹 → 임베딩 →<br/>해시 재확인 + 청크 교체 + job done (단일 트랜잭션)"]
-    model["BGE-M3<br/>sentence-transformers 로컬 구동"]
-
-    ui --> svc
-    rest --> svc
-    mcps --> svc
-    svc -->|"documents INSERT/UPDATE만 — 임베딩 호출 없음<br/>필터 + 벡터 + 관계를 단일 SQL로"| proxy
-    proxy --> db
-    jobs -.->|"5초 폴링 (주 경로) + NOTIFY (최적화)"| worker
-    worker -->|"청크 배치 임베딩"| model
-    worker -->|"청크 교체 + ready 전이"| chunks
+```
+ ┌──────────────┐  ┌──────────────┐  ┌──────────────┐
+ │  Web UI      │  │  REST API    │  │  MCP Server  │   대등한 3면
+ │  (정적 빌드) │  │  (위임 토큰) │  │  (stdio)     │
+ └──────┬───────┘  └──────┬───────┘  └──────┬───────┘
+        └─────────────────┼─────────────────┘
+                          ▼
+              backend/app/services/
+              모든 인터페이스가 공유하는 단일 진입점
+                          │  documents INSERT/UPDATE만 — 임베딩 호출 없음
+                          ▼
+        ┌──────────────────────────────────────────┐
+        │  OpenProxy (VIP:6432)                    │
+        │  커넥션 풀 · Primary 추적 · 재연결       │
+        └────────────────────┬─────────────────────┘
+                             ▼
+ ┌──────────────────────────────────────────────────────┐
+ │  OpenSQL — PostgreSQL 17.8 + pgvector 0.8.1          │
+ │                                                      │
+ │   documents ──AFTER trigger──▶ document_versions     │  ← 같은 트랜잭션
+ │        │                  └──▶ embedding_jobs        │     (아웃박스)
+ │        └──AFTER trigger─────▶ document_links         │
+ │                                                      │
+ │   document_chunks (vector(1024), HNSW)               │
+ │        └─청크 교체와 같은 트랜잭션─▶ document_edges  │
+ └───────────────────────┬──────────────────────────────┘
+                         │  5초 폴링(주 경로) + NOTIFY(최적화)
+                         ▼
+              Embedding Worker — 무상태 실행기
+              SKIP LOCKED claim → 청킹 → 임베딩 →
+              해시 재확인 + 청크 교체 + job done (단일 트랜잭션)
 ```
 
 원본과 벡터가 어긋난 문서 수는 쿼리 한 줄로 셉니다. 문서를 고치면 잠깐 올랐다가 워커 처리 후
