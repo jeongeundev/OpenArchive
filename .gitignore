@@ -38,3 +38,7 @@ models/
 # --- phase 실행 산출물 ---
 phases/**/phase*-output.json
 phases/**/step*-output.json
+
+# 제출 자료는 저장소 밖에 둔다 — 결과보고서 초안과 대회 서식 원본
+docs/submission/
+*.docx
