@@ -167,62 +167,64 @@ DB에서 넓게 가져와 애플리케이션에서 후처리 필터링하지 않
 
 ## 시작하기
 
-세 단계입니다 — **설치 → DB 연결 → 실행**. 배포 패키지는 없으므로 소스에서 설치합니다.
+아래 블록을 **그대로 복사해 터미널에 붙여넣으면** 됩니다. 필요한 것은 Git, Python 3.12+, 그리고
+OpenSQL이 없을 때만 Docker입니다. 배포 패키지는 없으므로 소스에서 설치합니다.
 
-### 1. 설치
+### 빠른 시작 A — OpenSQL이 있을 때
+
+DSN 한 줄만 자기 환경으로 바꿉니다. OpenProxy 경유라면 데이터베이스 자리에 **풀 이름**을 적습니다.
 
 ```bash
 git clone https://github.com/jeongeundev/OpenArchive.git
 cd OpenArchive/backend
 python3 -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev,local]"      # local = BGE-M3 임베딩 모델 (torch 포함, 수 GB)
+pip install -e ".[local]"
+openarchive init --yes --dsn "postgresql://app:secret@<OpenProxy 호스트>:6432/<풀 이름>"   # ← 이 줄만 바꾼다
+ADMIN_PASSWORD='change-me' python ../scripts/create_admin.py admin --admin
+EMBEDDING_PROVIDER=local openarchive serve
 ```
 
-동작만 빠르게 확인하려면 `".[dev]"`로 설치해도 됩니다 — 가짜 벡터로 파이프라인 전 구간이
-돌지만 **검색 결과에 의미가 없으므로** 실제 사용에는 `local`이 필요합니다.
+브라우저에서 http://localhost:8000 을 열고 `admin` / `change-me`로 로그인합니다. 비밀번호는 설정
+화면에서 바로 바꿉니다.
 
-### 2. DB 연결
+> ⚠️ 설치기는 `opensql` 데이터베이스를 만들어 놓고 OpenProxy 풀은 관리용 `postgres`를 바라보게
+> 설정합니다. DSN을 주기 전에 풀이 어느 DB를 가리키는지 확인하세요 —
+> [OpenSQL 환경 구축 §10](docs/SETUP_OPENSQL.md#10-설치-확인). OpenSQL 자체를 세우는 절차도 그
+> 문서에 있습니다.
 
-OpenArchive는 표준 PostgreSQL 17 + pgvector 인터페이스에만 의존합니다. 연결 대상은 둘 중 하나입니다.
+### 빠른 시작 B — OpenSQL이 없을 때 (Docker로 DB만)
 
-**이미 OpenSQL(또는 PostgreSQL + pgvector)을 운영 중이라면** — OpenProxy 엔드포인트를 줍니다.
+저장소에 든 `pgvector/pgvector:pg17` 컨테이너를 DB로 씁니다. 바꿀 줄이 없습니다.
 
 ```bash
-openarchive init --dsn "postgresql://app@<vip>:6432/<pool_name>"
+git clone https://github.com/jeongeundev/OpenArchive.git
+cd OpenArchive
+docker compose up -d --wait
+cd backend
+python3 -m venv .venv && source .venv/bin/activate
+pip install -e ".[local]"
+openarchive init --yes --dsn "postgresql://openarchive:openarchive@localhost:5433/openarchive"
+ADMIN_PASSWORD='change-me' python ../scripts/create_admin.py admin --admin
+EMBEDDING_PROVIDER=local openarchive serve
 ```
 
-**없다면** — 저장소에 든 로컬 컨테이너를 씁니다 (Docker 필요).
-
-```bash
-docker compose up -d               # 저장소 루트에서. 호스트 포트 5433
-openarchive init                   # 대화형 — 기본 DSN을 그대로 Enter
-```
-
-`init`은 **연결 확인 → 확장·권한 점검 → 스키마 적용 → 준비 상태 보고**를 한 번에 합니다.
-확인이 적용보다 먼저라 `vector` 확장이 없거나 권한이 모자라면 스키마를 건드리기 전에 무엇이
-왜 필요한지 알려주고 멈추고, 기존 테이블이 있으면 아무것도 바꾸지 않습니다
-([ADR-039](docs/ADR.md)). 확인한 DSN은 `backend/.env`에 기록됩니다.
-
-> ⚠️ **실 OpenSQL**: 설치기는 `opensql` 데이터베이스를 만들어 놓고 OpenProxy 풀은 관리용
-> `postgres`를 바라보게 설정합니다. DSN을 주기 전에 풀이 어느 DB를 가리키는지 확인하세요 —
-> [OpenSQL 환경 구축 §10](docs/SETUP_OPENSQL.md#10-설치-확인). OpenSQL 자체를 세우는 절차도
-> 그 문서에 있습니다.
-
-### 3. 실행
-
-```bash
-# 최초 관리자 계정 — 자체 가입이 없으므로 첫 로그인 전에 한 번
-ADMIN_PASSWORD='<초기 비밀번호>' python ../scripts/create_admin.py admin --admin
-
-# API + 임베딩 워커 + 웹 화면을 한 명령으로
-EMBEDDING_PROVIDER=local openarchive serve     # ".[dev]"로 설치했다면 환경변수 생략
-```
-
-`http://localhost:8000`에서 방금 만든 계정으로 로그인합니다. 웹 화면은 백엔드에 동봉된 정적
-빌드라 Node.js가 필요 없습니다. 최초 1회는 모델 다운로드(약 2GB)로 기동이 오래 걸립니다.
-
-실 OpenSQL 위에서는 이 절차 그대로 Patroni의 장애 복구와 OpenProxy의 커넥션 풀링이 더해집니다 —
+같은 코드가 그대로 돕니다 — OpenArchive는 표준 PostgreSQL 17 + pgvector 인터페이스에만 의존하기
+때문입니다. 실 OpenSQL 위에서는 여기에 Patroni의 장애 복구와 OpenProxy의 커넥션 풀링이 더해집니다 —
 코드 변경도, 추가 설정도 없습니다 ([ADR-006](docs/ADR.md)).
+
+### 각 단계가 하는 일
+
+- **`pip install -e ".[local]"`** — `local`은 BGE-M3 임베딩 모델입니다 (torch 포함, 수 GB). 동작만
+  빠르게 확인하려면 `".[dev]"`로 설치하고 `EMBEDDING_PROVIDER=local`을 빼도 됩니다 — 가짜 벡터로
+  파이프라인 전 구간이 돌지만 **검색 결과에 의미가 없으므로** 실제 사용에는 `local`이 필요합니다.
+- **`openarchive init`** — **연결 확인 → 확장·권한 점검 → 스키마 적용 → 준비 상태 보고**를 한 번에
+  합니다. 확인이 적용보다 먼저라 `vector` 확장이 없거나 권한이 모자라면 스키마를 건드리기 전에 무엇이
+  왜 필요한지 알려주고 멈추고, 기존 테이블이 있으면 아무것도 바꾸지 않습니다
+  ([ADR-039](docs/ADR.md)). `--yes`를 빼면 단계마다 묻습니다. 확인한 DSN은 `backend/.env`에 기록됩니다.
+- **`create_admin.py`** — 자체 가입이 없으므로 최초 관리자 계정을 한 번 만듭니다.
+- **`openarchive serve`** — API + 임베딩 워커 + 웹 화면을 한 명령으로 띄웁니다. 웹 화면은 백엔드에
+  동봉된 정적 빌드라 Node.js가 필요 없습니다. **최초 1회는 모델 다운로드(약 2GB)로 기동이 오래
+  걸립니다.**
 
 ---
 
