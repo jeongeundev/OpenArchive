@@ -24,6 +24,14 @@ GRAPH_MAX_DEPTH = 2
 # 코사인 거리는 최대 2다. 한 단계마다 그 범위만큼 벌려 직접 결과가 관계 확장보다
 # 항상 앞서게 하고, 동시에 기존 `score = 1 - dist` 정렬 의미를 유지한다.
 GRAPH_DISTANCE_PENALTY = 2.0
+# 관계 종류의 우선순위. 최종 정렬뿐 아니라 같은 문서·같은 발췌로 수렴한 행을 하나로
+# 접을 때도 이 순서로 남긴다 — 거리·깊이까지 같은 동점(문서 단위 overlaps와 위키링크
+# refers가 같은 경유 문서에서 닿는 경우)이 실제로 생기며, 접는 규칙에 이 축이 빠지면
+# 어느 쪽이 남는지가 정렬 구현의 물리 행 순서에 달린다 (ADR-011 보강 6).
+VIA_KIND_PRIORITY = """CASE {alias}via_kind
+        WHEN 'overlaps' THEN 0 WHEN 'related' THEN 1
+        WHEN 'refers' THEN 2 WHEN 'revision' THEN 3 ELSE 4
+    END"""
 
 SEARCH_SQL = f"""
 WITH RECURSIVE candidates AS (
@@ -63,28 +71,23 @@ traversal_edges AS (
     SELECT src_document_id, dst_document_id, kind, dst_chunk_index
     FROM resolved_links
 ),
-walk AS (
-    SELECT c.document_id, c.chunk_index, c.content, c.version, c.dist,
+walk_ids AS (
+    -- 순회는 문서 id·거리·경로만 나른다. 발췌(청크 본문)는 여기서 고르지 않는다 —
+    -- 촘촘한 그래프에서 깊이 2 순회 행은 만 단위인데 그 행마다 청크 정렬을 돌리면
+    -- 그것이 검색 비용의 전부가 된다 (ADR-011 보강 6: 13,332회 → 204회, 3.5~11.6초 → 0.35~0.81초).
+    SELECT c.document_id, c.dist,
            NULL::uuid AS via_document_id, NULL::text AS via_kind, 0 AS depth,
-           ARRAY[c.document_id] AS path
+           ARRAY[c.document_id] AS path, NULL::int AS target_chunk_index
     FROM candidates c
 
     UNION ALL
 
-    SELECT e.dst_document_id, target.chunk_index, target.content, target.version,
-           w.dist + {GRAPH_DISTANCE_PENALTY},
-           w.document_id, e.kind, w.depth + 1, w.path || e.dst_document_id
-    FROM walk w
+    SELECT e.dst_document_id, w.dist + {GRAPH_DISTANCE_PENALTY},
+           w.document_id, e.kind, w.depth + 1, w.path || e.dst_document_id,
+           e.dst_chunk_index
+    FROM walk_ids w
     JOIN traversal_edges e ON e.src_document_id = w.document_id
     JOIN documents d ON d.id = e.dst_document_id
-    JOIN LATERAL (
-        SELECT target.chunk_index, target.content, target.version
-        FROM document_chunks target
-        WHERE target.document_id = e.dst_document_id
-          AND (e.dst_chunk_index IS NULL OR target.chunk_index = e.dst_chunk_index)
-        ORDER BY target.embedding <=> %(qvec)s::vector
-        LIMIT 1
-    ) target ON true
     WHERE w.depth < {GRAPH_MAX_DEPTH}
       AND NOT e.dst_document_id = ANY(w.path)
       AND NOT EXISTS (
@@ -94,6 +97,36 @@ walk AS (
       AND (%(tags)s::text[] IS NULL OR d.tags && %(tags)s)
       AND (%(ctype)s::text IS NULL OR d.content_type = %(ctype)s)
       AND {VISIBLE_TO_USER}
+),
+walk_targets AS (
+    -- 같은 문서·같은 대상 청크(NULL은 -1로 접는다)에 여러 경로로 닿으면 가장 가까운
+    -- 경로 하나만 남긴다. 아래 deduplicated가 실제 chunk_index로 한 번 더 접으므로
+    -- NULL 대상과 명시 대상이 같은 청크로 수렴해도 결과는 이전과 같다.
+    SELECT DISTINCT ON (document_id, COALESCE(target_chunk_index, -1))
+           document_id, dist, via_document_id, via_kind, depth, target_chunk_index
+    FROM walk_ids
+    WHERE depth > 0
+    ORDER BY document_id, COALESCE(target_chunk_index, -1), dist,
+             {VIA_KIND_PRIORITY.format(alias='')}, depth
+),
+walk AS (
+    SELECT c.document_id, c.chunk_index, c.content, c.version, c.dist,
+           NULL::uuid AS via_document_id, NULL::text AS via_kind, 0 AS depth
+    FROM candidates c
+
+    UNION ALL
+
+    SELECT w.document_id, target.chunk_index, target.content, target.version, w.dist,
+           w.via_document_id, w.via_kind, w.depth
+    FROM walk_targets w
+    JOIN LATERAL (
+        SELECT target.chunk_index, target.content, target.version
+        FROM document_chunks target
+        WHERE target.document_id = w.document_id
+          AND (w.target_chunk_index IS NULL OR target.chunk_index = w.target_chunk_index)
+        ORDER BY target.embedding <=> %(qvec)s::vector
+        LIMIT 1
+    ) target ON true
 ),
 expanded AS (
     SELECT document_id, chunk_index, content, version, dist,
@@ -120,7 +153,7 @@ deduplicated AS (
              CASE WHEN depth = 0 THEN -1 ELSE version END,
              CASE WHEN depth = 0 OR via_kind = 'revision' THEN -1 ELSE chunk_index END,
              CASE WHEN depth = 0 THEN 0 ELSE 1 END,
-             dist, depth
+             dist, {VIA_KIND_PRIORITY.format(alias='')}, depth
 ),
 selected AS (
     (SELECT * FROM deduplicated
@@ -133,10 +166,7 @@ selected AS (
     (SELECT * FROM deduplicated
      WHERE depth > 0
      ORDER BY dist,
-              CASE via_kind
-                  WHEN 'overlaps' THEN 0 WHEN 'related' THEN 1
-                  WHEN 'refers' THEN 2 WHEN 'revision' THEN 3 ELSE 4
-              END,
+              {VIA_KIND_PRIORITY.format(alias='')},
               depth, document_id, chunk_index
      LIMIT %(k)s)
 )
@@ -147,10 +177,7 @@ FROM selected hit
 JOIN documents d ON d.id = hit.document_id
 ORDER BY CASE WHEN hit.depth = 0 THEN 0 ELSE 1 END,
          hit.dist,
-         CASE hit.via_kind
-             WHEN 'overlaps' THEN 0 WHEN 'related' THEN 1
-             WHEN 'refers' THEN 2 WHEN 'revision' THEN 3 ELSE 4
-         END,
+         {VIA_KIND_PRIORITY.format(alias='hit.')},
          hit.depth,
          hit.document_id, hit.chunk_index
 """
