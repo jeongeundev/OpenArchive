@@ -189,20 +189,17 @@ openarchive init                 # 아래 「openarchive init」 참조
 cd .. && ADMIN_PASSWORD='<초기 비밀번호>' python scripts/create_admin.py admin --admin
 cd backend
 
-# 5. API 서버 + 임베딩 워커 — 한 명령이 둘 다 띄우고 Ctrl-C에 둘 다 멈춘다
+# 5. API + 임베딩 워커 + 웹 화면 — 한 명령이 전부 띄운다
 openarchive serve                # 아래 「openarchive serve」 참조
 
-# 6. 프론트엔드 (별도 터미널)
-cd frontend
-npm install && npm run dev
-
-# 7. MCP 서버 (Claude Desktop/Code가 기동한다. 수동 확인은 아래 커맨드)
+# 6. MCP 서버 (Claude Desktop/Code가 기동한다. 수동 확인은 아래 커맨드)
 #    MCP_USER_ID는 4번에서 만든 계정명과 같아야 한다 — 아래 「MCP 서버 등록」 참조.
-cd backend && source .venv/bin/activate
 MCP_USER_ID=admin python -m mcp_server.server
 ```
 
-`http://localhost:3000` 접속.
+`http://localhost:8000` 접속. **웹 화면은 API와 같은 주소에서 나옵니다** — 빌드된
+프론트가 백엔드 패키지에 동봉돼 있어 Node.js가 필요하지 않습니다 ([ADR-041](docs/ADR.md)).
+프론트 코드를 고칠 때만 아래 「프론트엔드를 고칠 때」를 보십시오.
 
 ### `openarchive init`
 
@@ -241,6 +238,7 @@ openarchive serve                              # 127.0.0.1:8000
 openarchive serve --host 0.0.0.0 --port 9000
 ```
 
+- 웹 화면·API·워커가 한 주소에서 나옵니다. 별도 프론트 서버가 필요 없습니다.
 - Ctrl-C 한 번에 둘 다 멈춥니다. 워커는 **처리 중인 잡을 마치고** 종료합니다.
 - 한쪽이 멈추면 나머지도 내리고 0이 아닌 코드로 끝납니다 — 반쪽만 도는 상태를 만들지 않습니다.
 - **죽은 프로세스를 되살리지는 않습니다.** 배포 호스트에서는 systemd가 그 역할을 합니다
@@ -252,6 +250,22 @@ openarchive serve --host 0.0.0.0 --port 9000
 uvicorn app.main:app --reload                  # 터미널 1
 python -m app.worker                           # 터미널 2
 ```
+
+### 프론트엔드를 고칠 때
+
+웹 화면은 `backend/app/static/`에 동봉된 빌드 산출물입니다(1.5MB). 프론트 소스를 고쳤다면
+**다시 빌드해 산출물을 갱신하고 함께 커밋해야** 화면에 반영됩니다.
+
+```bash
+cd frontend
+npm install
+npm run dev            # 개발 서버 — http://localhost:3000, /api/*는 8000으로 프록시된다
+npm run build:static   # 정적 export + backend/app/static 갱신
+```
+
+`bash scripts/check.sh`가 `build:static`을 돌리므로, 검증만 통과시켜도 산출물이 최신이
+됩니다 — 갱신분은 `git diff`에 드러납니다.
+
 
 ### 환경변수 파일은 `backend/.env` 하나입니다
 

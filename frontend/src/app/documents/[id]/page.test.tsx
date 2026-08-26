@@ -1,13 +1,16 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { Suspense } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { DocumentDetail } from "@/lib/types";
 import { AuthProvider } from "@/components/AuthProvider";
-import DocumentDetailPage from "./page";
+import { DocumentDetailView } from "./DocumentDetailView";
 
-// DocumentActions가 삭제 후 목록으로 보낼 때만 쓴다. 태그 편집 경로와는 무관하다.
-vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
+// useRouter는 DocumentActions가 삭제 후 목록으로 보낼 때만 쓴다. usePathname은 문서 ID의
+// 출처다 — 정적 export에서는 params에 껍데기 값이 들어오므로 URL에서 읽는다.
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push: vi.fn() }),
+  usePathname: () => "/documents/document-1",
+}));
 
 const detail: DocumentDetail = {
   id: "document-1",
@@ -64,14 +67,12 @@ function savedTags(fetchMock: ReturnType<typeof stubFetch>): string[][] {
 }
 
 async function renderPage(): Promise<void> {
-  // params는 렌더마다 새로 만들면 use()가 계속 서스펜드한다. 한 번만 만든다.
-  const params = Promise.resolve({ id: "document-1" });
-  // use(params)가 서스펜드하므로 render를 await된 act 안에서 돌려야 재개된다.
+  // 마운트 직후 useEffect가 문서·링크를 부르므로 render를 await된 act 안에서 돌린다.
   await act(async () => {
     render(
-      <Suspense fallback={null}>
-        <AuthProvider><DocumentDetailPage params={params} /></AuthProvider>
-      </Suspense>,
+      <AuthProvider>
+        <DocumentDetailView />
+      </AuthProvider>,
     );
   });
   await screen.findByRole("button", { name: "태그 저장" });

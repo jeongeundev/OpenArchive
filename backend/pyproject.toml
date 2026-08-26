@@ -37,6 +37,10 @@ dev = [
 # 테스트·CI는 전부 FakeProvider로 돌기 때문이다 (ADR-003).
 local = ["sentence-transformers"]
 
+# 빌드된 프론트를 wheel에 담는다 (ADR-041). 이것이 없으면 설치본에서 화면이 뜨지 않는다.
+[tool.setuptools.package-data]
+app = ["static/**/*"]
+
 [tool.setuptools.packages.find]
 # tests는 설치 대상이 아니다. app과 MCP 서버 패키지만 배포한다.
 include = ["app*", "mcp_server*"]

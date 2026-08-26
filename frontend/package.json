@@ -7,7 +7,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "vitest run"
+    "test": "vitest run",
+    "build:static": "STATIC_EXPORT=1 next build && rm -rf ../backend/app/static && cp -R out ../backend/app/static"
   },
   "dependencies": {
     "jszip": "3.10.1",

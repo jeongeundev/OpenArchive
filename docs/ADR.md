@@ -2093,3 +2093,69 @@ ADR-034가 토큰 발급·목록·폐기를 세션 전용으로 봉인했다. �
   도입해야 하고, 그것은 ADR-028의 "최소 로그인" 범위를 다시 여는 별개 판단이다.
 - **화면이 하나 늘었다.** UI_GUIDE의 사용자 화면은 6개에서 7개가 된다. 관리 화면이 아닌 이유는
   이 화면의 모든 동작이 **자기 자신에게만** 미치기 때문이다.
+
+### ADR-041: 빌드된 프론트를 백엔드 패키지에 동봉해 같은 오리진에서 서빙한다
+**상태**: 2026-08-26 신규. ADR-039 결정 2 개정(`openarchive serve`)의 다음 걸음이다.
+
+**배경 — 마지막에 남은 런타임 하나**
+
+`init`이 DB 연결을, `serve`가 API·워커 기동을 한 줄로 만든 뒤에도 프론트엔드가 남았다.
+사용자는 여전히 Node.js를 설치하고 `npm install`로 **521MB**(실측)의 `node_modules`를
+받은 뒤 세 번째 프로세스를 띄워야 했다.
+
+그런데 이 앱의 프론트가 Node에서 하는 일은 셋뿐이었다 — 정적 파일 서빙, `/api/*`
+프록시(`next.config`의 rewrites), `documents/[id]` 한 페이지의 서버 렌더링. 셋 다
+없앨 수 있다. 확인해 보니 서버 전용 코드(`use server`·Route Handler·`cookies()`)는
+한 줄도 없었다. 이미 순수 클라이언트 앱이었다.
+
+**결정 1 — 정적 export를 백엔드 패키지에 담는다.** `STATIC_EXPORT=1 npm run build:static`이
+`out/`을 만들고 `backend/app/static/`으로 복사한다. FastAPI가 그것을 서빙하므로 Node는
+개발자 쪽에만 남는다. 산출물은 **1.5MB · 86파일**이라 저장소에 커밋한다 — 커밋하지 않으면
+clean clone에서 다시 Node가 필요해져 이 ADR의 목적이 사라진다.
+
+**결정 2 — 문서 상세는 껍데기 한 장으로 받는다.** 정적 export는 빌드 시점에 아는 경로만
+만드는데(Next 16 static-exports 문서: `dynamicParams: true`인 동적 라우트는 미지원)
+문서 ID는 실행 중에 생긴다. `generateStaticParams`가 `__id__` 하나만 내놓고, 서버가 모든
+문서 ID 요청에 그 파일을 내려준다. 실제 ID는 컴포넌트가 `usePathname()`으로 URL에서 읽는다.
+
+`page.tsx`가 서버 컴포넌트로 남고 화면은 `DocumentDetailView.tsx`로 갈라진 것은 이 때문이다
+— `generateStaticParams`는 클라이언트 컴포넌트 파일에서 export할 수 없다.
+
+**결정 3 — fallback은 두 번째 세그먼트를 치환해 찾고, 확장자를 남긴다.**
+
+| 요청 | 내려주는 파일 |
+|---|---|
+| `/search` | `search.html` |
+| `/documents/<uuid>` | `documents/__id__.html` |
+| `/documents/<uuid>.txt` | `documents/__id__.txt` |
+| `/documents/<uuid>/__next._tree.txt` | `documents/__id__/__next._tree.txt` |
+
+확장자를 남기는 이유는 `<Link>` 이동이 HTML이 아니라 **RSC 페이로드**를 받아 가기 때문이다.
+확장자를 잃고 `.html`로 떨어지면 라우터가 페이로드 대신 HTML을 읽어 클라이언트 이동이 깨진다.
+
+어느 라우트가 동적인지는 **적어 두지 않는다.** 치환한 경로가 실제로 존재할 때만 쓰이므로
+목록이 필요 없고, 손으로 적은 목록은 라우트가 늘 때 조용히 낡는다(ADR-039 결정 3의 같은 원칙).
+
+**결정 4 — catch-all은 API 라우트를 전부 등록한 뒤에 붙인다.** 먼저 붙이면 `/api/*`까지
+삼킨다. `mount_frontend(app)` 호출이 `main.py` 맨 끝에 있는 이유이며, 테스트가 이 순서를
+`/api/health` 응답으로 고정한다.
+
+**실측에서 잡은 것 둘**
+
+- **HEAD를 함께 받아야 한다.** Next의 `<Link>` 프리페치가 HEAD로 온다. GET만 받으면 화면은
+  멀쩡히 동작하는데 콘솔이 405로 뒤덮인다(브라우저로 열기 전까지 드러나지 않았다 —
+  페이지 하나 여는 데 31건). 회귀는 테스트로 고정한다.
+- **경로 조작 방어는 정규화 뒤에 판정한다.** 문자열만 검사하면 인코딩된 형태를 놓친다.
+  `resolve()` 후 `is_relative_to(static_dir)`로 본다.
+
+**트레이드오프**
+
+- **빌드 산출물이 저장소에 들어온다.** 소스와 어긋날 위험이 있어 `scripts/check.sh`의 프론트
+  빌드를 `build:static`으로 바꿨다 — 검증을 돌리면 산출물이 갱신되고 차이는 `git diff`에
+  그대로 드러난다. 검증 스크립트가 워킹트리를 건드리는 것은 부작용이지만, 조용히 어긋난
+  산출물을 배포하는 것보다 낫다.
+- **`next.config`의 rewrites가 정적 export에서 빠진다.** 동봉하면 API가 같은 오리진이라
+  프록시가 필요 없고, Next 16은 export 모드에서 rewrites를 무시한다(빌드 경고). 개발
+  서버는 여전히 프록시가 필요하므로 `STATIC_EXPORT` 환경변수로 갈라 둔다.
+- **개발 경험은 바뀌지 않는다.** `npm run dev`는 그대로다. 동봉 산출물은 배포·심사 경로를
+  위한 것이고, 프론트를 고치는 사람은 기존 방식을 쓴다.
