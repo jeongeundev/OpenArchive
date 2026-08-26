@@ -59,7 +59,9 @@ export default function ClustersPage(): React.ReactElement {
       <header>
         <p className="text-sm text-neutral-500">현재 열람 범위 기준</p>
         <h1 className="mt-2 text-4xl font-semibold text-white">주제 덩어리</h1>
-        <p className="mt-3 text-sm text-neutral-400">원의 크기는 문서 수, 선의 굵기는 주제 사이 관계 수를 나타냅니다.</p>
+        <p className="mt-3 text-sm text-neutral-400">
+          관계 그래프에서 서로 많이 이어진 문서끼리 묶었습니다. 원의 크기는 문서 수, 선의 굵기는 덩어리 사이 관계 수입니다. 덩어리 이름은 가장 많이 쓰인 태그이고, 태그가 없으면 연결이 가장 많은 문서의 제목입니다. 묶음은 관계로 계산한 추천이며 사실처럼 단정하지 않습니다.
+        </p>
       </header>
 
       {error !== null ? <p className="text-sm text-[#ef4444]" role="alert">{error}</p> : null}
@@ -119,6 +121,9 @@ export default function ClustersPage(): React.ReactElement {
       {selected !== null ? (
         <section className="rounded-lg border border-neutral-800 bg-[#141414] p-6">
           <h2 className="text-sm font-medium text-neutral-400">{selected.name} 문서 {selected.size}개</h2>
+          {selected.name === "미분류" ? (
+            <p className="mt-2 text-sm text-neutral-500">아직 관계가 계산되지 않았거나 이어진 문서가 없는 문서입니다.</p>
+          ) : null}
           <ul className="mt-4 space-y-2">
             {selected.documents.map((document) => (
               <li key={document.document_id}>

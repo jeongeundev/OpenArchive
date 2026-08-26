@@ -29,6 +29,12 @@ describe("주제 덩어리 화면", () => {
 
     render(<ClustersPage />);
 
+    expect(screen.getByText(/관계/)).toBeInTheDocument();
+    expect(screen.queryByText(/태그로 묶/)).not.toBeInTheDocument();
+    expect(
+      screen.getByText(/묶음은 관계로 계산한 추천이며 사실처럼 단정하지 않습니다\./),
+    ).toBeInTheDocument();
+
     fireEvent.click(await screen.findByRole("button", { name: "검색 덩어리" }));
 
     expect(screen.getByRole("heading", { name: "검색 문서 2개" })).toBeInTheDocument();
@@ -37,5 +43,10 @@ describe("주제 덩어리 화면", () => {
       "/documents/doc-1",
     );
     expect(screen.getByRole("link", { name: "검색 운영" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "미분류 덩어리" }));
+    expect(
+      screen.getByText("아직 관계가 계산되지 않았거나 이어진 문서가 없는 문서입니다."),
+    ).toBeInTheDocument();
   });
 });
