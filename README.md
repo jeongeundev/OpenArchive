@@ -220,27 +220,33 @@ REST 전체 목록과 스키마는 `http://localhost:8000/docs`(OpenAPI)에 있�
 다시 띄우면 이어서 처리합니다.
 
 ```
-  Web UI               REST API               MCP Server
-  (정적 빌드)            (위임 토큰)             (stdio)
-      └────────────────────┼────────────────────┘
-                           ▼
+ ┌──────────────┐  ┌──────────────┐  ┌──────────────┐
+ │  Web UI      │  │  REST API    │  │  MCP Server  │   인터페이스
+ │  (정적 빌드)   │  │  (위임 토큰)   │  │  (stdio)     │
+ └──────┬───────┘  └──────┬───────┘  └──────┬───────┘
+        └─────────────────┼─────────────────┘
+                          ▼
               backend/app/services/
               모든 인터페이스가 공유하는 단일 진입점
-                           │  documents INSERT/UPDATE만 — 임베딩 호출 없음
-                           ▼
-              OpenProxy (VIP:6432)
-              커넥션 풀 · Primary 추적 · 재연결
-                           ▼
-  ══ OpenSQL : PostgreSQL 17.8 + pgvector 0.8.1 ══════════════════
-      documents ──AFTER trigger──▶ document_versions
-           │                  └──▶ embedding_jobs
-           └──AFTER trigger─────▶ document_links
-                                  셋 다 같은 트랜잭션 · 잡은 아웃박스
-      document_chunks (vector(1024), HNSW)
-           └──▶ document_edges   (청크 교체와 같은 트랜잭션)
-  ════════════════════════════════════════════════════════════════
-                           │  5초 폴링(주 경로) + NOTIFY(최적화)
-                           ▼
+                          │  documents INSERT/UPDATE만 — 임베딩 호출 없음
+                          ▼
+        ┌──────────────────────────────────────────┐
+        │  OpenProxy (VIP:6432)                    │
+        │  커넥션 풀 · Primary 추적 · 재연결            │
+        └────────────────────┬─────────────────────┘
+                             ▼
+ ┌──────────────────────────────────────────────────────┐
+ │  OpenSQL — PostgreSQL 17.8 + pgvector 0.8.1          │
+ │                                                      │
+ │   documents ──AFTER trigger──▶ document_versions     │  ← 같은 트랜잭션
+ │        │                  └──▶ embedding_jobs        │     (아웃박스)
+ │        └──AFTER trigger─────▶ document_links         │
+ │                                                      │
+ │   document_chunks (vector(1024), HNSW)               │
+ │        └─청크 교체와 같은 트랜잭션─▶ document_edges        │
+ └───────────────────────┬──────────────────────────────┘
+                         │  5초 폴링(주 경로) + NOTIFY(최적화)
+                         ▼
               Embedding Worker — 무상태 실행기
               SKIP LOCKED claim → 청킹 → 임베딩 →
               해시 재확인 + 청크 교체 + job done (단일 트랜잭션)
