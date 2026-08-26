@@ -13,6 +13,20 @@
 bash scripts/check.sh
 ```
 
+DB 의존 테스트는 Mock이 아니라 실제 `pgvector/pgvector:pg17` 컨테이너 위에서 돕니다 —
+트리거·`NOTIFY`·`vector` 연산자는 Mock으로 검증할 수 없기 때문입니다.
+
+개발 중에는 자동 재시작이 필요하므로 두 프로세스를 따로 띄웁니다.
+
+```bash
+uvicorn app.main:app --reload      # backend/ — API
+python -m app.worker               # backend/ — 워커
+```
+
+프론트 소스를 고쳤다면 `frontend/`에서 `npm install && npm run dev`(개발 서버, `/api/*`를
+8000으로 프록시)로 작업하고, `npm run build:static`으로 `backend/app/static/`의 동봉 빌드를
+갱신해 함께 커밋합니다 ([ADR-041](docs/ADR.md)). `check.sh`가 이 빌드를 포함합니다.
+
 기여할 때 걸리기 쉬운 세 가지만 여기 적습니다.
 
 > **가상환경**: `scripts/check.sh`는 `backend/.venv/bin`의 실행 파일을 직접 부릅니다.

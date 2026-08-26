@@ -38,7 +38,7 @@ AI 에이전트는 MCP로 같은 문서와 같은 권한 규칙 위에서 접근
 
 | 기능 | 설명 |
 |---|---|
-| 자동 임베딩 파이프라인 | PDF·DOCX·TXT·MD 업로드(ZIP 일괄 포함) 시 트리거가 작업을 만들고 워커가 청킹·임베딩·저장 |
+| 자동 임베딩 파이프라인 | PDF·DOCX·TXT·MD 업로드(ZIP 일괄 포함) 시 트리거가 작업을 만들고 워커가 청킹·임베딩·저장. **원본 파일은 보관하지 않고 추출 텍스트만 남음** |
 | 하이브리드 검색 | 태그·유형·권한 필터 + 벡터 유사도 + 저장된 문서 관계(깊이 2)를 **단일 SQL**로 결합. 결과에 "왜 나왔는지"를 함께 표시 |
 | 텍스트 버전 관리 | 추출 텍스트를 직접 편집하면 이력이 쌓이고 재임베딩이 자동 기동. 처리 중에는 이전 벡터로 검색이 계속됨. 되돌리기는 새 버전을 만듦 |
 | 자동 정리 | 관계 그래프의 Louvain 군집으로 주제 덩어리를 태그 없이 묶고, 관련 문서·태그 추천, 고아·중복·깨진 위키링크 진단 |
@@ -47,130 +47,12 @@ AI 에이전트는 MCP로 같은 문서와 같은 권한 규칙 위에서 접근
 | 위임 API 토큰 | 계정 설정에서 프로그램용 토큰을 발급·폐기. scope는 `read`·`read_write` |
 | 장애 자동 복구 | DB 프로세스 장애 시 자동 재기동·앱 재연결·미처리 작업 무손실 재개를 실 OpenSQL에서 검증 |
 
-> **원본 파일은 보관하지 않습니다.** 업로드된 파일에서 텍스트만 추출해 저장하며, 편집·버전·임베딩의
-> 대상은 그 **추출 텍스트**입니다 ([ADR-017](docs/ADR.md)).
-
----
-
-## 아키텍처
-
-```mermaid
-flowchart TB
-    subgraph iface["소비·공급 인터페이스 — 대등한 3면"]
-        direction LR
-        ui["Web UI<br/>동봉 정적 빌드 · 세션 쿠키"]
-        rest["REST API<br/>위임 토큰 (Bearer)"]
-        mcps["MCP Server<br/>stdio · AI 에이전트"]
-    end
-
-    svc["backend/app/services<br/>모든 인터페이스가 공유하는 단일 진입점 · VISIBLE_TO_USER 술어"]
-    proxy["OpenProxy — VIP:6432<br/>커넥션 풀 · Primary 추적 · 재연결"]
-
-    subgraph db["OpenSQL v3 — PostgreSQL 17.8 + pgvector 0.8.1"]
-        direction TB
-        docs["documents"]
-        trg1{{"AFTER 트리거<br/>같은 트랜잭션"}}
-        ver["document_versions<br/>텍스트 버전 이력 (append-only)"]
-        jobs["embedding_jobs<br/>트랜잭셔널 아웃박스 · 문서당 pending 1건"]
-        links["document_links<br/>위키링크 해석"]
-        chunks["document_chunks<br/>vector(1024) · HNSW"]
-        trg2{{"AFTER 트리거<br/>청크 교체와 같은 트랜잭션"}}
-        edges["document_edges<br/>overlaps · related (kNN, 순수 SQL)"]
-
-        docs --> trg1
-        trg1 --> ver
-        trg1 --> jobs
-        trg1 --> links
-        chunks --> trg2 --> edges
-    end
-
-    worker["Embedding Worker — 무상태 실행기<br/>SKIP LOCKED claim → 청킹 → 임베딩 →<br/>해시 재확인 + 청크 교체 + job done (단일 트랜잭션)"]
-    model["BGE-M3<br/>sentence-transformers 로컬 구동"]
-
-    ui --> svc
-    rest --> svc
-    mcps --> svc
-    svc -->|"documents INSERT/UPDATE만 — 임베딩 호출 없음<br/>필터 + 벡터 + 관계를 단일 SQL로"| proxy
-    proxy --> db
-    jobs -.->|"5초 폴링 (주 경로) + NOTIFY (최적화)"| worker
-    worker -->|"청크 배치 임베딩"| model
-    worker -->|"청크 교체 + ready 전이"| chunks
-```
-
-### 책임의 경계 — 무엇이 DB 안에 있는가
-
-이 아키텍처의 핵심은 **DB 안에 있는 것과 밖에 있는 것의 경계**입니다.
-
-| DB 계층이 보장하는 것 | 수단 |
-|---|---|
-| 문서가 저장되면 잡도 반드시 생긴다 | AFTER 트리거 (문서 UPDATE와 **같은 트랜잭션**) |
-| 연속 수정이 하나의 잡으로 합쳐진다 | 파셜 유니크 인덱스 `uq_pending_job_per_doc` |
-| 문서를 지우면 잡·청크·관계도 사라진다 | FK CASCADE |
-| 두 워커가 같은 잡을 집지 않는다 | `FOR UPDATE SKIP LOCKED` |
-| 텍스트 버전 이력이 빠짐없이 쌓인다 | 트리거가 기록 (앱은 `document_versions`에 직접 INSERT하지 않는다) |
-| 문서 사이 관계가 원본에서 파생된다 | `embedding_status='ready'` 트리거가 순수 SQL로 생성 |
-| 빈 본문 문서가 저장되지 않는다 | `CHECK` 제약 |
-
-**DB 밖 연산은 임베딩 모델 추론 하나뿐입니다.** 워커는 "DB가 만들어 둔 잡을 집어가는 무상태
-실행기"이며, 워커를 통째로 지워도 잡은 DB에 남고 다시 띄우면 이어서 처리합니다.
-
-원본과 벡터가 어긋난 문서 수는 쿼리 한 줄로 셉니다. 문서를 고치면 잠깐 올랐다가 워커 처리 후
-0으로 돌아오고, 장애를 일으켜도 결국 0으로 수렴합니다.
-
-```sql
-SELECT count(*) FROM documents d
-  JOIN document_chunks c ON c.document_id = d.id
- WHERE c.version <> d.version;
-```
-
-### 핵심 데이터 흐름
-
-1. **공급** — 웹 업로드 / `POST /api/documents(/text)` / MCP `create_document` → 서비스가
-   `documents`에 INSERT → 트리거가 `document_versions`·`embedding_jobs`·`document_links`를
-   같은 트랜잭션에 기록.
-2. **파생** — 워커가 `SKIP LOCKED`로 잡을 집어 청킹·임베딩 → 청크 교체와 `ready` 전이를 한
-   트랜잭션에 → 그 안에서 트리거가 `document_edges`(kNN 기반 `overlaps`·`related`)를 재생성.
-3. **소비** — 검색·관련 문서·태그 추천·군집·진단이 저장된 관계와 `VISIBLE_TO_USER` 술어를
-   공유. 조회 시점에 벡터를 다시 계산하지 않는다.
-
-### 설계 결정 셋
-
-**① 기동 방식은 정합성의 일부가 아니다 ([ADR-009](docs/ADR.md)).** 트리거가 `pg_notify`를
-발행하지만 워커는 **5초 폴링을 주 경로**로 삼습니다. 알림은 휘발성이라 수신자가 없는 순간의 것은
-사라지므로, 연결이 끊긴 구간에 생성된 잡은 폴링만이 회수합니다. 실측에서 OpenProxy 경유 LISTEN이
-정상 동작함을 확인했으나 결정을 바꾸지 않았습니다 — 유실·중복을 막는 것은 알림이 아니라 아웃박스와
-`SKIP LOCKED`이기 때문입니다.
-
-**② 검색은 단일 SQL입니다.** 권한·태그 필터가 벡터 정렬 서브쿼리 **안쪽**에 들어가고, 문서당
-1건 축소(`DISTINCT ON`)와 관계 그래프 확장(`WITH RECURSIVE`, 깊이 2)까지 한 쿼리에 있습니다.
-DB에서 넓게 가져와 애플리케이션에서 후처리 필터링하지 않습니다 ([ADR-011](docs/ADR.md)·[018](docs/ADR.md)).
-
-**③ 볼 수 없는 문서는 존재하지 않는 것처럼 보입니다 ([ADR-018](docs/ADR.md)·[027](docs/ADR.md)).**
-`VISIBLE_TO_USER`라는 단일 열람 술어를 검색·관련 문서·태그 추천·그래프 순회·집계·위키링크 해석·
-군집이 모두 공유합니다. `🔒` 같은 자리 표시도 남기지 않습니다 — 표시 자체가 존재와 개수를
-누출하기 때문입니다.
-
-상세는 [Architecture](docs/ARCHITECTURE.md), 각 결정의 근거는 [ADR](docs/ADR.md)에 있습니다.
-
-### 기술 스택
-
-| 영역 | 사용 기술 |
-|---|---|
-| DB | [Tmax OpenSQL v3](https://docs.tibero.com/tmaxopensql/overview) — PostgreSQL 17 + pgvector 0.8.1 · OpenHA(Patroni) · OpenHA DCS(etcd) · OpenProxy |
-| 백엔드 | Python 3.12+ · FastAPI · psycopg3 · `openarchive` CLI |
-| 임베딩 | [`BAAI/bge-m3`](https://huggingface.co/BAAI/bge-m3) (MIT, 1024차원) — `sentence-transformers`로 로컬 구동 |
-| 프론트엔드 | Next.js (App Router) · TypeScript · Tailwind CSS · JSZip — 정적 빌드를 백엔드에 동봉 |
-| 군집 | `networkx` Louvain |
-| MCP | Python `mcp` SDK (FastMCP, stdio) |
-
 ---
 
 ## 시작하기
 
-아래 블록을 **그대로 복사해 터미널에 붙여넣으면** 됩니다. 필요한 것은 Git, Python 3.12+, 그리고
-OpenSQL이 없을 때만 Docker입니다. 배포 패키지는 없으므로 소스에서 설치합니다.
-
-### 빠른 시작 A — OpenSQL이 있을 때
+아래 블록을 **그대로 복사해 터미널에 붙여넣으면** 됩니다. 필요한 것은 Git, Python 3.12+,
+그리고 OpenSQL입니다. 배포 패키지는 없으므로 소스에서 설치합니다.
 
 DSN 한 줄만 자기 환경으로 바꿉니다. OpenProxy 경유라면 데이터베이스 자리에 **풀 이름**을 적습니다.
 
@@ -192,26 +74,6 @@ EMBEDDING_PROVIDER=local openarchive serve
 > [OpenSQL 환경 구축 §10](docs/SETUP_OPENSQL.md#10-설치-확인). OpenSQL 자체를 세우는 절차도 그
 > 문서에 있습니다.
 
-### 빠른 시작 B — OpenSQL이 없을 때 (Docker로 DB만)
-
-저장소에 든 `pgvector/pgvector:pg17` 컨테이너를 DB로 씁니다. 바꿀 줄이 없습니다.
-
-```bash
-git clone https://github.com/jeongeundev/OpenArchive.git
-cd OpenArchive
-docker compose up -d --wait
-cd backend
-python3 -m venv .venv && source .venv/bin/activate
-pip install -e ".[local]"
-openarchive init --yes --dsn "postgresql://openarchive:openarchive@localhost:5433/openarchive"
-ADMIN_PASSWORD='change-me' python ../scripts/create_admin.py admin --admin
-EMBEDDING_PROVIDER=local openarchive serve
-```
-
-같은 코드가 그대로 돕니다 — OpenArchive는 표준 PostgreSQL 17 + pgvector 인터페이스에만 의존하기
-때문입니다. 실 OpenSQL 위에서는 여기에 Patroni의 장애 복구와 OpenProxy의 커넥션 풀링이 더해집니다 —
-코드 변경도, 추가 설정도 없습니다 ([ADR-006](docs/ADR.md)).
-
 ### 각 단계가 하는 일
 
 - **`pip install -e ".[local]"`** — `local`은 BGE-M3 임베딩 모델입니다 (torch 포함, 수 GB). 동작만
@@ -225,6 +87,30 @@ EMBEDDING_PROVIDER=local openarchive serve
 - **`openarchive serve`** — API + 임베딩 워커 + 웹 화면을 한 명령으로 띄웁니다. 웹 화면은 백엔드에
   동봉된 정적 빌드라 Node.js가 필요 없습니다. **최초 1회는 모델 다운로드(약 2GB)로 기동이 오래
   걸립니다.**
+
+### 로컬 개발·평가용 대체 환경
+
+OpenSQL 환경이 없으면 `pgvector/pgvector:pg17` Docker 컨테이너를 DB로 쓸 수 있습니다.
+OpenArchive는 표준 PostgreSQL 17 + pgvector 인터페이스에 의존하므로 **동일한 애플리케이션
+코드가 그대로 동작합니다.** 단, OpenHA(Patroni)의 장애 복구와 OpenProxy의 커넥션 풀링은
+실 OpenSQL 환경에서만 검증할 수 있습니다 ([ADR-006](docs/ADR.md)).
+
+<details>
+<summary>Docker로 DB만 띄우는 명령 — 바꿀 줄이 없습니다</summary>
+
+```bash
+git clone https://github.com/jeongeundev/OpenArchive.git
+cd OpenArchive
+docker compose up -d --wait
+cd backend
+python3 -m venv .venv && source .venv/bin/activate
+pip install -e ".[local]"
+openarchive init --yes --dsn "postgresql://openarchive:openarchive@localhost:5433/openarchive"
+ADMIN_PASSWORD='change-me' python ../scripts/create_admin.py admin --admin
+EMBEDDING_PROVIDER=local openarchive serve
+```
+
+</details>
 
 ---
 
@@ -323,27 +209,80 @@ REST 전체 목록과 스키마는 `http://localhost:8000/docs`(OpenAPI)에 있�
 
 ---
 
-## 개발
+## 아키텍처
 
-```bash
-bash scripts/check.sh              # 백엔드 ruff+pytest, 프론트엔드 lint+test+build — 한 번에
+이 아키텍처의 핵심은 **DB 안에 있는 것과 밖에 있는 것의 경계**입니다. 문서를 저장하면 트리거가
+같은 트랜잭션에서 임베딩 작업·버전 이력·문서 관계를 만들고, 워커는 그것을 집어가는 무상태
+실행기입니다. **DB 밖 연산은 임베딩 모델 추론 하나뿐이라**, 워커를 통째로 지워도 잡은 DB에 남고
+다시 띄우면 이어서 처리합니다.
+
+```mermaid
+flowchart TB
+    subgraph iface["소비·공급 인터페이스 — 대등한 3면"]
+        direction LR
+        ui["Web UI<br/>동봉 정적 빌드 · 세션 쿠키"]
+        rest["REST API<br/>위임 토큰 (Bearer)"]
+        mcps["MCP Server<br/>stdio · AI 에이전트"]
+    end
+
+    svc["backend/app/services<br/>모든 인터페이스가 공유하는 단일 진입점 · VISIBLE_TO_USER 술어"]
+    proxy["OpenProxy — VIP:6432<br/>커넥션 풀 · Primary 추적 · 재연결"]
+
+    subgraph db["OpenSQL v3 — PostgreSQL 17.8 + pgvector 0.8.1"]
+        direction TB
+        docs["documents"]
+        trg1{{"AFTER 트리거<br/>같은 트랜잭션"}}
+        ver["document_versions<br/>텍스트 버전 이력 (append-only)"]
+        jobs["embedding_jobs<br/>트랜잭셔널 아웃박스 · 문서당 pending 1건"]
+        links["document_links<br/>위키링크 해석"]
+        chunks["document_chunks<br/>vector(1024) · HNSW"]
+        trg2{{"AFTER 트리거<br/>청크 교체와 같은 트랜잭션"}}
+        edges["document_edges<br/>overlaps · related (kNN, 순수 SQL)"]
+
+        docs --> trg1
+        trg1 --> ver
+        trg1 --> jobs
+        trg1 --> links
+        chunks --> trg2 --> edges
+    end
+
+    worker["Embedding Worker — 무상태 실행기<br/>SKIP LOCKED claim → 청킹 → 임베딩 →<br/>해시 재확인 + 청크 교체 + job done (단일 트랜잭션)"]
+    model["BGE-M3<br/>sentence-transformers 로컬 구동"]
+
+    ui --> svc
+    rest --> svc
+    mcps --> svc
+    svc -->|"documents INSERT/UPDATE만 — 임베딩 호출 없음<br/>필터 + 벡터 + 관계를 단일 SQL로"| proxy
+    proxy --> db
+    jobs -.->|"5초 폴링 (주 경로) + NOTIFY (최적화)"| worker
+    worker -->|"청크 배치 임베딩"| model
+    worker -->|"청크 교체 + ready 전이"| chunks
 ```
 
-DB 의존 테스트는 Mock이 아니라 실제 pgvector 컨테이너 위에서 돕니다 — 트리거·`NOTIFY`·`vector`
-연산자는 Mock으로 검증할 수 없기 때문입니다.
+원본과 벡터가 어긋난 문서 수는 쿼리 한 줄로 셉니다. 문서를 고치면 잠깐 올랐다가 워커 처리 후
+0으로 돌아오고, 장애를 일으켜도 결국 0으로 수렴합니다.
 
-개발 중에는 자동 재시작이 필요하므로 두 프로세스를 따로 띄웁니다.
-
-```bash
-uvicorn app.main:app --reload      # backend/ — API
-python -m app.worker               # backend/ — 워커
+```sql
+SELECT count(*) FROM documents d
+  JOIN document_chunks c ON c.document_id = d.id
+ WHERE c.version <> d.version;
 ```
 
-프론트 소스를 고쳤다면 `frontend/`에서 `npm install && npm run dev`(개발 서버, `/api/*`를
-8000으로 프록시)로 작업하고, `npm run build:static`으로 `backend/app/static/`의 동봉 빌드를 갱신해
-함께 커밋합니다 ([ADR-041](docs/ADR.md)). `check.sh`가 이 빌드를 포함합니다.
+이 그림을 떠받치는 설계 결정은 셋입니다 — 워커의 **기동 방식은 정합성의 일부가 아니고**(5초 폴링이
+주 경로, `NOTIFY`는 최적화), **검색은 필터·벡터 유사도·관계 확장까지 단일 SQL**이며, **볼 수 없는
+문서는 자리 표시조차 남기지 않습니다**. 각 결정의 근거와 트레이드오프는 [ADR](docs/ADR.md)에,
+스키마·트리거·워커·검색 상세는 [Architecture](docs/ARCHITECTURE.md)에 있습니다.
 
-브랜치·커밋 규약과 TDD 훅은 [Contributing](CONTRIBUTING.md)에 있습니다.
+### 기술 스택
+
+| 영역 | 사용 기술 |
+|---|---|
+| DB | [Tmax OpenSQL v3](https://docs.tibero.com/tmaxopensql/overview) — PostgreSQL 17 + pgvector 0.8.1 · OpenHA(Patroni) · OpenHA DCS(etcd) · OpenProxy |
+| 백엔드 | Python 3.12+ · FastAPI · psycopg3 · `openarchive` CLI |
+| 임베딩 | [`BAAI/bge-m3`](https://huggingface.co/BAAI/bge-m3) (MIT, 1024차원) — `sentence-transformers`로 로컬 구동 |
+| 프론트엔드 | Next.js (App Router) · TypeScript · Tailwind CSS · JSZip — 정적 빌드를 백엔드에 동봉 |
+| 군집 | `networkx` Louvain |
+| MCP | Python `mcp` SDK (FastMCP, stdio) |
 
 ---
 
@@ -360,21 +299,3 @@ python -m app.worker               # backend/ — 워커
 | [OpenSQL 환경 구축](docs/SETUP_OPENSQL.md) | Rocky Linux 9.7 VM 준비부터 설치·검증까지 |
 | [UI Guide](docs/UI_GUIDE.md) | 디자인 원칙, 화면 구성 |
 | [Contributing](CONTRIBUTING.md) | 개발 규약, 브랜치·커밋 컨벤션 |
-
----
-
-## AI 모델 활용
-
-문서·질의 임베딩에 **공개 가중치 모델을 로컬에서 구동**합니다. 외부 API 전용 모델은 사용하지 않으며,
-답변을 생성하는 LLM은 탑재하지 않습니다.
-
-| 항목 | 내용 |
-|---|---|
-| 모델 | [`BAAI/bge-m3`](https://huggingface.co/BAAI/bge-m3) — Beijing Academy of Artificial Intelligence |
-| 라이선스 | MIT |
-| 활용 방식 | 사전학습 가중치를 추가 학습 없이 그대로 사용 |
-| 구동 환경 | 로컬 `sentence-transformers`. 외부 API 호출 없음 |
-
-## 라이선스
-
-[MIT License](LICENSE). 의존하는 오픈소스의 출처와 라이선스는 SBOM으로 함께 공개합니다.
