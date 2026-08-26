@@ -158,6 +158,9 @@ def test_private_documents_do_not_shape_other_users_clusters(
     login_as(db_client, "alice")
     alice_body = db_client.get("/api/clusters").json()
     assert sum(cluster["size"] for cluster in alice_body["clusters"]) == 7
+    # 다리가 보이는 사람에게는 덩어리 사이 연결도 보인다. bob의 빈 connections가
+    # "연결 집계가 늘 비어 있다"가 아니라 "다리가 열람 범위 밖이다"임을 여기서 고정한다.
+    assert [item["count"] for item in alice_body["connections"]] == [1]
 
 
 def test_cluster_count_is_capped_and_small_clusters_are_merged_into_other(
@@ -227,21 +230,21 @@ def test_untagged_community_is_named_after_its_best_connected_document(
     db_client: TestClient, migrated_db: str
 ):
     center = _insert_document(migrated_db, title="중심 문서", content="중심 문서")
-    others = [
+    ring = [
         _insert_document(migrated_db, title=title, content=title)
-        for title in ("가 문서", "나 문서", "다 문서")
+        for title in ("가 문서", "나 문서", "다 문서", "라 문서")
     ]
-    _connect_all(migrated_db, [center, *others[:2]])
-    _insert_bidirectional_edge(migrated_db, center, others[2])
+    # 허브 + 링(바퀴 모양). 허브만 차수 4로 유일한 최대이고 한 덩어리로 남는다. 삼각형에
+    # 문서 하나를 매단 모양은 Louvain이 두 덩어리로 쪼개므로 이름 규칙을 가리지 못한다.
+    for index, spoke in enumerate(ring):
+        _insert_bidirectional_edge(migrated_db, center, spoke)
+        _insert_bidirectional_edge(migrated_db, spoke, ring[(index + 1) % len(ring)])
 
     clusters = db_client.get("/api/clusters").json()["clusters"]
 
-    center_cluster = next(
-        cluster
-        for cluster in clusters
-        if any(document["document_id"] == center for document in cluster["documents"])
-    )
-    assert center_cluster["name"] == "중심 문서"
+    assert len(clusters) == 1
+    assert clusters[0]["size"] == 5
+    assert clusters[0]["name"] == "중심 문서"
 
 
 def test_result_is_deterministic_across_calls(db_client: TestClient, migrated_db: str):
@@ -265,3 +268,56 @@ def test_result_is_deterministic_across_calls(db_client: TestClient, migrated_db
     second = db_client.get("/api/clusters").json()
 
     assert first == second
+
+
+def test_untagged_community_named_after_reserved_title_stays_separate_from_bucket(
+    db_client: TestClient, migrated_db: str
+):
+    """제목이 예약 이름과 겹쳐도 덩어리 이름은 버킷과 구분된다.
+
+    화면은 덩어리 이름을 식별자로 쓰므로(원 하나, 선 하나) 두 덩어리가 같은 이름으로
+    나가면 원이 겹쳐 그려지고 안내 문구가 엉뚱한 덩어리에 붙는다.
+    """
+    community = [
+        _insert_document(migrated_db, title=title, content=title)
+        for title in ("미분류", "이어진 문서")
+    ]
+    _insert_bidirectional_edge(migrated_db, *community)
+    _insert_document(migrated_db, title="edge 없음", content="edge 없음")
+
+    response = db_client.get("/api/clusters")
+    names = [cluster["name"] for cluster in response.json()["clusters"]]
+
+    assert len(names) == len(set(names))
+    clusters = _cluster_map(response)
+    assert clusters["미분류 (문서)"]["size"] == 2
+    assert clusters["미분류"]["size"] == 1
+
+
+def test_community_name_uses_degree_inside_the_community(
+    db_client: TestClient, migrated_db: str
+):
+    """이름을 정하는 차수는 군집 안에서 센다 (ADR-042 결정 4).
+
+    군집 밖으로 뻗은 edge까지 세면 다른 덩어리와 이어졌다는 이유만으로 대표가 바뀐다.
+    """
+    untagged = [
+        _insert_document(migrated_db, title=title, content=title)
+        for title in ("하 문서", "나 문서", "다 문서")
+    ]
+    _connect_all(migrated_db, untagged)
+    tagged = [
+        _insert_document(
+            migrated_db, title=f"태그 {index}", content=f"태그 {index}", tags=["와이"]
+        )
+        for index in range(4)
+    ]
+    _connect_all(migrated_db, tagged)
+    _insert_bidirectional_edge(migrated_db, untagged[0], tagged[0])
+
+    clusters = _cluster_map(db_client.get("/api/clusters"))
+
+    # 군집 안 차수는 셋 다 2로 동률이라 제목순 최소인 "나 문서"가 이름이 된다.
+    # 군집 밖 edge까지 세면 차수 3인 "하 문서"가 뽑힌다.
+    assert clusters["나 문서"]["size"] == 3
+    assert clusters["와이"]["size"] == 4

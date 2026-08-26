@@ -105,20 +105,25 @@ def _assign_communities(
         first_title = min(document_by_id[document_id][0] for document_id in members)
         if tag_counts:
             label = min(tag_counts, key=lambda tag: (-tag_counts[tag], tag))
-            if label in {UNCATEGORIZED, OTHER}:
-                label = f"{label} (태그)"
-            kind = TAGGED
+            kind, origin = TAGGED, "태그"
         else:
-            label = min(
+            # 차수는 군집 안에서 센다. 군집 밖으로 뻗은 edge까지 세면 다른 덩어리와
+            # 이어졌다는 이유만으로 대표 문서가 바뀐다.
+            degrees = graph.subgraph(members).degree
+            central_id = min(
                 members,
                 key=lambda document_id: (
-                    -graph.degree[document_id],
+                    -degrees[document_id],
                     document_by_id[document_id][0],
                     document_id,
                 ),
             )
-            label = document_by_id[label][0]
-            kind = COMMUNITY
+            label = document_by_id[central_id][0]
+            kind, origin = COMMUNITY, "문서"
+        # 예약 버킷과 이름이 겹치면 출처를 밝힌다. 화면은 덩어리 이름을 식별자로 쓰므로
+        # 같은 이름이 둘이면 원이 겹쳐 그려지고 안내 문구가 엉뚱한 덩어리에 붙는다.
+        if label in {UNCATEGORIZED, OTHER}:
+            label = f"{label} ({origin})"
         labeled.append((members, kind, label, first_title))
 
     # 같은 이름은 큰 덩어리부터 기본 이름을 쓰고 이후에 번호를 붙인다.
