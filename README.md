@@ -148,14 +148,24 @@ document_chunks 교체 (단일 트랜잭션)
 
 ## 빠른 시작
 
-### OpenSQL 라이선스는 필요하지 않습니다
+### 어디서 도는가 — 그리고 OpenSQL이 무엇을 더하는가
 
-**아래 절차는 OpenSQL 없이 그대로 완주합니다.** 로컬 DB는 `pgvector/pgvector:pg17`
-컨테이너 한 대이고, 스키마·트리거·검색 SQL은 전부 표준 PostgreSQL 17 기능이라 OpenSQL
-전용 확장에 의존하지 않습니다. 애플리케이션이 OpenSQL과 만나는 지점은 `DATABASE_URL`
-환경변수 하나뿐입니다 ([ADR-006](docs/ADR.md), [ADR-007](docs/ADR.md)).
+OpenArchive는 **표준 PostgreSQL 17 + pgvector** 인터페이스에만 의존합니다. 스키마·트리거·
+검색 SQL은 전부 표준 기능이고, 애플리케이션이 DB와 만나는 지점은 `DATABASE_URL` 환경변수
+하나뿐입니다 ([ADR-006](docs/ADR.md), [ADR-007](docs/ADR.md)). 그래서 같은 코드가 로컬
+`pgvector/pgvector:pg17` 컨테이너와 실 OpenSQL 클러스터 양쪽에서 그대로 동작합니다.
 
-| 로컬 컨테이너로 되는 것 | 실 OpenSQL 환경이 필요한 것 |
+**Tmax OpenSQL 위에서 더해지는 것** — 애플리케이션 코드는 한 줄도 바뀌지 않습니다.
+
+- **Patroni** — 장애 자동 감지, 리더 선출과 승격 ([ADR-020](docs/ADR.md))
+- **OpenProxy** — VIP 단일 엔드포인트와 커넥션 풀링. 새 프라이머리 발견과 재연결을 앱 대신
+  수행하므로, 애플리케이션에 멀티호스트 DSN이나 재연결 로직을 두지 않습니다 ([ADR-006](docs/ADR.md))
+- **번들 확장** — pgvector 0.8.1 · pgvectorscale 0.9.0
+
+따라서 아래 절차는 **OpenSQL 라이선스 없이 그대로 완주합니다.** 라이선스가 있다면
+[실 OpenSQL 클러스터에 연결](#실-opensql-클러스터에-연결)에서 DSN만 바꾸면 됩니다.
+
+| 라이선스 없이 검증할 수 있는 범위 | 실 OpenSQL 환경이 필요한 검증 |
 |---|---|
 | 자동 임베딩 파이프라인 전 구간 — 트리거·아웃박스·`SKIP LOCKED`·청킹·임베딩 | OpenProxy 경유 세션 동작 ([ADR-009](docs/ADR.md)) |
 | 하이브리드 검색 · 관계 그래프 · 태그 추천 | 읽기/쓰기 분리와 복제 지연 ([ADR-010](docs/ADR.md)) |
