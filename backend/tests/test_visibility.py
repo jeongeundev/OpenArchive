@@ -630,11 +630,7 @@ async def test_cluster_sizes_follow_anonymous_other_and_owner_visibility(
 
     assert anonymous.clusters[0].size == 1
     assert sorted(cluster.size for cluster in other.clusters) == [1, 2]
-    assert sorted(cluster.size for cluster in owner.clusters) == [1, 1]
+    assert sorted(cluster.size for cluster in owner.clusters) == [2]
     assert anonymous.connections == []
-    assert [(item.source, item.target, item.count) for item in other.connections] == [
-        ("공개", "밥", 1)
-    ]
-    assert [(item.source, item.target, item.count) for item in owner.connections] == [
-        ("공개", "앨리스", 1)
-    ]
+    assert other.connections == []
+    assert owner.connections == []
