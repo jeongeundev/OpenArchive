@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"$CLAUDE_PROJECT_DIR/scripts/check.sh\" 2>&1"
+            "command": "cd \"$CLAUDE_PROJECT_DIR\" && if [ -z \"$(git status --porcelain -- backend frontend scripts)\" ]; then echo '검증 생략 — backend·frontend·scripts에 변경 없음'; else bash scripts/check.sh 2>&1; fi"
           }
         ]
       }
