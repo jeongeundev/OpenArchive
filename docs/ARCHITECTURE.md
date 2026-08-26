@@ -496,7 +496,7 @@ OpenSQL `patroni.yml`의 PostgreSQL 파라미터는 `max_connections: 100`이다
 | `POST /api/auth/tokens` · `GET /api/auth/tokens` · `DELETE /api/auth/tokens/{id}` | **세션 전용** API 토큰 발급·목록·폐기. 원문은 발급 응답에만 반환하며 기본 scope는 `read` |
 | `PUT /api/auth/password` | **세션 전용** 자기 비밀번호 변경. 현재 비밀번호를 확인하고, 바꾼 뒤 그 계정의 세션을 전부 무효화한다. 틀린 현재 비밀번호는 403(세션은 유효하므로 401이 아니다). API 토큰은 폐기하지 않는다 (ADR-040) |
 | `GET /api/diagnostics` | **진단.** 고아 문서·깨진 링크·중복 후보 등을 **열람 범위 기준**으로 집계 (ADR-027) |
-| `GET /api/clusters` | **주제 덩어리.** 관계 그래프의 연결 요소 |
+| `GET /api/clusters` | **주제 덩어리.** 관계 그래프의 Louvain 군집. 조회 시점 계산, 열람 범위 기준 (ADR-042) |
 | `GET /api/admin/users` 등 | 관리자 전용 |
 | `GET /api/system/status` | **로그인 필요 · 운영/데모 전용**: `inet_server_addr()`(현재 접속 노드), pending/processing/error 잡 수, 임베딩 프로바이더명, **정합성 검증 쿼리 결과**(`c.version <> d.version` 건수). `/admin/status`가 소비하며 사용자 화면은 호출하지 않는다. SQL과 결과 모델은 `services/system.py`에 있고 라우터는 인증과 응답 변환만 맡는다 |
 
@@ -845,7 +845,7 @@ class EmbeddingProvider(Protocol):
 
 ## 프론트엔드 패턴
 
-- 사용자 화면: `/`(목록 + 업로드 드롭존), `/documents/[id]`(메타데이터·텍스트 버전 이력·청크 수와 기준 버전 요약·**문서 텍스트 편집**·관련 문서·태그 추천), `/search`(질의 + 태그/유형 필터 + 결과. "실행된 SQL 보기" 토글), `/clusters`(태그 덩어리와 연결), `/diagnostics`(고아·중복 후보·미분류·깨진 링크), `/login`
+- 사용자 화면: `/`(목록 + 업로드 드롭존), `/documents/[id]`(메타데이터·텍스트 버전 이력·청크 수와 기준 버전 요약·**문서 텍스트 편집**·관련 문서·태그 추천), `/search`(질의 + 태그/유형 필터 + 결과. "실행된 SQL 보기" 토글), `/clusters`(관계 군집 덩어리와 연결), `/diagnostics`(고아·중복 후보·미분류·깨진 링크), `/login`
 - **편집은 Client Component**다. 보기 ↔ 편집 토글, 저장 시 `version`을 함께 전송하고 409를 처리한다. 저장 직후 상태 배지가 `pending → processing → ready`로 바뀌는 것을 2초 폴링으로 보여준다
 - **사용자 화면은 인프라 상태를 노출하지 않는다.** 페일오버가 나도 화면 구성이 달라지지 않으며, 사용자는 업로드·검색이 계속 성공하는 것만 본다 (UI_GUIDE 디자인 원칙 3).
 - 관리 화면: `/admin/status` — `GET /api/system/status`를 폴링해 접속 노드·잡 수·프로바이더 표시. **페일오버 데모의 증거 채널**이며 사용자 내비게이션에 노출하지 않는다. `/admin/users` — 계정 발급·삭제 (ADR-028)

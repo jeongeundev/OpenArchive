@@ -4,14 +4,19 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass
 from uuid import UUID
 
+import networkx as nx
 import psycopg
+from networkx.algorithms.community import louvain_communities
 
 from app.services.visibility import VISIBLE_TO_USER
 
 MAX_CLUSTERS = 20
+LOUVAIN_SEED = 42
+LOUVAIN_RESOLUTION = 1.0
 UNCATEGORIZED = "미분류"
 OTHER = "기타"
 TAGGED = "tagged"
+COMMUNITY = "community"
 BUCKET = "bucket"
 ClusterKey = tuple[str, str]
 
@@ -19,7 +24,7 @@ VISIBLE_DOCUMENTS_SQL = f"""
 SELECT d.id, d.title, d.tags
 FROM documents d
 WHERE {VISIBLE_TO_USER}
-ORDER BY d.title, d.id
+ORDER BY d.id
 """
 
 VISIBLE_EDGES_SQL = f"""
@@ -62,25 +67,78 @@ class ClusterResult:
 
 
 def _display_name(key: ClusterKey) -> str:
-    kind, name = key
-    if kind == TAGGED and name in {UNCATEGORIZED, OTHER}:
-        return f"{name} (태그)"
-    return name
+    return key[1]
 
 
-def _assign_clusters(rows: list[tuple]) -> dict[UUID, ClusterKey]:
-    tag_counts = Counter(tag for _, _, tags in rows for tag in tags)
-    # 여러 태그 중 저장소에서 가장 자주 쓰인 태그는 사용자가 이미 만든 주제 축을
-    # 재사용하면서 별도 클러스터링 계산이 필요 없다. 동률은 이름순으로 고정해 결과를
-    # 결정론적으로 유지한다. 무태그 문서는 추정 연산 없이 진단 화면과 같은 미분류로 둔다.
-    assigned = {
-        document_id: (
-            (TAGGED, min(tags, key=lambda tag: (-tag_counts[tag], tag)))
-            if tags
-            else (BUCKET, UNCATEGORIZED)
-        )
-        for document_id, _, tags in rows
+def _assign_communities(
+    documents: list[tuple[UUID, str, list[str]]],
+    pairs: set[tuple[UUID, UUID]],
+) -> dict[UUID, ClusterKey]:
+    """열람 가능한 무가중 관계 그래프를 결정론적인 Louvain 덩어리로 나눈다."""
+    document_by_id = {
+        document_id: (title, tags) for document_id, title, tags in documents
     }
+    connected_ids = {document_id for pair in pairs for document_id in pair}
+    graph = nx.Graph()
+    graph.add_nodes_from(sorted(connected_ids))
+    graph.add_edges_from(sorted(pairs))
+
+    communities = (
+        [
+            sorted(community)
+            for community in louvain_communities(
+                graph,
+                weight=None,
+                resolution=LOUVAIN_RESOLUTION,
+                seed=LOUVAIN_SEED,
+            )
+        ]
+        if graph
+        else []
+    )
+
+    labeled: list[tuple[list[UUID], str, str, str]] = []
+    for members in communities:
+        tag_counts = Counter(
+            tag for document_id in members for tag in document_by_id[document_id][1]
+        )
+        first_title = min(document_by_id[document_id][0] for document_id in members)
+        if tag_counts:
+            label = min(tag_counts, key=lambda tag: (-tag_counts[tag], tag))
+            kind, origin = TAGGED, "태그"
+        else:
+            # 차수는 군집 안에서 센다. 군집 밖으로 뻗은 edge까지 세면 다른 덩어리와
+            # 이어졌다는 이유만으로 대표 문서가 바뀐다.
+            degrees = graph.subgraph(members).degree
+            central_id = min(
+                members,
+                key=lambda document_id: (
+                    -degrees[document_id],
+                    document_by_id[document_id][0],
+                    document_id,
+                ),
+            )
+            label = document_by_id[central_id][0]
+            kind, origin = COMMUNITY, "문서"
+        # 예약 버킷과 이름이 겹치면 출처를 밝힌다. 화면은 덩어리 이름을 식별자로 쓰므로
+        # 같은 이름이 둘이면 원이 겹쳐 그려지고 안내 문구가 엉뚱한 덩어리에 붙는다.
+        if label in {UNCATEGORIZED, OTHER}:
+            label = f"{label} ({origin})"
+        labeled.append((members, kind, label, first_title))
+
+    # 같은 이름은 큰 덩어리부터 기본 이름을 쓰고 이후에 번호를 붙인다.
+    occurrences: Counter[str] = Counter()
+    labeled.sort(key=lambda item: (-len(item[0]), item[3]))
+    assigned: dict[UUID, ClusterKey] = {}
+    for members, kind, label, _ in labeled:
+        occurrences[label] += 1
+        suffix = f" ({occurrences[label]})" if occurrences[label] > 1 else ""
+        key = (kind, f"{label}{suffix}")
+        assigned.update(dict.fromkeys(members, key))
+
+    for document_id, _, _ in documents:
+        assigned.setdefault(document_id, (BUCKET, UNCATEGORIZED))
+
     cluster_sizes = Counter(assigned.values())
     uncategorized_key = (BUCKET, UNCATEGORIZED)
     named = [key for key in cluster_sizes if key != uncategorized_key]
@@ -110,12 +168,17 @@ async def get_clusters(
         ).fetchall()
         edge_rows = await (await conn.execute(VISIBLE_EDGES_SQL, params)).fetchall()
 
-    assigned = _assign_clusters(document_rows)
+    document_pairs = {
+        tuple(sorted((source_id, target_id))) for source_id, target_id in edge_rows
+    }
+    assigned = _assign_communities(document_rows, document_pairs)
     documents_by_cluster: dict[ClusterKey, list[ClusterDocument]] = defaultdict(list)
     for document_id, title, _ in document_rows:
         documents_by_cluster[assigned[document_id]].append(
             ClusterDocument(document_id=document_id, title=title)
         )
+    for documents in documents_by_cluster.values():
+        documents.sort(key=lambda document: (document.title, document.document_id))
 
     # 선의 굵기는 "덩어리 사이를 잇는 문서쌍이 몇 개인가"다. 트리거가 관계 하나를
     # 양방향 두 행으로 저장하므로(ADR-029) 원시 edge를 세면 모든 값이 일률적으로

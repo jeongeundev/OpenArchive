@@ -75,6 +75,11 @@
       "dir": "m10-zip-ingest",
       "status": "completed",
       "completed_at": "2026-08-15T16:40:56+0900"
+    },
+    {
+      "dir": "m12-communities",
+      "status": "completed",
+      "completed_at": "2026-08-26T11:40:42+0900"
     }
   ]
 }

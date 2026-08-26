@@ -17,6 +17,9 @@ dependencies = [
     "pypdf",
     "python-docx",
     "python-multipart",
+    # Louvain 군집(services/clusters.py). 순수 Python·BSD. torch가 끌고 오던 것을 기본
+    # 의존성으로 승격 — [local] 없이도 덩어리가 계산되어야 한다.
+    "networkx",
 ]
 
 # 상용 임베딩 API 클라이언트는 넣지 않는다 — 대회 규정상 사용할 수 없다 (ADR-003).

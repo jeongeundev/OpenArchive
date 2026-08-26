@@ -1,0 +1,41 @@
+{
+  "project": "OpenArchive",
+  "phase": "m12-communities",
+  "steps": [
+    {
+      "step": 0,
+      "name": "louvain-clusters",
+      "type": "feat",
+      "scope": "search",
+      "desc": "주제 덩어리를 태그가 아니라 관계 그래프의 Louvain 군집으로 조회 시점에 묶는다",
+      "status": "completed",
+      "started_at": "2026-08-26T11:23:18+0900",
+      "summary": "응답 형태를 유지한 채 열람 가능 무가중 edge를 LOUVAIN_SEED=42·LOUVAIN_RESOLUTION=1.0으로 군집화하고 태그·중심 제목 이름 규칙을 적용",
+      "completed_at": "2026-08-26T11:32:37+0900"
+    },
+    {
+      "step": 1,
+      "name": "clusters-copy",
+      "type": "feat",
+      "scope": "frontend",
+      "desc": "주제 덩어리 화면 문구를 관계 기반 군집에 맞추고 동봉 정적 산출물을 갱신한다",
+      "status": "completed",
+      "started_at": "2026-08-26T11:32:37+0900",
+      "summary": "관계 기반 추천 설명과 미분류 보조 문구를 추가하고 동봉 정적 프론트 산출물을 갱신",
+      "completed_at": "2026-08-26T11:36:00+0900"
+    },
+    {
+      "step": 2,
+      "name": "adr-042",
+      "type": "docs",
+      "scope": "adr",
+      "desc": "ADR-042 조회 시점 Louvain 군집 — UI 가이드·아키텍처·PRD·로드맵 정합",
+      "status": "completed",
+      "started_at": "2026-08-26T11:36:00+0900",
+      "summary": "조회 시점 무가중 Louvain 군집 결정을 ADR-042로 기록하고 UI 가이드·아키텍처·PRD·로드맵·README를 구현과 일치시킴",
+      "completed_at": "2026-08-26T11:40:42+0900"
+    }
+  ],
+  "created_at": "2026-08-26T11:23:18+0900",
+  "completed_at": "2026-08-26T11:40:42+0900"
+}
