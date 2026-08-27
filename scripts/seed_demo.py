@@ -107,14 +107,19 @@ def load_seed_documents(root: Path = CORPUS_ROOT) -> list[SeedDocument]:
 
 
 async def seed_documents(
-    conn: psycopg.AsyncConnection, documents: list[SeedDocument]
+    conn: psycopg.AsyncConnection,
+    documents: list[SeedDocument],
+    owner: str = SEED_OWNER,
 ) -> int:
-    """없는 seed 문서만 서비스 계층을 통해 적재하고 생성 건수를 반환한다."""
+    """없는 문서만 서비스 계층을 통해 적재하고 생성 건수를 반환한다.
+
+    중복 판정은 소유자 안에서만 한다 — 같은 제목이라도 소유자가 다르면 다른 문서다.
+    """
     existing = {
         row[0]
         for row in await (
             await conn.execute(
-                "SELECT title FROM documents WHERE owner_id = %s", (SEED_OWNER,)
+                "SELECT title FROM documents WHERE owner_id = %s", (owner,)
             )
         ).fetchall()
     }
@@ -127,7 +132,7 @@ async def seed_documents(
             title=document.title,
             content=document.content,
             content_type="md",
-            owner_id=SEED_OWNER,
+            owner_id=owner,
             tags=document.tags,
             visibility=document.visibility,
         )
@@ -137,7 +142,10 @@ async def seed_documents(
 
 
 async def wait_until_ready(
-    conn: psycopg.AsyncConnection, titles: list[str], timeout: float
+    conn: psycopg.AsyncConnection,
+    titles: list[str],
+    timeout: float,
+    owner: str = SEED_OWNER,
 ) -> tuple[int, float]:
     started = time.monotonic()
     expected = len(titles)
@@ -150,19 +158,21 @@ async def wait_until_ready(
                            count(*) FILTER (WHERE embedding_status = 'error')
                     FROM documents WHERE owner_id = %s AND title = ANY(%s)
                     """,
-                    (SEED_OWNER, titles),
+                    (owner, titles),
                 )
             ).fetchone()
         )
         if failed:
-            raise RuntimeError(f"임베딩에 실패한 seed 문서가 {failed}개 있습니다.")
+            raise RuntimeError(f"임베딩에 실패한 코퍼스 문서가 {failed}개 있습니다.")
         if ready == expected:
             return ready, time.monotonic() - started
         await asyncio.sleep(1)
     raise TimeoutError("임베딩 대기 시간이 초과되었습니다. 워커가 떠 있는지 확인하세요.")
 
 
-async def summarize(conn: psycopg.AsyncConnection) -> tuple[int, int]:
+async def summarize(
+    conn: psycopg.AsyncConnection, owner: str = SEED_OWNER
+) -> tuple[int, int]:
     """적재 결과로 만들어진 청크 수와 관계 문서쌍 수를 센다.
 
     관계는 트리거가 양방향 두 행으로 저장하므로(ADR-029) 문서쌍으로 접어 센다.
@@ -178,25 +188,25 @@ async def summarize(conn: psycopg.AsyncConnection) -> tuple[int, int]:
                                         greatest(src_document_id, dst_document_id)
                         FROM document_edges) pairs)
             """,
-            (SEED_OWNER,),
+            (owner,),
         )
     ).fetchone()
 
 
-async def run(reset: bool, timeout: float) -> None:
+async def run(reset: bool, timeout: float, owner: str) -> None:
     documents = load_seed_documents()
     async with await psycopg.AsyncConnection.connect(
         get_settings().database_url, autocommit=True
     ) as conn:
         if reset:
             await conn.execute(
-                "DELETE FROM documents WHERE owner_id = %s", (SEED_OWNER,)
+                "DELETE FROM documents WHERE owner_id = %s", (owner,)
             )
-        created = await seed_documents(conn, documents)
+        created = await seed_documents(conn, documents, owner)
         ready, elapsed = await wait_until_ready(
-            conn, [document.title for document in documents], timeout
+            conn, [document.title for document in documents], timeout, owner
         )
-        chunks, edge_pairs = await summarize(conn)
+        chunks, edge_pairs = await summarize(conn, owner)
     print(
         f"seed 완료: 문서 {ready}개 (신규 {created}개), 청크 {chunks}개, "
         f"관계 {edge_pairs}쌍, {elapsed:.1f}초"
@@ -206,14 +216,23 @@ async def run(reset: bool, timeout: float) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--reset", action="store_true", help="owner_id=seed 문서만 삭제 후 재적재"
+        "--owner",
+        default=SEED_OWNER,
+        help=(
+            "적재 문서의 소유자. 비공개 문서는 소유자에게만 보이므로(ADR-018) "
+            "시연에서는 로그인 계정과 같게 준다. --reset도 이 소유자에만 적용된다 — "
+            "로그인 계정으로 주면 그 계정이 업로드한 문서까지 지워진다."
+        ),
+    )
+    parser.add_argument(
+        "--reset", action="store_true", help="같은 소유자의 문서만 삭제 후 재적재"
     )
     parser.add_argument(
         "--timeout", type=float, default=600, help="임베딩 완료 대기 시간(초)"
     )
     args = parser.parse_args()
     try:
-        asyncio.run(run(args.reset, args.timeout))
+        asyncio.run(run(args.reset, args.timeout, args.owner))
     except (ValueError, TimeoutError, RuntimeError, psycopg.Error) as exc:
         print(f"seed 실패: {exc}", file=sys.stderr)
         return 1

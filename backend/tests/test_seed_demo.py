@@ -178,6 +178,35 @@ async def test_seeding_is_idempotent_and_keeps_private_documents(migrated_db: st
     assert dict(rows) == {"공개 문서": "public", "비공개 문서": "private"}
 
 
+async def test_seeding_can_target_the_demo_login_account(migrated_db: str):
+    """소유자를 고를 수 있어야 비공개 문서를 시연에서 보여줄 수 있다.
+
+    비공개 문서는 소유자에게만 보인다(ADR-018). 코퍼스가 `seed` 소유인데 시연은
+    `admin`으로 로그인하면 비공개 4건이 처음부터 보이지 않아, 「다른 계정에게는
+    존재하지 않는 것처럼 보인다」를 보여줄 수 없다.
+    """
+    documents = [
+        SeedDocument("공개", "# 공개\n내용", ["문서"]),
+        SeedDocument("비공개", "# 비공개\n내용", ["문서"], "private"),
+    ]
+
+    async with await psycopg.AsyncConnection.connect(migrated_db, autocommit=True) as conn:
+        created = await seed_documents(conn, documents, owner="admin")
+        rows = await (
+            await conn.execute("SELECT title, owner_id FROM documents ORDER BY title")
+        ).fetchall()
+        # 다른 소유자로 다시 넣으면 별개 문서다 — 중복 판정은 소유자 안에서만 한다.
+        again = await seed_documents(conn, documents, owner="seed")
+        owners = await (
+            await conn.execute("SELECT count(DISTINCT owner_id) FROM documents")
+        ).fetchone()
+
+    assert created == 2
+    assert dict(rows) == {"공개": "admin", "비공개": "admin"}
+    assert again == 2
+    assert owners == (2,)
+
+
 async def test_corpus_loads_as_text_documents_with_resolved_wikilinks(migrated_db: str):
     documents = load_seed_documents()
 
