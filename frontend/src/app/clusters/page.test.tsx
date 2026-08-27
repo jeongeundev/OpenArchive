@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import ClustersPage from "./page";
 
-describe("주제 덩어리 화면", () => {
+describe("관계 지도 화면", () => {
   it("덩어리를 SVG로 보여주고 클릭하면 문서 목록을 연다", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(
       JSON.stringify({
@@ -29,7 +29,7 @@ describe("주제 덩어리 화면", () => {
 
     render(<ClustersPage />);
 
-    expect(screen.getByText(/관계/)).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 1, name: "관계 지도" })).toBeInTheDocument();
     expect(screen.queryByText(/태그로 묶/)).not.toBeInTheDocument();
     expect(
       screen.getByText(/묶음은 관계로 계산한 추천이며 사실처럼 단정하지 않습니다\./),

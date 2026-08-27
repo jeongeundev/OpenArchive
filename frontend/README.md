@@ -1,7 +1,7 @@
 # OpenArchive Web UI
 
 [OpenArchive](../README.md)의 Web UI입니다. Next.js(App Router) · TypeScript(strict) ·
-Tailwind CSS로 만들어졌고, 문서 목록·상세·검색·주제 덩어리·진단과 관리 화면을 제공합니다.
+Tailwind CSS로 만들어졌고, 문서 목록·상세·검색·관계 지도·진단과 관리 화면을 제공합니다.
 
 Web UI는 여러 소비 인터페이스 중 하나입니다 — REST API·MCP 서버와 같은 서비스 계층을
 소비하며, 어느 쪽도 다른 쪽의 축소판이 아닙니다 ([ADR-031](../docs/ADR.md)).

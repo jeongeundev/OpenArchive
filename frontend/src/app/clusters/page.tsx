@@ -31,7 +31,7 @@ export default function ClustersPage(): React.ReactElement {
         if (active) setData(result);
       })
       .catch((reason: unknown) => {
-        if (active) setError(reason instanceof ApiError ? reason.detail : "주제 덩어리를 불러오지 못했습니다.");
+        if (active) setError(reason instanceof ApiError ? reason.detail : "관계 지도를 불러오지 못했습니다.");
       });
     return () => {
       active = false;
@@ -58,7 +58,7 @@ export default function ClustersPage(): React.ReactElement {
     <div className="space-y-8">
       <header>
         <p className="text-sm text-neutral-500">현재 열람 범위 기준</p>
-        <h1 className="mt-2 text-4xl font-semibold text-white">주제 덩어리</h1>
+        <h1 className="mt-2 text-4xl font-semibold text-white">관계 지도</h1>
         <p className="mt-3 text-sm text-neutral-400">
           관계 그래프에서 서로 많이 이어진 문서끼리 묶었습니다. 원의 크기는 문서 수, 선의 굵기는 덩어리 사이 관계 수입니다. 덩어리 이름은 가장 많이 쓰인 태그이고, 태그가 없으면 연결이 가장 많은 문서의 제목입니다. 묶음은 관계로 계산한 추천이며 사실처럼 단정하지 않습니다.
         </p>
@@ -68,8 +68,8 @@ export default function ClustersPage(): React.ReactElement {
       {data === null && error === null ? <p className="text-sm text-neutral-500">불러오는 중…</p> : null}
       {data?.clusters.length === 0 ? <p className="text-sm text-neutral-500">표시할 문서가 없습니다.</p> : null}
       {data !== null && data.clusters.length > 0 ? (
-        <section className="overflow-x-auto rounded-lg border border-neutral-800 bg-[#141414] p-4" aria-label="주제 덩어리 그래프">
-          <svg className="min-w-[720px]" viewBox={`0 0 ${WIDTH} ${HEIGHT}`} role="img" aria-label="문서 주제 덩어리와 연결">
+        <section className="overflow-x-auto rounded-lg border border-neutral-800 bg-[#141414] p-4" aria-label="관계 지도 그래프">
+          <svg className="min-w-[720px]" viewBox={`0 0 ${WIDTH} ${HEIGHT}`} role="img" aria-label="문서 덩어리와 덩어리 사이 연결">
             {data.connections.map((connection) => {
               const source = positions.get(connection.source);
               const target = positions.get(connection.target);

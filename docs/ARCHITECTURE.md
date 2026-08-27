@@ -496,7 +496,7 @@ OpenSQL `patroni.yml`의 PostgreSQL 파라미터는 `max_connections: 100`이다
 | `POST /api/auth/tokens` · `GET /api/auth/tokens` · `DELETE /api/auth/tokens/{id}` | **세션 전용** API 토큰 발급·목록·폐기. 원문은 발급 응답에만 반환하며 기본 scope는 `read` |
 | `PUT /api/auth/password` | **세션 전용** 자기 비밀번호 변경. 현재 비밀번호를 확인하고, 바꾼 뒤 그 계정의 세션을 전부 무효화한다. 틀린 현재 비밀번호는 403(세션은 유효하므로 401이 아니다). API 토큰은 폐기하지 않는다 (ADR-040) |
 | `GET /api/diagnostics` | **진단.** 고아 문서·깨진 링크·중복 후보 등을 **열람 범위 기준**으로 집계 (ADR-027) |
-| `GET /api/clusters` | **주제 덩어리.** 관계 그래프의 Louvain 군집. 조회 시점 계산, 열람 범위 기준 (ADR-042) |
+| `GET /api/clusters` | **관계 지도.** 관계 그래프의 Louvain 군집. 조회 시점 계산, 열람 범위 기준 (ADR-042) |
 | `GET /api/admin/users` 등 | 관리자 전용 |
 | `GET /api/system/status` | **로그인 필요 · 운영/데모 전용**: `inet_server_addr()`(현재 접속 노드), pending/processing/error 잡 수, 임베딩 프로바이더명, **정합성 검증 쿼리 결과**(`c.version <> d.version` 건수). `/admin/status`가 소비하며 사용자 화면은 호출하지 않는다. SQL과 결과 모델은 `services/system.py`에 있고 라우터는 인증과 응답 변환만 맡는다 |
 
