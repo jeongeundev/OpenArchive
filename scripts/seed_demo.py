@@ -147,7 +147,6 @@ def load_seed_documents(root: Path = ROOT) -> list[SeedDocument]:
     for filename, source_tag in (
         ("PRD.md", "prd"),
         ("UI_GUIDE.md", "ui"),
-        ("PROJECT_CONTEXT.md", "요구사항"),
         ("SETUP_OPENSQL.md", "설치"),
     ):
         result.append(_whole_file(docs / filename, source_tag))

@@ -591,7 +591,7 @@ bash scripts/install_opensql_host.sh ~/Tmax_OpenSQL_3.17.8.7_rockylinux9.7_build
   - 포트 리스닝(`ss -tln`)도 부족하다. OpenProxy는 커넥션 풀러라 백엔드 PostgreSQL이 죽어도 자기는 리스닝하고, 연결이 서더라도 Replica로 라우팅되면 마이그레이션이 read-only로 죽는다. 쿼리 한 번이 프로세스 생존·자격증명·풀 이름·쓰기 가능 여부를 함께 확인한다
   - `pkill -f openproxy` 같은 명령은 **자기 자신의 셸도 죽인다**(명령줄에 그 문자열이 들어 있으면 매치된다). 프로세스 이름만 보는 `pgrep -x`/`pkill -x`를 쓴다
 - **CPU는 4개를 넘길 수 없다.** 라이선스 `<limit_cpu>` 상한이라 t3.xlarge(4 vCPU)가 최대다
-- 설치 파일과 라이선스 xml은 **저장소에 커밋하지 않는다.** 저장소는 규정상 public이어야 한다 (`PROJECT_CONTEXT.md` 제10조 ②)
+- 설치 파일과 라이선스 xml은 **저장소에 커밋하지 않는다.** 저장소는 규정상 public이어야 한다 (대회 규정 제10조 ②)
 
 ---
 
