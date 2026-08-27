@@ -1329,6 +1329,11 @@ Step 1의 `scripts/seed_demo.py`가 저장소 문서를 복사해 넣은 로컬
 `count(DISTINCT embedding::text) = 262`로 퇴화가 없었다. 문서당 청크 수는 최소 1, 중앙 3,
 최대 29다.
 
+> ⚠️ **이 측정은 그대로 재현되지 않는다.** 2026-08-27에 `scripts/seed_demo.py`가 적재하는
+> 코퍼스를 저장소 문서 복사본에서 `scripts/demo_corpus/`(가상 회사 사내 문서 64건)로 바꿨다.
+> `measure_relations.py`의 지정 문서쌍 프로브는 옛 제목을 찾으므로 아무 행도 출력하지 않는다.
+> 아래 수치는 당시 코퍼스에서 얻은 기록이며, ADR-029의 근거로서 유효하다.
+
 재현 스크립트는 `scripts/measure_relations.py`다. 모든 벡터 측정은 명시적 트랜잭션 안에서 다음
 두 설정을 함께 적용했다.
 

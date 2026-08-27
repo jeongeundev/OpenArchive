@@ -200,6 +200,9 @@ def main() -> int:
         for source, target, matched, chunks, ratio in ratio_examples:
             print(f"ratio {source} -> {target} matched={matched}/{chunks} ratio={float(ratio):.3f}")
 
+        # 아래 지정 문서쌍은 §14 측정 당시의 코퍼스(저장소 문서 복사본) 제목이다.
+        # 2026-08-27에 `seed_demo.py`가 `scripts/demo_corpus/`를 적재하도록 바뀌어
+        # 이 제목들은 더 이상 존재하지 않는다 — 조인이 0행이라 조용히 아무것도 찍지 않는다.
         named_pairs = conn.execute(
             """
             WITH pairs(a_pattern, b_pattern, label) AS (VALUES
