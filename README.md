@@ -54,16 +54,26 @@ AI 에이전트는 MCP로 같은 문서와 같은 권한 규칙 위에서 접근
 필요한 것은 Git, Python 3.12+, 그리고 OpenSQL입니다. 배포 패키지는 없으므로 소스에서
 설치합니다.
 
-아래 블록에서 **DSN 한 줄만 자기 환경으로 바꿔** 붙여넣습니다 — `<OpenProxy 호스트>`와
-`<풀 이름>`을 실제 값으로 바꾸지 않으면 그 문자열이 그대로 호스트명이 되어 연결에 실패합니다.
-OpenProxy 경유라면 데이터베이스 자리에 **풀 이름**을 적습니다.
+저장소를 받고 의존성을 설치합니다. 그대로 붙여넣으면 됩니다.
 
 ```bash
 git clone https://github.com/jeongeundev/OpenArchive.git
 cd OpenArchive/backend
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[local]"
-openarchive init --yes --dsn "postgresql://app:secret@<OpenProxy 호스트>:6432/<풀 이름>"   # ← 이 줄만 바꾼다
+```
+
+**DSN 한 줄만 자기 환경으로 바꿉니다.** OpenProxy 경유라면 데이터베이스 자리에 **풀 이름**을
+적습니다 — `<OpenProxy 호스트>`와 `<풀 이름>`을 실제 값으로 바꾸지 않으면 그 문자열이 그대로
+호스트명이 되어 연결에 실패합니다.
+
+```bash
+openarchive init --dsn "postgresql://app:secret@<OpenProxy 호스트>:6432/<풀 이름>"
+```
+
+연결·확장·권한을 점검한 뒤 적용해도 되는지 묻습니다. 이어서 관리자 계정을 만들고 실행합니다.
+
+```bash
 ADMIN_PASSWORD='change-me' python ../scripts/create_admin.py admin --admin
 EMBEDDING_PROVIDER=local openarchive serve
 ```
@@ -84,7 +94,7 @@ EMBEDDING_PROVIDER=local openarchive serve
 - **`openarchive init`** — **연결 확인 → 확장·권한 점검 → 스키마 적용 → 준비 상태 보고**를 한 번에
   합니다. 확인이 적용보다 먼저라 `vector` 확장이 없거나 권한이 모자라면 스키마를 건드리기 전에 무엇이
   왜 필요한지 알려주고 멈추고, 기존 테이블이 있으면 아무것도 바꾸지 않습니다
-  ([ADR-039](docs/ADR.md)). `--yes`를 빼면 단계마다 묻습니다. 확인한 DSN은 `backend/.env`에 기록됩니다.
+  ([ADR-039](docs/ADR.md)). `--yes`를 붙이면 묻지 않고 진행합니다. 확인한 DSN은 `backend/.env`에 기록됩니다.
 - **`create_admin.py`** — 자체 가입이 없으므로 최초 관리자 계정을 한 번 만듭니다.
 - **`openarchive serve`** — API + 임베딩 워커 + 웹 화면을 한 명령으로 띄웁니다. 웹 화면은 백엔드에
   동봉된 정적 빌드라 Node.js가 필요 없습니다. **최초 1회는 모델 다운로드(약 2GB)로 기동이 오래
