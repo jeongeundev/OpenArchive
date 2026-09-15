@@ -53,7 +53,7 @@ pg_repack 1.5.2
 
 `opensql-dev` VM(Rocky 9.7 x86-64, single 모드)에 실제로 설치해 측정했다. 설치 절차는 `SETUP_OPENSQL.md`.
 
-> **`ADR-021`에 따라 이 표가 증거다.** 라이선스가 **2026-09-10에 만료**되면 PostgreSQL이 기동하지 않아 재측정이 불가능하다. 심사는 저장소 상태를 기준으로 하므로(규정 제11조 ②) 여기 남은 기록이 검증의 근거가 된다.
+> **`ADR-021`에 따라 이 표가 증거다.** 라이선스가 **만료**되면(초회 2026-09-10 · 재발급분 2026-11-13) PostgreSQL이 기동하지 않아 재측정이 불가능하다. 심사는 저장소 상태를 기준으로 하므로(규정 제11조 ②) 여기 남은 기록이 검증의 근거가 된다.
 
 **METADATA 기록과 일치한 항목**
 
@@ -351,14 +351,14 @@ $ grep OPENSQL_RUST_TOOLCHAIN scripts/install.sh
 ```xml
 <identified_by_host>opensql-dev</identified_by_host>   <!-- 검증 기준: hostname -->
 <limit_cpu>4</limit_cpu>                                <!-- CPU 상한 -->
-<end_date>2026/09/10</end_date>                         <!-- 만료 -->
+<end_date>2026/11/13</end_date>                         <!-- 만료. 2026-09-14 재발급분 (초회는 2026/09/10) -->
 <edition>Enterprise</edition>  <type>trial</type>
 ```
 
 - 검증은 **hostname과 CPU 상한**으로 이루어진다. 아키텍처·OS 필드는 없다
 - `patroni.yml`의 `shared_preload_libraries`에 **`opensql_license`가 포함**되어, 라이선스가 맞지 않으면 PostgreSQL이 기동하지 않는다. 이는 preload된 12개 중 하나이며 전체 목록은 위 「번들 확장 실측」에 기록했다
 - 배치 위치: `opensql-installer/licenses/`, 파일명은 `config/common.env`의 `LICENSE_NAME`으로 지정
-- **만료일(2026/09/10)이 대회 일정과 겹치는지 확인이 필요하다.** 이후에는 DB를 띄울 수 없다
+- **만료일이 대회 일정과 겹치는지 확인이 필요하다.** 이후에는 DB를 띄울 수 없다. 재발급받으면 `$OPENSQL_HOME/license/license.xml`만 교체하고 Patroni를 재기동하면 된다 — 재설치 불필요 (2026-09-15 실측, `SETUP_OPENSQL.md` §1 「라이선스 갱신」)
 
 ---
 

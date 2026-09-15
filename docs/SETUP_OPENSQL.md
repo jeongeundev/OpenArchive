@@ -49,12 +49,36 @@ DATABASE_URL="postgresql://postgres:pg_password@<VM_IP>:6432/opensql"
 ```xml
 <identified_by_host>opensql-dev</identified_by_host>   <!-- VM hostname과 일치해야 함 -->
 <limit_cpu>4</limit_cpu>                                <!-- CPU 상한. 정확히 일치가 아니라 이하 -->
-<end_date>2026/09/10</end_date>                         <!-- 만료일 -->
+<end_date>2026/11/13</end_date>                         <!-- 만료일. 2026-09-14 재발급분 (초회 발급분은 2026/09/10) -->
 ```
 
 `identified_by_host`를 VM hostname으로 그대로 쓴다. 틀리면 **PostgreSQL이 기동하지 않는다** — `patroni.yml`의 `shared_preload_libraries`에 `opensql_license`가 있어 검증이 DB 기동 시점에 일어난다.
 
 `limit_cpu`는 **상한**이므로 4코어 이하면 된다. 소켓/코어/스레드 토폴로지를 정확히 맞출 필요는 없다.
+
+### 라이선스 갱신 — 재설치는 필요 없다
+
+라이선스는 설치 산출물이 아니라 **기동 시점에 읽는 파일 하나**다. 설치기는 XML을 `$OPENSQL_HOME/license/license.xml`(0640, `opensql:opensql`)로 복사하고 `.opensqlrc`에 `OPENSQL_LICENSE_PATH`를 적을 뿐이며(`opensql_local_installer.py`의 `deploy_license`), `start_patroni.sh`가 그 파일을 source해 `patroni.yml`의 `postgresql.env`로 넘긴다. `opensql_license`가 이 경로를 PostgreSQL 기동 시 읽는다. edition(Standard/Enterprise)은 설치 컴포넌트에 영향이 없다.
+
+그러므로 재발급받으면 **파일 교체 + Patroni 재기동**으로 끝난다 (2026-09-15 실측):
+
+```bash
+# 맥 → VM. 인스톨러 사본에도 넣어 두면 재설치 때 그대로 쓴다
+scp OpenSQL_Trial_opensql-dev_<만료일>.xml \
+    kje@192.168.64.4:~/Tmax_OpenSQL_3.17.8.7_rockylinux9.7_buildtime20260720/opensql-installer/licenses/
+
+# VM
+sudo cp /home/opensql/license/license.xml /home/opensql/license/license.xml.expired-<옛만료일>
+sudo install -m 640 -o opensql -g opensql \
+    ~/Tmax_OpenSQL_3.17.8.7_rockylinux9.7_buildtime20260720/opensql-installer/licenses/OpenSQL_Trial_opensql-dev_<만료일>.xml \
+    /home/opensql/license/license.xml
+sed -i 's|^LICENSE_NAME=.*|LICENSE_NAME="OpenSQL_Trial_opensql-dev_<만료일>.xml"|' \
+    ~/Tmax_OpenSQL_3.17.8.7_rockylinux9.7_buildtime20260720/opensql-installer/config/common.env
+```
+
+이어서 §15 「인스턴스를 켤 때마다」의 기동 순서(Patroni → OpenProxy)로 띄우고 `patronictl list`가 `Leader · running`이면 통과다. PG 로그에 라이선스 메시지는 따로 찍히지 않는다 — preload 확장이라 서버가 뜬 것 자체가 검증이다.
+
+교체 전에 새 XML의 `identified_by_host`가 VM hostname과 같은지, `limit_cpu`가 VM 코어 수 이상인지 확인한다. hostname이 다르면 `hostnamectl set-hostname`과 `/etc/hosts`를 맞춘다 — Patroni의 `NODE_NAME`은 hostname과 무관하므로 그것까지 바꿀 필요는 없다.
 
 ---
 
@@ -326,7 +350,7 @@ sed -i 's|^NODE_NAME=.*|NODE_NAME="opensql-dev"|'                  config/common
 sed -i 's|^OPENSQL_HOME=.*|OPENSQL_HOME="/home/opensql"|'          config/common.env
 sed -i 's|^PG_HOME=.*|PG_HOME="/home/opensql"|'                    config/common.env
 sed -i 's|^PG_DATA_DIR=.*|PG_DATA_DIR="/home/opensql/data/pgsql"|' config/common.env
-sed -i 's|^LICENSE_NAME=.*|LICENSE_NAME="OpenSQL_Trial_opensql-dev_20260910.xml"|' config/common.env
+sed -i 's|^LICENSE_NAME=.*|LICENSE_NAME="OpenSQL_Trial_opensql-dev_20261113.xml"|' config/common.env
 
 grep -E "^(NODE1_IP|NODE_NAME|OPENSQL_HOME|PG_HOME|PG_DATA_DIR|LICENSE_NAME)=" config/common.env
 ls licenses/
@@ -479,7 +503,7 @@ psql -U postgres -c "NOTIFY ch1, 'hello from another session';"
 | **x86-64 에뮬레이션** | 부팅·쿼리가 느리다. 애플리케이션을 맥 네이티브로 두는 이유 |
 | **single 구성** | 실제 failover 시연 불가 (사무국 지시사항) |
 | **라이선스 hostname 고정** | `opensql-dev` 외의 hostname에서는 DB가 기동하지 않는다 |
-| **라이선스 만료 2026/09/10** | 이후 DB 기동 불가. 1차 제출(8/27)까지는 여유가 있으나 2차 일정 확인 필요 (ADR-021) |
+| **라이선스 만료 2026/11/13** | 이후 DB 기동 불가. trial 기간이 짧다(초회 38일·재발급 60일). 만료되면 사무국에 재발급을 요청하고 §1 「라이선스 갱신」대로 파일만 교체한다 (ADR-021) |
 
 ## 13. 로컬 대체 환경
 
@@ -582,7 +606,7 @@ bash scripts/install_opensql_host.sh ~/Tmax_OpenSQL_3.17.8.7_rockylinux9.7_build
 
 ### 제약
 
-- **라이선스는 2026-09-10에 만료된다.** 그 후에는 이 인스턴스의 PostgreSQL도 기동하지 않는다 (ADR-021)
+- **이 인스턴스에 설치된 라이선스는 2026-09-10에 만료됐다.** 다시 켜려면 §1 「라이선스 갱신」대로 새 XML(만료 2026-11-13)로 교체해야 PostgreSQL이 기동한다 (ADR-021)
 - **인스턴스를 정지했다 켜면 공인 IP가 바뀐다.** 심사용 링크를 유지하려면 Elastic IP나 도메인이 필요하다
   - 반면 **사설 IP는 보존된다**(실측: 정지·기동 후에도 `172.31.25.213`). `patroni.yml`·`openproxy.toml`이 사설 IP에 묶여 있으므로 재설정 없이 그대로 뜬다
 - **재부팅하면 `opensql-etcd.service` 하나만 살아난다.** Patroni·PostgreSQL·OpenProxy는 systemd 유닛이 없는 `nohup` 맨 프로세스라(#27) 인스턴스를 켤 때마다 수동 기동이 필요하다 (§15)
