@@ -39,9 +39,10 @@ models/
 phases/**/phase*-output.json
 phases/**/step*-output.json
 
-# 제출 자료는 저장소 밖에 둔다 — 결과보고서 초안과 대회 서식 원본
-docs/submission/
+# 대회 서식 원본
 *.docx
 
-# 과제 정리 노트 — 로컬에만 둔다
-docs/PROJECT_CONTEXT.md
+# --- 작업 노트 ---
+# docs/에는 사용자·기여자용 제품 문서만 둔다. 조사·메모(notes/)와 대회 자료(notes/contest/:
+# 과제 정리·평가 기준·결과보고서)는 저장소 밖.
+notes/
