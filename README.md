@@ -7,8 +7,6 @@
 [![PostgreSQL](https://img.shields.io/badge/OpenSQL-PostgreSQL%2017-336791.svg)](https://docs.tibero.com/tmaxopensql/overview)
 [![Embedding](https://img.shields.io/badge/embedding-BGE--M3%20(MIT)-orange.svg)](https://huggingface.co/BAAI/bge-m3)
 
-> 2026년 오픈소스 개발자대회 기업 지정과제 「OpenSQL 기반 AI 문서관리 플랫폼」 출품작
-
 ---
 
 ## 소개
