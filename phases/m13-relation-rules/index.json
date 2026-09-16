@@ -1,0 +1,70 @@
+{
+  "project": "OpenArchive",
+  "phase": "m13-relation-rules",
+  "steps": [
+    {
+      "step": 0,
+      "name": "edges-rebuild",
+      "type": "feat",
+      "scope": "db",
+      "desc": "관계 판정을 rebuild_document_edges 함수로 옮기고 양쪽 비율·문서당 5건·단방향 저장·HNSW 강제를 적용한다",
+      "status": "pending"
+    },
+    {
+      "step": 1,
+      "name": "worker-clock",
+      "type": "fix",
+      "scope": "worker",
+      "desc": "잡 완료 시각을 트랜잭션 시작이 아니라 실제 완료 시점으로 기록한다",
+      "status": "pending"
+    },
+    {
+      "step": 2,
+      "name": "search-symmetric",
+      "type": "feat",
+      "scope": "search",
+      "desc": "검색의 관계 순회가 단방향 저장 edge를 양방향으로 읽는다",
+      "status": "pending"
+    },
+    {
+      "step": 3,
+      "name": "related-symmetric",
+      "type": "feat",
+      "scope": "search",
+      "desc": "관련 문서·태그 추천이 단방향 저장 edge를 양방향으로 읽는다",
+      "status": "pending"
+    },
+    {
+      "step": 4,
+      "name": "cluster-labels",
+      "type": "fix",
+      "scope": "search",
+      "desc": "덩어리 이름을 최빈 태그 대신 군집에 집중된 태그로 짓는다",
+      "status": "pending"
+    },
+    {
+      "step": 5,
+      "name": "rebuild-cli",
+      "type": "feat",
+      "scope": "api",
+      "desc": "openarchive rebuild-edges — 모든 문서의 관계를 전체 코퍼스 기준으로 다시 계산한다",
+      "status": "pending"
+    },
+    {
+      "step": 6,
+      "name": "demo-corpus",
+      "type": "feat",
+      "scope": "db",
+      "desc": "시연 코퍼스에 다청크 문서를 넣고 1청크 불변식을 걷어내며 적재 뒤 관계를 전량 재계산한다",
+      "status": "pending"
+    },
+    {
+      "step": 7,
+      "name": "docs-relations",
+      "type": "docs",
+      "scope": "adr",
+      "desc": "ADR-029 개정 — 단방향 저장·양쪽 비율·문서당 상한·전량 재계산과 #94 실측을 기록한다",
+      "status": "pending"
+    }
+  ]
+}
