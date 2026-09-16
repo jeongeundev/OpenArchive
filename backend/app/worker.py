@@ -133,7 +133,7 @@ async def finalize_job(
             # 새 pending 잡이 최신 내용으로 다시 처리하므로 실패가 아니라 마감이다.
             # 실패 처리하면 재시도 횟수만 소모한다.
             await conn.execute(
-                "UPDATE embedding_jobs SET status = 'done', finished_at = now() WHERE id = %s",
+                "UPDATE embedding_jobs SET status = 'done', finished_at = clock_timestamp() WHERE id = %s",
                 (job.job_id,),
             )
             return False
@@ -158,8 +158,9 @@ async def finalize_job(
             "UPDATE documents SET embedding_status = 'ready' WHERE id = %s",
             (job.document_id,),
         )
+        # now()는 트랜잭션 시작 시각이라 같은 트랜잭션의 AFTER 트리거(관계 계산) 시간이 빠진다.
         await conn.execute(
-            "UPDATE embedding_jobs SET status = 'done', finished_at = now() WHERE id = %s",
+            "UPDATE embedding_jobs SET status = 'done', finished_at = clock_timestamp() WHERE id = %s",
             (job.job_id,),
         )
     return True
@@ -197,7 +198,7 @@ async def fail_job(conn: psycopg.AsyncConnection, job: ClaimedJob, error: Except
             await conn.execute(
                 """
                 UPDATE embedding_jobs
-                   SET status = 'done', last_error = %s, finished_at = now()
+                   SET status = 'done', last_error = %s, finished_at = clock_timestamp()
                  WHERE id = %s
                 """,
                 (message, job.job_id),
@@ -213,7 +214,7 @@ async def fail_job(conn: psycopg.AsyncConnection, job: ClaimedJob, error: Except
             await conn.execute(
                 """
                 UPDATE embedding_jobs
-                   SET status = 'error', last_error = %s, finished_at = now()
+                   SET status = 'error', last_error = %s, finished_at = clock_timestamp()
                  WHERE id = %s
                 """,
                 (message, job.job_id),
@@ -262,7 +263,7 @@ async def release_job(conn: psycopg.AsyncConnection, job: ClaimedJob) -> None:
         if await cur.fetchone() is not None:
             # 처리 중 문서가 수정됐다 — 새 잡이 최신 내용으로 처리하므로 마감한다.
             await conn.execute(
-                "UPDATE embedding_jobs SET status = 'done', finished_at = now() WHERE id = %s",
+                "UPDATE embedding_jobs SET status = 'done', finished_at = clock_timestamp() WHERE id = %s",
                 (job.job_id,),
             )
             return
@@ -347,7 +348,7 @@ async def sweep_zombies(conn: psycopg.AsyncConnection) -> int:
                    last_error = CASE WHEN d.next_status = 'error'
                                      THEN %(exhausted_error)s ELSE j.last_error END,
                    finished_at = CASE WHEN d.next_status IN ('done', 'error')
-                                      THEN now() ELSE j.finished_at END
+                                      THEN clock_timestamp() ELSE j.finished_at END
               FROM decided d
              WHERE j.id = d.id
          RETURNING d.document_id, d.next_status
@@ -402,7 +403,7 @@ async def process_once(
             # UPDATE는 0건이지만, 마감을 시도해 두면 "삭제 아닌 이유로 load가 비는"
             # 회귀가 생겨도 잡이 processing으로 방치되지 않는다.
             await conn.execute(
-                "UPDATE embedding_jobs SET status = 'done', finished_at = now() WHERE id = %s",
+                "UPDATE embedding_jobs SET status = 'done', finished_at = clock_timestamp() WHERE id = %s",
                 (job.job_id,),
             )
             return True

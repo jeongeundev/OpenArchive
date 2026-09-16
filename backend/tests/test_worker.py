@@ -236,6 +236,59 @@ async def test_a_locked_single_job_is_skipped_not_waited_on(conn, other_conn):
         assert await asyncio.wait_for(claim_job(other_conn), timeout=5) is None
 
 
+async def test_finished_at_records_the_end_of_the_finalize_transaction(conn):
+    await insert_document(conn)
+    job = await claim_job(conn)
+    assert job is not None
+    chunks = chunk_text(DOC_V1)
+    vectors = FakeProvider().embed(chunks)
+    await conn.execute(
+        """
+        CREATE FUNCTION test_slow_edges() RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN PERFORM pg_sleep(0.3); RETURN NEW; END $$;
+        CREATE TRIGGER trg_test_slow_edges AFTER UPDATE OF embedding_status ON documents
+          FOR EACH ROW WHEN (NEW.embedding_status = 'ready')
+          EXECUTE FUNCTION test_slow_edges();
+        """
+    )
+
+    cur = await conn.execute("SELECT clock_timestamp()")
+    (before,) = await cur.fetchone()
+    assert await finalize_job(conn, job, "sha256:v1", chunks, vectors) is True
+
+    cur = await conn.execute(
+        "SELECT finished_at FROM embedding_jobs WHERE id = %s", (job.job_id,)
+    )
+    (finished_at,) = await cur.fetchone()
+    assert (finished_at - before).total_seconds() >= 0.3
+
+
+async def test_fail_job_finished_at_is_the_actual_time(conn):
+    doc_id = await insert_document(conn)
+    for _ in range(MAX_ATTEMPTS - 1):
+        assert await process_once(conn, ExplodingProvider()) is True
+        await conn.execute(
+            "UPDATE embedding_jobs SET next_attempt_at = now() WHERE document_id = %s",
+            (doc_id,),
+        )
+    job = await claim_job(conn)
+    assert job is not None
+
+    # 기준 시각 전에 트랜잭션을 열어 now()라면 반드시 기준보다 이르게 만든다.
+    async with conn.transaction():
+        cur = await conn.execute("SELECT clock_timestamp()")
+        (before,) = await cur.fetchone()
+        await fail_job(conn, job, RuntimeError("모델 추론 실패를 재현한다"))
+
+    cur = await conn.execute(
+        "SELECT status, finished_at FROM embedding_jobs WHERE id = %s", (job.job_id,)
+    )
+    status, finished_at = await cur.fetchone()
+    assert status == "error"
+    assert finished_at >= before
+    assert (await document_state(conn, doc_id))[1] == "error"
+
+
 async def test_drain_processes_a_new_document_end_to_end(conn):
     """정상 경로 — 업로드(INSERT) 후 drain만으로 청크·상태·잡이 완결된다.
 
