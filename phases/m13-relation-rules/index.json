@@ -19,7 +19,10 @@
       "type": "feat",
       "scope": "search",
       "desc": "관련 문서·태그 추천이 단방향 저장 edge를 양방향으로 읽는다",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-09-16T16:28:06+0900",
+      "summary": "관련 문서·태그 추천을 양방향 이웃 CTE로 통합하고 overlaps 우선 중복 제거·역방향 권한·태그 빈도 테스트 5개를 추가함(AC·통합 검증 통과).",
+      "completed_at": "2026-09-16T16:33:06+0900"
     },
     {
       "step": 2,
