@@ -1,9 +1,10 @@
 import psycopg
 import pytest
 from conftest import insert_test_document, process_all_embedding_jobs
+from test_triggers import edges_for, insert_document, mark_document_ready, unit_vector
 
 from app.embeddings import FakeProvider
-from app.services.system import get_system_status
+from app.services.system import get_system_status, rebuild_all_edges
 
 
 @pytest.fixture
@@ -62,3 +63,59 @@ async def test_status_includes_values_supplied_by_the_caller(system_conn):
 
     assert result.zombie_timeout_minutes == 17
     assert result.embedding_provider == "test-provider"
+
+
+async def test_rebuild_all_edges_lets_earlier_documents_see_later_ones(system_conn, migrated_db):
+    with psycopg.connect(migrated_db, autocommit=True) as setup:
+        first = insert_document(setup)
+        mark_document_ready(setup, first, ["first"], vectors=[unit_vector(0)])
+        second = insert_document(setup)
+        mark_document_ready(setup, second, ["second"], vectors=[unit_vector(0)])
+        assert [(row[0], row[1]) for row in edges_for(setup, first)] == [(second, first)]
+
+        assert await rebuild_all_edges(system_conn) == 2
+        rebuilt = edges_for(setup, first)
+        assert {(row[0], row[1]) for row in rebuilt} == {(first, second), (second, first)}
+        assert await rebuild_all_edges(system_conn) == 2
+        assert edges_for(setup, first) == rebuilt
+
+
+async def test_rebuild_all_edges_skips_documents_that_are_not_ready(system_conn, migrated_db):
+    with psycopg.connect(migrated_db, autocommit=True) as setup:
+        ready = insert_document(setup)
+        mark_document_ready(setup, ready, ["ready"], vectors=[unit_vector(0)])
+        pending = insert_document(setup)
+
+        assert await rebuild_all_edges(system_conn) == 1
+        assert setup.execute(
+            "SELECT count(*) FROM document_edges WHERE src_document_id = %s", (pending,)
+        ).fetchone() == (0,)
+        assert setup.execute(
+            "SELECT embedding_status FROM documents WHERE id = %s", (pending,)
+        ).fetchone() == ("pending",)
+
+
+@pytest.mark.parametrize("autocommit", [False, True])
+async def test_rebuild_all_edges_commits_per_document(migrated_db, autocommit):
+    with psycopg.connect(migrated_db, autocommit=True) as observer:
+        for _ in range(3):
+            doc_id = insert_document(observer)
+            mark_document_ready(observer, doc_id, ["text"], vectors=[unit_vector(0)])
+        ordered_ids = [row[0] for row in observer.execute(
+            "SELECT id FROM documents ORDER BY created_at, id"
+        ).fetchall()]
+        progress = []
+
+        def on_progress(done, total):
+            progress.append((done, total))
+            # 별도 연결은 커밋된 결과만 본다. 첫 문서는 원래 나가는 관계가 없다.
+            assert observer.execute(
+                "SELECT count(*) FROM document_edges WHERE src_document_id = %s",
+                (ordered_ids[done - 1],),
+            ).fetchone()[0] == 2
+
+        async with await psycopg.AsyncConnection.connect(
+            migrated_db, autocommit=autocommit
+        ) as conn:
+            assert await rebuild_all_edges(conn, on_progress=on_progress) == 3
+        assert progress == [(1, 3), (2, 3), (3, 3)]

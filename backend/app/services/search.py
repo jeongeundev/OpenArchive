@@ -68,6 +68,10 @@ traversal_edges AS (
     SELECT e.src_document_id, e.dst_document_id, e.kind, e.dst_chunk_index
     FROM document_edges e
     UNION ALL
+    -- 역방향. 계산 주체가 어느 쪽이든 관계는 무방향이다 (ADR-029 개정 — 저장은 단방향이 된다).
+    SELECT e.dst_document_id, e.src_document_id, e.kind, e.src_chunk_index
+    FROM document_edges e
+    UNION ALL
     SELECT src_document_id, dst_document_id, kind, dst_chunk_index
     FROM resolved_links
 ),

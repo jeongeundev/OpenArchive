@@ -104,8 +104,118 @@ async def test_relation_expands_search_to_a_document_outside_vector_candidates(
     assert hits[1].via.depth == 1
 
 
+async def test_reverse_stored_edge_expands_search(worker_conn, search_conn):
+    provider = FakeProvider()
+    entry_id = await insert_test_document(
+        worker_conn,
+        title="직접 진입점",
+        content=("정합성 직접 일치 문장 " * 900),
+    )
+    related_id = await insert_test_document(
+        worker_conn,
+        title="관계로만 도달",
+        content="질의 어휘가 전혀 없는 별도 문서",
+    )
+    await process_all_embedding_jobs(worker_conn, provider)
+    await worker_conn.execute("DELETE FROM document_edges")
+    await worker_conn.execute(
+        """
+        INSERT INTO document_edges
+            (src_document_id, dst_document_id, kind,
+             src_chunk_index, dst_chunk_index, score)
+        VALUES (%s, %s, 'related', 0, 0, 0.9)
+        """,
+        (related_id, entry_id),
+    )
+
+    hits = await search_documents(search_conn, provider, query="정합성 직접 일치 문장", k=2)
+
+    assert [hit.document_id for hit in hits] == [entry_id, related_id]
+    assert hits[0].via is None
+    assert hits[1].via is not None
+    assert hits[1].via.from_document_id == entry_id
+    assert hits[1].via.kind == "related"
+    assert hits[1].via.depth == 1
+
+
+async def test_reverse_edge_excerpt_uses_the_stored_source_chunk(
+    worker_conn, search_conn
+):
+    provider = FakeProvider()
+    entry_id = await insert_test_document(
+        worker_conn,
+        title="직접 진입점",
+        content=("발췌 선택 직접 질의 " * 2000),
+    )
+    related_id = await insert_test_document(
+        worker_conn,
+        title="관계로만 도달",
+        content="\n\n".join(
+            ("질의 " * (2 * index + 1)) + ("대목 고유 어휘 " * 60) for index in range(4)
+        ),
+    )
+    await process_all_embedding_jobs(worker_conn, provider)
+    await worker_conn.execute("DELETE FROM document_edges")
+    await worker_conn.execute(
+        """
+        INSERT INTO document_edges
+            (src_document_id, dst_document_id, kind,
+             src_chunk_index, dst_chunk_index, score)
+        VALUES (%s, %s, 'related', 2, 0, 0.9)
+        """,
+        (related_id, entry_id),
+    )
+
+    hits = await search_documents(search_conn, provider, query="발췌 선택 직접 질의", k=4)
+
+    assert [hit.document_id for hit in hits] == [entry_id, related_id]
+    assert hits[0].via is None
+    assert hits[1].via is not None
+    assert hits[1].via.from_document_id == entry_id
+    assert hits[1].via.kind == "related"
+    assert hits[1].via.depth == 1
+    assert hits[1].chunk_index == 2
+
+
+async def test_an_edge_stored_in_both_directions_is_expanded_once(
+    worker_conn, search_conn
+):
+    provider = FakeProvider()
+    entry_id = await insert_test_document(
+        worker_conn,
+        title="직접 진입점",
+        content=("정합성 직접 일치 문장 " * 900),
+    )
+    related_id = await insert_test_document(
+        worker_conn,
+        title="관계로만 도달",
+        content="질의 어휘가 전혀 없는 별도 문서",
+    )
+    await process_all_embedding_jobs(worker_conn, provider)
+    await worker_conn.execute("DELETE FROM document_edges")
+    await worker_conn.execute(
+        """
+        INSERT INTO document_edges
+            (src_document_id, dst_document_id, kind,
+             src_chunk_index, dst_chunk_index, score)
+        VALUES (%s, %s, 'related', 0, 0, 0.9),
+               (%s, %s, 'related', 0, 0, 0.9)
+        """,
+        (entry_id, related_id, related_id, entry_id),
+    )
+
+    hits = await search_documents(search_conn, provider, query="정합성 직접 일치 문장", k=2)
+
+    assert [hit.document_id for hit in hits] == [entry_id, related_id]
+    assert hits[0].via is None
+    assert hits[1].via is not None
+    assert hits[1].via.from_document_id == entry_id
+    assert hits[1].via.kind == "related"
+    assert hits[1].via.depth == 1
+
+
 async def test_trigger_built_edges_drive_search_expansion(worker_conn, search_conn):
-    """008 트리거가 만든 edge만으로 검색이 확장되는지 — step6과 step8의 결합을 본다.
+    """트리거(014)가 만든 edge만으로 검색이 확장되는지 — step6과 step8의 결합을 본다.
 
     다른 그래프 테스트는 전부 `DELETE FROM document_edges` 후 손으로 INSERT한다. 그러면
     트리거가 실제로 내놓는 행의 형태(kind·청크 인덱스·방향)가 SEARCH_SQL이 소비하는
@@ -125,8 +235,10 @@ async def test_trigger_built_edges_drive_search_expansion(worker_conn, search_co
     await process_all_embedding_jobs(worker_conn, provider)
 
     # document_edges를 손대지 않는다 — 남아 있는 행은 전부 트리거가 만든 것이다.
+    # 저장은 단방향(014)이라 먼저 처리된 entry에는 (neighbor→entry) 행만 있다 — 방향을 묻지 않는다.
     edge_cur = await worker_conn.execute(
-        "SELECT count(*) FROM document_edges WHERE src_document_id = %s", (entry_id,)
+        "SELECT count(*) FROM document_edges WHERE src_document_id = %s OR dst_document_id = %s",
+        (entry_id, entry_id),
     )
     assert (await edge_cur.fetchone())[0] > 0
 
@@ -165,7 +277,8 @@ async def test_graph_search_stops_at_depth_two_and_does_not_repeat_a_cycle(
                (%s, %s, 'related', 0, 0, 0.7),
                (%s, %s, 'related', 0, 0, 0.6)
         """,
-        (ids[0], ids[1], ids[1], ids[2], ids[2], ids[3], ids[2], ids[0]),
+        # 무방향 조회에서도 0–1–2–3의 깊이를 유지하며 1→0으로 순환한다.
+        (ids[0], ids[1], ids[1], ids[2], ids[2], ids[3], ids[1], ids[0]),
     )
 
     hits = await search_documents(search_conn, provider, query="깊이 제한 순환 질의", k=4)

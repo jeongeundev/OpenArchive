@@ -40,9 +40,11 @@
 - 편집·버전 관리의 대상은 **문서 텍스트**이며 원본 파일이 아니다. 원본 파일은 보관하지 않는다. 파일 업로드 문서에서는 문서 텍스트가 **추출 텍스트**이고, 원본 파일 없는 문서(`filename IS NULL`)에는 "추출"이라는 말을 쓰지 않는다. 문서·UI에서 **원본 파일 / 문서 텍스트 / 추출 텍스트 / 텍스트 버전**을 구분해 쓰고 "원문"으로 뭉뚱그리지 않는다 (ADR-017, ADR-035).
 - CRITICAL: **벡터 검색 트랜잭션에는 `SET LOCAL random_page_cost = 1.1`을 건다.** VM 기본값 4에서는 플래너가 HNSW를 **아예 고르지 않는다** — 쿼리 형태와 무관하게 Seq Scan으로 떨어진다(6000행 실측 624~785ms → 33~36ms). 힙은 3MB인데 HNSW 인덱스가 47MB라, 임의 접근을 4배로 계산하면 통째로 읽는 쪽이 싸다고 나온다 (ADR-011 보강 5).
 - **권한·태그 필터를 벡터 정렬 서브쿼리 안에 두는 것은 문제가 없다.** 1차 실측이 "JOIN이 HNSW를 막는다"로 결론냈으나 **재측정에서 재현되지 않았다** — 필터를 밖으로 빼면 비공개 문서가 후보 자리를 차지해 손해만 본다 (ADR-018 재개정, `OPENSQL_RESEARCH.md` §12 17번).
-- CRITICAL: **후보 `LIMIT`은 `hnsw.ef_search`보다 작아야 한다 — 등호에서도 모자란다**(`ef_search=200`, `LIMIT 200` → 193행). 지킬 불변식은 `MAX_K * 배수 < EF_SEARCH`이며 **반드시 테스트로 고정한다**(`test_search.py:449`·`test_related.py:330`이 각각 단언한다). 배수가 벽에 가까운 호출부는 `(EF_SEARCH - 1) // MAX_K`로 역산하고, 여유가 큰 검색은 상수 5를 쓴다. `random_page_cost=1.1`에서는 400부터 Seq Scan으로 떨어지므로 `SET LOCAL` 값은 아래·위 벽 사이의 200을 유지한다 (ADR-011 보강 4, `OPENSQL_RESEARCH.md` §12-22).
+- CRITICAL: **후보 `LIMIT`은 `hnsw.ef_search`보다 작아야 한다 — 등호에서도 모자란다**(`ef_search=200`, `LIMIT 200` → 193행). 지킬 불변식은 `MAX_K * 배수 < EF_SEARCH`이며 **반드시 테스트로 고정한다**(`test_search.py:665`·`test_related.py:330`이 각각 단언한다). 배수가 벽에 가까운 호출부는 `(EF_SEARCH - 1) // MAX_K`로 역산하고, 여유가 큰 검색은 상수 5를 쓴다. `random_page_cost=1.1`에서는 400부터 Seq Scan으로 떨어지므로 `SET LOCAL` 값은 아래·위 벽 사이의 200을 유지한다 (ADR-011 보강 4, `OPENSQL_RESEARCH.md` §12-22).
 - **합성 벡터로 성능을 측정할 때는 `count(DISTINCT embedding::text)`를 먼저 확인한다.** 상관관계 없는 `LATERAL`/서브쿼리는 한 번만 평가되어 전 행이 같은 벡터가 되는데, 에러도 경고도 없다. 퇴화 상태에서는 HNSW 인덱스 크기와 삽입 시간이 한 자릿수 배 달라져 측정이 통째로 무의미해진다 (`OPENSQL_RESEARCH.md` §12 17번).
 - **임시 테이블을 쓰지 않는다.** OpenProxy는 풀 백엔드를 넘길 때 `RESET ALL`만 하고 `DISCARD ALL`은 하지 않아, 임시 테이블과 `LISTEN` 등록이 다음 클라이언트로 누수된다(실측). 중간 결과는 CTE로 처리한다 (ADR-022, `OPENSQL_RESEARCH.md` §5-2).
+- CRITICAL: `document_edges`는 **단방향 저장**이다 — `src_document_id`가 계산한 문서이고 재계산은 자기 `src` 행만 교체한다. 읽는 쪽(검색 순회·관련 문서·태그 추천·군집·진단)은 반드시 `src ∪ dst`로 읽는다. 이유: 양방향 두 행 + DELETE both는 남이 발견한 관계를 지웠다(#93 R4, ADR-029 개정).
+- CRITICAL: 관계 판정 함수 `rebuild_document_edges`는 **함수 정의 `SET enable_seqscan = off`**를 유지한다. 1만 청크 미만에서 플래너가 HNSW를 안 골라 트리거가 청크당 0.26초였다. `SET LOCAL`은 OpenProxy 풀 백엔드에 남는 generic plan 때문에 안 먹는다. 대량 적재 뒤에는 `openarchive rebuild-edges`로 전체 기준으로 수렴시킨다 (ADR-029 결정 6).
 - 벡터 컬럼은 `vector(1024)` 고정. 임베딩 프로바이더가 바뀌어도 차원은 바꾸지 않는다.
 - 스키마 변경은 `backend/migrations/`의 번호 붙은 raw SQL 파일로만 한다 (ORM 마이그레이션 도구 금지).
 - 백엔드 비즈니스 로직은 `backend/app/services/`에 두고, API 라우터와 MCP 서버는 이를 재사용만 한다.

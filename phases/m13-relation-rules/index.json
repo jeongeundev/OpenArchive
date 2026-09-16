@@ -1,0 +1,96 @@
+{
+  "project": "OpenArchive",
+  "phase": "m13-relation-rules",
+  "steps": [
+    {
+      "step": 0,
+      "name": "search-symmetric",
+      "type": "feat",
+      "scope": "search",
+      "desc": "검색의 관계 순회가 단방향 저장 edge를 양방향으로 읽는다",
+      "status": "completed",
+      "started_at": "2026-09-16T16:24:21+0900",
+      "summary": "검색 순회에 역방향 edge와 소스 청크 매핑을 추가하고 대칭·중복 제거 테스트 3개 및 기존 순환 픽스처를 검증함(AC·통합 검증 통과).",
+      "completed_at": "2026-09-16T16:28:05+0900"
+    },
+    {
+      "step": 1,
+      "name": "related-symmetric",
+      "type": "feat",
+      "scope": "search",
+      "desc": "관련 문서·태그 추천이 단방향 저장 edge를 양방향으로 읽는다",
+      "status": "completed",
+      "started_at": "2026-09-16T16:28:06+0900",
+      "summary": "관련 문서·태그 추천을 양방향 이웃 CTE로 통합하고 overlaps 우선 중복 제거·역방향 권한·태그 빈도 테스트 5개를 추가함(AC·통합 검증 통과).",
+      "completed_at": "2026-09-16T16:33:06+0900"
+    },
+    {
+      "step": 2,
+      "name": "edges-rebuild",
+      "type": "feat",
+      "scope": "db",
+      "desc": "관계 판정을 rebuild_document_edges 함수로 옮기고 양쪽 비율·문서당 5건·단방향 저장·HNSW 강제를 적용한다",
+      "status": "completed",
+      "started_at": "2026-09-16T16:33:06+0900",
+      "completed_at": "2026-09-16T17:12:05+0900",
+      "summary": "backend/migrations/014_edges_triggers.sql — 판정 본체 rebuild_document_edges(uuid)(함수 정의 SET hnsw.ef_search=200·random_page_cost=1.1·enable_seqscan=off), 트리거 build_document_edges는 호출만. overlaps = 양쪽 비율 ≥0.8 AND matched_src ≥2, 문서당 이웃 상한 5(matched_src↓·min_dist↑·dst_id), 단방향 저장(src=계산 주체, DELETE src만). test_triggers 32개(신규 5·재작성 3·filler 보강 1), test_search 선행 단언을 src OR dst로. 전체 582 passed."
+    },
+    {
+      "step": 3,
+      "name": "worker-clock",
+      "type": "fix",
+      "scope": "worker",
+      "desc": "잡 완료 시각을 트랜잭션 시작이 아니라 실제 완료 시점으로 기록한다",
+      "status": "completed",
+      "started_at": "2026-09-16T17:12:14+0900",
+      "summary": "워커 완료 시각 7곳을 clock_timestamp()로 변경하고 실제 DB 회귀 테스트 2개를 추가함(워커 36개·전체 584개·Ruff·통합 검증 통과).",
+      "completed_at": "2026-09-16T17:15:48+0900"
+    },
+    {
+      "step": 4,
+      "name": "cluster-labels",
+      "type": "fix",
+      "scope": "search",
+      "desc": "덩어리 이름을 최빈 태그 대신 군집에 집중된 태그로 짓는다",
+      "status": "completed",
+      "started_at": "2026-09-16T17:15:48+0900",
+      "summary": "군집 라벨을 열람 범위 내 안−밖 태그 빈도의 양수 최댓값으로 변경하고 제목 폴백·권한·미분류 집계를 검증함(테스트 3개 추가, 군집 15개·전체 587개·Ruff·통합 검증 통과). 테스트 3 기대값은 확정된 점수·사전순 규칙에 맞춰 정정.",
+      "completed_at": "2026-09-16T17:20:34+0900"
+    },
+    {
+      "step": 5,
+      "name": "rebuild-cli",
+      "type": "feat",
+      "scope": "api",
+      "desc": "openarchive rebuild-edges — 모든 문서의 관계를 전체 코퍼스 기준으로 다시 계산한다",
+      "status": "completed",
+      "started_at": "2026-09-16T17:20:35+0900",
+      "summary": "rebuild_all_edges(conn, *, on_progress: Callable[[int, int], None] | None = None) -> int 서비스와 openarchive rebuild-edges CLI 추가: ready 문서별 DB 함수 호출·커밋 후 진행 통지, 연결/실행 오류 분리; 신규 테스트 6개(7케이스), 전체 594개·AC·통합 검증 통과.",
+      "completed_at": "2026-09-16T17:25:26+0900"
+    },
+    {
+      "step": 6,
+      "name": "demo-corpus",
+      "type": "feat",
+      "scope": "db",
+      "desc": "시연 코퍼스에 다청크 문서를 넣고 1청크 불변식을 걷어내며 적재 뒤 관계를 전량 재계산한다",
+      "status": "completed",
+      "started_at": "2026-09-16T17:25:26+0900",
+      "summary": "기존 코퍼스 13건(hr 2·finance 2·cs 3·logistics 3·security 3)을 확장해 1청크 51건·2청크 13건으로 구성하고 seed 완료 후 관계 전량 재계산·진행 및 요약 출력을 추가함(seed 19개·전체 595개·Ruff·AC·통합 검증 통과).",
+      "completed_at": "2026-09-16T17:31:50+0900"
+    },
+    {
+      "step": 7,
+      "name": "docs-relations",
+      "type": "docs",
+      "scope": "adr",
+      "desc": "ADR-029 개정 — 단방향 저장·양쪽 비율·문서당 상한·전량 재계산과 #94 실측을 기록한다",
+      "status": "completed",
+      "started_at": "2026-09-16T17:31:50+0900",
+      "summary": "ADR-029에 결정 3·4 개정 블록(단방향 저장·조회 대칭, 양쪽 비율·문서당 5건, 함수 SET enable_seqscan=off)과 결정 6(전량 재계산) 신설, ADR-042 결정 4 개정(안−밖 태그 라벨), ADR-039에 rebuild-edges 한 줄; ARCHITECTURE 관계 생성 트리거 소절 신설·검색/관련 문서/태그 추천 SQL 발췌를 search.py·related.py에 맞춤·finished_at=clock_timestamp(); OPENSQL_RESEARCH §16 신설(기준선·규칙 비교표·P1·기각 대안, 표는 step 정의와 글자 단위 일치); UI_GUIDE·OPERATIONS·README·CLAUDE.md 규칙 2줄 반영. 코드 0줄 변경, AC 5건·backend 595 tests 통과.",
+      "completed_at": "2026-09-16T17:46:57+0900"
+    }
+  ],
+  "created_at": "2026-09-16T16:24:21+0900",
+  "completed_at": "2026-09-16T17:46:57+0900"
+}

@@ -37,7 +37,7 @@ from app.migrations import (
     run_migrations,
 )
 from app.services.auth import UserNotFound, reset_password
-from app.services.system import get_system_status
+from app.services.system import get_system_status, rebuild_all_edges
 
 # gen_random_uuid()가 코어에 들어온 버전. 그 아래에서는 002가 기동하지 못한다.
 MINIMUM_SERVER_VERSION_NUM = 130000
@@ -488,17 +488,19 @@ class _ConnectionFailed(Exception):
     """DSN으로 붙지 못했다. 붙은 뒤의 실패와 구분해 보고하려고 따로 둔다."""
 
 
-async def _reset(dsn: str, username: str, new_password: str) -> None:
-    """해시 교체와 세션 무효화를 한 트랜잭션에 담는다. 둘 사이에서 끊기면 안 된다.
-
-    연결 실패만 여기서 잡는다 — `run_init`과 같은 이유다. 더 넓게 감싸면 UPDATE·DELETE의
-    실패까지 "연결하지 못했습니다"로 보고되어 원인을 가린다.
+async def _connect(dsn: str, **kwargs) -> psycopg.AsyncConnection:
+    """연결 실패만 `_ConnectionFailed`로 바꾼다 — `run_init`과 같은 이유다. 더 넓게 감싸면
+    연결 뒤 UPDATE·DELETE·재계산의 실패까지 "연결하지 못했습니다"로 보고되어 원인을 가린다.
     """
     try:
-        connection = await psycopg.AsyncConnection.connect(dsn, connect_timeout=5)
+        return await psycopg.AsyncConnection.connect(dsn, connect_timeout=5, **kwargs)
     except psycopg.Error as error:
         raise _ConnectionFailed(str(error).strip()) from error
-    async with connection as conn:
+
+
+async def _reset(dsn: str, username: str, new_password: str) -> None:
+    """해시 교체와 세션 무효화를 한 트랜잭션에 담는다. 둘 사이에서 끊기면 안 된다."""
+    async with await _connect(dsn) as conn:
         await reset_password(conn, username, new_password)
 
 
@@ -522,6 +524,26 @@ def run_reset_password(*, dsn: str | None, username: str) -> int:
     return 0
 
 
+def _rebuild_progress(done: int, total: int) -> None:
+    print(f"\r  {done}/{total}", end="", flush=True)
+
+
+async def _rebuild_edges(dsn: str) -> int:
+    async with await _connect(dsn, autocommit=True) as conn:
+        return await rebuild_all_edges(conn, on_progress=_rebuild_progress)
+
+
+def run_rebuild_edges(*, dsn: str | None) -> int:
+    dsn = dsn or get_settings().database_url
+    try:
+        count = asyncio.run(_rebuild_edges(dsn))
+    except _ConnectionFailed as error:
+        print(f"연결하지 못했습니다: {error}")
+        return 1
+    print(f"\n관계를 다시 계산했습니다: 문서 {count}건")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="openarchive", description="OpenArchive 운영 CLI")
     subcommands = parser.add_subparsers(dest="command", required=True)
@@ -541,7 +563,16 @@ def main(argv: list[str] | None = None) -> int:
     )
     reset.add_argument("username")
     reset.add_argument("--dsn", help="DB 연결 문자열. 생략하면 DATABASE_URL을 씁니다.")
+    rebuild_help = (
+        "모든 문서의 관계를 전체 코퍼스 기준으로 다시 계산합니다. 대량 적재 뒤 한 번 실행합니다."
+    )
+    rebuild = subcommands.add_parser(
+        "rebuild-edges", help=rebuild_help, description=rebuild_help
+    )
+    rebuild.add_argument("--dsn", help="DB 연결 문자열. 생략하면 DATABASE_URL을 씁니다.")
     args = parser.parse_args(argv)
+    if args.command == "rebuild-edges":
+        return run_rebuild_edges(dsn=args.dsn)
     if args.command == "serve":
         return run_serve(host=args.host, port=args.port)
     if args.command == "reset-password":

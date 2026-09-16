@@ -8,6 +8,7 @@ Mock으로는 확인할 수 없다 (CLAUDE.md 개발 프로세스).
 import psycopg
 import pytest
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
+from test_triggers import insert_document, mark_document_ready, unit_vector
 
 from app.cli import OWNED_TABLES, main, probe_capabilities
 from app.config import ENV_FILE
@@ -457,4 +458,39 @@ def test_reset_password_does_not_report_a_query_failure_as_a_connection_failure(
     with pytest.raises(psycopg.Error):
         main(["reset-password", "alice", "--dsn", clean_db])
 
+    assert "연결하지 못했습니다" not in capsys.readouterr().out
+
+
+def test_rebuild_edges_recomputes_every_ready_document(migrated_db, capsys):
+    with psycopg.connect(migrated_db, autocommit=True) as conn:
+        first = insert_document(conn)
+        mark_document_ready(conn, first, ["first"], vectors=[unit_vector(0)])
+        second = insert_document(conn)
+        mark_document_ready(conn, second, ["second"], vectors=[unit_vector(0)])
+        assert conn.execute(
+            "SELECT count(*) FROM document_edges WHERE src_document_id = %s", (first,)
+        ).fetchone() == (0,)
+
+        assert main(["rebuild-edges", "--dsn", migrated_db]) == 0
+        assert conn.execute(
+            "SELECT dst_document_id FROM document_edges WHERE src_document_id = %s", (first,)
+        ).fetchall() == [(second,)]
+    output = capsys.readouterr().out
+    assert "관계를 다시 계산했습니다: 문서 2건" in output
+    assert "1/2" in output
+    assert "2/2" in output
+
+
+def test_rebuild_edges_reports_a_connection_failure_without_traceback(capsys):
+    assert main([
+        "rebuild-edges", "--dsn", "postgresql://nobody@127.0.0.1:1/none"
+    ]) == 1
+    output = capsys.readouterr()
+    assert "연결하지 못했습니다" in output.out
+    assert "Traceback" not in output.out + output.err
+
+
+def test_rebuild_edges_does_not_report_a_query_failure_as_a_connection_failure(clean_db, capsys):
+    with pytest.raises(psycopg.Error):
+        main(["rebuild-edges", "--dsn", clean_db])
     assert "연결하지 못했습니다" not in capsys.readouterr().out

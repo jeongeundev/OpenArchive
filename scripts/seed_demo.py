@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """시연·측정용 문서 코퍼스(`scripts/demo_corpus/`)를 적재한다.
 
+1청크와 여러 청크 문서가 섞여 있어 다양한 길이의 사내 규정을 시연한다.
 코퍼스는 가상 회사의 사내 문서다. 저장소 자체 문서를 쪼개 넣던 이전 방식은 전부 한
 주제여서 관계 그래프가 거의 완전그래프가 됐고(문서당 평균 19.6개 관계), Louvain
 덩어리가 출처 태그로만 갈려 화면에서 읽을 것이 없었다. 부서가 다섯이면 청크의 최근접
@@ -26,6 +27,7 @@ if str(BACKEND) not in sys.path:
 
 from app.config import get_settings
 from app.services.documents import create_text_document
+from app.services.system import rebuild_all_edges
 
 SEED_OWNER = "seed"
 CORPUS_ROOT = ROOT / "scripts" / "demo_corpus"
@@ -175,7 +177,7 @@ async def summarize(
 ) -> tuple[int, int]:
     """적재 결과로 만들어진 청크 수와 관계 문서쌍 수를 센다.
 
-    관계는 트리거가 양방향 두 행으로 저장하므로(ADR-029) 문서쌍으로 접어 센다.
+    저장은 단방향이지만 양쪽이 서로를 발견하면 두 행이 남으므로(ADR-029 개정) 문서쌍으로 접어 센다.
     """
     return await (
         await conn.execute(
@@ -206,10 +208,15 @@ async def run(reset: bool, timeout: float, owner: str) -> None:
         ready, elapsed = await wait_until_ready(
             conn, [document.title for document in documents], timeout, owner
         )
+        # 트리거는 처리 시점까지의 문서만 후보로 보므로 적재 순서에 따라 관계가 달라진다.
+        # 적재가 끝난 뒤 한 번 전체 기준으로 수렴시킨다.
+        rebuilt = await rebuild_all_edges(
+            conn, on_progress=lambda done, total: print(f"관계 재계산 {done}/{total}")
+        )
         chunks, edge_pairs = await summarize(conn, owner)
     print(
         f"seed 완료: 문서 {ready}개 (신규 {created}개), 청크 {chunks}개, "
-        f"관계 {edge_pairs}쌍, {elapsed:.1f}초"
+        f"관계 {edge_pairs}쌍, 관계 재계산 {rebuilt}건, {elapsed:.1f}초"
     )
 
 
