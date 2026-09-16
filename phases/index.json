@@ -83,7 +83,8 @@
     },
     {
       "dir": "m13-relation-rules",
-      "status": "pending"
+      "status": "completed",
+      "completed_at": "2026-09-16T17:46:57+0900"
     }
   ]
 }
