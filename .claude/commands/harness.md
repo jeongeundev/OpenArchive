@@ -149,9 +149,13 @@ npm test        # 테스트 통과
 ### E. 실행
 
 ```bash
-python3 scripts/execute.py {task-name}        # 순차 실행
-python3 scripts/execute.py {task-name} --push  # 실행 후 push
+python3 scripts/execute.py {task-name}                # 순차 실행 (step 세션은 Claude)
+python3 scripts/execute.py {task-name} --push         # 실행 후 push
+python3 scripts/execute.py {task-name} --agent codex  # Codex 우선, 한도 소진 시 Claude 폴백
 ```
+
+> 기본 에이전트는 Claude다. Codex는 한도에 걸리면 에러 대신 응답 없이 매달려 폴백이 잡지
+> 못하고 30분 타임아웃으로 죽은 적이 있다(m13 step 2). 쓰려면 `--agent codex`로 명시한다.
 
 execute.py가 자동으로 처리하는 것:
 
