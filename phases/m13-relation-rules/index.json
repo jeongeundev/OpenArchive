@@ -63,7 +63,10 @@
       "type": "feat",
       "scope": "api",
       "desc": "openarchive rebuild-edges — 모든 문서의 관계를 전체 코퍼스 기준으로 다시 계산한다",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-09-16T17:20:35+0900",
+      "summary": "rebuild_all_edges(conn, *, on_progress: Callable[[int, int], None] | None = None) -> int 서비스와 openarchive rebuild-edges CLI 추가: ready 문서별 DB 함수 호출·커밋 후 진행 통지, 연결/실행 오류 분리; 신규 테스트 6개(7케이스), 전체 594개·AC·통합 검증 통과.",
+      "completed_at": "2026-09-16T17:25:26+0900"
     },
     {
       "step": 6,
