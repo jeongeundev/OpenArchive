@@ -101,14 +101,23 @@ def _assign_communities(
         else []
     )
 
+    # #93 G2의 「2025판」「2025판 (2)」, OPENSQL_RESEARCH §15 (b)의 「경영지원」 둘처럼
+    # 공통 태그가 이름을 독점하지 않도록 안 빈도에서 밖 빈도를 뺀다.
+    # documents는 열람 범위 안의 전체 문서이며 미분류 문서도 밖 빈도에 포함한다.
+    total_tag_counts = Counter(tag for _, _, tags in documents for tag in tags)
     labeled: list[tuple[list[UUID], str, str, str]] = []
     for members in communities:
         tag_counts = Counter(
             tag for document_id in members for tag in document_by_id[document_id][1]
         )
+        scores = {
+            tag: count - (total_tag_counts[tag] - count)
+            for tag, count in tag_counts.items()
+        }
+        positive = {tag: score for tag, score in scores.items() if score > 0}
         first_title = min(document_by_id[document_id][0] for document_id in members)
-        if tag_counts:
-            label = min(tag_counts, key=lambda tag: (-tag_counts[tag], tag))
+        if positive:
+            label = min(positive, key=lambda tag: (-positive[tag], tag))
             kind, origin = TAGGED, "태그"
         else:
             # 차수는 군집 안에서 센다. 군집 밖으로 뻗은 edge까지 세면 다른 덩어리와

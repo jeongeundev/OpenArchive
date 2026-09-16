@@ -52,9 +52,10 @@ def _cluster_map(response) -> dict[str, dict]:
     return {cluster["name"]: cluster for cluster in response.json()["clusters"]}
 
 
-def test_connected_documents_form_one_cluster_named_by_top_tag(
+def test_connected_documents_form_one_cluster_named_by_its_distinctive_tag(
     db_client: TestClient, migrated_db: str
 ):
+    """밖 빈도가 0인 한 덩어리에서는 검색 태그가 2점으로 가장 구별된다."""
     document_ids = [
         _insert_document(migrated_db, title="검색 A", content="검색 A", tags=["검색", "공통"]),
         _insert_document(migrated_db, title="검색 B", content="검색 B", tags=["검색"]),
@@ -206,24 +207,134 @@ def test_reserved_bucket_names_do_not_merge_with_same_named_tags(
     assert clusters["미분류"]["size"] == 1
 
 
-def test_duplicate_top_tags_get_numbered_names(db_client: TestClient, migrated_db: str):
-    triangle = [
-        _insert_document(
-            migrated_db, title=f"삼각형 {index}", content=f"삼각형 {index}", tags=["공통"]
-        )
-        for index in range(3)
-    ]
-    pair = [
-        _insert_document(migrated_db, title=f"쌍 {index}", content=f"쌍 {index}", tags=["공통"])
-        for index in range(2)
-    ]
-    _connect_all(migrated_db, triangle)
-    _insert_bidirectional_edge(migrated_db, *pair)
+def test_duplicate_fallback_titles_get_numbered_names(
+    db_client: TestClient, migrated_db: str
+):
+    """같은 태그가 두 군집에서 모두 양수일 수 없어, 번호는 동명 제목으로 검증한다."""
+    groups = []
+    for prefix in ("A", "B"):
+        triangle = [
+            _insert_document(migrated_db, title=title, content=f"{prefix}-{title}")
+            for title in ("회의록", f"흐름 {prefix}", f"히스토리 {prefix}")
+        ]
+        _connect_all(migrated_db, triangle)
+        groups.append(set(triangle))
 
     clusters = _cluster_map(db_client.get("/api/clusters"))
 
-    assert clusters["공통"]["size"] == 3
-    assert clusters["공통 (2)"]["size"] == 2
+    assert {name: cluster["size"] for name, cluster in clusters.items()} == {
+        "회의록": 3,
+        "회의록 (2)": 3,
+    }
+    assert {
+        frozenset(document["document_id"] for document in cluster["documents"])
+        for cluster in clusters.values()
+    } == {frozenset(group) for group in groups}
+
+
+def test_a_tag_shared_across_clusters_does_not_name_them(
+    db_client: TestClient, migrated_db: str
+):
+    for tag in ("인사복무", "회계계약"):
+        triangle = [
+            _insert_document(
+                migrated_db,
+                title=f"{tag} {index}",
+                content=f"{tag} {index}",
+                tags=["2025판", tag],
+            )
+            for index in range(3)
+        ]
+        _connect_all(migrated_db, triangle)
+
+    clusters = _cluster_map(db_client.get("/api/clusters"))
+
+    assert {name: cluster["size"] for name, cluster in clusters.items()} == {
+        "인사복무": 3,
+        "회계계약": 3,
+    }
+
+
+def test_a_cluster_whose_tags_are_all_shared_falls_back_to_its_central_document(
+    db_client: TestClient, migrated_db: str
+):
+    for prefix in ("A", "B"):
+        triangle = [
+            _insert_document(
+                migrated_db,
+                title=f"{prefix} {index}",
+                content=f"{prefix} {index}",
+                tags=["2025판"],
+            )
+            for index in range(3)
+        ]
+        _connect_all(migrated_db, triangle)
+
+    clusters = _cluster_map(db_client.get("/api/clusters"))
+
+    assert {name: cluster["size"] for name, cluster in clusters.items()} == {
+        "A 0": 3,
+        "B 0": 3,
+    }
+    assert "2025판" not in clusters
+
+
+def test_tag_score_counts_outside_documents_within_the_visible_scope_only(
+    db_client: TestClient, migrated_db: str
+):
+    """비공개 문서는 타인의 밖 빈도에 없고, 보이는 미분류 문서는 포함된다."""
+    private_ids = [
+        _insert_document(
+            migrated_db,
+            title=f"비공개 {index}",
+            content=f"비공개 {index}",
+            tags=["보안"],
+            owner_id="alice",
+            visibility="private",
+        )
+        for index in range(3)
+    ]
+    public_ids = [
+        _insert_document(
+            migrated_db,
+            title=f"공개 {index}",
+            content=f"공개 {index}",
+            tags=["보안", "공개"],
+        )
+        for index in range(3)
+    ]
+    _connect_all(migrated_db, private_ids)
+    _connect_all(migrated_db, public_ids)
+
+    login_as(db_client, "bob")
+    clusters = _cluster_map(db_client.get("/api/clusters"))
+    # 둘 다 3점이면 사전순으로 공개가 앞선다.
+    assert set(clusters) == {"공개"}
+    assert {doc["document_id"] for doc in clusters["공개"]["documents"]} == set(public_ids)
+
+    login_as(db_client, "alice")
+    clusters = _cluster_map(db_client.get("/api/clusters"))
+    # 보안은 양쪽 모두 3 - 3 = 0이다. private 군집에는 양수 태그가 없다.
+    assert set(clusters) == {"공개", "비공개 0"}
+    assert {doc["document_id"] for doc in clusters["공개"]["documents"]} == set(public_ids)
+    assert {doc["document_id"] for doc in clusters["비공개 0"]["documents"]} == set(private_ids)
+
+    # 미분류 문서 한 건으로 동률을 풀면 열람 범위별 이름 차이까지 관측된다.
+    isolated_id = _insert_document(
+        migrated_db, title="고립 문서", content="고립 문서", tags=["공개"]
+    )
+    login_as(db_client, "bob")
+    clusters = _cluster_map(db_client.get("/api/clusters"))
+    assert set(clusters) == {"보안", "미분류"}
+    assert {doc["document_id"] for doc in clusters["보안"]["documents"]} == set(public_ids)
+    assert clusters["미분류"]["documents"] == [
+        {"document_id": isolated_id, "title": "고립 문서"}
+    ]
+
+    login_as(db_client, "alice")
+    clusters = _cluster_map(db_client.get("/api/clusters"))
+    assert set(clusters) == {"공개", "비공개 0", "미분류"}
+    assert {doc["document_id"] for doc in clusters["공개"]["documents"]} == set(public_ids)
 
 
 def test_untagged_community_is_named_after_its_best_connected_document(
