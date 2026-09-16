@@ -685,6 +685,39 @@ def test_edge_neighbor_constant_probe_can_use_the_hnsw_index(conn: psycopg.Conne
     assert "Index Scan using idx_chunks_embedding" in plan
 
 
+def test_rebuild_function_probes_hit_the_hnsw_index_on_repeated_calls(conn: psycopg.Connection):
+    """#93 P1 — 같은 세션에서 6회 이상 부른 뒤에도 함수 안 프로브가 HNSW를 탄다.
+
+    PL/pgSQL은 다섯 번째 실행 뒤 generic plan으로 넘어갈 수 있고, 실 VM에서는 그 계획이
+    OpenProxy 풀 백엔드에 남아 호출 트랜잭션의 `SET LOCAL`을 무시했다. 함수 정의의 `SET`은
+    계획을 세우기 전에 적용되므로 몇 번째 호출이든 인덱스를 타야 한다. 함수 안 계획은
+    바깥 EXPLAIN으로 볼 수 없어 인덱스 스캔 횟수의 증가분으로 본다 — 작은 테이블에서
+    `enable_seqscan = off`가 빠지면 플래너가 Seq Scan을 골라 이 수가 늘지 않는다.
+    """
+    first_id = insert_document(conn, "first", "sha256:edge-generic-first")
+    second_id = insert_document(conn, "second", "sha256:edge-generic-second")
+    mark_document_ready(conn, first_id, ["first"], vectors=[unit_vector(0)])
+    mark_document_ready(conn, second_id, ["second"], vectors=[unit_vector(1)])
+    # 통계가 없는 표에서는 플래너가 기본 추정치로 인덱스를 고르므로 판별력이 없다.
+    # ANALYZE 뒤에는 20행에서도 Seq Scan을 고른다 — 그래서 함수의 SET이 필요하다.
+    conn.execute("ANALYZE document_chunks")
+
+    def hnsw_index_scans() -> int:
+        # 이 백엔드의 대기 통계를 즉시 공유 메모리로 내보낸 뒤 읽는다.
+        conn.execute("SELECT pg_stat_force_next_flush()")
+        return conn.execute(
+            "SELECT idx_scan FROM pg_stat_user_indexes WHERE indexrelname = 'idx_chunks_embedding'"
+        ).fetchone()[0]
+
+    calls = 6
+    before = hnsw_index_scans()
+    for _ in range(calls):
+        conn.execute("SELECT rebuild_document_edges(%s)", (first_id,))
+
+    # 청크 하나당 프로브 하나 — 호출마다 인덱스 스캔이 정확히 한 번 늘어야 한다.
+    assert hnsw_index_scans() - before == calls
+
+
 def test_overlaps_requires_the_ratio_on_both_sides(conn: psycopg.Connection):
     long_id = insert_document(conn, "long", "sha256:both-long")
     mark_document_ready(
