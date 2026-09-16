@@ -25,6 +25,11 @@ ROOT = Path(__file__).resolve().parent.parent
 # 스텝 세션 기본 모델. 전역 설정(~/.claude/settings.json)을 상속하지 않도록 명시한다.
 DEFAULT_MODEL = "opus"
 
+# 스텝 세션 에이전트. Codex는 --agent codex로 켰을 때만 쓴다 — 한도에 걸리면 에러를
+# 돌려주지 않고 응답 없이 매달려, 아래 폴백이 못 잡고 30분 타임아웃으로 죽었다(m13 step 2).
+DEFAULT_AGENT = "claude"
+AGENTS = ("claude", "codex")
+
 # Codex 사용량 한도 초과를 알리는 문구. exitCode != 0 이면서 이 패턴이 stdout/stderr에
 # 있으면 "일시적 실패"가 아니라 "한도 소진"으로 간주하고 이번 실행 내내 Claude로 전환한다.
 QUOTA_SIGNAL_PATTERN = re.compile(r"rate limit|usage limit|\b429\b", re.IGNORECASE)
@@ -71,7 +76,7 @@ class StepExecutor:
     TZ = timezone(timedelta(hours=9))
 
     def __init__(self, phase_dir_name: str, *, auto_push: bool = False,
-                 model: str = DEFAULT_MODEL):
+                 model: str = DEFAULT_MODEL, agent: str = DEFAULT_AGENT):
         self._root = str(ROOT)
         self._phases_dir = ROOT / "phases"
         self._phase_dir = self._phases_dir / phase_dir_name
@@ -79,7 +84,7 @@ class StepExecutor:
         self._top_index_file = self._phases_dir / "index.json"
         self._auto_push = auto_push
         self._model = model
-        self._active_agent = "codex"
+        self._active_agent = agent
 
         if not self._phase_dir.is_dir():
             print(f"ERROR: {self._phase_dir} not found")
@@ -340,7 +345,8 @@ class StepExecutor:
         return bool(QUOTA_SIGNAL_PATTERN.search(text))
 
     def _invoke_agent(self, step: dict, preamble: str) -> dict:
-        """Codex를 우선 시도하고, 사용량 한도 초과 시 이번 실행 내내 Claude로 전환한다.
+        """기본은 Claude. --agent codex면 Codex를 우선 시도하고, 사용량 한도 초과 시
+        이번 실행 내내 Claude로 전환한다.
 
         전환은 sticky하다 — Codex 한도는 보통 5시간/주간 단위로 오래 지속되므로,
         매 step마다 Codex를 재시도하면 실패 호출만 반복된다.
@@ -360,7 +366,10 @@ class StepExecutor:
         print(f"\n{'='*60}")
         print(f"  Harness Step Executor")
         print(f"  Phase: {self._phase_name} | Steps: {self._total}")
-        print(f"  Agent: Codex → Claude ({self._model}, 한도 소진 시 폴백)")
+        if self._active_agent == "codex":
+            print(f"  Agent: Codex → Claude ({self._model}, 한도 소진 시 폴백)")
+        else:
+            print(f"  Agent: Claude ({self._model})")
         if self._auto_push:
             print(f"  Auto-push: enabled")
         print(f"{'='*60}")
@@ -511,9 +520,15 @@ def main():
         "--model", default=DEFAULT_MODEL,
         help=f"Model for step sessions (default: {DEFAULT_MODEL})",
     )
+    parser.add_argument(
+        "--agent", default=DEFAULT_AGENT, choices=AGENTS,
+        help=f"Agent for step sessions (default: {DEFAULT_AGENT}; codex falls back to claude on quota)",
+    )
     args = parser.parse_args()
 
-    StepExecutor(args.phase_dir, auto_push=args.push, model=args.model).run()
+    StepExecutor(
+        args.phase_dir, auto_push=args.push, model=args.model, agent=args.agent
+    ).run()
 
 
 if __name__ == "__main__":

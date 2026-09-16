@@ -648,15 +648,47 @@ class TestInvokeCodex:
 
 
 # ---------------------------------------------------------------------------
-# Codex 우선 + Claude 폴백 (sticky) — 코덱스 사용량 한도 도달 시
-# 이번 phase 실행이 끝날 때까지 남은 모든 step을 Claude로 처리한다.
+# 에이전트 선택 — 기본은 Claude. Codex는 --agent codex로 켰을 때만 우선 시도하고,
+# 사용량 한도 도달 시 이번 phase 실행이 끝날 때까지 남은 step을 Claude로 처리한다(sticky).
 # ---------------------------------------------------------------------------
 
-class TestAgentFallback:
-    def test_default_active_agent_is_codex(self, executor):
-        assert executor._active_agent == "codex"
+class TestAgentSelection:
+    def test_default_active_agent_is_claude(self, executor):
+        assert executor._active_agent == "claude"
 
+    def test_constructor_accepts_codex(self, tmp_project, phase_dir):
+        with patch.object(ex, "ROOT", tmp_project):
+            inst = ex.StepExecutor("0-mvp", agent="codex")
+        assert inst._active_agent == "codex"
+
+    def test_main_defaults_to_claude(self):
+        with patch("sys.argv", ["execute.py", "0-mvp"]):
+            with patch.object(ex, "StepExecutor") as mock_exec:
+                ex.main()
+        assert mock_exec.call_args[1]["agent"] == "claude"
+
+    def test_main_passes_agent_flag(self):
+        with patch("sys.argv", ["execute.py", "0-mvp", "--agent", "codex"]):
+            with patch.object(ex, "StepExecutor") as mock_exec:
+                ex.main()
+        assert mock_exec.call_args[1]["agent"] == "codex"
+
+    def test_main_rejects_unknown_agent(self):
+        with patch("sys.argv", ["execute.py", "0-mvp", "--agent", "gemini"]):
+            with pytest.raises(SystemExit):
+                ex.main()
+
+    def test_default_invoke_agent_never_calls_codex(self, executor):
+        mock_result = MagicMock(returncode=0, stdout='{"ok": true}', stderr="")
+        with patch("subprocess.run", return_value=mock_result) as mock_run:
+            executor._invoke_agent({"step": 2, "name": "ui"}, "preamble")
+        assert mock_run.call_count == 1
+        assert mock_run.call_args[0][0][0] == "claude"
+
+
+class TestAgentFallback:
     def test_invoke_agent_uses_codex_when_active(self, executor):
+        executor._active_agent = "codex"
         mock_result = MagicMock(returncode=0, stdout='{"ok": true}', stderr="")
         with patch("subprocess.run", return_value=mock_result) as mock_run:
             executor._invoke_agent({"step": 2, "name": "ui"}, "preamble")
@@ -670,6 +702,7 @@ class TestAgentFallback:
         assert mock_run.call_args[0][0][0] == "claude"
 
     def test_quota_exceeded_switches_to_claude_and_retries_same_step(self, executor):
+        executor._active_agent = "codex"
         codex_fail = MagicMock(returncode=1, stdout="", stderr="Error: usage limit reached, try again later")
         claude_ok = MagicMock(returncode=0, stdout='{"ok": true}', stderr="")
 
@@ -683,6 +716,7 @@ class TestAgentFallback:
         assert output["agent"] == "claude"
 
     def test_fallback_is_sticky_across_subsequent_calls(self, executor):
+        executor._active_agent = "codex"
         codex_fail = MagicMock(returncode=1, stdout="", stderr="rate limit exceeded")
         claude_ok = MagicMock(returncode=0, stdout='{"ok": true}', stderr="")
 
@@ -697,6 +731,7 @@ class TestAgentFallback:
 
     def test_non_quota_failure_does_not_switch_agent(self, executor):
         """quota와 무관한 실패는 codex를 유지한다 — 재시도는 상위 재시도 루프의 몫이다."""
+        executor._active_agent = "codex"
         codex_fail = MagicMock(returncode=1, stdout="", stderr="SyntaxError: unexpected token")
 
         with patch("subprocess.run", return_value=codex_fail) as mock_run:
