@@ -11,10 +11,10 @@ step 0~6이 관계 판정·저장·조회·라벨·CLI·시연 코퍼스를 바�
 
 | step | 산출물 | 문서에 반영할 사실 |
 |---|---|---|
-| 0 | `backend/migrations/014_edges_triggers.sql` | 판정 본체는 `rebuild_document_edges(uuid)`(함수 정의 `SET hnsw.ef_search=200`·`random_page_cost=1.1`·`enable_seqscan=off`), 트리거 함수는 호출만. `overlaps` = 양쪽 비율 ≥ 0.8 AND `matched ≥ 2`. 문서당 이웃 상한 5(겹친 대목 ↓·최소 거리 ↑). **단방향 저장** — `src` = 계산 주체, `DELETE WHERE src = NEW`만 |
-| 1 | `backend/app/worker.py` | `finished_at = clock_timestamp()` — 잡 시간에 트리거 시간이 포함된다 |
-| 2 | `backend/app/services/search.py` | `traversal_edges`가 역방향(`dst→src`, chunk_index 뒤집음)을 UNION ALL |
-| 3 | `backend/app/services/related.py` | `neighbors` CTE가 `src=X ∪ dst=X`, 같은 이웃은 `DISTINCT ON`으로 overlaps 우선 |
+| 0 | `backend/app/services/search.py` | `traversal_edges`가 역방향(`dst→src`, chunk_index 뒤집음)을 UNION ALL. 저장 변경(step 2)보다 먼저 들어갔다 — 읽기를 먼저 대칭으로 만들어야 조회 테스트가 깨지지 않는다 |
+| 1 | `backend/app/services/related.py` | `neighbors` CTE가 `src=X ∪ dst=X`, 같은 이웃은 `DISTINCT ON`으로 overlaps 우선 |
+| 2 | `backend/migrations/014_edges_triggers.sql` | 판정 본체는 `rebuild_document_edges(uuid)`(함수 정의 `SET hnsw.ef_search=200`·`random_page_cost=1.1`·`enable_seqscan=off`), 트리거 함수는 호출만. `overlaps` = 양쪽 비율 ≥ 0.8 AND `matched ≥ 2`. 문서당 이웃 상한 5(겹친 대목 ↓·최소 거리 ↑). **단방향 저장** — `src` = 계산 주체, `DELETE WHERE src = NEW`만 |
+| 3 | `backend/app/worker.py` | `finished_at = clock_timestamp()` — 잡 시간에 트리거 시간이 포함된다 |
 | 4 | `backend/app/services/clusters.py` | 라벨 = (군집 안 빈도 − 밖 빈도) 최대 태그, 양수가 없으면 중심 문서 제목 |
 | 5 | `backend/app/services/system.py`·`cli.py` | `rebuild_all_edges(conn)` · `openarchive rebuild-edges [--dsn]` — 문서마다 커밋 |
 | 6 | `scripts/demo_corpus/`·`seed_demo.py` | 12~16건이 2~4청크, `seed_demo.py`가 끝에 전량 재계산 |
@@ -106,7 +106,7 @@ edge와 **A 자카드 1.000(kind까지 일치)·C 0.989**). 순도 = 덩어리�
 - `document_edges` 스키마 주석: 단방향 저장·조회 대칭 한 문장.
 - 트리거 절: `trg_build_document_edges` → `build_document_edges()` → `rebuild_document_edges(uuid)` 호출 구조, 함수 SET 세 값.
 - 「검색 데이터 흐름」: `traversal_edges`의 역방향 UNION 발췌 갱신.
-- 「관련 문서·태그 추천」: SQL 발췌를 step 3의 `neighbors`/`best` CTE로 바꾸고, *"저장된 score는 양방향이
+- 「관련 문서·태그 추천」: SQL 발췌를 step 1의 `neighbors`/`best` CTE로 바꾸고, *"저장된 score는 양방향이
   같지만, 그것은 근사다"* 문단을 **삭제**하고 "한 방향만 저장하고 조회에서 합친다 — 같은 이웃이 양방향에서
   kind가 다르면 overlaps를 남긴다"로 교체.
 - 「관계 지도」(`GET /api/clusters`) 행: 라벨 규칙 한 줄.

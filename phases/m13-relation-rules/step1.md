@@ -1,66 +1,103 @@
-# Step 1: worker-clock
+# Step 1: related-symmetric
 
-## 배경 — 잡 완료 시각이 트랜잭션 시작 시각이다
+## 배경 — 관련 문서·태그 추천이 아직 `src` 기준으로만 읽는다
 
-`backend/app/worker.py`는 `embedding_jobs.finished_at = now()`로 잡을 마감한다. PostgreSQL의
-`now()`는 **트랜잭션 시작 시각**이다. `finalize_job`은 청크 교체 → `embedding_status = 'ready'`
-→ (AFTER 트리거 `trg_build_document_edges`가 관계 계산) → 잡 마감을 한 트랜잭션에서 하므로,
-트리거에 40초가 걸려도 `finished_at`은 트랜잭션이 열린 순간이 찍힌다. #93 실측에서 159청크
-문서의 잡이 11.9초로 기록됐지만 실제 트리거는 40초였다 — 잡 시간으로 트리거 비용을 추정하면
-10배 이상 틀린다.
+이 phase의 step 2(`backend/migrations/014_edges_triggers.sql`)가 `document_edges` 저장을
+**단방향**으로 바꾼다 — 계산한 문서가 `src_document_id`인 행만 남고, 각자 자기 행만 교체한다.
+지금(008)은 `(A→B)`·`(B→A)` 두 행을 넣고 재임베딩 때 둘 다 지워 남의 발견이 소실된다(#93 R4).
 
-`clock_timestamp()`는 호출 시점의 실제 시각이다. `finished_at` 대입 전부를 이것으로 바꾼다.
+저장이 바뀌기 **전에** 읽는 쪽을 대칭으로 만든다. step 0이 검색의 그래프 순회를 양방향으로
+바꿨고, 이 step은 `backend/app/services/related.py`의 두 쿼리 — 관련 문서(`RELATED_SQL`)와
+태그 추천(`TAG_SUGGESTION_SQL`) — 를 양방향으로 바꾼다. 순서를 이렇게 두는 이유: 조회 측
+테스트는 "source를 먼저 넣고 후보를 나중에 넣은 뒤 source의 관계를 읽는" 픽스처라, 저장을 먼저
+바꾸면 `(후보→source)` 행만 남아 `src = source` 조회가 전부 빈다(17개 실측 실패). 읽기가 먼저
+대칭이면 저장 변경이 조회 테스트를 건드리지 않는다.
 
-이 step은 **워커 파일 하나**만 바꾼다. step 0(`014_edges_triggers.sql`)은 이미 적용되어 있고,
-이 step과는 파일이 겹치지 않는다.
+단방향 저장 뒤에는 "B가 나중에 들어와 A를 발견했다"는 관계가 `(B→A)` 행으로만 남는다. 이것을
+A의 관련 문서로 내는 것이 이 step의 목적이며 #93 R4의 화면 쪽 증상을 고친다.
+
+같은 문서가 양방향에서 **서로 다른 kind**로 나올 수 있다 — A 기준으로는 두 대목 모두 닿아
+`overlaps`, B 기준으로는 처리 시점의 후보가 달라 `related`. 이때 **`overlaps`를 남긴다**
+(kind 사전순이 우연히 `overlaps < related`이지만 우연에 기대지 말고 `CASE`로 우선순위를 적어라 —
+`search.py`의 `VIA_KIND_PRIORITY`가 같은 축을 이미 쓴다). 지금의 양방향 저장(008)에서는 같은
+쌍이 두 행으로 있으므로 접어서 **한 번만** 내야 한다 — 테스트 2·5가 이를 고정한다.
 
 ## 읽어야 할 파일
 
-- `CLAUDE.md` — 워커는 폴링이 주 경로, `LISTEN`은 최적화
-- `docs/ARCHITECTURE.md` 「워커 처리 루프」·「정합성 보장」
-- `backend/app/worker.py` — **수정 대상.** `finished_at = now()`가 `finalize_job`(2곳)·`fail_job`(2곳)·
-  `release_job`·`sweep_zombie_jobs`(CASE 식)·그 밖의 마감 경로에 있다. `grep -n finished_at`으로 전부 찾아라
-- `backend/tests/test_worker.py` — **테스트 추가 대상.** 픽스처 `conn`·`other_conn`, 헬퍼
-  `insert_document`, `claim_job`·`finalize_job` 호출 방식은 기존 테스트(`test_drain_processes_a_new_document_end_to_end`,
-  `test_finalize_discards_a_stale_result_but_completes_the_job`)를 따른다
-- `backend/migrations/008_edges_triggers.sql` · `014_edges_triggers.sql` — 트리거가 같은 트랜잭션 안에서 도는 구조
+- `CLAUDE.md` — "볼 수 없는 문서는 존재하지 않는 것처럼 보인다", "주체 문서의 열람 검증은 서비스가 `ensure_visible`로"
+- `docs/ARCHITECTURE.md` 「관련 문서·태그 추천」 — 공통 규칙 3개(열람 범위·`not_indexed`·`no_edges`)와 SQL 설명
+- `docs/ADR.md` **ADR-029 결정 5**(관련 문서를 저장 관계 위로) · **ADR-027**(권한 규칙)
+- `backend/app/services/related.py` — **수정 대상.** `RELATED_SQL`·`TAG_SUGGESTION_SQL`. 나머지(`IDENTICAL_SQL`, `find_related`·`suggest_tags`의 흐름, `reason`)는 그대로
+- `backend/app/services/search.py` — `VIA_KIND_PRIORITY`(kind 우선순위 표현을 참고만 한다. import하지 마라 — 정렬 SQL은 모듈마다 자기 것을 갖는다)
+- `backend/tests/test_related.py` — **테스트 추가 대상.** 픽스처 `worker_conn`·`related_conn`, 헬퍼 `insert_test_document`·`process_all_embedding_jobs`. edge를 직접 넣는 방식은 `backend/tests/test_search.py`의 `test_relation_expands_search_to_a_document_outside_vector_candidates`를 참고
+- `backend/app/api/schemas.py`의 `RelatedDocumentItem`·`TagSuggestionItem` — **응답 형태 변경 없음**
 
 ## 작업
 
-### 1) 테스트를 먼저 쓴다 — `backend/tests/test_worker.py`
+### 1) 테스트를 먼저 쓴다 — `backend/tests/test_related.py`
 
-`test_finished_at_records_the_end_of_the_finalize_transaction`:
+edge는 워커를 돌린 뒤 `DELETE FROM document_edges`로 비우고 직접 INSERT한다(FakeProvider 벡터로
+트리거가 만드는 edge는 임의라, 방향을 통제하려면 직접 넣어야 한다).
 
-1. 문서 1건을 넣고 잡을 claim한다.
-2. 트랜잭션 안에서 시간이 흐르게 만든다 — 테스트 안에서 **임시 AFTER 트리거**를 건다:
-   ```sql
-   CREATE FUNCTION test_slow_edges() RETURNS trigger LANGUAGE plpgsql AS $$
-   BEGIN PERFORM pg_sleep(0.3); RETURN NEW; END $$;
-   CREATE TRIGGER trg_test_slow_edges AFTER UPDATE OF embedding_status ON documents
-     FOR EACH ROW WHEN (NEW.embedding_status = 'ready') EXECUTE FUNCTION test_slow_edges();
-   ```
-   `migrated_db`는 테스트마다 새 DB이므로 정리하지 않아도 된다.
-3. `finalize_job` 호출 **직전**에 `SELECT clock_timestamp()`를 같은 연결에서 읽어 `before`로 둔다.
-4. `finalize_job(...)`이 `True`를 반환한 뒤 `SELECT finished_at FROM embedding_jobs WHERE id = %s`를
-   읽어 **`finished_at - before >= 0.3초`**를 단언한다. `now()`였다면 `finished_at`은 트랜잭션
-   시작 시각이라 `before`와 거의 같아 실패한다.
+1. `test_related_documents_include_a_neighbour_that_computed_the_edge` — `source`·`other` 두 문서.
+   edge를 **`(other → source, 'related', 0, 0, 0.8)`만** 넣는다. `find_related(source)`의 items에
+   `other`가 kind `related`·score 0.8로 나온다. `reason`은 `None`.
+2. `test_a_neighbour_reached_from_both_directions_is_listed_once_with_overlaps_first` —
+   `(source → other, 'related', 0, 0, 0.7)`와 `(other → source, 'overlaps', NULL, NULL, 1.0)`을 둘 다
+   넣는다. items에 `other`가 **정확히 한 번**, kind `overlaps`, score 1.0으로 나온다.
+3. `test_related_documents_from_reverse_edges_apply_visibility` — `(private_other → source)` 방향으로만
+   있는 edge에서, `private_other`가 다른 사용자의 private 문서면 요청자에게 나오지 않는다
+   (`test_related_documents_apply_candidate_visibility`의 방식).
+4. `test_tag_suggestions_count_tags_of_neighbours_that_computed_the_edge` — `(other → source)`만
+   있고 `other`의 태그가 `["운영", "정합성"]`, source의 태그가 `["정합성"]`이면 추천은
+   `[("운영", 1)]`이다.
+5. `test_tag_suggestions_count_a_neighbour_once_even_if_stored_in_both_directions` —
+   `(source→other)`·`(other→source)` 둘 다 있어도 `other`의 태그 빈도는 1이다.
 
-같은 방식으로 실패 경로 하나만 더: `test_fail_job_finished_at_is_the_actual_time` — 재시도 예산을
-소진시켜 `error`로 마감되는 경로(`test_retries_exhaust_into_error_state`의 방식)에서, `fail_job`
-직전 `before`를 읽고 `finished_at >= before`를 단언한다. 여기에는 트리거가 없어 차이가 작으므로
-`>=`면 충분하다 — 목적은 이 경로도 `clock_timestamp()`로 바뀌었음을 고정하는 것이다.
+기존 `test_related_documents_are_ranked_by_score_and_exclude_the_source`·정렬·`no_edges`·
+`not_indexed` 테스트는 그대로 통과해야 한다.
 
-### 2) 구현 — `backend/app/worker.py`
+### 2) 구현 — `backend/app/services/related.py`
 
-`finished_at` 대입의 `now()`를 **전부** `clock_timestamp()`로 바꾼다. `started_at = now()`(claim)와
-`next_attempt_at = now() + …`(백오프)는 **그대로 둔다** — claim 트랜잭션은 짧고, 백오프 기준은
-잡 시각이 아니라 현재 시각이면 된다. 바꾼 이유를 `finalize_job` 안 주석 한 줄로 남긴다:
-*`now()`는 트랜잭션 시작 시각이라 같은 트랜잭션의 AFTER 트리거(관계 계산) 시간이 빠진다.*
+두 쿼리에 공통 이웃 CTE를 둔다. 시그니처 수준:
+
+```sql
+WITH neighbors AS (
+    SELECT e.dst_document_id AS document_id, e.kind, e.score
+    FROM document_edges e
+    WHERE e.src_document_id = %(id)s
+    UNION ALL
+    -- 역방향 — 남이 발견한 관계도 이 문서의 관련 문서다 (ADR-029 개정, 저장은 단방향이 된다)
+    SELECT e.src_document_id, e.kind, e.score
+    FROM document_edges e
+    WHERE e.dst_document_id = %(id)s
+),
+best AS (
+    -- 같은 이웃이 양방향에서 다른 kind로 오면 overlaps를 남긴다. 그다음 높은 score.
+    SELECT DISTINCT ON (document_id) document_id, kind, score
+    FROM neighbors
+    ORDER BY document_id,
+             CASE kind WHEN 'overlaps' THEN 0 WHEN 'related' THEN 1 ELSE 2 END,
+             score DESC
+)
+SELECT d.id, d.title, d.tags, b.kind, b.score
+FROM best b
+JOIN documents d ON d.id = b.document_id
+WHERE {VISIBLE_TO_USER}
+ORDER BY b.kind, b.score DESC, d.id
+LIMIT %(k)s
+```
+
+`TAG_SUGGESTION_SQL`의 `neighbors` CTE도 같은 `best`를 기반으로 상위 `NEIGHBOR_LIMIT`을 고른다.
+최종 정렬(`ORDER BY e.kind, e.score DESC, d.id`)과 `LIMIT`은 지금과 같다 — 결과 순서 의미를
+바꾸지 않는다. 열람 조건은 이웃 문서에 그대로 건다(`documents d` JOIN 뒤 `VISIBLE_TO_USER`).
+
+`ARCHITECTURE.md`의 SQL 발췌는 step 7에서 갱신하므로 여기서 문서를 고치지 않는다.
 
 ## Acceptance Criteria
 
 ```bash
-cd backend && .venv/bin/python -m pytest tests/test_worker.py -q
+cd backend && .venv/bin/python -m pytest tests/test_related.py tests/test_related_api.py tests/test_mcp_server.py -q
 cd backend && .venv/bin/python -m pytest -q
 cd backend && .venv/bin/ruff check .
 ```
@@ -69,9 +106,9 @@ cd backend && .venv/bin/ruff check .
 
 1. 위 AC 커맨드를 실행한다.
 2. 아키텍처 체크리스트:
-   - `backend/app/worker.py` 외의 애플리케이션 파일을 바꾸지 않았는가?
-   - `grep -n "finished_at = now()" backend/app/worker.py`와 `grep -n "THEN now()" backend/app/worker.py`가 **비어 있는가?** (sweep의 CASE 식도 포함)
-   - 새 테스트 2개가 실제 DB에서 도는가? (Mock 금지)
+   - 관련 문서·태그 추천이 여전히 **단일 SQL**인가? (양방향을 Python에서 합치지 않았는가)
+   - `ensure_visible` 선행 검증과 `not_indexed`·`no_edges` reason이 그대로인가?
+   - API 스키마·라우터·프론트엔드를 건드리지 않았는가?
 3. 결과에 따라 `phases/m13-relation-rules/index.json`의 step 1을 업데이트한다:
    - 성공 → `"status": "completed"`, `"summary": "산출물 한 줄 요약"`
    - 수정 3회 시도 후에도 실패 → `"status": "error"`, `"error_message": "구체적 에러 내용"`
@@ -79,9 +116,8 @@ cd backend && .venv/bin/ruff check .
 
 ## 금지사항
 
-- `started_at`·`next_attempt_at`·`created_at`을 바꾸지 마라. 이유: 요청받은 것은 완료 시각뿐이다.
-  claim의 `now()`는 트랜잭션이 짧아 차이가 없고, sweep의 좀비 판정(`started_at < now() - …`)은 기준이 흔들리면 안 된다.
-- 트리거·마이그레이션을 건드리지 마라. 이유: step 0이 끝났고 이 step은 워커 스코프다.
-- 테스트에서 `pg_sleep`을 `time.sleep`으로 대체하지 마라. 이유: 트랜잭션 **안**에서 시간이 흘러야
-  `now()`와 `clock_timestamp()`의 차이가 드러난다.
+- `avg(embedding)` 같은 조회 시점 벡터 계산을 되살리지 마라. 이유: ADR-029 결정 5 — 관련 문서는 저장된 관계만 읽는다.
+- `search.py`·`clusters.py`·`diagnostics.py`를 고치지 마라. 이유: step 0이 끝났고 나머지 둘은 이미 대칭으로 읽는다.
+- 마이그레이션을 만들지 마라. 이유: 저장 형식 변경은 step 2의 일이다. 주석에 `014`라는 파일 번호를 적지 마라 — 아직 없다.
+- `VIA_KIND_PRIORITY`를 `search.py`에서 import하지 마라. 이유: 검색과 관련 문서는 정렬 축이 다르고(검색은 거리·깊이가 앞), 모듈 간 SQL 조각 공유는 한쪽 변경이 다른 쪽을 조용히 바꾼다.
 - 기존 테스트를 깨뜨리지 마라.

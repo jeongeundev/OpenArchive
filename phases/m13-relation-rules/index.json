@@ -4,22 +4,6 @@
   "steps": [
     {
       "step": 0,
-      "name": "edges-rebuild",
-      "type": "feat",
-      "scope": "db",
-      "desc": "관계 판정을 rebuild_document_edges 함수로 옮기고 양쪽 비율·문서당 5건·단방향 저장·HNSW 강제를 적용한다",
-      "status": "pending"
-    },
-    {
-      "step": 1,
-      "name": "worker-clock",
-      "type": "fix",
-      "scope": "worker",
-      "desc": "잡 완료 시각을 트랜잭션 시작이 아니라 실제 완료 시점으로 기록한다",
-      "status": "pending"
-    },
-    {
-      "step": 2,
       "name": "search-symmetric",
       "type": "feat",
       "scope": "search",
@@ -27,11 +11,27 @@
       "status": "pending"
     },
     {
-      "step": 3,
+      "step": 1,
       "name": "related-symmetric",
       "type": "feat",
       "scope": "search",
       "desc": "관련 문서·태그 추천이 단방향 저장 edge를 양방향으로 읽는다",
+      "status": "pending"
+    },
+    {
+      "step": 2,
+      "name": "edges-rebuild",
+      "type": "feat",
+      "scope": "db",
+      "desc": "관계 판정을 rebuild_document_edges 함수로 옮기고 양쪽 비율·문서당 5건·단방향 저장·HNSW 강제를 적용한다",
+      "status": "pending"
+    },
+    {
+      "step": 3,
+      "name": "worker-clock",
+      "type": "fix",
+      "scope": "worker",
+      "desc": "잡 완료 시각을 트랜잭션 시작이 아니라 실제 완료 시점으로 기록한다",
       "status": "pending"
     },
     {
