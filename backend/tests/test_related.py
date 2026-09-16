@@ -328,3 +328,123 @@ def test_candidate_limits_stay_under_ef_search():
     k 상한에서도 여유가 남아야 한다 (ADR-011 보강 4).
     """
     assert MAX_K * SEARCH_CANDIDATE_MULTIPLIER < EF_SEARCH
+
+
+async def test_related_documents_include_a_neighbour_that_computed_the_edge(
+    worker_conn, related_conn
+):
+    source_id = await insert_test_document(worker_conn, title="기준", content="기준 내용")
+    other_id = await insert_test_document(worker_conn, title="이웃", content="이웃 내용")
+    await process_all_embedding_jobs(worker_conn, FakeProvider())
+    await worker_conn.execute("DELETE FROM document_edges")
+    await worker_conn.execute(
+        """INSERT INTO document_edges
+           (src_document_id, dst_document_id, kind, src_chunk_index, dst_chunk_index, score)
+           VALUES (%s, %s, 'related', 0, 0, 0.8)""",
+        (other_id, source_id),
+    )
+
+    result = await find_related(related_conn, document_id=source_id)
+
+    assert [(item.document_id, item.kind) for item in result.items] == [
+        (other_id, "related")
+    ]
+    assert result.items[0].score == pytest.approx(0.8)
+    assert result.reason is None
+
+
+async def test_a_neighbour_reached_from_both_directions_is_listed_once_with_overlaps_first(
+    worker_conn, related_conn
+):
+    source_id = await insert_test_document(worker_conn, title="기준", content="기준 내용")
+    other_id = await insert_test_document(worker_conn, title="이웃", content="이웃 내용")
+    await process_all_embedding_jobs(worker_conn, FakeProvider())
+    await worker_conn.execute("DELETE FROM document_edges")
+    await worker_conn.execute(
+        """INSERT INTO document_edges
+           (src_document_id, dst_document_id, kind, src_chunk_index, dst_chunk_index, score)
+           VALUES (%s, %s, 'related', 0, 0, 0.7),
+                  (%s, %s, 'overlaps', NULL, NULL, 1.0)""",
+        (source_id, other_id, other_id, source_id),
+    )
+
+    result = await find_related(related_conn, document_id=source_id)
+
+    assert [(item.document_id, item.kind, item.score) for item in result.items] == [
+        (other_id, "overlaps", 1.0)
+    ]
+
+
+@pytest.mark.parametrize("user_id", [None, "alice", "bob"])
+async def test_related_documents_from_reverse_edges_apply_visibility(
+    worker_conn, related_conn, user_id
+):
+    source_id = await insert_test_document(worker_conn, title="기준", content="기준 내용")
+    other_id = await insert_test_document(
+        worker_conn, title="비공개", content="비공개 내용",
+        owner_id="bob", visibility="private", tags=["비밀"],
+    )
+    await process_all_embedding_jobs(worker_conn, FakeProvider())
+    await worker_conn.execute("DELETE FROM document_edges")
+    await worker_conn.execute(
+        """INSERT INTO document_edges
+           (src_document_id, dst_document_id, kind, src_chunk_index, dst_chunk_index, score)
+           VALUES (%s, %s, 'related', 0, 0, 0.8)""",
+        (other_id, source_id),
+    )
+
+    result = await find_related(related_conn, document_id=source_id, user_id=user_id)
+    tags = await suggest_tags(related_conn, document_id=source_id, user_id=user_id)
+
+    assert [item.document_id for item in result.items] == (
+        [other_id] if user_id == "bob" else []
+    )
+    assert result.reason == (None if user_id == "bob" else "no_edges")
+    assert [(item.tag, item.freq) for item in tags.items] == (
+        [("비밀", 1)] if user_id == "bob" else []
+    )
+
+
+async def test_tag_suggestions_count_tags_of_neighbours_that_computed_the_edge(
+    worker_conn, related_conn
+):
+    source_id = await insert_test_document(
+        worker_conn, title="기준", content="기준 내용", tags=["정합성"]
+    )
+    other_id = await insert_test_document(
+        worker_conn, title="이웃", content="이웃 내용", tags=["운영", "정합성"]
+    )
+    await process_all_embedding_jobs(worker_conn, FakeProvider())
+    await worker_conn.execute("DELETE FROM document_edges")
+    await worker_conn.execute(
+        """INSERT INTO document_edges
+           (src_document_id, dst_document_id, kind, src_chunk_index, dst_chunk_index, score)
+           VALUES (%s, %s, 'related', 0, 0, 0.8)""",
+        (other_id, source_id),
+    )
+
+    result = await suggest_tags(related_conn, document_id=source_id)
+
+    assert [(item.tag, item.freq) for item in result.items] == [("운영", 1)]
+
+
+async def test_tag_suggestions_count_a_neighbour_once_even_if_stored_in_both_directions(
+    worker_conn, related_conn
+):
+    source_id = await insert_test_document(worker_conn, title="기준", content="기준 내용")
+    other_id = await insert_test_document(
+        worker_conn, title="이웃", content="이웃 내용", tags=["운영"]
+    )
+    await process_all_embedding_jobs(worker_conn, FakeProvider())
+    await worker_conn.execute("DELETE FROM document_edges")
+    await worker_conn.execute(
+        """INSERT INTO document_edges
+           (src_document_id, dst_document_id, kind, src_chunk_index, dst_chunk_index, score)
+           VALUES (%s, %s, 'related', 0, 0, 0.7),
+                  (%s, %s, 'overlaps', NULL, NULL, 1.0)""",
+        (source_id, other_id, other_id, source_id),
+    )
+
+    result = await suggest_tags(related_conn, document_id=source_id)
+
+    assert [(item.tag, item.freq) for item in result.items] == [("운영", 1)]

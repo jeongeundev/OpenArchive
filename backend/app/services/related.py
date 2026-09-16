@@ -13,13 +13,34 @@ from app.services.visibility import VISIBLE_TO_USER
 # 빈도순으로 정렬한 뒤 limit개를 자른다.
 NEIGHBOR_LIMIT = 10
 
+_NEIGHBOR_CTE = """
+WITH neighbors AS (
+    SELECT e.dst_document_id AS document_id, e.kind, e.score
+    FROM document_edges e
+    WHERE e.src_document_id = %(id)s
+    UNION ALL
+    -- 역방향 — 남이 발견한 관계도 이 문서의 관련 문서다 (ADR-029 개정, 저장은 단방향이 된다).
+    SELECT e.src_document_id, e.kind, e.score
+    FROM document_edges e
+    WHERE e.dst_document_id = %(id)s
+),
+best AS (
+    -- 같은 이웃은 overlaps를 우선하고, 같은 종류에서는 높은 점수를 남긴다.
+    SELECT DISTINCT ON (document_id) document_id, kind, score
+    FROM neighbors
+    ORDER BY document_id,
+             CASE kind WHEN 'overlaps' THEN 0 WHEN 'related' THEN 1 ELSE 2 END,
+             score DESC
+)
+"""
+
 RELATED_SQL = f"""
-SELECT d.id, d.title, d.tags, e.kind, e.score
-FROM document_edges e
-JOIN documents d ON d.id = e.dst_document_id
-WHERE e.src_document_id = %(id)s
-  AND {VISIBLE_TO_USER}
-ORDER BY e.kind, e.score DESC, d.id
+{_NEIGHBOR_CTE}
+SELECT d.id, d.title, d.tags, b.kind, b.score
+FROM best b
+JOIN documents d ON d.id = b.document_id
+WHERE {VISIBLE_TO_USER}
+ORDER BY b.kind, b.score DESC, d.id
 LIMIT %(k)s
 """
 
@@ -34,17 +55,17 @@ ORDER BY d.created_at, d.id
 """
 
 TAG_SUGGESTION_SQL = f"""
-WITH neighbors AS (
-  SELECT e.dst_document_id AS document_id
-  FROM document_edges e
-  JOIN documents d ON d.id = e.dst_document_id
-  WHERE e.src_document_id = %(id)s
-    AND {VISIBLE_TO_USER}
-  ORDER BY e.kind, e.score DESC, d.id
+{_NEIGHBOR_CTE},
+selected_neighbors AS (
+  SELECT b.document_id
+  FROM best b
+  JOIN documents d ON d.id = b.document_id
+  WHERE {VISIBLE_TO_USER}
+  ORDER BY b.kind, b.score DESC, d.id
   LIMIT {NEIGHBOR_LIMIT}
 )
 SELECT t.tag, count(*) AS freq
-FROM neighbors n
+FROM selected_neighbors n
 JOIN documents d ON d.id = n.document_id
 CROSS JOIN LATERAL unnest(d.tags) AS t(tag)
 WHERE NOT (t.tag = ANY(%(current_tags)s::text[]))
