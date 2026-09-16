@@ -5,7 +5,10 @@ from pathlib import Path
 
 import psycopg
 import pytest
+from conftest import process_all_embedding_jobs
 
+from app.config import get_settings
+from app.embeddings.fake import FakeProvider
 from app.services.chunking import chunk_text
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -16,6 +19,7 @@ from scripts.seed_demo import (
     SeedDocument,
     load_seed_documents,
     parse_seed_document,
+    run,
     seed_documents,
 )
 
@@ -85,23 +89,22 @@ def test_corpus_titles_are_unique():
     assert len(titles) == len(set(titles))
 
 
-def test_every_corpus_document_fits_in_one_chunk():
-    """청크가 2개 이상이면 `overlaps` 관계가 무의미해진다.
-
-    008 트리거는 청크마다 가장 가까운 10개를 이웃으로 잡고, 겹친 청크 비율이 0.8
-    이상이면서 2개 이상이면 "전반적으로 같은 내용"(overlaps)으로 판정한다. 코퍼스
-    전체가 66청크뿐이라 이웃 10개가 전체의 15%를 덮으므로, 2청크 문서는 두 청크가
-    모두 걸리기만 하면 2/2 = 1.0으로 이 하한을 통과한다. 실측에서 「재택근무 운영
-    지침」이 「경비 정산 처리 기준」과 겹친다고 저장됐고, 3청크로 늘려도 오탐이 13쌍
-    남았다. 모든 문서를 1청크로 두면 matched_chunks >= 2가 성립할 수 없다.
+def test_corpus_mixes_single_and_multi_chunk_documents():
+    """014의 양쪽 비율·문서당 상한이 2청크 편향을 막았으므로 길이를 섞어
+    새 규칙이 여러 청크 문서에서 성립함을 시연한다.
     """
-    over = [
-        (document.title, len(chunk_text(document.content)))
-        for document in load_seed_documents()
-        if len(chunk_text(document.content)) != 1
-    ]
+    documents = load_seed_documents()
+    counts = [len(chunk_text(document.content)) for document in documents]
+    multi_by_department = Counter(
+        document.tags[0]
+        for document, count in zip(documents, counts)
+        if count >= 2
+    )
 
-    assert over == []
+    assert set(multi_by_department) == {"경영지원", "고객지원", "물류", "보안"}
+    assert min(multi_by_department.values()) >= 3
+    assert max(counts) <= 4
+    assert counts.count(1) >= 30
 
 
 def test_corpus_has_private_documents_in_more_than_one_domain():
@@ -239,3 +242,27 @@ async def test_corpus_loads_as_text_documents_with_resolved_wikilinks(migrated_d
     assert metadata == (len(documents), 0, 0)
     assert resolved >= 30
     assert unresolved == 1
+
+
+async def test_seed_run_rebuilds_edges_after_embedding(migrated_db: str, monkeypatch, capsys):
+    documents = load_seed_documents()
+    async with await psycopg.AsyncConnection.connect(migrated_db, autocommit=True) as conn:
+        assert await seed_documents(conn, documents) == len(documents)
+        assert await process_all_embedding_jobs(conn, FakeProvider()) == len(documents)
+        first_id, = await (
+            await conn.execute(
+                "SELECT id FROM documents WHERE owner_id = 'seed' ORDER BY created_at, id LIMIT 1"
+            )
+        ).fetchone()
+        query = "SELECT count(*) FROM document_edges WHERE src_document_id = %s"
+        assert await (await conn.execute(query, (first_id,))).fetchone() == (0,)
+
+        monkeypatch.setenv("DATABASE_URL", migrated_db)
+        get_settings.cache_clear()
+        await run(reset=False, timeout=10, owner="seed")
+
+        count, = await (await conn.execute(query, (first_id,))).fetchone()
+        assert count > 0
+        output = capsys.readouterr().out
+        assert "신규 0개" in output
+        assert f"관계 재계산 {len(documents)}건" in output
