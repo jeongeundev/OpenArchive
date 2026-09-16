@@ -158,7 +158,19 @@ END; $$;
 (OpenProxy 풀 백엔드의 generic plan — `SET LOCAL`은 `DISCARD PLANS` 뒤에야 먹었다),
 **왜 조회가 양방향인지**(`search.py`·`related.py`가 이미 역방향을 UNION한다)를 008과 같은 밀도로 적는다.
 
-### 3) `build_document_edges`의 기존 정의를 남기지 마라
+### 3) `backend/tests/test_search.py`의 선행 단언 한 곳 — `test_trigger_built_edges_drive_search_expansion`
+
+이 테스트는 edge를 손으로 넣지 않고 트리거가 만든 행만으로 검색이 확장되는지 본다. 검색 호출
+**앞**의 선행 단언이 `SELECT count(*) FROM document_edges WHERE src_document_id = entry`로
+"트리거가 entry의 edge를 만들었다"를 확인하는데, 단방향 저장에서는 entry가 먼저 처리되어
+`(neighbor→entry)` 행만 있으므로 0이 된다(2차 실행에서 실측 — 전체 581 passed / 이 1개 failed).
+선행 단언의 조건을 **`src_document_id = %s OR dst_document_id = %s`**로 바꿔 "트리거가 entry에
+닿는 edge를 만들었다"로 고쳐라. 검색 결과 단언(entry 직접 히트 → neighbor가 `via.from_document_id
+== entry`로 확장)은 **그대로** — 역방향 행을 step 0의 대칭 읽기가 소비하는지가 이 테스트의 본체이며,
+그 단언은 지금도 통과해야 한다. docstring의 "008 트리거"는 "트리거(014)"로 바꾼다. 이 파일에서
+바꾸는 것은 이 테스트 하나뿐이다.
+
+### 4) `build_document_edges`의 기존 정의를 남기지 마라
 
 008의 함수는 `CREATE OR REPLACE`로 덮인다. 008 파일 자체에 손대지 않는다.
 
@@ -177,7 +189,8 @@ cd backend && .venv/bin/ruff check .
    건드린 것이다. `test_triggers.py`가 깨진다면 위 「픽스처 원칙」부터 확인하라.
 2. 아키텍처 체크리스트:
    - 새 마이그레이션은 `backend/migrations/014_edges_triggers.sql` 하나뿐인가? (다른 번호·이름 금지)
-   - 애플리케이션 코드(`backend/app/**`)를 **한 줄도** 바꾸지 않았는가?
+   - 애플리케이션 코드(`backend/app/**`)를 **한 줄도** 바꾸지 않았는가? 테스트 변경은 `test_triggers.py`와
+     `test_search.py`의 선행 단언 한 곳뿐인가?
    - `rebuild_document_edges`의 `proconfig`에 세 값이 전부 있는가?
    - 임시 테이블·`LISTEN`·`SET LOCAL`을 쓰지 않았는가?
 3. 결과에 따라 `phases/m13-relation-rules/index.json`의 step 2를 업데이트한다:
@@ -188,7 +201,8 @@ cd backend && .venv/bin/ruff check .
 ## 금지사항
 
 - `search.py`·`related.py`·`clusters.py`·`diagnostics.py`를 고치지 마라. 이유: 조회 측 양방향 읽기는
-  step 0·1에서 끝났다. 이 step은 마이그레이션 파일 하나와 `test_triggers.py`만 바꾼다.
+  step 0·1에서 끝났다. 이 step은 마이그레이션 파일 하나와 `test_triggers.py`, 그리고 `test_search.py`의
+  선행 단언 한 곳(작업 3)만 바꾼다.
 - 역방향(이웃 문서 기준) 재계산을 트리거에 넣지 마라. 이유: 비용이 이웃 청크 수에 비례해
   `finalize_job`이 5배 길어지고, kNN 비대칭이라 그래도 완전하지 않다. 전량 재계산(step 5)이 답이다.
 - 픽스처를 맞추려고 정렬 키·`LIMIT 10`·비율 0.8을 바꾸지 마라. 이유: 위 「닫힌 결정」은 실 코퍼스
