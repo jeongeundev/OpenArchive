@@ -290,7 +290,7 @@ BEGIN
   DELETE FROM document_edges WHERE src_document_id = target_document_id;   -- ★ 자기 src 행만
   -- 청크마다 다른 문서의 최근접 10개(청크별 상수 프로브 → HNSW)를 모은다
   --   → 문서쌍으로 접어 matched_src↓ · min_dist↑ · dst_document_id 순 5건까지 (MAX_NEIGHBOR_DOCUMENTS)
-  --   → 양쪽 비율 ≥ 0.8 AND matched_src ≥ 2 면 overlaps, 아니면 related
+  --   → 양쪽 비율 ≥ 0.8 AND 양쪽 matched ≥ 3 이면 overlaps, 아니면 related
   --   → INSERT (src = 계산 주체 한 방향만)
   …
 END; $$;

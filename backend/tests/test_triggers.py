@@ -477,27 +477,34 @@ def test_edge_kind_distinguishes_overlaps_from_related_and_never_emits_points_to
     mark_document_ready(
         conn,
         overlap_id,
-        ["same zero", "same one"],
-        vectors=[unit_vector(0), unit_vector(1)],
+        ["same zero", "same one", "same four"],
+        vectors=[unit_vector(0), unit_vector(1), unit_vector(4)],
     )
-    mark_document_ready(conn, partial_id, ["only zero"], vectors=[unit_vector(0)])
-    # source의 두 번째 청크에서 partial을 top-10 밖으로 밀어 매칭 비율을 1/2로 만든다.
+    # partial은 세 청크 중 e0 하나만 source와 겹친다 — 비율 1/3.
+    mark_document_ready(
+        conn,
+        partial_id,
+        ["only zero", "seven", "eight"],
+        vectors=[unit_vector(0), unit_vector(7), unit_vector(8)],
+    )
+    # source의 e1 프로브에서 partial을 top-10 밖으로 밀어 매칭 비율을 1/3로 만든다.
     near_one = unit_vector(1)
     near_one[2] = 0.1
     for index in range(10):
         decoy_id = insert_document(conn, f"decoy {index}", f"sha256:kind-decoy:{index}")
         mark_document_ready(conn, decoy_id, [f"decoy {index}"], vectors=[near_one])
-    # e0 프로브를 채워 직교 decoy가 두 대목에서 만난 것으로 집계되지 않게 한다.
-    near_zero = unit_vector(0)
-    near_zero[3] = 0.1
-    for index in range(9):
-        filler_id = insert_document(conn, f"filler {index}", f"sha256:kind-filler:{index}")
-        mark_document_ready(conn, filler_id, [f"filler {index}"], vectors=[near_zero])
+    # e0·e4 프로브를 채워 직교 청크가 동점으로 끌려와 대목 수에 집계되지 않게 한다.
+    for axis in (0, 4):
+        near_axis = unit_vector(axis)
+        near_axis[3] = 0.1
+        for index in range(9):
+            filler_id = insert_document(conn, f"filler {index}", f"sha256:kind-filler:{axis}:{index}")
+            mark_document_ready(conn, filler_id, [f"filler {index}"], vectors=[near_axis])
     mark_document_ready(
         conn,
         source_id,
-        ["source zero", "source one"],
-        vectors=[unit_vector(0), unit_vector(1)],
+        ["source zero", "source one", "source four"],
+        vectors=[unit_vector(0), unit_vector(1), unit_vector(4)],
     )
 
     kinds = {
@@ -519,9 +526,9 @@ def test_edge_kind_distinguishes_overlaps_from_related_and_never_emits_points_to
 def test_a_single_chunk_document_never_claims_overlaps(conn: psycopg.Connection):
     """청크가 하나인 문서는 비율만으로는 항상 1.0이라 무조건 overlaps가 된다.
 
-    분모가 자기 청크 수이므로 이웃에 걸리기만 하면 1/1 = 1.0 >= 0.8이다. 하한 2가 이 자리를
-    막는다. 다만 하한이 막는 것은 1청크 문서까지이며, 주제가 가까운 긴 문서끼리 비율이 1.0에
-    붙는 것은 막지 못한다 — 그쪽은 화면 어휘로 다룬다 (ADR-029 정정, OPENSQL_RESEARCH §14).
+    분모가 자기 청크 수이므로 이웃에 걸리기만 하면 1/1 = 1.0 >= 0.8이다. 대목 수 하한 3이 이
+    자리를 막는다. 다만 하한이 막는 것은 짧은 문서까지이며, 주제가 가까운 긴 문서끼리 비율이
+    1.0에 붙는 것은 막지 못한다 — 그쪽은 화면 어휘로 다룬다 (ADR-029 정정, OPENSQL_RESEARCH §14).
     """
     long_id = insert_document(conn, "long", "sha256:min-chunks-long")
     single_id = insert_document(conn, "single", "sha256:min-chunks-single")
@@ -543,8 +550,38 @@ def test_a_single_chunk_document_never_claims_overlaps(conn: psycopg.Connection)
     assert kind[0] == "related"
 
 
-def test_two_matching_chunks_still_qualify_as_overlaps(conn: psycopg.Connection):
-    """하한은 2다. 청크 두 개가 모두 겹치면 overlaps 판정이 유지되어야 한다."""
+def test_a_long_document_does_not_claim_overlaps_with_a_single_chunk_neighbour(
+    conn: psycopg.Connection,
+):
+    """하한은 상대 쪽에도 걸린다. 한쪽에만 걸면 긴 문서가 계산 주체일 때 1청크 이웃이
+    자기 모든 대목의 top-10에 들어오는 순간 3/3 · 1/1로 통과한다 — 시연 코퍼스 실측에서
+    overlaps 44건 중 39건이 이 모양이었다(2청크 문서 → 1청크 이웃)."""
+    single_id = insert_document(conn, "single", "sha256:dst-floor-single")
+    long_id = insert_document(conn, "long", "sha256:dst-floor-long")
+    # 세 축의 합성 벡터 — long의 세 대목 어디에서 재도 같은 거리라 모든 프로브의 top-10에 든다.
+    blend = [0.0] * 1024
+    for axis in range(3):
+        blend[axis] = 1.0 / 3**0.5
+    mark_document_ready(conn, single_id, ["blend"], vectors=[blend])
+    mark_document_ready(
+        conn,
+        long_id,
+        ["zero", "one", "two"],
+        vectors=[unit_vector(0), unit_vector(1), unit_vector(2)],
+    )
+
+    kind = conn.execute(
+        "SELECT kind FROM document_edges WHERE src_document_id = %s AND dst_document_id = %s",
+        (long_id, single_id),
+    ).fetchone()
+
+    assert kind is not None, "이웃이므로 관계 자체는 남아야 한다"
+    assert kind[0] == "related"
+
+
+def test_two_chunk_documents_never_qualify_as_overlaps(conn: psycopg.Connection):
+    """2청크에서 비율은 0·0.5·1.0뿐이라 "두 청크가 모두 걸렸다"는 판별력이 없다 — 작은
+    코퍼스에서는 같은 주제 문서가 top-10에 거의 다 들어온다. 하한 3이 이 구간을 related로 둔다."""
     twin_id = insert_document(conn, "twin", "sha256:min-chunks-twin")
     source_id = insert_document(conn, "source", "sha256:min-chunks-source")
     mark_document_ready(
@@ -558,6 +595,31 @@ def test_two_matching_chunks_still_qualify_as_overlaps(conn: psycopg.Connection)
         source_id,
         ["zero", "one"],
         vectors=[unit_vector(0), unit_vector(1)],
+    )
+
+    kind = conn.execute(
+        "SELECT kind FROM document_edges WHERE src_document_id = %s AND dst_document_id = %s",
+        (source_id, twin_id),
+    ).fetchone()
+
+    assert kind is not None and kind[0] == "related"
+
+
+def test_three_matching_chunks_on_both_sides_qualify_as_overlaps(conn: psycopg.Connection):
+    """하한은 양쪽 3이다. 세 청크가 모두 서로 겹치면 overlaps 판정이 유지되어야 한다."""
+    twin_id = insert_document(conn, "twin", "sha256:min-chunks-triplet")
+    source_id = insert_document(conn, "source", "sha256:min-chunks-triplet-source")
+    mark_document_ready(
+        conn,
+        twin_id,
+        ["zero", "one", "two"],
+        vectors=[unit_vector(0), unit_vector(1), unit_vector(2)],
+    )
+    mark_document_ready(
+        conn,
+        source_id,
+        ["zero", "one", "two"],
+        vectors=[unit_vector(0), unit_vector(1), unit_vector(2)],
     )
 
     kind = conn.execute(
@@ -719,12 +781,15 @@ def test_rebuild_function_probes_hit_the_hnsw_index_on_repeated_calls(conn: psyc
 
 
 def test_overlaps_requires_the_ratio_on_both_sides(conn: psycopg.Connection):
+    """short는 3/3이지만 long 쪽은 3/4 = 0.75 < 0.8이라 related다. short가 2청크면 대목 수
+    하한에 먼저 걸려 비율 조건을 검증하지 못하므로 3청크로 둔다."""
     long_id = insert_document(conn, "long", "sha256:both-long")
     mark_document_ready(
         conn, long_id, ["zero", "one", "two", "three"],
         vectors=[unit_vector(axis) for axis in range(4)],
     )
-    for axis in range(2):
+    # 세 프로브의 top-10을 채워 long의 네 번째 청크가 동점으로 끌려오지 않게 한다.
+    for axis in range(3):
         vector = unit_vector(axis)
         vector[10] = 0.001
         for index in range(9):
@@ -732,7 +797,8 @@ def test_overlaps_requires_the_ratio_on_both_sides(conn: psycopg.Connection):
             mark_document_ready(conn, filler_id, ["filler"], vectors=[vector])
     short_id = insert_document(conn, "short", "sha256:both-short")
     mark_document_ready(
-        conn, short_id, ["zero", "one"], vectors=[unit_vector(0), unit_vector(1)],
+        conn, short_id, ["zero", "one", "two"],
+        vectors=[unit_vector(0), unit_vector(1), unit_vector(2)],
     )
 
     kinds = {row[1]: row[2] for row in edges_for(conn, short_id) if row[0] == short_id}

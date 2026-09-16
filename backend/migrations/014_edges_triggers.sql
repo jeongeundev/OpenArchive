@@ -4,7 +4,8 @@
 -- 0.97 → 0.99로 개선됐다. search.py·related.py가 이미 역방향을 UNION하므로
 -- 저장은 단방향이어도 조회에서는 양방향 이웃으로 읽는다.
 -- 자기 비율만 보면 2청크 문서는 2/2 = 1.0으로 편향된다. 양쪽 비율을 요구하면
--- C 코퍼스 overlaps 정밀도가 0.17 → 0.41이고 판본 24/24는 유지된다.
+-- C 코퍼스 overlaps 정밀도가 0.17 → 0.41이고 판본 24/24는 유지된다. 대목 수 하한을
+-- 양쪽 3으로 올리면 전체 기준 시뮬레이션에서 C 정밀도 0.857 → 0.889, 24/24 유지.
 --
 -- 함수 정의에 SET을 둔다. OpenProxy 풀 백엔드에 남은 PL/pgSQL generic plan에는
 -- SET LOCAL이 DISCARD PLANS 뒤에야 먹었다. enable_seqscan=off를 함수 정의에
@@ -104,10 +105,13 @@ BEGIN
     SELECT stats.dst_document_id,
            stats.matched_src::real / source_size.src_chunks AS overlap_ratio,
            closest.src_chunk_index, closest.dst_chunk_index, stats.min_dist,
-           -- OVERLAP_RATIO = 0.8, MIN_MATCHED = 2: 양쪽 비율과 두 대목 하한.
+           -- OVERLAP_RATIO = 0.8, MIN_MATCHED = 3: 양쪽 비율과 양쪽 세 대목 하한.
+           -- 하한이 한쪽(2)에만 있으면 긴 문서가 계산 주체일 때 1청크 이웃이 1/1로 통과하고,
+           -- 2청크에서는 비율이 0·0.5·1.0뿐이라 판별력이 없다 — 시연 코퍼스 실측 overlaps 44건.
            (stats.matched_src::real / source_size.src_chunks >= 0.8
             AND stats.matched_dst::real / target_size.dst_chunks >= 0.8
-            AND stats.matched_src >= 2) AS is_overlaps
+            AND stats.matched_src >= 3
+            AND stats.matched_dst >= 3) AS is_overlaps
     FROM capped_pairs stats
     JOIN closest_chunks closest USING (dst_document_id)
     CROSS JOIN source_size
