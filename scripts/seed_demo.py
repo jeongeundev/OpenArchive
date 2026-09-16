@@ -177,7 +177,7 @@ async def summarize(
 ) -> tuple[int, int]:
     """적재 결과로 만들어진 청크 수와 관계 문서쌍 수를 센다.
 
-    관계는 트리거가 양방향 두 행으로 저장하므로(ADR-029) 문서쌍으로 접어 센다.
+    저장은 단방향이지만 양쪽이 서로를 발견하면 두 행이 남으므로(ADR-029 개정) 문서쌍으로 접어 센다.
     """
     return await (
         await conn.execute(

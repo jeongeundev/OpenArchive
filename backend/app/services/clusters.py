@@ -193,9 +193,9 @@ async def get_clusters(
     for documents in documents_by_cluster.values():
         documents.sort(key=lambda document: (document.title, document.document_id))
 
-    # 선의 굵기는 "덩어리 사이를 잇는 문서쌍이 몇 개인가"다. 트리거가 관계 하나를
-    # 양방향 두 행으로 저장하므로(ADR-029) 원시 edge를 세면 모든 값이 일률적으로
-    # 2배가 되어 굵기의 의미가 없다. 문서쌍 단위로 접어 실제 연결 수를 센다.
+    # 선의 굵기는 "덩어리 사이를 잇는 문서쌍이 몇 개인가"다. 저장은 단방향이지만
+    # 양쪽이 서로를 발견하면 (A→B)·(B→A) 두 행이 남으므로(ADR-029 개정) 원시 edge를
+    # 세면 굵기가 흔들린다. 문서쌍 단위로 접어 실제 연결 수를 센다.
     connection_counts: Counter[tuple[ClusterKey, ClusterKey]] = Counter()
     seen_document_pairs: set[tuple[UUID, UUID]] = set()
     for source_id, target_id in edge_rows:
