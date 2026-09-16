@@ -1319,6 +1319,15 @@ kind의 의미인 예외도 현재는 없다. 트리거는 `src = NEW.id OR dst 
 > **0.990**이 되고 이 하락이 멈춘다. "정확한 역방향은 문서 수에 비례해 비싸다"는 위 근거는 여전히
 > 맞다 — 그래서 역방향을 저장하지 않고 **읽을 때 합친다.** 결정 6의 전량 재계산이 그 나머지를 맡는다.
 >
+> **이 선택의 값은 낡은 역방향 행이다.** A가 재임베딩되면 A의 `src` 행만 새로 계산되고, B가 예전에
+> 발견해 둔 `(B→A)`는 A의 **옛 내용** 기준 `kind`·`score`·`dst_chunk_index`를 그대로 지닌 채 남는다
+> (`test_reembedding_replaces_only_the_rows_this_document_computed`가 이 생존을 고정한다). 008이
+> `DELETE both`로 막던 "낡은 위치와 점수"가 이 범위에서 되살아난 것이다. 감수하는 이유는 손해의 크기다 —
+> 남의 발견을 지우면 **재실행만으로** 순도가 떨어졌지만(위 수치), 낡은 행은 이웃 자체는 대개 맞고 점수와
+> 대목 위치만 옛것이다. 검색 순회에서는 그 `dst_chunk_index`가 사라진 번호면 `JOIN LATERAL`이 청크를 못
+> 찾아 행이 조용히 빠지고, 남아 있는 번호면 옛 위치의 청크를 발췌한다 — 문서 자체가 잘못 나오지는
+> 않는다. B가 다시 임베딩되거나 `openarchive rebuild-edges`(결정 6)를 돌리면 수렴한다.
+>
 > **판정 본체는 트리거 함수가 아니라 일반 함수 `rebuild_document_edges(uuid)`다**
 > (`014_edges_triggers.sql`). 트리거 함수 `build_document_edges()`는 `PERFORM rebuild_document_edges(NEW.id)`
 > 한 줄이며, 트리거 정의(`AFTER UPDATE OF embedding_status` · `ready` 전이 `WHEN`)는 008 그대로다. 같은
