@@ -2,7 +2,7 @@
 """검색 평가셋으로 Recall@k·MRR을 잰다 (#94).
 
     DATABASE_URL=… EMBEDDING_PROVIDER=local \\
-      python scripts/eval_search.py notes/corpus93/eval/c.json [--label base] [--out FILE]
+      python scripts/eval_search.py scripts/eval/c.json [--label base] [--out FILE]
 
 평가셋은 `{"queries": [{"query": …, "relevant": [제목, …]}, …]}`다. 정답은 제목으로 적고
 실행 시점의 DB에서 문서 id로 푼다 — 동명 문서는 전부 정답이고, 없는 제목은 오타로 보고

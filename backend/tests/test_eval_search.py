@@ -95,3 +95,17 @@ def test_recall_is_capped_by_the_number_of_relevant_documents():
     relevant = _fresh_ids(3)
 
     assert recall_at_k(relevant, set(relevant), 1) == pytest.approx(1 / 3)
+
+
+@pytest.mark.parametrize("corpus", ["a", "c"])
+def test_committed_evalsets_are_well_formed(corpus: str):
+    """평가셋은 저장소 안에 있어야 다음 변경을 같은 잣대로 잰다 — 형식이 깨지면 스크립트가 아니라 여기서 멈춘다."""
+    import json
+
+    evalset = json.loads((ROOT / "scripts" / "eval" / f"{corpus}.json").read_text())
+
+    assert evalset["corpus"] == corpus
+    queries = evalset["queries"]
+    assert len(queries) >= 20  # #94: 질의 20~30개
+    assert all(item["query"].strip() and item["relevant"] for item in queries)
+    assert all(title.strip() for item in queries for title in item["relevant"])

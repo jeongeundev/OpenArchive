@@ -1765,7 +1765,8 @@ m9 step 0 이후 같은 로컬 seed를 실 `BAAI/bge-m3` 상태로 측정했다.
 한국어 위키 도움말, 디렉토리 분류 23종). C = 실 OpenSQL VM(PostgreSQL 17.8 + pgvector 0.8.1,
 OpenProxy:6432), 문서 **104 · 청크 2,211**(한국콘텐츠진흥원 규정집을 규정별로 분할, 기능 분류 9종,
 2025판·2022판이 섞여 있어 **판본 쌍 24개**가 정답 집합이 된다 — 동명 21 + 개명 3). 둘 다 실
-`BAAI/bge-m3`다. 코퍼스와 도구·평가셋은 라이선스 때문에 저장소 밖 `notes/corpus93/`에 있다.
+`BAAI/bge-m3`다. 코퍼스와 도구는 라이선스 때문에 저장소 밖 `notes/corpus93/`에 있고, **평가셋(질의와
+정답 제목)은 `scripts/eval/a.json`·`c.json`으로 저장소 안에 둔다** — 규칙을 바꿀 때마다 같은 잣대로 재야 하므로.
 
 **검색 평가는 `scripts/eval_search.py`로 잰다** (저장소 안). 평가셋은
 `{"queries": [{"query": …, "relevant": [제목, …]}]}` 형식이고, 정답 제목은 실행 시점의 DB에서
@@ -1775,9 +1776,9 @@ OpenProxy:6432), 문서 **104 · 청크 2,211**(한국콘텐츠진흥원 규정�
 ```bash
 cd backend && source .venv/bin/activate
 DATABASE_URL=postgresql://…:5433/eval_a EMBEDDING_PROVIDER=local \
-  python ../scripts/eval_search.py ../notes/corpus93/eval/a.json --label base
+  python ../scripts/eval_search.py ../scripts/eval/a.json --label base
 DATABASE_URL=postgresql://postgres:pg_password@192.168.64.4:6432/opensql EMBEDDING_PROVIDER=local \
-  python ../scripts/eval_search.py ../notes/corpus93/eval/c.json --label base
+  python ../scripts/eval_search.py ../scripts/eval/c.json --label base
 ```
 
 **규칙 후보는 시뮬레이션으로 비교했다** (`notes/corpus93/scripts/simulate_rules.py`, git 밖). DB의
