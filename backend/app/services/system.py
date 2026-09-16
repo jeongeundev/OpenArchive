@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -76,3 +77,28 @@ async def get_system_status(
         inconsistent_documents=row["inconsistent_documents"],
         embedding_provider=embedding_provider,
     )
+
+
+async def rebuild_all_edges(
+    conn: psycopg.AsyncConnection,
+    *,
+    on_progress: Callable[[int, int], None] | None = None,
+) -> int:
+    """ready 문서 전부의 관계를 다시 계산하고 처리한 문서 수를 돌려준다.
+
+    진행 중인 트랜잭션이 없는 연결을 받는다. 대상 조회와 문서별 재계산을 각각
+    커밋해, 중간 실패가 이미 처리한 문서까지 되돌리거나 잠금을 오래 잡지 않는다.
+    관계 교체의 원자성은 DB 함수가 지키고 진행 콜백은 커밋 뒤에 호출한다.
+    """
+    async with conn.transaction():
+        cur = await conn.execute(
+            "SELECT id FROM documents WHERE embedding_status = 'ready' ORDER BY created_at, id"
+        )
+        documents = await cur.fetchall()
+    total = len(documents)
+    for done, (document_id,) in enumerate(documents, start=1):
+        async with conn.transaction():
+            await conn.execute("SELECT rebuild_document_edges(%s)", (document_id,))
+        if on_progress is not None:
+            on_progress(done, total)
+    return total

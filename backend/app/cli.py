@@ -37,7 +37,7 @@ from app.migrations import (
     run_migrations,
 )
 from app.services.auth import UserNotFound, reset_password
-from app.services.system import get_system_status
+from app.services.system import get_system_status, rebuild_all_edges
 
 # gen_random_uuid()가 코어에 들어온 버전. 그 아래에서는 002가 기동하지 못한다.
 MINIMUM_SERVER_VERSION_NUM = 130000
@@ -522,6 +522,33 @@ def run_reset_password(*, dsn: str | None, username: str) -> int:
     return 0
 
 
+def _rebuild_progress(done: int, total: int) -> None:
+    print(f"\r  {done}/{total}", end="", flush=True)
+
+
+async def _rebuild_edges(dsn: str) -> int:
+    """연결 실패만 감싼다. 재계산 실행 오류는 원래 예외를 보존한다."""
+    try:
+        connection = await psycopg.AsyncConnection.connect(
+            dsn, autocommit=True, connect_timeout=5
+        )
+    except psycopg.Error as error:
+        raise _ConnectionFailed(str(error).strip()) from error
+    async with connection as conn:
+        return await rebuild_all_edges(conn, on_progress=_rebuild_progress)
+
+
+def run_rebuild_edges(*, dsn: str | None) -> int:
+    dsn = dsn or get_settings().database_url
+    try:
+        count = asyncio.run(_rebuild_edges(dsn))
+    except _ConnectionFailed as error:
+        print(f"연결하지 못했습니다: {error}")
+        return 1
+    print(f"\n관계를 다시 계산했습니다: 문서 {count}건")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="openarchive", description="OpenArchive 운영 CLI")
     subcommands = parser.add_subparsers(dest="command", required=True)
@@ -541,7 +568,16 @@ def main(argv: list[str] | None = None) -> int:
     )
     reset.add_argument("username")
     reset.add_argument("--dsn", help="DB 연결 문자열. 생략하면 DATABASE_URL을 씁니다.")
+    rebuild_help = (
+        "모든 문서의 관계를 전체 코퍼스 기준으로 다시 계산합니다. 대량 적재 뒤 한 번 실행합니다."
+    )
+    rebuild = subcommands.add_parser(
+        "rebuild-edges", help=rebuild_help, description=rebuild_help
+    )
+    rebuild.add_argument("--dsn", help="DB 연결 문자열. 생략하면 DATABASE_URL을 씁니다.")
     args = parser.parse_args(argv)
+    if args.command == "rebuild-edges":
+        return run_rebuild_edges(dsn=args.dsn)
     if args.command == "serve":
         return run_serve(host=args.host, port=args.port)
     if args.command == "reset-password":
