@@ -215,7 +215,7 @@ async def test_an_edge_stored_in_both_directions_is_expanded_once(
 
 
 async def test_trigger_built_edges_drive_search_expansion(worker_conn, search_conn):
-    """008 트리거가 만든 edge만으로 검색이 확장되는지 — step6과 step8의 결합을 본다.
+    """트리거(014)가 만든 edge만으로 검색이 확장되는지 — step6과 step8의 결합을 본다.
 
     다른 그래프 테스트는 전부 `DELETE FROM document_edges` 후 손으로 INSERT한다. 그러면
     트리거가 실제로 내놓는 행의 형태(kind·청크 인덱스·방향)가 SEARCH_SQL이 소비하는
@@ -235,8 +235,10 @@ async def test_trigger_built_edges_drive_search_expansion(worker_conn, search_co
     await process_all_embedding_jobs(worker_conn, provider)
 
     # document_edges를 손대지 않는다 — 남아 있는 행은 전부 트리거가 만든 것이다.
+    # 저장은 단방향(014)이라 먼저 처리된 entry에는 (neighbor→entry) 행만 있다 — 방향을 묻지 않는다.
     edge_cur = await worker_conn.execute(
-        "SELECT count(*) FROM document_edges WHERE src_document_id = %s", (entry_id,)
+        "SELECT count(*) FROM document_edges WHERE src_document_id = %s OR dst_document_id = %s",
+        (entry_id, entry_id),
     )
     assert (await edge_cur.fetchone())[0] > 0
 
