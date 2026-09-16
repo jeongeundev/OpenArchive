@@ -488,17 +488,19 @@ class _ConnectionFailed(Exception):
     """DSN으로 붙지 못했다. 붙은 뒤의 실패와 구분해 보고하려고 따로 둔다."""
 
 
-async def _reset(dsn: str, username: str, new_password: str) -> None:
-    """해시 교체와 세션 무효화를 한 트랜잭션에 담는다. 둘 사이에서 끊기면 안 된다.
-
-    연결 실패만 여기서 잡는다 — `run_init`과 같은 이유다. 더 넓게 감싸면 UPDATE·DELETE의
-    실패까지 "연결하지 못했습니다"로 보고되어 원인을 가린다.
+async def _connect(dsn: str, **kwargs) -> psycopg.AsyncConnection:
+    """연결 실패만 `_ConnectionFailed`로 바꾼다 — `run_init`과 같은 이유다. 더 넓게 감싸면
+    연결 뒤 UPDATE·DELETE·재계산의 실패까지 "연결하지 못했습니다"로 보고되어 원인을 가린다.
     """
     try:
-        connection = await psycopg.AsyncConnection.connect(dsn, connect_timeout=5)
+        return await psycopg.AsyncConnection.connect(dsn, connect_timeout=5, **kwargs)
     except psycopg.Error as error:
         raise _ConnectionFailed(str(error).strip()) from error
-    async with connection as conn:
+
+
+async def _reset(dsn: str, username: str, new_password: str) -> None:
+    """해시 교체와 세션 무효화를 한 트랜잭션에 담는다. 둘 사이에서 끊기면 안 된다."""
+    async with await _connect(dsn) as conn:
         await reset_password(conn, username, new_password)
 
 
@@ -527,14 +529,7 @@ def _rebuild_progress(done: int, total: int) -> None:
 
 
 async def _rebuild_edges(dsn: str) -> int:
-    """연결 실패만 감싼다. 재계산 실행 오류는 원래 예외를 보존한다."""
-    try:
-        connection = await psycopg.AsyncConnection.connect(
-            dsn, autocommit=True, connect_timeout=5
-        )
-    except psycopg.Error as error:
-        raise _ConnectionFailed(str(error).strip()) from error
-    async with connection as conn:
+    async with await _connect(dsn, autocommit=True) as conn:
         return await rebuild_all_edges(conn, on_progress=_rebuild_progress)
 
 
