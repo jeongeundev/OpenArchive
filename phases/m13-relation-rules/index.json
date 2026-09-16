@@ -30,7 +30,10 @@
       "type": "feat",
       "scope": "db",
       "desc": "관계 판정을 rebuild_document_edges 함수로 옮기고 양쪽 비율·문서당 5건·단방향 저장·HNSW 강제를 적용한다",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-09-16T16:33:06+0900",
+      "completed_at": "2026-09-16T17:12:05+0900",
+      "summary": "backend/migrations/014_edges_triggers.sql — 판정 본체 rebuild_document_edges(uuid)(함수 정의 SET hnsw.ef_search=200·random_page_cost=1.1·enable_seqscan=off), 트리거 build_document_edges는 호출만. overlaps = 양쪽 비율 ≥0.8 AND matched_src ≥2, 문서당 이웃 상한 5(matched_src↓·min_dist↑·dst_id), 단방향 저장(src=계산 주체, DELETE src만). test_triggers 32개(신규 5·재작성 3·filler 보강 1), test_search 선행 단언을 src OR dst로. 전체 582 passed."
     },
     {
       "step": 3,
