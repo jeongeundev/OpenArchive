@@ -41,7 +41,10 @@
       "type": "fix",
       "scope": "worker",
       "desc": "잡 완료 시각을 트랜잭션 시작이 아니라 실제 완료 시점으로 기록한다",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-09-16T17:12:14+0900",
+      "summary": "워커 완료 시각 7곳을 clock_timestamp()로 변경하고 실제 DB 회귀 테스트 2개를 추가함(워커 36개·전체 584개·Ruff·통합 검증 통과).",
+      "completed_at": "2026-09-16T17:15:48+0900"
     },
     {
       "step": 4,
