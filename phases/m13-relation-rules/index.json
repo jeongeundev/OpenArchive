@@ -74,7 +74,10 @@
       "type": "feat",
       "scope": "db",
       "desc": "시연 코퍼스에 다청크 문서를 넣고 1청크 불변식을 걷어내며 적재 뒤 관계를 전량 재계산한다",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-09-16T17:25:26+0900",
+      "summary": "기존 코퍼스 13건(hr 2·finance 2·cs 3·logistics 3·security 3)을 확장해 1청크 51건·2청크 13건으로 구성하고 seed 완료 후 관계 전량 재계산·진행 및 요약 출력을 추가함(seed 19개·전체 595개·Ruff·AC·통합 검증 통과).",
+      "completed_at": "2026-09-16T17:31:50+0900"
     },
     {
       "step": 7,
