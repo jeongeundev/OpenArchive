@@ -149,6 +149,10 @@ python3 examples/ingest_text.py notes.md --base-url http://localhost:8000 \
 `visibility`는 `public`(로그인한 모두) 또는 `private`(나만)입니다. 볼 수 없는 문서는 다른
 사용자의 검색·관련 문서·그래프·집계 어디에도 나타나지 않습니다.
 
+문서를 한꺼번에 많이 올렸다면 `openarchive rebuild-edges`를 한 번 실행합니다 — 문서 사이의 관계는
+각 문서가 임베딩되는 시점까지 들어온 문서만 이웃 후보로 보므로, 적재가 끝난 뒤 전체 기준으로 다시
+계산해야 먼저 올린 문서도 나중 문서와 이어집니다 ([운영 가이드](docs/OPERATIONS.md#openarchive-rebuild-edges)).
+
 ### 검색하기
 
 `/search`에서 **검색어**를 입력하고, 필요하면 **태그**(쉼표 구분)·**문서 유형**·**결과 수**로

@@ -56,14 +56,15 @@ OpenArchive/
 │   └── ingest_text.py            # 표준 라이브러리만 쓰는 독립 HTTP 텍스트 공급 예제
 ├── backend/
 │   ├── pyproject.toml            # fastapi, psycopg[binary,pool], pydantic-settings, mcp<2, pypdf, python-docx / [dev]: pytest, ruff / [local]: sentence-transformers
-│   ├── migrations/               # 001~013: extensions, tables, triggers, indexes,
-│   │                             #   trgm, edges(006~008), auth(009), links(010~011), token(013)
+│   ├── migrations/               # 001~014: extensions, tables, triggers, indexes,
+│   │                             #   trgm, edges(006~008), auth(009), links(010~011), token(013),
+│   │                             #   edges 재설계(014 — rebuild_document_edges, ADR-029 개정)
 │   ├── app/
 │   │   ├── main.py               # FastAPI 앱 조립
 │   │   ├── config.py             # pydantic-settings (DATABASE_URL, EMBEDDING_PROVIDER 등)
 │   │   ├── db.py                 # AsyncConnectionPool만 — import 시 부작용 없음
 │   │   ├── migrations.py         # 마이그레이션 러너 — API startup과 `openarchive init`이 호출
-│   │   ├── cli.py                # `openarchive init`·`reset-password` — 운영자 CLI (ADR-039·040)
+│   │   ├── cli.py                # `openarchive init`·`serve`·`reset-password`·`rebuild-edges` — 운영자 CLI (ADR-039·040)
 │   │   ├── api/                  # 라우터: documents, search, system, auth, admin,
 │   │   │                         #   diagnostics, clusters, retry (+ deps, schemas)
 │   │   ├── services/             # parsing, chunking, documents, search, related,
@@ -153,6 +154,7 @@ CREATE UNIQUE INDEX uq_pending_job_per_doc
   ON embedding_jobs(document_id) WHERE status = 'pending';
 
 -- document_edges: 저장 시점에 만드는 관계 그래프 (006, ADR-029)
+-- ★ 저장은 단방향(src = 계산 주체, 재계산은 자기 src 행만 교체), 조회는 src ∪ dst로 대칭 (014, ADR-029 개정)
 CREATE TABLE document_edges (
   src_document_id uuid NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
   dst_document_id uuid NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
@@ -272,6 +274,47 @@ CREATE TRIGGER trg_documents_content_changed
 - **PUT 시**: API는 `documents`의 `version`(+1), `content`, `content_hash`만 UPDATE한다. 이력 기록은 트리거가 **같은 트랜잭션에서** 수행하므로, 본문만 바뀌고 이력이 누락되는 상태가 구조적으로 불가능하다.
 - `ON CONFLICT (document_id, version) DO NOTHING`은 재실행 안전장치다. 같은 버전 번호로 트리거가 두 번 발화해도 이력이 중복되지 않는다.
 
+### 관계 생성 트리거
+
+임베딩이 끝나 `embedding_status`가 `ready`로 **전이**하는 순간, 같은 트랜잭션 안에서 저장 관계(`document_edges`)를 만든다 (ADR-029). 애플리케이션은 `document_edges`에 직접 INSERT하지 않는다 — `embedding_jobs`·`document_versions`와 같은 원칙이다.
+
+```sql
+-- 판정 본체는 일반 함수다. 트리거와 전량 재계산(openarchive rebuild-edges)이 같은 함수를 부른다 (014)
+CREATE FUNCTION rebuild_document_edges(target_document_id uuid) RETURNS void
+  LANGUAGE plpgsql
+  SET hnsw.ef_search = 200        -- 청크당 이웃 10 < ef_search (ADR-011 보강 4)
+  SET random_page_cost = 1.1      -- ADR-011 보강 5
+  SET enable_seqscan = off        -- 1만 청크 미만에서는 위 둘로도 플래너가 HNSW를 고르지 않는다 (#93 P1)
+AS $$
+BEGIN
+  DELETE FROM document_edges WHERE src_document_id = target_document_id;   -- ★ 자기 src 행만
+  -- 청크마다 다른 문서의 최근접 10개(청크별 상수 프로브 → HNSW)를 모은다
+  --   → 문서쌍으로 접어 matched_src↓ · min_dist↑ · dst_document_id 순 5건까지 (MAX_NEIGHBOR_DOCUMENTS)
+  --   → 양쪽 비율 ≥ 0.8 AND matched_src ≥ 2 면 overlaps, 아니면 related
+  --   → INSERT (src = 계산 주체 한 방향만)
+  …
+END; $$;
+
+CREATE OR REPLACE FUNCTION build_document_edges() RETURNS trigger
+  LANGUAGE plpgsql
+AS $$
+BEGIN
+  PERFORM rebuild_document_edges(NEW.id);
+  RETURN NEW;
+END; $$;
+
+CREATE TRIGGER trg_build_document_edges                          -- (008) 정의는 그대로다
+  AFTER UPDATE OF embedding_status ON documents
+  FOR EACH ROW
+  WHEN (NEW.embedding_status = 'ready' AND OLD.embedding_status IS DISTINCT FROM 'ready')
+  EXECUTE FUNCTION build_document_edges();
+```
+
+- **저장은 단방향, 조회는 대칭이다.** `src_document_id`가 계산 주체이고 재계산은 자기 `src` 행만 교체한다. 양방향 두 행 + `DELETE both`는 남이 발견한 관계를 지워 재실행만으로 그래프가 흔들렸다(같은 규칙 재실행의 자카드 0.971 → 단방향 0.990). 읽는 쪽(검색 순회·관련 문서·태그 추천·군집·진단)이 `src ∪ dst`로 합친다 (ADR-029 개정).
+- **세 설정은 함수 정의에 둔다.** 함수가 끝나면 호출 전 값으로 복원되어 `finalize_job` 트랜잭션의 나머지를 오염시키지 않는다. `SET LOCAL`로는 안 된다 — OpenProxy 풀 백엔드에 남는 PL/pgSQL generic plan이 이전 계획을 재사용해 `DISCARD PLANS` 뒤에야 먹었다. 실 VM 트리거 비용은 10청크 4.6 s → 0.2 s, 159청크 40 s → 2.7 s다 (`OPENSQL_RESEARCH.md` §16).
+- **트리거는 처리 시점까지의 문서만 이웃 후보로 본다.** 먼저 들어온 문서가 나중 문서를 발견할 기회는 없으므로, 대량 적재 뒤에는 `openarchive rebuild-edges`로 전체 기준으로 수렴시킨다 (ADR-029 결정 6). `scripts/seed_demo.py`는 적재 끝에 이를 한 번 자동으로 한다.
+- **판정이 실패하면 청크 교체도 함께 롤백된다.** 예외를 삼키지 않으며 워커의 재시도·백오프가 처리한다.
+
 ### 워커 처리 루프
 
 **기동**: 폴링 루프에 들어가기 전에 임베딩 모델을 한 번 **예열**한다 (ADR-003). `LocalProvider`는 첫 `embed()`까지 모델(~2GB) 로딩을 미루므로, 예열이 없으면 그 지연이 통째로 **첫 업로드**에 붙는다 — 가중치가 이미 캐시된 상태에서도 12~13초다(2026-08-21 실측). 아무도 기다리지 않는 기동 때 치른다. 예열 실패는 삼키고 루프를 계속한다: 최적화이지 새 실패 지점이 아니며, 모델을 못 받는 상황이라면 잡 처리의 기존 실패 경로가 `last_error`로 더 정확히 알린다.
@@ -312,8 +355,8 @@ BEGIN;
   INSERT INTO document_chunks (document_id, version, chunk_index, content, embedding)
   VALUES (%(doc_id)s, %(locked_version)s, %(idx)s, %(chunk_text)s, %(vec)s);
 
-  UPDATE documents SET embedding_status='ready' WHERE id = %(doc_id)s;
-  UPDATE embedding_jobs SET status='done', finished_at=now() WHERE id = %(job_id)s;
+  UPDATE documents SET embedding_status='ready' WHERE id = %(doc_id)s;   -- ← 여기서 관계 생성 트리거가 돈다
+  UPDATE embedding_jobs SET status='done', finished_at=clock_timestamp() WHERE id = %(job_id)s;
 COMMIT;
 ```
 
@@ -321,6 +364,8 @@ COMMIT;
 > 이 컬럼은 정합성 검증 쿼리(`c.version <> d.version`)와 `/admin/status` 카운터의 근거다. **잘못 채우면 카운터가 영원히 0이거나 영원히 0이 아니게 되어 지표 자체가 무의미해진다.**
 >
 > 2번에서 미리 읽지 않는 이유: 본문이 `A → B → A`로 되돌아온 경우 `content_hash`는 원래대로 돌아오지만 `version`은 2 올라가 있다. 해시 재확인은 통과하는데 2번에서 읽은 `version`은 낡은 값이 된다. 잠금 아래에서 읽으면 이 경우에도 잠금 시점의 `version`이 정확히 기록된다.
+
+> **`finished_at`은 `now()`가 아니라 `clock_timestamp()`다.** `now()`는 트랜잭션 시작 시각이라, 같은 트랜잭션 안에서 도는 관계 생성 트리거의 시간이 잡 소요에서 통째로 빠진다 — #93에서 잡 시간으로 트리거 비용을 추정하다 10배 넘게 틀렸다. `fail_job`·마감 경로의 `finished_at`도 같다.
 
 4. 실패 시: `attempts` 기반 지수 백오프로 `next_attempt_at` 갱신 후 `pending` 복귀. `attempts`는 claim 시점에 이미 올라 있으므로 **3회를 소진하면**(3회째 실패) job `error` + `documents.embedding_status='error'`.
 
@@ -496,7 +541,7 @@ OpenSQL `patroni.yml`의 PostgreSQL 파라미터는 `max_connections: 100`이다
 | `POST /api/auth/tokens` · `GET /api/auth/tokens` · `DELETE /api/auth/tokens/{id}` | **세션 전용** API 토큰 발급·목록·폐기. 원문은 발급 응답에만 반환하며 기본 scope는 `read` |
 | `PUT /api/auth/password` | **세션 전용** 자기 비밀번호 변경. 현재 비밀번호를 확인하고, 바꾼 뒤 그 계정의 세션을 전부 무효화한다. 틀린 현재 비밀번호는 403(세션은 유효하므로 401이 아니다). API 토큰은 폐기하지 않는다 (ADR-040) |
 | `GET /api/diagnostics` | **진단.** 고아 문서·깨진 링크·중복 후보 등을 **열람 범위 기준**으로 집계 (ADR-027) |
-| `GET /api/clusters` | **관계 지도.** 관계 그래프의 Louvain 군집. 조회 시점 계산, 열람 범위 기준 (ADR-042) |
+| `GET /api/clusters` | **관계 지도.** 관계 그래프의 Louvain 군집. 조회 시점 계산, 열람 범위 기준. 이름은 (군집 안 빈도 − 밖 빈도)가 양수인 태그 중 최대, 없으면 중심 문서 제목 (ADR-042 개정) |
 | `GET /api/admin/users` 등 | 관리자 전용 |
 | `GET /api/system/status` | **로그인 필요 · 운영/데모 전용**: `inet_server_addr()`(현재 접속 노드), pending/processing/error 잡 수, 임베딩 프로바이더명, **정합성 검증 쿼리 결과**(`c.version <> d.version` 건수). `/admin/status`가 소비하며 사용자 화면은 호출하지 않는다. SQL과 결과 모델은 `services/system.py`에 있고 라우터는 인증과 응답 변환만 맡는다 |
 
@@ -588,8 +633,10 @@ resolved_links AS (                  -- ② 위키링크를 열람 범위에서 
     JOIN documents d ON d.title = l.target_title
                     AND (d.visibility = 'public' OR d.owner_id = %(user)s)
 ),
-traversal_edges AS (                 -- ③ 저장된 관계 ∪ 해석된 링크
-    SELECT … FROM document_edges
+traversal_edges AS (                 -- ③ 저장된 관계(양방향) ∪ 해석된 링크
+    SELECT e.src_document_id, e.dst_document_id, e.kind, e.dst_chunk_index FROM document_edges e
+    UNION ALL                        -- 역방향. 저장은 단방향이라 여기서 뒤집는다 (ADR-029 개정)
+    SELECT e.dst_document_id, e.src_document_id, e.kind, e.src_chunk_index FROM document_edges e
     UNION ALL
     SELECT … FROM resolved_links
 ),
@@ -632,6 +679,8 @@ COMMIT;
 > 실제 쿼리는 `services/search.py`의 `SEARCH_SQL` **한 곳에만** 존재하며 REST API와 MCP 서버가 공유한다. 위는 단계 구조만 옮긴 것이다 — 컬럼 목록과 순환 방지 `path` 배열은 코드를 보라. **문서에 전체 SQL을 복사해 두지 않는다**: 쿼리가 길어진 뒤로는 복사본이 조용히 낡아 잘못된 근거가 된다.
 
 정형 필터·권한 술어·벡터 정렬·관계 순회가 한 쿼리에 결합된다(가산점 포인트).
+
+**③에서 `document_edges`를 두 번 읽는다.** 저장이 단방향(`src` = 계산 주체)이라 역방향은 저장돼 있지 않다. 뒤집을 때 `src_chunk_index`가 대상 청크가 된다 — `related`의 위치 정보는 계산 주체 쪽 대목이 `src_chunk_index`이므로, 반대편에서 볼 때는 그것이 "닿은 대목"이다. 관계가 무방향이라는 뜻은 저장이 아니라 이 CTE가 지킨다 (ADR-029 개정).
 
 **`<kind 순서>`는 동점 타이브레이커다** — `overlaps`(0) · `related`(1) · `refers`(2) · `revision`(3). 사람이 본문에 직접 쓴 링크가 같은 문서의 과거 판본보다 앞선다 (ADR-030). 최종 정렬뿐 아니라 ④'·⑥에서 같은 문서·같은 발췌로 수렴한 행을 하나로 접을 때도 이 순서를 쓴다 — 문서 단위 `overlaps`와 위키링크 `refers`가 같은 경유 문서에서 닿으면 거리·깊이까지 같은 동점이 실제로 생긴다 (ADR-011 보강 6).
 
@@ -719,7 +768,7 @@ OpenProxy는 `query_parser_read_write_splitting` 활성 시 **트랜잭션 밖�
 **2. `kind`를 섞어 `score`로 정렬하지 않는다**
 
 ```sql
-ORDER BY e.kind, e.score DESC, d.id     -- kind로 묶은 뒤 그 안에서 점수순
+ORDER BY b.kind, b.score DESC, d.id     -- kind로 묶은 뒤 그 안에서 점수순 (b = 양방향 이웃을 접은 best CTE)
 ```
 
 `score`의 **척도가 `kind`마다 다르기** 때문이다 — `overlaps`는 매칭 비율, `related`·`points_to`는 `1.0 - 최소거리`다 (`006_edges_tables.sql`). 섞어서 정렬하면 서로 다른 단위의 숫자를 한 줄에 세우게 된다. 화면도 `kind`별로 묶어 보여준다.
@@ -767,13 +816,26 @@ WHERE me.id = %(id)s
   AND (d.visibility = 'public' OR d.owner_id = %(user)s)
 ORDER BY d.created_at, d.id;
 
--- 3) 저장된 관계 — 벡터 정렬 없이 edge를 읽기만 한다
-SELECT d.id, d.title, d.tags, e.kind, e.score
-FROM document_edges e
-JOIN documents d ON d.id = e.dst_document_id
-WHERE e.src_document_id = %(id)s
-  AND (d.visibility = 'public' OR d.owner_id = %(user)s)   -- ★ 열람 범위는 조회 시점에
-ORDER BY e.kind, e.score DESC, d.id
+-- 3) 저장된 관계 — 벡터 정렬 없이 edge를 읽기만 한다. 저장이 단방향이라 양쪽에서 읽는다
+WITH neighbors AS (
+    SELECT e.dst_document_id AS document_id, e.kind, e.score
+    FROM document_edges e WHERE e.src_document_id = %(id)s
+    UNION ALL                                  -- 역방향 — 남이 발견한 관계도 이 문서의 관련 문서다
+    SELECT e.src_document_id, e.kind, e.score
+    FROM document_edges e WHERE e.dst_document_id = %(id)s
+),
+best AS (                                      -- 같은 이웃이 양쪽에 있으면 overlaps 우선, 같은 kind면 높은 점수
+    SELECT DISTINCT ON (document_id) document_id, kind, score
+    FROM neighbors
+    ORDER BY document_id,
+             CASE kind WHEN 'overlaps' THEN 0 WHEN 'related' THEN 1 ELSE 2 END,
+             score DESC
+)
+SELECT d.id, d.title, d.tags, b.kind, b.score
+FROM best b
+JOIN documents d ON d.id = b.document_id
+WHERE (d.visibility = 'public' OR d.owner_id = %(user)s)   -- ★ 열람 범위는 조회 시점에
+ORDER BY b.kind, b.score DESC, d.id
 LIMIT %(k)s;
 
 COMMIT;
@@ -785,10 +847,10 @@ COMMIT;
 
 | `kind` | `score`의 의미 | 계산 |
 |---|---|---|
-| `overlaps` | 자기 대목 중 상대 문서에서 최근접 이웃을 찾은 **비율** | `overlap_ratio` |
+| `overlaps` | 자기 대목 중 상대 문서에서 최근접 이웃을 찾은 **비율**(판정은 양쪽 비율 모두 ≥ 0.8이어야 하지만 저장값은 계산 주체 쪽이다) | `overlap_ratio` |
 | `related` · `points_to` | 가장 가까운 청크 쌍의 **유사도** | `1.0 - 최소거리` |
 
-`008_edges_triggers.sql:119`의 `CASE WHEN is_overlaps THEN overlap_ratio ELSE 1.0 - min_dist END`가 그 자리다. **비율과 거리는 같은 줄에 세울 수 없으므로 `kind`를 섞어 정렬하지 않는다**(공통 규칙 2).
+`014_edges_triggers.sql`의 `CASE WHEN is_overlaps THEN overlap_ratio ELSE 1.0 - min_dist END`가 그 자리다. **비율과 거리는 같은 줄에 세울 수 없으므로 `kind`를 섞어 정렬하지 않는다**(공통 규칙 2).
 
 > **`overlaps`를 "같은 내용"으로 읽으면 안 된다.** 이웃 판정이 순위 기반이라 절대 거리 임계가 없고, 주제가 가까운 문서끼리는 모든 대목이 서로 최근접이 되어 비율이 1.0에 붙는다 — 실 BGE-M3 실측에서 `PRD`↔`UI 디자인 가이드`가 1.00이었다 (`OPENSQL_RESEARCH.md` §14). 화면 어휘를 「여러 대목에서 만난다」로 두고 대목 수만 달리 말하는 이유다 (`UI_GUIDE.md`).
 
@@ -796,7 +858,7 @@ COMMIT;
 
 위 `score`는 **중복 판정에 쓰지 않는다.** 완전히 같은 문서도 주제가 여럿이면 점수가 낮게 나올 수 있고(거짓 음성), 긴 문서가 짧은 문서를 포함하면 높게 나온다(포함이지 중복이 아님, 거짓 양성).
 
-**저장된 `score`는 양방향이 같지만, 그것은 근사다.** 트리거가 `both_directions`로 같은 값을 A→B와 B→A에 함께 넣는다(`008_edges_triggers.sql:122`). kNN 자체는 대칭이 아닌데, 정확한 역방향을 구하려면 기존 문서 전부를 다시 계산해야 해 비용이 문서 수에 비례한다. 새 문서 기준 한 번의 조회를 양방향에 복사하는 쪽을 택했다 — 중복 판정처럼 정밀도가 필요한 곳에 쓸 수 없는 또 하나의 이유다.
+**한 방향만 저장하고 조회에서 합친다.** `score`는 계산 주체(`src`) 기준 값이며 반대편에서 계산한 값과 다를 수 있다 — kNN은 대칭이 아니다. 같은 이웃이 양방향에서 각각 발견되어 kind가 다르면 `overlaps`를 남기고, 같은 kind면 높은 점수를 남긴다(`best` CTE). 어느 쪽 값을 보든 두 문서 사이의 관측 하나이지 대칭 유사도가 아니므로, 중복 판정처럼 정밀도가 필요한 곳에 쓸 수 없다 (ADR-029 개정).
 
 | 신호 | 판정 | 방법 |
 |---|---|---|
@@ -812,17 +874,18 @@ COMMIT;
 ```sql
 BEGIN;  -- plain BEGIN (ADR-010). 관련 문서와 같은 이유로 SET LOCAL이 없다
 
-WITH neighbors AS (            -- 저장된 관계에서 이웃 10건 (NEIGHBOR_LIMIT)
-  SELECT e.dst_document_id AS document_id
-  FROM document_edges e
-  JOIN documents d ON d.id = e.dst_document_id
-  WHERE e.src_document_id = %(id)s
-    AND (d.visibility = 'public' OR d.owner_id = %(user)s)
-  ORDER BY e.kind, e.score DESC, d.id      -- 관련 문서와 같은 정렬 (공통 규칙 2)
+WITH neighbors AS ( … ),       -- 관련 문서와 같은 CTE: src ∪ dst 양방향
+best AS ( … ),                 -- 같은 이웃은 overlaps 우선 1건
+selected_neighbors AS (        -- 저장된 관계에서 이웃 10건 (NEIGHBOR_LIMIT)
+  SELECT b.document_id
+  FROM best b
+  JOIN documents d ON d.id = b.document_id
+  WHERE (d.visibility = 'public' OR d.owner_id = %(user)s)
+  ORDER BY b.kind, b.score DESC, d.id      -- 관련 문서와 같은 정렬 (공통 규칙 2)
   LIMIT 10
 )
 SELECT t.tag, count(*) AS freq
-FROM neighbors n
+FROM selected_neighbors n
 JOIN documents d ON d.id = n.document_id
 CROSS JOIN LATERAL unnest(d.tags) AS t(tag)
 WHERE NOT (t.tag = ANY(%(current_tags)s::text[]))   -- 이미 달린 태그 제외

@@ -89,6 +89,23 @@ openarchive serve --host 0.0.0.0 --port 9000
 - **죽은 프로세스를 되살리지는 않습니다.** 배포 호스트에서는 systemd가 그 역할을 합니다
   (ADR-038 · `scripts/openarchive-worker.service`).
 
+### `openarchive rebuild-edges`
+
+모든 문서의 관계(`document_edges`)를 **전체 코퍼스 기준으로** 다시 계산합니다. **대량 적재 뒤 한 번**
+실행합니다 — 관계를 만드는 트리거는 각 문서가 임베딩되는 시점까지 들어온 문서만 이웃 후보로 보므로,
+먼저 올린 문서는 나중 문서와 이어질 기회가 없습니다 (ADR-029 결정 6).
+
+```bash
+openarchive rebuild-edges                # DATABASE_URL을 쓴다
+openarchive rebuild-edges --dsn "postgresql://app@<vip>:6432/<pool_name>"
+```
+
+- `ready` 문서를 `created_at` 순으로 하나씩 처리하고 **문서마다 커밋**합니다. 중간에 끊겨도 처리한
+  문서는 남고, 다시 실행하면 처음부터 같은 결과로 수렴합니다.
+- 진행은 `done/total`로 출력됩니다. 관계 판정은 트리거와 같은 DB 함수(`rebuild_document_edges`)라
+  결과의 규칙이 다르지 않습니다.
+- `scripts/seed_demo.py`는 적재를 마친 뒤 이것을 자동으로 한 번 합니다.
+
 ### 기동 순서
 
 스키마를 준비하는 것은 `openarchive init`과 API 서버뿐입니다 (ADR-012·039). 워커나 MCP 서버를
