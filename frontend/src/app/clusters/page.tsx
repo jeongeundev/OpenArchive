@@ -60,7 +60,7 @@ export default function ClustersPage(): React.ReactElement {
         <p className="text-sm text-neutral-500">현재 열람 범위 기준</p>
         <h1 className="mt-2 text-4xl font-semibold text-white">관계 지도</h1>
         <p className="mt-3 text-sm text-neutral-400">
-          관계 그래프에서 서로 많이 이어진 문서끼리 묶었습니다. 원의 크기는 문서 수, 선의 굵기는 덩어리 사이 관계 수입니다. 덩어리 이름은 가장 많이 쓰인 태그이고, 태그가 없으면 연결이 가장 많은 문서의 제목입니다. 묶음은 관계로 계산한 추천이며 사실처럼 단정하지 않습니다.
+          관계 그래프에서 서로 많이 이어진 문서끼리 묶었습니다. 원의 크기는 문서 수, 선의 굵기는 덩어리 사이 관계 수입니다. 덩어리 이름은 그 덩어리에 집중된 태그이고, 그런 태그가 없으면 연결이 가장 많은 문서의 제목입니다. 묶음은 관계로 계산한 추천이며 사실처럼 단정하지 않습니다.
         </p>
       </header>
 
