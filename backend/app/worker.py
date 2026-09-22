@@ -122,6 +122,19 @@ async def load_document(conn: psycopg.AsyncConnection, document_id: UUID) -> tup
     return (row[0], row[1]) if row is not None else None
 
 
+async def mark_job_done(conn: psycopg.AsyncConnection, job_id: int) -> None:
+    """잡을 done으로 마감한다 — 일을 마친 경우도, 낡아서 폐기한 경우도 같은 마감이다.
+
+    `now()`가 아니라 `clock_timestamp()`를 쓴다. now()는 트랜잭션 시작 시각이라 같은
+    트랜잭션 안에서 한 일(청크 교체·관계 판정·AFTER 트리거의 잡 기록)의 시간이 통째로
+    빠진다.
+    """
+    await conn.execute(
+        "UPDATE embedding_jobs SET status = 'done', finished_at = clock_timestamp() WHERE id = %s",
+        (job_id,),
+    )
+
+
 async def finalize_job(
     conn: psycopg.AsyncConnection,
     job: ClaimedJob,
@@ -147,10 +160,7 @@ async def finalize_job(
             # 처리 도중 문서가 수정됐다 — 이 결과는 낡았으므로 폐기한다. 트리거가 만든
             # 새 pending 잡이 최신 내용으로 다시 처리하므로 실패가 아니라 마감이다.
             # 실패 처리하면 재시도 횟수만 소모한다.
-            await conn.execute(
-                "UPDATE embedding_jobs SET status = 'done', finished_at = clock_timestamp() WHERE id = %s",
-                (job.job_id,),
-            )
+            await mark_job_done(conn, job.job_id)
             return False
 
         # 교체는 DELETE+INSERT가 같은 트랜잭션이어야 한다 — 다른 세션이 중간 상태를
@@ -173,51 +183,40 @@ async def finalize_job(
             "UPDATE documents SET embedding_status = 'ready' WHERE id = %s",
             (job.document_id,),
         )
-        # now()는 트랜잭션 시작 시각이라 같은 트랜잭션의 AFTER 트리거(관계 잡 기록) 시간이 빠진다.
-        await conn.execute(
-            "UPDATE embedding_jobs SET status = 'done', finished_at = clock_timestamp() WHERE id = %s",
-            (job.job_id,),
-        )
+        await mark_job_done(conn, job.job_id)
     return True
 
 
 async def finalize_edge_job(conn: psycopg.AsyncConnection, job: ClaimedJob) -> bool:
-    """관계를 **자기 트랜잭션**에서 다시 판정한다. 반영했으면 True, 폐기했으면 False.
+    """관계를 **자기 트랜잭션**에서 다시 판정한다. 판정했으면 True, 문서가 없으면 False.
 
     판정 본체는 DB 함수 `rebuild_document_edges` 하나다 (014). 워커는 규칙을 복제하지
     않는다 — `openarchive rebuild-edges`의 전량 재계산과 결과가 갈리면 안 되고, 판정이
     DB 안에 있다는 것이 이 과제의 주장이기 때문이다 (ADR-029 결정 6).
 
-    documents는 한 컬럼도 UPDATE하지 않는다. 임베딩은 이미 끝나 청크가 있고 `ready`가
-    맞으므로, 관계 판정의 성패가 임베딩 상태 배지를 건드려서는 안 된다.
+    임베딩 잡과 달리 **낡았다는 이유로 폐기하지 않는다.** 재임베딩이 시작된 문서라도
+    지금 있는 청크로 판정한다. 폐기의 전제인 "새 ready 전이가 새 잡을 만든다"는
+    재임베딩이 성공할 때만 참이고, 재시도 예산을 소진해 error로 끝나면 ready 전이가
+    영영 오지 않아 관계를 한 번도 계산하지 않은 문서가 남는다 — 그런데 잡은 done이라
+    관계 미반영 카운터는 0을 보고한다. 곧 교체될 청크로 계산하는 손해는 판정 한 번이고,
+    재임베딩이 끝나면 그 ready 전이의 새 잡이 다시 계산한다 (ADR-029 결정 3 개정).
+
+    documents는 한 컬럼도 UPDATE하지 않는다. `embedding_status`는 임베딩 잡이 쓰는
+    칸이므로 — 이 잡이 도는 시점의 값이 무엇이든 — 관계 판정의 성패가 그것을 건드려서는
+    안 된다. 청크가 멀쩡해 검색이 되는데 "임베딩 실패" 배지가 뜨면 화면이 거짓말을 한다.
     """
     async with conn.transaction():
-        # fail_job·sweep_zombies와 같은 잠금 순서다. 재임베딩 판정과 판정 실행 사이에
-        # 청크가 교체되면 방금 계산한 관계가 사라진 청크 번호를 가리킨다.
+        # fail_job·sweep_zombies와 같은 잠금 순서다. 판정과 결과 기록 사이에 청크가
+        # 교체되면 방금 계산한 관계가 사라진 청크 번호를 가리킨다.
         cur = await conn.execute(
-            "SELECT embedding_status FROM documents WHERE id = %s FOR UPDATE",
-            (job.document_id,),
+            "SELECT 1 FROM documents WHERE id = %s FOR UPDATE", (job.document_id,)
         )
-        row = await cur.fetchone()
-        if row is None:
+        if await cur.fetchone() is None:
             # 문서가 삭제됐다 — 잡·관계도 CASCADE로 이미 사라졌다. 쓸 곳이 없다.
             return False
 
-        if row[0] != "ready":
-            # 재임베딩이 시작됐다 — 지금 계산하면 곧 교체될 청크 기준의 관계가 된다.
-            # 새 ready 전이가 새 관계 잡을 만들므로 실패가 아니라 수명이 끝난 것이다
-            # (finalize_job이 낡은 결과를 폐기하면서도 잡은 마감하는 것과 같은 원칙).
-            await conn.execute(
-                "UPDATE embedding_jobs SET status = 'done', finished_at = clock_timestamp() WHERE id = %s",
-                (job.job_id,),
-            )
-            return False
-
         await conn.execute("SELECT rebuild_document_edges(%s)", (job.document_id,))
-        await conn.execute(
-            "UPDATE embedding_jobs SET status = 'done', finished_at = clock_timestamp() WHERE id = %s",
-            (job.job_id,),
-        )
+        await mark_job_done(conn, job.job_id)
     return True
 
 
@@ -324,10 +323,7 @@ async def release_job(conn: psycopg.AsyncConnection, job: ClaimedJob) -> None:
         )
         if await cur.fetchone() is not None:
             # 처리 중 문서가 수정됐다 — 새 잡이 최신 내용으로 처리하므로 마감한다.
-            await conn.execute(
-                "UPDATE embedding_jobs SET status = 'done', finished_at = clock_timestamp() WHERE id = %s",
-                (job.job_id,),
-            )
+            await mark_job_done(conn, job.job_id)
             return
 
         # documents.embedding_status는 되돌리지 않는다 — fail_job과 같은 이유다.
@@ -479,10 +475,7 @@ async def process_once(
             # 문서가 삭제됐다 — 실패가 아니다. 잡은 CASCADE로 이미 사라졌으므로 이
             # UPDATE는 0건이지만, 마감을 시도해 두면 "삭제 아닌 이유로 load가 비는"
             # 회귀가 생겨도 잡이 processing으로 방치되지 않는다.
-            await conn.execute(
-                "UPDATE embedding_jobs SET status = 'done', finished_at = clock_timestamp() WHERE id = %s",
-                (job.job_id,),
-            )
+            await mark_job_done(conn, job.job_id)
             return True
         content, content_hash = document
         chunks = chunk_text(content)

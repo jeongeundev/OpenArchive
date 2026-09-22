@@ -795,7 +795,7 @@ async def test_an_edge_job_is_processed_in_its_own_transaction(conn):
 
     assert (await document_state(conn, doc_id))[1] == "ready"
     assert len(await chunk_rows(conn, doc_id)) > 0
-    assert await edge_count(conn, doc_id) == 0  # ready 전이는 잡만 만든다 (016)
+    assert await edge_count(conn, doc_id) == 0  # ready 전이는 잡만 만든다 (017)
     assert [j[0] for j in await job_rows(conn, doc_id, kind="edges")] == ["pending"]
 
     assert await process_once(conn, ExplodingProvider()) is True  # 관계 잡
@@ -861,15 +861,21 @@ async def test_an_exhausted_edge_job_does_not_mark_the_document_as_error(conn):
     assert await process_once(conn, FakeProvider()) is False  # 더는 집히지 않는다
 
 
-async def test_an_edge_job_is_discarded_when_the_document_is_being_reembedded(conn, other_conn):
-    """재임베딩이 시작된 문서의 관계 잡은 판정 없이 마감한다.
+async def test_an_edge_job_judges_with_the_chunks_that_exist_even_during_reembedding(
+    conn, other_conn
+):
+    """재임베딩이 시작된 문서라도 관계 잡은 **지금 있는 청크로** 판정하고 마감한다.
 
-    청크가 곧 통째로 교체되므로 지금 계산한 관계는 낡은 청크 기준이 된다. 새 ready
-    전이가 새 관계 잡을 만들므로 실패가 아니라 수명이 끝난 것이다 — `finalize_job`이
-    낡은 임베딩 결과를 폐기하면서도 잡은 done으로 마감하는 것과 같은 원칙이다.
+    판정 없이 폐기하지 않는 이유는 폐기의 전제가 거짓이기 때문이다. "새 ready 전이가
+    새 관계 잡을 만든다"는 재임베딩이 성공할 때만 참이고, 재시도 예산을 소진해 error로
+    끝나면 ready 전이가 영영 오지 않는다. 그러면 관계를 한 번도 계산하지 않은 문서가
+    남는데 관계 미반영 카운터는 잡이 done이므로 0을 보고한다.
+
+    지금 계산한 관계가 곧 교체될 청크 기준이어도 손해는 판정 한 번뿐이다 — 재임베딩이
+    끝나면 그 ready 전이의 새 잡이 다시 계산한다 (ADR-029 결정 3 개정).
     """
     await insert_document(conn, content=DOC_V2, content_hash="sha256:neighbor")
-    await drain(conn, FakeProvider())  # 판정이 돌았다면 관계가 생겼을 이웃을 둔다
+    await drain(conn, FakeProvider())  # 판정이 돌면 관계가 생길 이웃을 둔다
     doc_id = await insert_document(conn)
     assert await process_once(conn, FakeProvider()) is True  # ready + 관계 잡 pending
 
@@ -877,11 +883,42 @@ async def test_an_edge_job_is_discarded_when_the_document_is_being_reembedded(co
 
     job = await claim_job(conn)
     assert job is not None and job.kind == "edges" and job.document_id == doc_id
-    assert await finalize_edge_job(conn, job) is False
+    assert await finalize_edge_job(conn, job) is True
 
-    assert await edge_count(conn, doc_id) == 0  # 판정이 돌지 않았다
+    assert await edge_count(conn, doc_id) > 0  # 판정이 돌았다
     assert [j[0] for j in await job_rows(conn, doc_id, kind="edges")] == ["done"]
     assert [j[0] for j in await job_rows(conn, doc_id)] == ["done", "pending"]
+
+
+async def test_edges_remain_when_a_reembedding_ends_in_error(conn, other_conn):
+    """재임베딩이 error로 끝나도 그 문서에는 현재 청크 기준의 관계가 남는다.
+
+    관계 미반영 카운터는 "관계 잡이 done이 아닌 문서"를 센다. 그 0이 참이려면 **done이
+    된 잡은 반드시 판정을 돌렸어야** 한다. 판정 없이 마감하는 경로가 하나라도 있으면
+    여기서 관계가 빈 채로 카운터가 0이 되고, 정합성 지표가 거짓말이 된다.
+    """
+    await insert_document(conn, content=DOC_V2, content_hash="sha256:neighbor")
+    await drain(conn, FakeProvider())
+    doc_id = await insert_document(conn)
+    assert await process_once(conn, FakeProvider()) is True  # ready + 관계 잡 pending
+    chunks_before = await chunk_rows(conn, doc_id)
+
+    await edit_document(other_conn, doc_id, DOC_V2, "sha256:v2")
+    assert await process_once(conn, FakeProvider()) is True  # 잡 id 순 — 관계 잡이 먼저다
+
+    for attempt in range(1, MAX_ATTEMPTS + 1):  # 재임베딩이 예산을 소진한다
+        assert await process_once(conn, ExplodingProvider()) is True
+        if attempt < MAX_ATTEMPTS:
+            await conn.execute(
+                "UPDATE embedding_jobs SET next_attempt_at = now()"
+                " WHERE document_id = %s AND kind = 'embed' AND status = 'pending'",
+                (doc_id,),
+            )
+
+    assert (await document_state(conn, doc_id))[1] == "error"
+    assert await chunk_rows(conn, doc_id) == chunks_before  # 청크는 1판 그대로다
+    assert await edge_count(conn, doc_id) > 0  # 그 청크 기준의 관계도 남아 있다
+    assert [j[0] for j in await job_rows(conn, doc_id, kind="edges")] == ["done"]
 
 
 async def test_sweep_recovers_both_job_kinds(conn):
