@@ -93,7 +93,8 @@
     },
     {
       "dir": "m15-edge-jobs",
-      "status": "pending"
+      "status": "completed",
+      "completed_at": "2026-09-22T23:06:44+0900"
     }
   ]
 }
