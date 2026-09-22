@@ -37,6 +37,14 @@ describe("StatusPanel", () => {
     expect(screen.getByTestId("stale-edge-count")).not.toHaveClass("text-[#ef4444]");
   });
 
+  it("관계 미반영이 남아 있을 때 저절로 0이 된다고 단정하지 않고 복구 경로를 알린다", () => {
+    // 관계 잡이 재시도를 소진해 error로 격리되면 rebuild-edges 전에는 내려오지 않는다.
+    render(<StatusPanel status={{ ...status, stale_edge_documents: 4 }} error={null} />);
+    const card = screen.getByTestId("stale-edge-count").parentElement;
+    expect(card?.textContent).not.toMatch(/0으로 돌아옵니다/);
+    expect(card?.textContent).toMatch(/openarchive rebuild-edges/);
+  });
+
   it("두 수가 무엇을 세는지 레이블로 구분한다", () => {
     render(<StatusPanel status={{ ...status, inconsistent_documents: 2, stale_edge_documents: 4 }} error={null} />);
     expect(screen.getByText("원본과 청크 버전")).toBeInTheDocument();
