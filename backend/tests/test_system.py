@@ -71,6 +71,9 @@ async def test_rebuild_all_edges_lets_earlier_documents_see_later_ones(system_co
         mark_document_ready(setup, first, ["first"], vectors=[unit_vector(0)])
         second = insert_document(setup)
         mark_document_ready(setup, second, ["second"], vectors=[unit_vector(0)])
+        # 016 이후 ready 전이는 관계 잡만 만든다 — 워커가 하는 판정을 여기서 대신 돌려
+        # "나중 문서만 자기 관계를 계산한 상태"를 그대로 재현한다.
+        setup.execute("SELECT rebuild_document_edges(%s)", (second,))
         assert [(row[0], row[1]) for row in edges_for(setup, first)] == [(second, first)]
 
         assert await rebuild_all_edges(system_conn) == 2

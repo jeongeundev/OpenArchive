@@ -34,7 +34,7 @@ def test_read_write_token_completes_ingest_search_and_detail_without_a_cookie(
     assert created.status_code == 201
     assert created.json()["owner_id"] == "alice"
 
-    assert run_embedding_worker(migrated_db) == 1
+    assert run_embedding_worker(migrated_db) == 2  # 임베딩 잡 + 관계 잡 (016)
     detail = db_client.get(f"/api/documents/{created.json()['id']}", headers=headers)
     search = db_client.post(
         "/api/search", headers=headers, json={"query": "토큰 공급 검색 근거"}

@@ -114,7 +114,8 @@ def test_text_ingest_matches_upload_pipeline_derivatives(
     # 대칭 비교만으로는 두 경로가 나란히 아무것도 만들지 않아도 통과한다.
     # 업로드 쪽 파생이 실제로 존재하는 것을 먼저 못박아 비교의 기준점을 세운다.
     jobs, versions, chunks, links, has_edges = derivatives[0]
-    assert (jobs, versions, links, has_edges) == (1, 1, ["Target"], True)
+    # 잡 2건 = 임베딩 잡 + ready 전이가 만든 관계 잡 (016)
+    assert (jobs, versions, links, has_edges) == (2, 1, ["Target"], True)
     assert chunks > 0
     assert derivatives[0] == derivatives[1]
 
@@ -497,8 +498,10 @@ def test_replacing_tags_does_not_trigger_text_versioning_or_reembedding(
             "SELECT version, embedding_status FROM documents WHERE id = %s",
             (document_id,),
         ).fetchone() == (1, "ready")
+        # 임베딩 잡만 센다 — 위 셋업의 ready 전이가 만든 관계 잡은 태그 교체와 무관하다.
         assert conn.execute(
-            "SELECT count(*) FROM embedding_jobs WHERE document_id = %s AND status = 'pending'",
+            "SELECT count(*) FROM embedding_jobs"
+            " WHERE document_id = %s AND kind = 'embed' AND status = 'pending'",
             (document_id,),
         ).fetchone() == (0,)
         assert conn.execute(
@@ -567,8 +570,10 @@ def test_edit_trigger_creates_version_job_and_pending_status(
         assert conn.execute(
             "SELECT embedding_status FROM documents WHERE id = %s", (document_id,)
         ).fetchone() == ("pending",)
+        # 임베딩 잡만 센다 — 위 셋업의 ready 전이가 만든 관계 잡은 편집과 무관하다.
         assert conn.execute(
-            "SELECT count(*) FROM embedding_jobs WHERE document_id = %s AND status = 'pending'",
+            "SELECT count(*) FROM embedding_jobs"
+            " WHERE document_id = %s AND kind = 'embed' AND status = 'pending'",
             (document_id,),
         ).fetchone() == (1,)
 

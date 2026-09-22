@@ -156,7 +156,7 @@ async def test_create_uses_mcp_owner_and_starts_all_database_derivatives(
     async with await psycopg.AsyncConnection.connect(
         mcp_database, autocommit=True
     ) as conn:
-        assert await process_all_embedding_jobs(conn, FakeProvider()) == 1
+        assert await process_all_embedding_jobs(conn, FakeProvider()) == 2  # 임베딩 + 관계
         row = await (
             await conn.execute(
                 """
@@ -175,7 +175,7 @@ async def test_create_uses_mcp_owner_and_starts_all_database_derivatives(
 
     owner, jobs, versions, chunks, links, edges = row
     assert owner == "alice"
-    assert (jobs, versions, links) == (1, 1, ["Target"])
+    assert (jobs, versions, links) == (2, 1, ["Target"])  # 잡 2건 = 임베딩 + 관계 (016)
     assert chunks > 0
     assert edges > 0
 
