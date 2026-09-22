@@ -115,6 +115,7 @@ class SystemStatus(BaseModel):
     zombie_timeout_minutes: int
     last_job_finished_at: datetime | None
     inconsistent_documents: int
+    stale_edge_documents: int
     embedding_provider: str
 
 

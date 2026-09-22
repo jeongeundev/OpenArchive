@@ -16,18 +16,24 @@ WITH job_counts AS (
          count(*) FILTER (WHERE status = 'error') AS error,
          max(finished_at) AS last_job_finished_at
   FROM embedding_jobs
+  WHERE kind = 'embed'
 ), consistency AS (
   SELECT count(DISTINCT c.document_id) AS inconsistent_documents
   FROM document_chunks c
   JOIN documents d ON d.id = c.document_id
   WHERE c.version <> d.version
+), stale_edges AS (
+  SELECT count(DISTINCT document_id) AS stale_edge_documents
+  FROM embedding_jobs
+  WHERE kind = 'edges' AND status <> 'done'
 )
 SELECT host(inet_server_addr()) AS node_address,
        inet_server_port() AS node_port,
        j.pending, j.processing, j.recovery_pending, j.error,
        j.last_job_finished_at,
-       s.inconsistent_documents
-FROM job_counts j CROSS JOIN consistency s
+       s.inconsistent_documents,
+       e.stale_edge_documents
+FROM job_counts j CROSS JOIN consistency s CROSS JOIN stale_edges e
 """
 
 
@@ -47,6 +53,7 @@ class SystemStatusResult:
     zombie_timeout_minutes: int
     last_job_finished_at: datetime | None
     inconsistent_documents: int
+    stale_edge_documents: int
     embedding_provider: str
 
 
@@ -62,7 +69,9 @@ async def get_system_status(
         {"zombie_timeout_minutes": zombie_timeout_minutes},
     )
     row = await cur.fetchone()
-    # 정합성 카운터는 청크 수가 아니라 어긋난 문서 수를 센다.
+    # 정합성 카운터는 청크 수가 아니라 어긋난 문서 수를 센다. 관계 카운터도 문서 수이며,
+    # 세는 근거는 `document_edges` 행 수가 아니라 관계 잡의 상태다 — 이웃이 없어 edge가
+    # 0행인 문서와 아직 판정하지 않은 문서가 행 수로는 구분되지 않는다.
     return SystemStatusResult(
         node_address=row["node_address"],
         node_port=row["node_port"],
@@ -75,6 +84,7 @@ async def get_system_status(
         zombie_timeout_minutes=zombie_timeout_minutes,
         last_job_finished_at=row["last_job_finished_at"],
         inconsistent_documents=row["inconsistent_documents"],
+        stale_edge_documents=row["stale_edge_documents"],
         embedding_provider=embedding_provider,
     )
 

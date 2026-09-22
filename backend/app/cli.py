@@ -469,6 +469,7 @@ def run_init(*, dsn: str | None, assume_yes: bool, env_file: Path) -> int:
         f"· 실패 {status.jobs.error}"
     )
     print(f"  원본과 어긋난 문서 {status.inconsistent_documents}건")
+    print(f"  관계가 아직 계산되지 않은 문서 {status.stale_edge_documents}건")
 
     if assume_yes or _confirm(f"이 DSN을 {env_file}에 저장할까요?"):
         _write_dsn(env_file, dsn)
