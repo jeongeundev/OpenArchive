@@ -1349,7 +1349,7 @@ kind의 의미인 예외도 현재는 없다. 트리거는 `src = NEW.id OR dst 
 > `WHEN`도, 단방향 저장도 한 줄이 바뀌지 않았다. 바뀐 것은 계산 시점 하나다.**
 >
 > ```sql
-> -- 016_edge_jobs.sql
+> -- 017_edge_jobs_triggers.sql (스키마 변경은 016_edge_jobs_tables.sql)
 > CREATE OR REPLACE FUNCTION build_document_edges() RETURNS trigger ... AS $$
 > BEGIN
 >   INSERT INTO embedding_jobs (document_id, kind) VALUES (NEW.id, 'edges')
@@ -1397,13 +1397,23 @@ kind의 의미인 예외도 현재는 없다. 트리거는 `src = NEW.id OR dst 
 > UPDATE하지 않고, 재시도를 소진한 잡이 `embedding_status = 'error'`를 거는 것도 `kind = 'embed'`일
 > 때뿐이다. 청크는 멀쩡해 검색이 그대로 되므로 임베딩 실패 배지를 붙이면 화면이 거짓말을 한다.
 > 실패한 관계 잡은 `error`로 남고 위 카운터에 계속 세어진다 — 격리했다고 어긋남을 숨기지 않는다
-> (ADR-038의 좀비 격리와 같은 원칙). 복구 수단은 문서 재수정과 `openarchive rebuild-edges`다.
+> (ADR-038의 좀비 격리와 같은 원칙). 복구 수단은 문서 재수정과 `openarchive rebuild-edges`이며,
+> 후자는 **재계산한 문서의 `error` 관계 잡을 함께 마감한다** — 그 잡이 요구한 일을 방금 했는데
+> 잡을 그대로 두면 관계를 복구하고도 카운터가 영영 내려오지 않는다. 워커가 가진 `pending`·
+> `processing` 잡은 건드리지 않는다.
 >
-> **재임베딩이 시작됐으면 판정하지 않고 잡만 마감한다.** `finalize_edge_job`은 `documents`를
-> `FOR UPDATE`로 잠그고 `embedding_status <> 'ready'`면 그대로 `done`으로 닫는다. 곧 올 `ready`
-> 전이가 새 관계 잡을 만들므로 실패가 아니라 수명이 끝난 것이다 — `finalize_job`이 낡은 임베딩
-> 결과를 폐기하면서도 잡은 마감하는 것과 같은 원칙이다. 문서가 삭제됐으면 잡도 관계도 CASCADE로
-> 이미 사라졌으므로 쓸 곳이 없다.
+> **관계 잡은 낡았다는 이유로 폐기하지 않는다.** `finalize_edge_job`은 `documents`를 `FOR UPDATE`로
+> 잠그되, 재임베딩이 시작된 문서라도 **지금 있는 청크로 판정하고** 마감한다. 문서가 삭제됐으면
+> 잡도 관계도 CASCADE로 이미 사라졌으므로 그때만 아무것도 하지 않는다.
+>
+> 임베딩 잡의 폐기 규칙(`content_hash`가 달라지면 결과를 버리고 잡만 마감)을 관계 잡에 그대로
+> 옮기지 않는 이유는 그 규칙이 기대는 전제 때문이다. *"곧 올 `ready` 전이가 새 잡을 만든다"*는
+> **재임베딩이 성공할 때만 참이다.** 재시도 예산을 소진해 `error`로 끝나면 `ready` 전이가 영영
+> 오지 않고, 관계를 한 번도 계산하지 않은 문서가 남는데 잡은 `done`이라 아래 카운터는 0을
+> 보고한다 — 정합성 지표가 거짓말을 하는 자리다. 지금 청크로 계산한 관계가 곧 교체되더라도 손해는
+> 판정 한 번이고, 재임베딩이 끝나면 그 `ready` 전이의 새 잡이 다시 계산한다. 그래서 불변식은
+> **"`done`이 된 관계 잡은 반드시 판정을 돌렸다"** 하나로 단순해진다 — 카운터의 0이 참이려면
+> 그 불변식이 필요하다(`test_edges_remain_when_a_reembedding_ends_in_error`가 고정한다).
 >
 > **그대로 성립하는 것.** 결정 6의 전량 재계산은 잡을 거치지 않고 `rebuild_document_edges`를 문서마다
 > 직접 부르므로 바뀌지 않았고, 트리거 시점의 이웃 한계(그때까지 임베딩된 문서만 본다)도 그대로라

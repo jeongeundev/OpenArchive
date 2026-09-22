@@ -58,10 +58,11 @@ OpenArchive/
 │   └── ingest_text.py            # 표준 라이브러리만 쓰는 독립 HTTP 텍스트 공급 예제
 ├── backend/
 │   ├── pyproject.toml            # fastapi, psycopg[binary,pool], pydantic-settings, mcp<2, pypdf, python-docx / [dev]: pytest, ruff / [local]: sentence-transformers
-│   ├── migrations/               # 001~016: extensions, tables, triggers, indexes,
+│   ├── migrations/               # 001~017: extensions, tables, triggers, indexes,
 │   │                             #   trgm, edges(006~008), auth(009), links(010~012), token(013),
 │   │                             #   edges 재설계(014 — rebuild_document_edges), 위키링크 정규화(015),
-│   │                             #   관계 잡 분리(016 — embedding_jobs.kind, ADR-029 결정 3 개정)
+│   │                             #   관계 잡 분리(016 — embedding_jobs.kind / 017 — ready 트리거,
+│   │                             #   ADR-029 결정 3 개정)
 │   ├── app/
 │   │   ├── main.py               # FastAPI 앱 조립
 │   │   ├── config.py             # pydantic-settings (DATABASE_URL, EMBEDDING_PROVIDER 등)
@@ -299,7 +300,7 @@ BEGIN
   …
 END; $$;
 
--- 트리거는 판정하지 않고 잡만 남긴다 (016). 문서당 pending 1건은 파셜 유니크 인덱스가 강제한다
+-- 트리거는 판정하지 않고 잡만 남긴다 (017). 문서당 pending 1건은 파셜 유니크 인덱스가 강제한다
 --   uq_pending_job_per_doc_kind (document_id, kind) WHERE status = 'pending'
 CREATE OR REPLACE FUNCTION build_document_edges() RETURNS trigger
   LANGUAGE plpgsql
@@ -320,9 +321,9 @@ CREATE TRIGGER trg_build_document_edges                          -- (008) 정의
 
 - **저장은 단방향, 조회는 대칭이다.** `src_document_id`가 계산 주체이고 재계산은 자기 `src` 행만 교체한다. 양방향 두 행 + `DELETE both`는 남이 발견한 관계를 지워 재실행만으로 그래프가 흔들렸다(같은 규칙 재실행의 자카드 0.971 → 단방향 0.990). 읽는 쪽(검색 순회·관련 문서·태그 추천·군집·진단)이 `src ∪ dst`로 합친다 (ADR-029 개정).
 - **세 설정은 함수 정의에 둔다.** 함수가 끝나면 호출 전 값으로 복원되어 관계 잡 트랜잭션의 나머지를 오염시키지 않는다. `SET LOCAL`로는 안 된다 — OpenProxy 풀 백엔드에 남는 PL/pgSQL generic plan이 이전 계획을 재사용해 `DISCARD PLANS` 뒤에야 먹었다. 실 VM 판정 비용은 10청크 4.6 s → 0.2 s, 159청크 40 s → 2.7 s다 (`OPENSQL_RESEARCH.md` §16). **이 시간이 임베딩 트랜잭션에서 빠진 것이 관계 잡 분리의 이유다.**
-- **판정 시점까지의 문서만 이웃 후보로 본다.** 먼저 들어온 문서가 나중 문서를 발견할 기회는 없으므로, 대량 적재 뒤에는 `openarchive rebuild-edges`로 전체 기준으로 수렴시킨다 (ADR-029 결정 6). `scripts/seed_demo.py`는 적재 끝에 이를 한 번 자동으로 한다.
+- **이웃 후보는 관계 잡이 처리되는 시점에 청크가 있는 문서뿐이다.** `ready` 전이 시점이 아니라 잡 처리 시점이므로, 큐가 밀리면 그 사이 적재된 문서도 후보에 들어와 대량 적재의 결과가 처리 순서에 따라 달라진다. 어느 쪽이든 먼저 들어온 문서가 나중 문서를 발견하는 것은 보장되지 않으므로, 대량 적재 뒤에는 `openarchive rebuild-edges`로 전체 기준으로 수렴시킨다 (ADR-029 결정 6). `scripts/seed_demo.py`는 적재 끝에 이를 한 번 자동으로 한다.
 - **판정이 실패해도 청크와 `ready`는 남는다.** 롤백 범위가 관계 잡 트랜잭션뿐이기 때문이다. 예외를 삼키지 않으며 워커의 재시도·백오프가 처리하고, 예산을 소진하면 **잡만** `error`로 격리된다 — `documents.embedding_status`는 건드리지 않는다(청크가 멀쩡해 검색이 그대로 되므로 임베딩 실패 배지를 붙이면 화면이 거짓말을 한다). 그 문서는 `/api/system/status`의 관계 미반영 수에 계속 세어진다.
-- **재임베딩이 시작됐으면 판정하지 않고 잡만 마감한다.** 워커가 `documents`를 `FOR UPDATE`로 잠그고 `embedding_status <> 'ready'`면 `done`으로 닫는다. 곧 올 `ready` 전이가 새 관계 잡을 만들므로 실패가 아니라 수명이 끝난 것이다 — 워커 루프 3번이 낡은 임베딩 결과를 폐기하면서도 잡을 마감하는 것과 같은 원칙이다.
+- **관계 잡은 낡았다는 이유로 폐기하지 않는다.** 재임베딩이 시작된 문서라도 워커는 `documents`를 `FOR UPDATE`로 잠근 뒤 **지금 있는 청크로 판정하고** 마감한다. 임베딩 잡의 폐기 규칙(워커 루프 3번)을 옮겨 오지 않는 이유는 그 규칙의 전제 *"곧 올 `ready` 전이가 새 잡을 만든다"*가 재임베딩이 성공할 때만 참이기 때문이다 — `error`로 끝나면 `ready` 전이가 영영 오지 않아, 관계를 한 번도 계산하지 않은 문서가 남는데 잡은 `done`이라 관계 미반영 수는 0을 보고한다. 지키는 불변식은 **"`done`이 된 관계 잡은 반드시 판정을 돌렸다"**이며, 그래야 그 0이 참이다 (ADR-029 결정 3 개정).
 
 ### 워커 처리 루프
 
@@ -379,9 +380,9 @@ COMMIT;
 >
 > 2번에서 미리 읽지 않는 이유: 본문이 `A → B → A`로 되돌아온 경우 `content_hash`는 원래대로 돌아오지만 `version`은 2 올라가 있다. 해시 재확인은 통과하는데 2번에서 읽은 `version`은 낡은 값이 된다. 잠금 아래에서 읽으면 이 경우에도 잠금 시점의 `version`이 정확히 기록된다.
 
-> **`finished_at`은 `now()`가 아니라 `clock_timestamp()`다.** `now()`는 트랜잭션 시작 시각이라, 같은 트랜잭션 안에서 도는 관계 생성 트리거의 시간이 잡 소요에서 통째로 빠졌다 — #93에서 잡 시간으로 트리거 비용을 추정하다 10배 넘게 틀렸다. 관계 판정이 잡으로 분리된 지금(016) 임베딩 잡에는 그 왜곡 자체가 없지만, **관계 잡의 마감도 같은 이유로 `clock_timestamp()`를 쓴다** — 판정 시간이 그 잡의 소요에 들어가야 한다. `fail_job`·마감 경로의 `finished_at`도 같다.
+> **`finished_at`은 `now()`가 아니라 `clock_timestamp()`다.** `now()`는 트랜잭션 시작 시각이라, 같은 트랜잭션 안에서 도는 관계 생성 트리거의 시간이 잡 소요에서 통째로 빠졌다 — #93에서 잡 시간으로 트리거 비용을 추정하다 10배 넘게 틀렸다. 관계 판정이 잡으로 분리된 지금(016·017) 임베딩 잡에는 그 왜곡 자체가 없지만, **관계 잡의 마감도 같은 이유로 `clock_timestamp()`를 쓴다** — 판정 시간이 그 잡의 소요에 들어가야 한다. `fail_job`·마감 경로의 `finished_at`도 같다.
 
-   **관계 잡(`kind='edges'`)은 2·3번을 타지 않는다.** 본문을 읽지도, 임베딩 모델을 부르지도 않는다. 자기 트랜잭션에서 `documents`를 `FOR UPDATE`로 잠그고 — 판정 도중 청크가 교체되면 방금 계산한 관계가 사라진 청크 번호를 가리킨다 — `embedding_status`가 `ready`인 것을 확인한 뒤 `SELECT rebuild_document_edges(...)` 한 줄을 부르고 잡을 `done`으로 마감한다. 워커는 판정 규칙을 복제하지 않는다: 판정은 DB 함수 하나이고 `openarchive rebuild-edges`의 전량 재계산이 같은 함수를 부른다. 문서가 삭제됐거나 재임베딩이 시작됐으면 판정하지 않는다(위 「관계 생성」 절).
+   **관계 잡(`kind='edges'`)은 2·3번을 타지 않는다.** 본문을 읽지도, 임베딩 모델을 부르지도 않는다. 자기 트랜잭션에서 `documents`를 `FOR UPDATE`로 잠그고 — 판정 도중 청크가 교체되면 방금 계산한 관계가 사라진 청크 번호를 가리킨다 — `SELECT rebuild_document_edges(...)` 한 줄을 부르고 잡을 `done`으로 마감한다. 워커는 판정 규칙을 복제하지 않는다: 판정은 DB 함수 하나이고 `openarchive rebuild-edges`의 전량 재계산이 같은 함수를 부른다. 판정을 건너뛰는 경우는 **문서가 이미 삭제됐을 때 하나뿐이다**(위 「관계 생성」 절).
 
 4. 실패 시: `attempts` 기반 지수 백오프로 `next_attempt_at` 갱신 후 `pending` 복귀. `attempts`는 claim 시점에 이미 올라 있으므로 **3회를 소진하면**(3회째 실패) job `error` + `documents.embedding_status='error'`. **문서를 `error`로 떨어뜨리는 것은 임베딩 잡뿐이다** — 관계 잡이 소진되면 잡만 `error`로 남는다.
 
@@ -768,7 +769,7 @@ OpenProxy는 `query_parser_read_write_splitting` 활성 시 **트랜잭션 밖�
 
 문서 상세에서 두 가지를 제공한다. 둘 다 **저장된 관계(`document_edges`)를 읽으며, 조회 시점에 벡터를 계산하지 않는다** (ADR-018 개정 · ADR-029 결정 5).
 
-> **2026-08-11에 방식이 바뀌었다.** 원래는 대상 문서의 `avg(embedding)`을 질의 시점에 계산해 이웃을 찾았다. 그 방식을 고른 근거는 *"조회 시점 계산이라 항상 현재 청크를 따른다"*였는데, 관계 edge를 **청크 교체와 같은 트랜잭션에서** 만드는 트리거를 채택하면서 최신성 차이가 사라졌다. 문서 대표 벡터를 컬럼으로 저장하지 않는다는 원래 판단은 그대로다 — edge는 벡터가 아니라 관계다.
+> **2026-08-11에 방식이 바뀌었다.** 원래는 대상 문서의 `avg(embedding)`을 질의 시점에 계산해 이웃을 찾았다. 그 방식을 고른 근거는 *"조회 시점 계산이라 항상 현재 청크를 따른다"*였고, 저장된 관계로 바꿀 때의 근거는 관계 edge를 **청크 교체와 같은 트랜잭션에서** 만드는 트리거라 최신성 차이가 없다는 것이었다. **그 근거는 016·017로 관계 판정이 잡으로 분리되면서 사라졌다** — 청크 교체와 관계 반영 사이에 다시 시차가 있다 (ADR-029 결정 3 개정). 그래도 저장된 관계를 읽는 선택은 유지한다: 이 제품이 약속한 보장은 원래 버전 일관성 + 최신 수렴이고(ADR-015), 아직 반영되지 않은 문서 수는 `/api/system/status`가 세어 관측할 수 있다. 문서 대표 벡터를 컬럼으로 저장하지 않는다는 원래 판단도 그대로다 — edge는 벡터가 아니라 관계다.
 >
 > 따라서 이 절의 두 쿼리에는 **벡터 연산이 없고, `SET LOCAL` 두 줄도 필요 없다.** 벡터 정렬은 청크가 바뀐 뒤 관계 잡이 한 번 수행하며 그 구조는 「자동 임베딩 파이프라인」의 관계 생성 절에 있다.
 
