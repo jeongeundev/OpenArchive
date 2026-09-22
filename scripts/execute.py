@@ -25,13 +25,15 @@ ROOT = Path(__file__).resolve().parent.parent
 # 스텝 세션 기본 모델. 전역 설정(~/.claude/settings.json)을 상속하지 않도록 명시한다.
 DEFAULT_MODEL = "opus"
 
-# 스텝 세션 에이전트. Codex는 --agent codex로 켰을 때만 쓴다 — 한도에 걸리면 에러를
-# 돌려주지 않고 응답 없이 매달려, 아래 폴백이 못 잡고 30분 타임아웃으로 죽었다(m13 step 2).
-DEFAULT_AGENT = "claude"
+# 스텝 세션 에이전트. Codex를 먼저 쓰고 한도 소진 시 Claude로 전환한다. --agent claude로
+# Codex를 건너뛸 수 있다.
+DEFAULT_AGENT = "codex"
 AGENTS = ("claude", "codex")
 
 # Codex 사용량 한도 초과를 알리는 문구. exitCode != 0 이면서 이 패턴이 stdout/stderr에
 # 있으면 "일시적 실패"가 아니라 "한도 소진"으로 간주하고 이번 실행 내내 Claude로 전환한다.
+# 단, 한도에 걸린 Codex는 이 문구조차 없이 응답 없이 매달리기도 한다(m13 step 2) —
+# 그 경우는 타임아웃 자체를 한도 신호로 본다(_is_quota_exceeded).
 QUOTA_SIGNAL_PATTERN = re.compile(r"rate limit|usage limit|\b429\b", re.IGNORECASE)
 
 
@@ -310,21 +312,31 @@ class StepExecutor:
             sys.exit(1)
 
         prompt = preamble + step_file.read_text()
-        result = subprocess.run(
-            ["codex", "exec", "--json", "--dangerously-bypass-approvals-and-sandbox", prompt],
-            cwd=self._root, capture_output=True, text=True, timeout=1800,
-        )
+        try:
+            result = subprocess.run(
+                ["codex", "exec", "--json", "--dangerously-bypass-approvals-and-sandbox", prompt],
+                cwd=self._root, capture_output=True, text=True, timeout=1800,
+            )
+        except subprocess.TimeoutExpired as e:
+            # 한도에 걸린 Codex는 에러 대신 응답 없이 매달린다(m13 step 2). 예외로 executor를
+            # 죽이면 폴백이 설 자리가 없으므로 출력으로 기록해 _invoke_agent가 판단하게 한다.
+            print(f"\n  WARN: Codex가 {e.timeout}초 동안 응답하지 않아 중단함")
+            output = {
+                "step": step_num, "name": step_name, "agent": "codex",
+                "exitCode": None, "timedOut": True,
+                "stdout": e.stdout or "", "stderr": e.stderr or "",
+            }
+        else:
+            if result.returncode != 0:
+                print(f"\n  WARN: Codex가 비정상 종료됨 (code {result.returncode})")
+                if result.stderr:
+                    print(f"  stderr: {result.stderr[:500]}")
 
-        if result.returncode != 0:
-            print(f"\n  WARN: Codex가 비정상 종료됨 (code {result.returncode})")
-            if result.stderr:
-                print(f"  stderr: {result.stderr[:500]}")
-
-        output = {
-            "step": step_num, "name": step_name, "agent": "codex",
-            "exitCode": result.returncode,
-            "stdout": result.stdout, "stderr": result.stderr,
-        }
+            output = {
+                "step": step_num, "name": step_name, "agent": "codex",
+                "exitCode": result.returncode, "timedOut": False,
+                "stdout": result.stdout, "stderr": result.stderr,
+            }
         out_path = self._phase_dir / f"step{step_num}-output.json"
         with open(out_path, "w") as f:
             json.dump(output, f, indent=2, ensure_ascii=False)
@@ -338,15 +350,21 @@ class StepExecutor:
         Codex CLI는 한도 초과를 별도 구조화 필드로 안정적으로 노출하지 않는다
         (openai/codex#14728 — exec 모드의 rate_limits가 종종 null로 온다).
         exitCode 비정상 종료 + 에러 문구 매칭으로만 판별 가능하다.
+
+        응답 없는 타임아웃도 한도 신호로 본다 — 실측된 한도 초과의 모양이 그것이었고
+        (m13 step 2), 설령 다른 원인이라도 30분을 삼킨 Codex를 다시 부르는 것보다
+        Claude로 넘기는 편이 낫다.
         """
+        if output.get("timedOut"):
+            return True
         if output.get("exitCode", 0) == 0:
             return False
         text = f"{output.get('stdout', '')}\n{output.get('stderr', '')}"
         return bool(QUOTA_SIGNAL_PATTERN.search(text))
 
     def _invoke_agent(self, step: dict, preamble: str) -> dict:
-        """기본은 Claude. --agent codex면 Codex를 우선 시도하고, 사용량 한도 초과 시
-        이번 실행 내내 Claude로 전환한다.
+        """기본은 Codex 우선. 사용량 한도 초과(실패 응답 또는 응답 없는 타임아웃) 시
+        이번 실행 내내 Claude로 전환한다. --agent claude면 처음부터 Claude만 쓴다.
 
         전환은 sticky하다 — Codex 한도는 보통 5시간/주간 단위로 오래 지속되므로,
         매 step마다 Codex를 재시도하면 실패 호출만 반복된다.
@@ -354,7 +372,8 @@ class StepExecutor:
         if self._active_agent == "codex":
             output = self._invoke_codex(step, preamble)
             if self._is_quota_exceeded(output):
-                print("  ⚠ Codex 사용량 한도 도달 — 이후 step은 Claude로 전환합니다.")
+                how = "응답 없이 타임아웃" if output.get("timedOut") else "사용량 한도 도달"
+                print(f"  ⚠ Codex {how} — 이후 step은 Claude로 전환합니다.")
                 self._active_agent = "claude"
                 output = self._invoke_claude(step, preamble)
             return output
@@ -522,7 +541,7 @@ def main():
     )
     parser.add_argument(
         "--agent", default=DEFAULT_AGENT, choices=AGENTS,
-        help=f"Agent for step sessions (default: {DEFAULT_AGENT}; codex falls back to claude on quota)",
+        help=f"Agent for step sessions (default: {DEFAULT_AGENT}; codex falls back to claude on quota or timeout)",
     )
     args = parser.parse_args()
 

@@ -149,13 +149,16 @@ npm test        # 테스트 통과
 ### E. 실행
 
 ```bash
-python3 scripts/execute.py {task-name}                # 순차 실행 (step 세션은 Claude)
-python3 scripts/execute.py {task-name} --push         # 실행 후 push
-python3 scripts/execute.py {task-name} --agent codex  # Codex 우선, 한도 소진 시 Claude 폴백
+python3 scripts/execute.py {task-name}                 # 순차 실행 (Codex 우선, 한도 소진 시 Claude 폴백)
+python3 scripts/execute.py {task-name} --push          # 실행 후 push
+python3 scripts/execute.py {task-name} --agent claude  # 처음부터 Claude만
 ```
 
-> 기본 에이전트는 Claude다. Codex는 한도에 걸리면 에러 대신 응답 없이 매달려 폴백이 잡지
-> 못하고 30분 타임아웃으로 죽은 적이 있다(m13 step 2). 쓰려면 `--agent codex`로 명시한다.
+> 기본은 Codex 우선이고, 한도 소진 신호(실패 응답의 `rate limit`/`usage limit`/`429` 문구
+> **또는 응답 없는 30분 타임아웃**)가 오면 같은 step을 Claude로 다시 돌리고 남은 step도
+> Claude로 간다(sticky). 타임아웃을 신호에 넣은 이유: 한도에 걸린 Codex는 에러 대신 응답
+> 없이 매달려, 문구 매칭만으로는 폴백이 잡지 못하고 executor가 죽었다(m13 step 2).
+> 그래서 한도에 걸린 run은 첫 폴백까지 최대 30분이 비어 있을 수 있다.
 
 execute.py가 자동으로 처리하는 것:
 
