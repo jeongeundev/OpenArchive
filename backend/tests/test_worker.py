@@ -908,6 +908,40 @@ async def test_sweep_recovers_both_job_kinds(conn):
     assert await job_rows(conn, embed_doc) == [("pending", 1, None)]
 
 
+async def test_sweep_recovers_both_kinds_of_zombie_on_one_document(conn, other_conn):
+    """**한 문서**에 임베딩 좀비와 관계 좀비가 같이 있어도 둘 다 회수한다.
+
+    rn > 1을 done으로 마감하는 규칙은 같은 (문서, 종류) 안에서만 성립한다. 종류를 빼고
+    문서로만 줄을 세우면 id가 큰 쪽 — 여기서는 새로 생긴 임베딩 잡 — 이 rn=2가 되어
+    아무 이유 없이 done으로 마감된다. 그러면 문서는 수정됐는데 재임베딩이 영영 일어나지
+    않고, 청크가 옛 내용에 머문 채 `ready` 배지만 남는다.
+
+    좀비 둘을 서로 다른 문서에 두면 이 규칙을 지나친다 — 문서가 다르면 종류를 빼도 각자
+    rn=1이라 통과한다. 그래서 **한 문서에** 두 종류를 만든다.
+    """
+    doc_id = await insert_document(conn, content=DOC_V2, content_hash="sha256:both-kinds")
+    assert await process_once(conn, FakeProvider()) is True  # 임베딩 → ready → 관계 잡
+    edge_zombie = await claim_job(conn)
+    assert edge_zombie is not None and edge_zombie.kind == "edges"
+
+    await edit_document(other_conn, doc_id, DOC_V2 + " 수정", "sha256:both-kinds-v2")
+    embed_zombie = await claim_job(conn)
+    assert embed_zombie is not None and embed_zombie.kind == "embed"
+    assert embed_zombie.document_id == doc_id  # 같은 문서에 두 종류의 processing 잡
+
+    await conn.execute(
+        "UPDATE embedding_jobs SET started_at = now() - interval '10 minutes'"
+        " WHERE document_id = %s AND status = 'processing'",
+        (doc_id,),
+    )
+
+    assert await sweep_zombies(conn) == 2  # 종류마다 하나씩, 둘 다 회수된다
+
+    assert await job_rows(conn, doc_id, kind="edges") == [("pending", 1, None)]
+    # 임베딩 잡은 둘이다 — 최초 적재분(정상 done)과 수정으로 생겨 회수된 것.
+    assert await job_rows(conn, doc_id) == [("done", 1, None), ("pending", 1, None)]
+
+
 async def test_sweep_isolates_an_exhausted_edge_zombie_without_flagging_the_document(conn):
     """소진된 관계 좀비는 error로 격리하되 문서 배지는 건드리지 않는다.
 
