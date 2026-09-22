@@ -53,6 +53,14 @@ KOREAN_PARAGRAPHS = [
 ]
 KOREAN_DOC = "\n\n".join(KOREAN_PARAGRAPHS)
 
+BOUNDARY_CASES = [
+    "검토의견을 받아야 한다.제6조(채용방법) ① 채용 절차를 정한다. " * 12,
+    "검토의\n\n-439-\n견을 받아 첨부하여야 한다.  ② 다음 절차를 따른다. " * 8,
+    "도입 문단을 마친다.\n\n### 절 제목\n\n" + "긴 설명을 이어 간다. " * 30,
+    "위임할 수 있으며 그 범위는 별표 1과 같다 제6조(채용방법) ① 기준은 별표 2에 따른다 " * 8,
+    "도입이 마침표 없이 이어지고 " * 3 + "\n\n### 왜 그런가?\n\n" + "긴 설명을 이어 간다. " * 30,
+]
+
 
 def nonspace(text: str) -> str:
     """공백을 모두 제거한 문자열. 내용 비교에서 줄바꿈·들여쓰기 차이를 지운다."""
@@ -202,3 +210,145 @@ def test_korean_document_keeps_every_invariant():
     for left, right in pairwise(chunks):  # 3. 오버랩
         assert shared_boundary(left, right)
     assert chunks == chunk_text(KOREAN_DOC, max_chars=100, overlap=25)  # 4. 결정론
+
+
+def test_pdf_text_without_newlines_is_cut_at_a_sentence_end_or_article_head():
+    text = (
+        "채용에 대한 검토의견을 충분히 받아야 한다."
+        "제6조(채용방법) ① 공개채용 절차와 심사 기준을 정한다. "
+    ) * 24
+
+    chunks = chunk_text(text)
+
+    assert len(chunks) > 1
+    assert all(chunk.endswith("다.") for chunk in chunks[:-1])
+    assert all(not chunk.endswith("에 대한 검토의") for chunk in chunks)
+
+
+def test_an_article_head_is_a_boundary_even_without_a_sentence_end_before_it():
+    """pypdf 텍스트에서 조문 머리 앞 문장의 종결 부호가 빠진 경우. 문장 끝 후보가 하나도
+    없으므로 `제6조(` 앞에서 자르는 것은 조문 머리 규칙만이 만들 수 있다."""
+    text = (
+        "① 임용권자는 소속 직원의 임용을 위임할 수 있으며 그 범위는 별표 1과 같다 "
+        "제6조(채용방법) ① 공개채용 절차와 심사 기준은 별표 2에 따른다 "
+    ) * 24
+
+    chunks = chunk_text(text)
+
+    assert len(chunks) > 1
+    assert all(chunk.endswith("별표 1과 같다") for chunk in chunks[:-1])
+    assert all("제6조(" in chunk for chunk in chunks[1:])
+
+
+def test_a_paragraph_break_in_the_middle_of_a_sentence_loses_to_a_later_sentence_end():
+    prefix = "앞선 규정을 충분히 설명한다. " * 3
+    text = (
+        prefix
+        + "담당자는 검토의\n\n-439-\n견을 받아 첨부하여야 한다.  ② 후속 절차를 따른다."
+        + " 뒤이어 세부 절차와 서식을 정한다." * 3
+    )
+    assert len(text) > 105  # 한 창에 다 들어가면 경계 선택이 돌지 않는다
+
+    first = chunk_text(text, max_chars=105, overlap=20)[0]
+
+    assert "-439-" in first
+    assert first.endswith("절차를 따른다.")
+
+
+def test_a_sentence_complete_paragraph_break_still_wins_over_later_sentence_ends():
+    paragraph = "첫 문단의 규칙과 적용 범위를 충분히 설명하고 여기에서 마친다."
+    text = paragraph + "\n\n" + "뒤 문단에도 문장 끝이 있다. " * 8
+
+    first = chunk_text(text, max_chars=100, overlap=20)[0]
+
+    assert first == paragraph
+
+
+@pytest.mark.parametrize(
+    "heading_block",
+    [
+        "### 절 제목",
+        "## 상위\n\n### 하위",
+    ],
+)
+def test_a_heading_is_not_left_at_the_tail_of_a_chunk(heading_block: str):
+    intro = "도입 설명을 충분히 이어 간다. " * 3
+    text = intro + "\n\n" + heading_block + "\n\n" + "본문 설명을 길게 이어 간다. " * 8
+
+    chunks = chunk_text(text, max_chars=105, overlap=20)
+
+    assert len(chunks) > 1
+    assert all(not chunk.rstrip().splitlines()[-1].lstrip().startswith("#") for chunk in chunks)
+
+
+@pytest.mark.parametrize(
+    "heading_block",
+    [
+        "### 절 제목",
+        "### 왜 그런가?",  # 헤딩 끝 `?`가 문장 끝 후보로 잡히면 헤딩이 꼬리에 남는다
+        "### 결론. 그리고 시작",  # 헤딩 안의 `. `도 마찬가지다
+        "문장이 마침표 없이 계속되고\n## 절 제목",  # 헤딩으로 끝나는 혼합 문단
+    ],
+)
+def test_a_heading_line_is_never_a_chunk_tail_through_any_boundary_grade(heading_block: str):
+    """앞 문단이 문장 중간이고 뒤 문단의 첫 문장이 창을 넘어야 헤딩 자리의 후보가 이긴다."""
+    intro = "도입 설명이 마침표 없이 이어지고 " * 3
+    body = "본문 첫 문장은 창이 끝날 때까지 마침표 없이 계속 이어지는 긴 설명이다 " * 2
+    text = intro + "\n\n" + heading_block + "\n\n" + body + "그리고 짧게 마친다. " * 6
+
+    chunks = chunk_text(text, max_chars=105, overlap=20)
+
+    assert len(chunks) > 1
+    assert all(not chunk.rstrip().splitlines()[-1].lstrip().startswith("#") for chunk in chunks)
+    assert chunks[0].endswith("이어지고")
+
+
+def test_heading_pullback_never_violates_the_overlap_floor():
+    text = (
+        "오버랩 영역의 짧은 도입.\n\n### 절 제목을 길게 늘여 오버랩 밖으로 보낸다\n\n```\n"
+        + "code_without_sentence_boundary = value\n" * 8
+        + "```"
+    )
+    assert text.index("\n\n```") > 30  # 헤딩 뒤 빈 줄은 floor 밖, 헤딩 앞 빈 줄(14)은 floor 안
+
+    chunks = chunk_text(text, max_chars=90, overlap=30)
+
+    assert len(chunks) > 1
+    assert all(len(chunk) > 30 for chunk in chunks[1:])
+    assert all(not chunk.rstrip().splitlines()[-1].lstrip().startswith("#") for chunk in chunks)
+
+
+def test_list_markers_and_dates_are_not_sentence_ends():
+    text = (
+        "  1. 국가공무원법에 따른 채용 기준을 준수한다. 적용 일자는 제정 2021. 12. 28. "
+        "이후 시행하는 절차와 세부 기준은 별도 지침으로 정하는 바에 따르되 다음 절차도 동일하게 처리해요."
+    )
+    assert text.index("28.") > text.index("준수한다.")  # 날짜가 뒤에 있어야 "뒤쪽 후보 우선"과 구분된다
+
+    chunks = chunk_text(text, max_chars=80, overlap=20)
+
+    assert chunks[0].endswith("기준을 준수한다.")
+    assert not chunks[0].endswith(("1.", "2021.", "12.", "28."))
+    assert chunks[-1].endswith("처리해요.")
+
+
+@pytest.mark.parametrize("structural_line", ["- 항목", "| 표 |", "> 인용", "```", "---"])
+def test_structural_markdown_lines_count_as_complete_paragraphs(structural_line: str):
+    text = structural_line + "\n\n" + "뒤 문단에는 문장 끝이 여러 번 있다. " * 8
+
+    first = chunk_text(text, max_chars=90, overlap=0)[0]
+
+    assert first == structural_line
+
+
+@pytest.mark.parametrize("text", BOUNDARY_CASES)
+def test_new_boundary_cases_keep_every_invariant(text: str):
+    max_chars = 120
+    overlap = 30
+    chunks = chunk_text(text, max_chars=max_chars, overlap=overlap)
+
+    assert all(len(chunk) <= max_chars for chunk in chunks)
+    assert is_subsequence(nonspace(text), nonspace("".join(chunks)))
+    for left, right in pairwise(chunks):
+        assert shared_boundary(left, right)
+    assert chunks == chunk_text(text, max_chars=max_chars, overlap=overlap)

@@ -135,4 +135,48 @@ describe("WikilinkContent", () => {
     expect(container.querySelector("script")).not.toBeInTheDocument();
     expect(screen.getByText(/<script>/)).toBeInTheDocument();
   });
+
+  it("별칭 링크는 정규화한 제목으로 찾고 별칭을 표시한다", () => {
+    render(
+      <WikilinkContent
+        content="[[기본 서식 구문#목록|목록]]을 보세요."
+        links={[{ title: "기본 서식 구문", document_id: "fmt-1" }]}
+      />,
+    );
+
+    expect(screen.getByRole("link", { name: "목록" })).toHaveAttribute(
+      "href",
+      "/documents/fmt-1",
+    );
+    expect(screen.getByText(/을 보세요\./)).toBeInTheDocument();
+  });
+
+  it("경로 링크는 마지막 제목으로 찾고 원문 경로를 표시한다", () => {
+    render(
+      <WikilinkContent
+        content="[[Obsidian Web Clipper/템플릿]]"
+        links={[{ title: "템플릿", document_id: "template-1" }]}
+      />,
+    );
+
+    expect(
+      screen.getByRole("link", { name: "Obsidian Web Clipper/템플릿" }),
+    ).toHaveAttribute("href", "/documents/template-1");
+  });
+
+  it("임베드는 원문으로 남기고 일반 위키링크만 처리한다", () => {
+    const { container } = render(
+      <WikilinkContent
+        content="그림 ![[첨부.png]] 아래 [[운영 가이드]]"
+        links={[{ title: "운영 가이드", document_id: "guide-1" }]}
+      />,
+    );
+
+    expect(container).toHaveTextContent("그림 ![[첨부.png]] 아래 운영 가이드");
+    expect(screen.getByRole("link", { name: "운영 가이드" })).toHaveAttribute(
+      "href",
+      "/documents/guide-1",
+    );
+    expect(container.querySelector(".border-dashed")).not.toBeInTheDocument();
+  });
 });

@@ -182,8 +182,9 @@ def _unmet_requirements(capabilities: Capabilities) -> list[str]:
 def _conflicting_tables(conn: psycopg.Connection) -> list[str]:
     """이미 있는 테이블 중 OpenArchive가 쓰는 이름. `schema_migrations`가 있으면 우리 것이다.
 
-    마이그레이션 009는 `ALTER TABLE documents`를, 012는 `DELETE FROM document_links`를
-    실행한다. 같은 이름의 남의 테이블 위에 적용하면 그 데이터가 손상된다.
+    마이그레이션 009는 `ALTER TABLE documents`를, 012·015는
+    `DELETE FROM document_links`를 실행한다. 같은 이름의 남의 테이블 위에 적용하면
+    그 데이터가 손상된다.
     """
     if _has_history_table(conn):
         return []

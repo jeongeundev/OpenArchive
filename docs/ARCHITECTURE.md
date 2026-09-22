@@ -169,7 +169,8 @@ CREATE TABLE document_edges (
 CREATE TABLE document_links (
   src_document_id uuid NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
   src_chunk_index int,
-  target_title    text NOT NULL    -- ★ 해석은 조회 시점에, 조회자의 열람 범위에서
+  target_title    text NOT NULL    -- ★ 저장 시 제목으로 정규화(015, ADR-030 개정),
+                                    --   해석은 조회 시점에 조회자의 열람 범위에서
 );
 
 -- users·sessions: 최소 로그인 (009)
@@ -917,7 +918,11 @@ class EmbeddingProvider(Protocol):
 
 ### 청킹 (services/chunking.py)
 
-순수 함수. 문단 경계 우선 분할, 청크 최대 1,000자, 인접 청크 150자 오버랩. 외부 의존성 없이 단위 테스트 가능해야 한다.
+순수 함수. 청크 최대 1,000자, 인접 청크 150자 오버랩을 유지하면서 경계 후보를 **문장이 끝난
+문단 경계 > 문장 끝·조문 머리 > 문장 중간 문단 경계 > 강제 절단**의 네 등급으로 고른다. 같은
+등급에서는 뒤쪽 경계를 선택하며, 앞 조각을 ATX 헤딩 줄로 끝내는 자리(헤딩 뒤 빈 줄·헤딩 안의
+문장 부호·헤딩으로 끝나는 혼합 문단)는 등급과 무관하게 제외해 헤딩이 앞 청크 꼬리에 고립되지
+않게 한다 (ADR-045). 외부 의존성 없이 단위 테스트 가능해야 한다.
 
 ## 프론트엔드 패턴
 

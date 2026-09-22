@@ -646,44 +646,83 @@ class TestInvokeCodex:
 
         assert mock_run.call_args[1]["timeout"] == 1800
 
+    def test_timeout_is_recorded_not_raised(self, executor):
+        """한도에 걸린 Codex는 에러 대신 응답 없이 매달린다(m13 step 2). TimeoutExpired가
+        executor를 죽이면 폴백이 설 자리가 없으므로, 출력으로 기록하고 돌려준다."""
+        step = {"step": 2, "name": "ui"}
+        # `subprocess.run(text=True)`여도 TimeoutExpired가 담는 부분 출력은 bytes다
+        # (CPython `Popen._check_timeout`). str 픽스처는 json.dump가 죽는 실제 경로를 가린다.
+        timeout = subprocess.TimeoutExpired(
+            ["codex", "exec"], 1800, output=b'{"type":"thread.started"}', stderr=b"partial"
+        )
+
+        with patch("subprocess.run", side_effect=timeout):
+            output = executor._invoke_codex(step, "preamble")
+
+        assert output["timedOut"] is True
+        assert output["exitCode"] is None
+        assert output["agent"] == "codex"
+        assert output["stdout"] == '{"type":"thread.started"}'
+        assert output["stderr"] == "partial"
+
+        data = json.loads((executor._phase_dir / "step2-output.json").read_text())
+        assert data["timedOut"] is True
+        assert data["exitCode"] is None
+
+    def test_timeout_without_any_output_is_recorded_as_empty(self, executor):
+        timeout = subprocess.TimeoutExpired(["codex", "exec"], 1800)
+
+        with patch("subprocess.run", side_effect=timeout):
+            output = executor._invoke_codex({"step": 2, "name": "ui"}, "preamble")
+
+        assert output["stdout"] == ""
+        assert output["stderr"] == ""
+
+    def test_normal_exit_is_not_timed_out(self, executor):
+        mock_result = MagicMock(returncode=0, stdout="{}", stderr="")
+        with patch("subprocess.run", return_value=mock_result):
+            output = executor._invoke_codex({"step": 2, "name": "ui"}, "preamble")
+        assert output["timedOut"] is False
+
 
 # ---------------------------------------------------------------------------
-# 에이전트 선택 — 기본은 Claude. Codex는 --agent codex로 켰을 때만 우선 시도하고,
-# 사용량 한도 도달 시 이번 phase 실행이 끝날 때까지 남은 step을 Claude로 처리한다(sticky).
+# 에이전트 선택 — 기본은 Codex 우선. 사용량 한도 도달(실패 응답 또는 응답 없는 타임아웃) 시
+# 이번 phase 실행이 끝날 때까지 남은 step을 Claude로 처리한다(sticky). --agent claude로
+# Codex를 건너뛸 수 있다.
 # ---------------------------------------------------------------------------
 
 class TestAgentSelection:
-    def test_default_active_agent_is_claude(self, executor):
-        assert executor._active_agent == "claude"
+    def test_default_active_agent_is_codex(self, executor):
+        assert executor._active_agent == "codex"
 
-    def test_constructor_accepts_codex(self, tmp_project, phase_dir):
+    def test_constructor_accepts_claude(self, tmp_project, phase_dir):
         with patch.object(ex, "ROOT", tmp_project):
-            inst = ex.StepExecutor("0-mvp", agent="codex")
-        assert inst._active_agent == "codex"
+            inst = ex.StepExecutor("0-mvp", agent="claude")
+        assert inst._active_agent == "claude"
 
-    def test_main_defaults_to_claude(self):
+    def test_main_defaults_to_codex(self):
         with patch("sys.argv", ["execute.py", "0-mvp"]):
             with patch.object(ex, "StepExecutor") as mock_exec:
                 ex.main()
-        assert mock_exec.call_args[1]["agent"] == "claude"
+        assert mock_exec.call_args[1]["agent"] == "codex"
 
     def test_main_passes_agent_flag(self):
-        with patch("sys.argv", ["execute.py", "0-mvp", "--agent", "codex"]):
+        with patch("sys.argv", ["execute.py", "0-mvp", "--agent", "claude"]):
             with patch.object(ex, "StepExecutor") as mock_exec:
                 ex.main()
-        assert mock_exec.call_args[1]["agent"] == "codex"
+        assert mock_exec.call_args[1]["agent"] == "claude"
 
     def test_main_rejects_unknown_agent(self):
         with patch("sys.argv", ["execute.py", "0-mvp", "--agent", "gemini"]):
             with pytest.raises(SystemExit):
                 ex.main()
 
-    def test_default_invoke_agent_never_calls_codex(self, executor):
+    def test_default_invoke_agent_calls_codex_first(self, executor):
         mock_result = MagicMock(returncode=0, stdout='{"ok": true}', stderr="")
         with patch("subprocess.run", return_value=mock_result) as mock_run:
             executor._invoke_agent({"step": 2, "name": "ui"}, "preamble")
         assert mock_run.call_count == 1
-        assert mock_run.call_args[0][0][0] == "claude"
+        assert mock_run.call_args[0][0][0] == "codex"
 
 
 class TestAgentFallback:
@@ -729,6 +768,27 @@ class TestAgentFallback:
         assert mock_run2.call_count == 1
         assert mock_run2.call_args[0][0][0] == "claude"
 
+    def test_codex_timeout_switches_to_claude_and_retries_same_step(self, executor):
+        """m13 step 2의 실패 모양: 한도에 걸린 Codex가 응답 없이 매달려 30분 타임아웃.
+        예외로 죽지 않고 같은 step을 Claude로 다시 돌리며, 전환은 sticky다."""
+        executor._active_agent = "codex"
+        timeout = subprocess.TimeoutExpired(["codex", "exec"], 1800, output="", stderr="")
+        claude_ok = MagicMock(returncode=0, stdout='{"ok": true}', stderr="")
+
+        with patch("subprocess.run", side_effect=[timeout, claude_ok]) as mock_run:
+            output = executor._invoke_agent({"step": 2, "name": "ui"}, "preamble")
+
+        assert mock_run.call_count == 2
+        assert mock_run.call_args_list[0][0][0][0] == "codex"
+        assert mock_run.call_args_list[1][0][0][0] == "claude"
+        assert executor._active_agent == "claude"
+        assert output["agent"] == "claude"
+
+        with patch("subprocess.run", return_value=claude_ok) as mock_run2:
+            executor._invoke_agent({"step": 2, "name": "ui"}, "preamble")
+        assert mock_run2.call_count == 1
+        assert mock_run2.call_args[0][0][0] == "claude"
+
     def test_non_quota_failure_does_not_switch_agent(self, executor):
         """quota와 무관한 실패는 codex를 유지한다 — 재시도는 상위 재시도 루프의 몫이다."""
         executor._active_agent = "codex"
@@ -754,6 +814,12 @@ class TestAgentFallback:
     def test_unrelated_failure_is_not_quota_exceeded(self):
         assert not ex.StepExecutor._is_quota_exceeded(
             {"exitCode": 1, "stdout": "", "stderr": "SyntaxError: unexpected token"}
+        )
+
+    def test_timed_out_counts_as_quota_exceeded_without_signal_text(self):
+        """매달린 Codex는 한도 문구를 내놓지 않는다 — 타임아웃 자체가 신호다."""
+        assert ex.StepExecutor._is_quota_exceeded(
+            {"exitCode": None, "timedOut": True, "stdout": "", "stderr": ""}
         )
 
 
