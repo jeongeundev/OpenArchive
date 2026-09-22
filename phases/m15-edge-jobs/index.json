@@ -41,7 +41,10 @@
       "type": "feat",
       "scope": "frontend",
       "desc": "상태 화면이 관계 미반영 문서 수를 정합성 카드에 함께 보여준다",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-09-22T22:43:54+0900",
+      "completed_at": "2026-09-22T22:53:24+0900",
+      "summary": "정합성 검증 카드 안에 둘째 지표를 넣었다 — 카드·화면을 새로 만들지 않고 `md:grid-cols-2`로 두 수를 나란히 두고 레이블로 무엇을 세는지 가른다(「원본과 청크 버전」 / 「관계」). `stale-edge-count`는 0이면 `text-[#22c55e]`, 그 외에는 `text-[#a3a3a3]`로 기존 `consistency-count`와 같은 규칙을 쓰고 오류 색(`#ef4444`)은 쓰지 않는다 — 관계 계산은 정상 처리 중인 상태이고 붉은색은 `jobs.error`의 자리다. 설명 문구는 0이면 「관계까지 반영됨. 관계는 임베딩이 끝난 뒤 별도 잡으로 계산됩니다.」, 0보다 크면 「…임베딩이 끝난 뒤 관계 계산이 따로 처리되며, 그 잡이 끝나면 0으로 돌아옵니다.」다 (ADR-015 금지어 「항상 최신」·「실시간 동기화」·「즉시」 미사용). types.ts `SystemStatus`에 `stale_edge_documents: number` 추가(백엔드 schemas.py 필드명 그대로). 테스트 3건 추가(0이면 반영됨 문구·0 초과면 건수 · 색 구분과 오류 색 배제 · 두 레이블과 두 값 구분)와 StatusPanel/useSystemStatus 픽스처 필드 보강. 먼저 빨강 3건을 확인한 뒤 구현했고, mutant 2종으로 판별력을 봤다 — 색 조건을 상수로 바꾸면 1건, 문구를 항상 「관계까지 반영됨」으로 두면 1건 실패한다. `npm run build:static`으로 동봉 빌드 갱신(변경분은 `backend/app/static/admin/status*`와 해당 청크 하나뿐 — 사용자 화면 산출물은 바뀌지 않았다). 폴링 주기·`useSystemStatus` 동작은 손대지 않았다. tsc --noEmit · lint · frontend 190 passed · `bash scripts/check.sh` EXIT=0(backend 645 passed)."
     },
     {
       "step": 4,
