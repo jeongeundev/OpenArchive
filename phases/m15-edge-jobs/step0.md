@@ -96,14 +96,22 @@ CREATE OR REPLACE FUNCTION build_document_edges() RETURNS trigger ...
 ```bash
 cd backend && .venv/bin/ruff check .
 cd backend && .venv/bin/pytest tests/test_triggers.py tests/test_tables.py tests/test_indexes.py -q
-cd backend && .venv/bin/pytest -q          # 이 step에서 전체가 초록일 필요는 없다(아래 참조)
 ```
 
-> **전체 스위트는 이 step에서 빨간불이 정상이다.** `ready` 전이로 edge가 생기는 것에 기대는 다른
-> 테스트(검색·관련 문서·군집·진단·API)는 step 1에서 워커가 관계 잡을 처리하면 다시 초록이 된다.
-> **단, 빨간 테스트 목록을 step 요약(`summary`)에 반드시 적어라** — step 1이 그 목록으로 자기 완료를
-> 판정한다. 빨간 테스트를 고치려고 `document_edges`에 직접 INSERT를 넣거나 테스트를 지우지 마라.
+> ⛔ **이 step에서 `pytest -q`(전체 스위트)를 돌리지 마라.** 빨간불로 끝나는 것이 아니라 **끝나지
+> 않는다.** 워커는 아직 `kind`를 모르므로 `kind='edges'` 잡을 임베딩 잡으로 처리한다 →
+> `claim_job`이 문서를 `processing`으로, `finalize_job`이 다시 `ready`로 바꾼다 →
+> `trg_build_document_edges`의 WHEN(`OLD IS DISTINCT FROM 'ready' AND NEW = 'ready'`)이 또 걸려
+> **새 관계 잡이 생긴다** → `conftest.process_all_embedding_jobs`의 `while process_once(...)`가
+> 영원히 돈다. 2026-09-22 실측: 청크 DELETE·재삽입이 반복되며 테스트 DB가 54 MB → 180 MB 이상으로
+>불어나 Docker VM 디스크(58 GB)를 채웠고, PostgreSQL이 `FileFallocate(): No space left on device`로
+> 죽어 crash recovery까지 실패했다. 세션 하나가 30분 타임아웃으로 통째로 날아갔다.
+> 전체 스위트는 **step 1이 워커에 kind 분기를 넣은 뒤** 처음 돌린다.
+>
 > `test_triggers.py`·`test_tables.py`·`test_indexes.py` 세 파일은 이 step에서 **전부 초록이어야 한다**.
+> 이 세 파일은 워커를 돌리지 않으므로 위 루프에 걸리지 않는다. 다른 테스트(검색·관련 문서·군집·
+> 진단·API)가 `ready` 전이로 edge가 생기는 것에 기대는 것은 step 1에서 해소된다. 그것을 미리
+> 고치려고 `document_edges`에 직접 INSERT를 넣거나 테스트를 지우지 마라.
 
 ## 검증 절차
 
@@ -114,7 +122,8 @@ cd backend && .venv/bin/pytest -q          # 이 step에서 전체가 초록일 
    - 임시 테이블을 만들지 않았는가? (ADR-022 — OpenProxy가 `DISCARD ALL`을 하지 않아 누수된다)
    - `rebuild_document_edges`의 함수 정의 `SET` 세 개가 그대로인가? (ADR-029 결정 6)
 3. `phases/m15-edge-jobs/index.json`의 step 0을 갱신한다:
-   - 성공 → `"status": "completed"`, `"summary"`에 **마이그레이션 파일명 + 남은 빨간 테스트 목록**
+   - 성공 → `"status": "completed"`, `"summary"`에 **마이그레이션 파일명**과, 전체 스위트를 아직
+     돌리지 않았다는 사실(위 ⛔ 이유)을 적어라
    - 3회 실패 → `"status": "error"`, `"error_message"`
    - 사용자 개입 필요 → `"status": "blocked"`, `"blocked_reason"` 후 즉시 중단
 
@@ -129,5 +138,6 @@ cd backend && .venv/bin/pytest -q          # 이 step에서 전체가 초록일 
   `_listen_for_jobs`가 두 연결을 들어야 한다 — LISTEN은 OpenProxy 경유에서 동작하지 않는 최적화다.
 - **`documents.embedding_status`에 관계용 상태값을 추가하지 마라.** 이유: 그 열은 임베딩 파이프라인의
   상태이고 UI 배지가 읽는다. 관계 진행 상황은 step 2가 잡 테이블에서 센다.
-- 기존 테스트를 깨뜨린 채 두지 마라 — 단 위에 적은 "step 1에서 초록이 되는 목록"은 예외이며,
-  그 목록을 summary에 남겨야 한다.
+- **전체 스위트(`pytest -q`)를 돌리지 마라.** 이유: 위 ⛔에 적은 무한 루프가 개발 DB를 디스크까지
+  채워 죽인다. 실측으로 확인된 사고이며 추측이 아니다.
+- 기존 테스트를 깨뜨린 채 두지 마라 — 단 워커를 돌리는 테스트가 step 1까지 빨간 것은 예외다.

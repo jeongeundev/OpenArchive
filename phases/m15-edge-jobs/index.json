@@ -8,7 +8,10 @@
       "type": "feat",
       "scope": "db",
       "desc": "관계 판정을 잡으로 분리한다 — ready 트리거는 kind='edges' 잡만 만들고 edge는 만들지 않는다 (016)",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-09-22T21:12:31+0900",
+      "completed_at": "2026-09-22T22:17:25+0900",
+      "summary": "016_edge_jobs.sql 추가 — embedding_jobs.kind('embed'|'edges', DEFAULT 'embed') + CHECK, uq_pending_job_per_doc → uq_pending_job_per_doc_kind(document_id, kind) WHERE pending, build_document_edges()가 rebuild 대신 kind='edges' 잡 INSERT + 기존 채널로 pg_notify. rebuild_document_edges 본체·trg_build_document_edges WHEN은 불변. test_triggers.py: 새 테스트 6건(잡 생성·코얼레싱·embed와 edges 공존·DEFAULT kind·NOTIFY·함수 SET 유지), 판정 규칙 테스트는 mark_document_ready 뒤 rebuild_document_edges 명시 호출로 전환. test_triggers/test_tables/test_indexes 88건 초록, ruff 초록. ⛔ 전체 스위트(pytest -q)는 이 step에서 돌리지 않았다 — 워커가 아직 kind를 모르므로 관계 잡을 임베딩 잡으로 처리해 finalize의 ready 전이가 새 관계 잡을 만드는 무한 루프가 된다. 실측으로 테스트 DB가 180MB 이상으로 불어나 Docker VM 디스크를 채우고 PostgreSQL이 죽었다. step 1의 kind 분기가 그 루프를 끊으므로 전체 스위트는 step 1에서 처음 돌린다."
     },
     {
       "step": 1,
@@ -42,5 +45,6 @@
       "desc": "ADR-029 결정 3 개정(edge_jobs 아웃박스 채택)·ARCHITECTURE 파이프라인·CLAUDE.md·OPERATIONS 갱신",
       "status": "pending"
     }
-  ]
+  ],
+  "created_at": "2026-09-22T21:12:31+0900"
 }

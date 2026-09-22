@@ -83,9 +83,18 @@ async def finalize_edge_job(conn, job: ClaimedJob) -> bool:   # 반영했으면 
 
 ### 3) 회귀 확인
 
-step 0 요약에 적힌 "빨간 테스트 목록"이 **이 step에서 전부 초록**이어야 한다. 대부분은
-`process_all_embedding_jobs`가 관계 잡까지 드레인하면 저절로 복구된다. 그래도 남는 것이 있으면
-테스트가 기대하는 것이 "ready 직후 edge"인지 확인하고, **테스트를 지우지 말고** 워커를 한 번 더
+⛔ **구현을 끝내기 전에 `pytest -q`(전체 스위트)를 돌리지 마라 — 현황 파악용으로도 돌리지 마라.**
+step 0까지만 적용된 상태에서는 빨간불로 끝나는 것이 아니라 **끝나지 않는다.** 워커가 아직 `kind`를
+모르므로 `kind='edges'` 잡을 임베딩 잡으로 처리하고, `claim_job`이 문서를 `processing`으로,
+`finalize_job`이 다시 `ready`로 바꿔 `trg_build_document_edges`가 또 걸린다 → **새 관계 잡** →
+`conftest.process_all_embedding_jobs`의 `while process_once(...)`가 영원히 돈다. 2026-09-22 실측:
+테스트 DB가 54 MB → 180 MB 이상으로 불어나 Docker VM 디스크를 채웠고 PostgreSQL이
+`No space left on device`로 죽었다. **이 step의 kind 분기가 바로 그 루프를 끊는 것**이므로,
+전체 스위트는 `process_once`의 분기를 넣은 뒤에 처음 돌린다.
+
+`ready` 전이로 edge가 생기는 것에 기대던 테스트(검색·관련 문서·군집·진단·API)는 대부분
+`process_all_embedding_jobs`가 관계 잡까지 드레인하면 저절로 초록으로 돌아온다. 그래도 남는 것이
+있으면 테스트가 기대하는 것이 "ready 직후 edge"인지 확인하고, **테스트를 지우지 말고** 워커를 한 번 더
 돌리도록(또는 `rebuild_document_edges`를 명시 호출하도록) 고쳐라.
 
 ## Acceptance Criteria
@@ -116,6 +125,8 @@ cd backend && .venv/bin/pytest -q          # 전체 초록이어야 한다
 - **관계 잡에 우선순위·전용 큐·전용 워커 프로세스를 만들지 마라.** 이유: 이슈가 요구한 것은 트랜잭션
   분리뿐이다. 임베딩 뒤에 관계가 늦게 붙는 구간은 ADR-029가 아웃박스의 대가로 적어 둔 것이며,
   그 지연을 없애려는 최적화는 근거(실측) 없이 넣지 않는다.
+- **kind 분기를 넣기 전에 전체 스위트를 돌리지 마라.** 이유: 위 ⛔의 무한 루프가 개발 DB를
+  디스크까지 채워 죽인다. 실측으로 확인된 사고이며 추측이 아니다.
 - **`rebuild_document_edges`를 Python으로 다시 구현하지 마라.** 이유: 판정은 DB 안에 있어야 하고
   (이 과제의 심사 핵심), `openarchive rebuild-edges`와 같은 함수를 써야 결과가 일치한다.
 - 기존 테스트를 깨뜨리지 마라.
