@@ -88,7 +88,8 @@
     },
     {
       "dir": "m14-chunk-links",
-      "status": "pending"
+      "status": "completed",
+      "completed_at": "2026-09-22T15:50:02+0900"
     }
   ]
 }
