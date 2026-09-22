@@ -19,7 +19,10 @@
       "type": "feat",
       "scope": "db",
       "desc": "위키링크 저장 시 [[제목#절|별칭]]·[[경로/제목]]을 제목으로 정규화하고 임베드·미디어 첨부를 제외한다 (015, 전량 재생성)",
-      "status": "pending"
+      "status": "completed",
+      "summary": "wikilink_targets(text)가 양끝 공백 → 별칭(|) → 절(#) → 마지막 경로(/) → 양끝 공백 순으로 제목을 정규화하고 임베드·빈 대상·큰따옴표 시작·미디어(png/jpeg/gif/svg/webp/mp4/mov/mp3)를 제외하며 PDF·ZIP 등 문서 형식은 유지",
+      "started_at": "2026-09-22T15:33:13+0900",
+      "completed_at": "2026-09-22T15:39:44+0900"
     },
     {
       "step": 2,
