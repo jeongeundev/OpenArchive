@@ -1,0 +1,46 @@
+{
+  "project": "OpenArchive",
+  "phase": "m15-edge-jobs",
+  "steps": [
+    {
+      "step": 0,
+      "name": "edge-jobs-schema",
+      "type": "feat",
+      "scope": "db",
+      "desc": "관계 판정을 잡으로 분리한다 — ready 트리거는 kind='edges' 잡만 만들고 edge는 만들지 않는다 (016)",
+      "status": "pending"
+    },
+    {
+      "step": 1,
+      "name": "worker-edge-jobs",
+      "type": "feat",
+      "scope": "worker",
+      "desc": "워커가 kind별로 잡을 처리한다 — 관계 잡은 자기 트랜잭션에서 rebuild_document_edges를 돌리고 실패해도 청크·ready가 남는다",
+      "status": "pending"
+    },
+    {
+      "step": 2,
+      "name": "status-edge-counter",
+      "type": "feat",
+      "scope": "api",
+      "desc": "/admin/status가 관계 미반영 문서 수를 세고 임베딩 잡 카운터는 kind='embed'만 센다",
+      "status": "pending"
+    },
+    {
+      "step": 3,
+      "name": "status-panel-edges",
+      "type": "feat",
+      "scope": "frontend",
+      "desc": "상태 화면이 관계 미반영 문서 수를 정합성 카드에 함께 보여준다",
+      "status": "pending"
+    },
+    {
+      "step": 4,
+      "name": "docs-edge-jobs",
+      "type": "docs",
+      "scope": "adr",
+      "desc": "ADR-029 결정 3 개정(edge_jobs 아웃박스 채택)·ARCHITECTURE 파이프라인·CLAUDE.md·OPERATIONS 갱신",
+      "status": "pending"
+    }
+  ]
+}

@@ -90,6 +90,10 @@
       "dir": "m14-chunk-links",
       "status": "completed",
       "completed_at": "2026-09-22T15:50:02+0900"
+    },
+    {
+      "dir": "m15-edge-jobs",
+      "status": "pending"
     }
   ]
 }
