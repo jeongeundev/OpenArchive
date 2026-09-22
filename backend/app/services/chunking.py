@@ -23,10 +23,13 @@ _ARTICLE_HEAD = re.compile(r"제\s?\d+\s?조(?:의\s?\d+)?\s?\(")
 
 # 빈 줄 직전의 짧은 Markdown 구조 문단은 종결 부호가 없어도 완결된 문단으로 본다.
 # 긴 PDF 한 줄의 우연한 접두사 일치를 막기 위해 호출부에서 200자 이하에만 적용한다.
-_MARKDOWN_STRUCTURE_LINE = re.compile(r"^\s*(?:#{1,6}\s|[-*+]\s|\d+[.)]\s|\||>|```|---)")
+# 헤딩은 넣지 않는다 — 헤딩으로 끝나는 자리는 등급을 매기기 전에 후보에서 빠진다.
+_MARKDOWN_STRUCTURE_LINE = re.compile(r"^\s*(?:[-*+]\s|\d+[.)]\s|\||>|```|---)")
 
-# ATX 헤딩만으로 이뤄진 문단 뒤의 빈 줄은 헤딩을 앞 청크 꼬리에 고립시키므로 제외한다.
-_ATX_HEADING_LINE = re.compile(r"^\s*#{1,6}\s+\S")
+# 앞 조각이 ATX 헤딩 줄로 끝나게 하는 자리는 등급과 무관하게 경계가 아니다 — 헤딩이 앞 청크
+# 꼬리에 고립된다(#93 K3). 헤딩 뒤 빈 줄뿐 아니라 `### 왜 그런가?`의 `?`, 헤딩으로 끝나는
+# 혼합 문단의 빈 줄도 같다. `match(pos)`로 줄 첫머리에 맞추므로 `^`를 두지 않는다.
+_ATX_HEADING_LINE = re.compile(r"\s*#{1,6}\s+\S")
 
 _PARAGRAPH_TERMINATORS = frozenset('.!?。」』)]"\'”’:')
 
@@ -67,7 +70,7 @@ def chunk_text(text: str, *, max_chars: int = 1000, overlap: int = 150) -> list[
         if limit >= len(body):
             end = len(body)
         else:
-            cut = _paragraph_cut(body, start, limit, floor=start + overlap)
+            cut = _boundary_cut(body, start, limit, floor=start + overlap)
             end = cut if cut is not None else limit
 
         piece = body[start:end].strip()
@@ -79,11 +82,12 @@ def chunk_text(text: str, *, max_chars: int = 1000, overlap: int = 150) -> list[
         start = end - overlap
 
 
-def _paragraph_cut(body: str, start: int, limit: int, floor: int) -> int | None:
+def _boundary_cut(body: str, start: int, limit: int, floor: int) -> int | None:
     """`[start, limit)` 안에서 가장 높은 등급의 마지막 경계. 없으면 None.
 
     후보 등급은 완결된 문단, 문장 끝·조문 머리, 문장 중간 문단 순이다. 같은 등급의
-    마지막 경계를 골라 창을 최대한 채운다.
+    마지막 경계를 골라 창을 최대한 채운다. 앞 조각을 헤딩 줄로 끝내는 자리는 등급을
+    매기기 전에 뺀다.
 
     `floor`(= start + overlap) 이하의 경계를 버리는 이유는 전진 보장이다. 다음 창은
     `cut - overlap`에서 시작하므로, 경계가 그보다 앞이면 창이 제자리이거나 뒤로
@@ -96,9 +100,7 @@ def _paragraph_cut(body: str, start: int, limit: int, floor: int) -> int | None:
         paragraph = body[paragraph_start : match.start()]
         paragraph_start = match.end()
 
-        if match.start() <= floor or match.start() >= limit:
-            continue
-        if _is_heading_paragraph(paragraph):
+        if match.start() <= floor or _ends_with_heading_line(body, match.start()):
             continue
         if _is_complete_paragraph(paragraph):
             completed_paragraphs.append(match.start())
@@ -108,12 +110,12 @@ def _paragraph_cut(body: str, start: int, limit: int, floor: int) -> int | None:
     sentence_boundaries = [
         match.end()
         for match in _SENTENCE_END.finditer(body, start, limit)
-        if floor < match.end() < limit
+        if floor < match.end() < limit and not _ends_with_heading_line(body, match.end())
     ]
     article_boundaries = [
         match.start()
         for match in _ARTICLE_HEAD.finditer(body, start, limit)
-        if floor < match.start() < limit
+        if floor < match.start() and not _ends_with_heading_line(body, match.start())
     ]
 
     if completed_paragraphs:
@@ -125,9 +127,13 @@ def _paragraph_cut(body: str, start: int, limit: int, floor: int) -> int | None:
     return None
 
 
-def _is_heading_paragraph(paragraph: str) -> bool:
-    lines = [line for line in paragraph.splitlines() if line.strip()]
-    return bool(lines) and all(_ATX_HEADING_LINE.match(line) for line in lines)
+def _ends_with_heading_line(body: str, cut: int) -> bool:
+    """`cut`에서 자르면 앞 조각의 마지막 비공백 줄이 ATX 헤딩인가."""
+    end = cut
+    while end > 0 and body[end - 1].isspace():
+        end -= 1
+    line_start = body.rfind("\n", 0, end) + 1
+    return _ATX_HEADING_LINE.match(body, line_start, end) is not None
 
 
 def _is_complete_paragraph(paragraph: str) -> bool:
