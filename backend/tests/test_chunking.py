@@ -53,6 +53,12 @@ KOREAN_PARAGRAPHS = [
 ]
 KOREAN_DOC = "\n\n".join(KOREAN_PARAGRAPHS)
 
+BOUNDARY_CASES = [
+    "검토의견을 받아야 한다.제6조(채용방법) ① 채용 절차를 정한다. " * 12,
+    "검토의\n\n-439-\n견을 받아 첨부하여야 한다.  ② 다음 절차를 따른다. " * 8,
+    "도입 문단을 마친다.\n\n### 절 제목\n\n" + "긴 설명을 이어 간다. " * 30,
+]
+
 
 def nonspace(text: str) -> str:
     """공백을 모두 제거한 문자열. 내용 비교에서 줄바꿈·들여쓰기 차이를 지운다."""
@@ -202,3 +208,100 @@ def test_korean_document_keeps_every_invariant():
     for left, right in pairwise(chunks):  # 3. 오버랩
         assert shared_boundary(left, right)
     assert chunks == chunk_text(KOREAN_DOC, max_chars=100, overlap=25)  # 4. 결정론
+
+
+def test_pdf_text_without_newlines_is_cut_at_a_sentence_end_or_article_head():
+    text = (
+        "채용에 대한 검토의견을 충분히 받아야 한다."
+        "제6조(채용방법) ① 공개채용 절차와 심사 기준을 정한다. "
+    ) * 24
+
+    chunks = chunk_text(text)
+
+    assert len(chunks) > 1
+    assert all(chunk.endswith("다.") or chunk.startswith("제6조(") for chunk in chunks[:-1])
+    assert all(not chunk.endswith("에 대한 검토의") for chunk in chunks)
+
+
+def test_a_paragraph_break_in_the_middle_of_a_sentence_loses_to_a_later_sentence_end():
+    prefix = "앞선 규정을 충분히 설명한다. " * 3
+    text = prefix + "담당자는 검토의\n\n-439-\n견을 받아 첨부하여야 한다.  ② 후속 절차를 따른다."
+
+    first = chunk_text(text, max_chars=105, overlap=20)[0]
+
+    assert "-439-" in first
+    assert first.endswith("다.")
+
+
+def test_a_sentence_complete_paragraph_break_still_wins_over_later_sentence_ends():
+    paragraph = "첫 문단의 규칙과 적용 범위를 충분히 설명하고 여기에서 마친다."
+    text = paragraph + "\n\n" + "뒤 문단에도 문장 끝이 있다. " * 8
+
+    first = chunk_text(text, max_chars=100, overlap=20)[0]
+
+    assert first == paragraph
+
+
+@pytest.mark.parametrize(
+    "heading_block",
+    [
+        "### 절 제목",
+        "## 상위\n\n### 하위",
+    ],
+)
+def test_a_heading_is_not_left_at_the_tail_of_a_chunk(heading_block: str):
+    intro = "도입 설명을 충분히 이어 간다. " * 3
+    text = intro + "\n\n" + heading_block + "\n\n" + "본문 설명을 길게 이어 간다. " * 8
+
+    chunks = chunk_text(text, max_chars=105, overlap=20)
+
+    assert len(chunks) > 1
+    assert all(not chunk.rstrip().splitlines()[-1].lstrip().startswith("#") for chunk in chunks)
+
+
+def test_heading_pullback_never_violates_the_overlap_floor():
+    text = (
+        "오버랩 영역의 짧은 도입.\n\n### 절 제목\n\n```\n"
+        + "code_without_sentence_boundary = value\n" * 8
+        + "```"
+    )
+
+    chunks = chunk_text(text, max_chars=90, overlap=30)
+
+    assert len(chunks) > 1
+    assert all(len(chunk) > 30 for chunk in chunks[1:])
+    assert all(not chunk.endswith("### 절 제목") for chunk in chunks)
+
+
+def test_list_markers_and_dates_are_not_sentence_ends():
+    text = (
+        "  1. 국가공무원법에 따른 채용 기준을 설명하고 적용 일자는 제정 2021. 12. 28. "
+        "관련 부서는 이 기준을 준수한다. 다음 절차도 동일하게 처리해요."
+    )
+
+    chunks = chunk_text(text, max_chars=80, overlap=20)
+
+    assert chunks[0].endswith("다.")
+    assert not chunks[0].endswith(("1.", "2021.", "12.", "28."))
+
+
+@pytest.mark.parametrize("structural_line", ["- 항목", "| 표 |", "> 인용", "```", "---"])
+def test_structural_markdown_lines_count_as_complete_paragraphs(structural_line: str):
+    text = structural_line + "\n\n" + "뒤 문단에는 문장 끝이 여러 번 있다. " * 8
+
+    first = chunk_text(text, max_chars=90, overlap=0)[0]
+
+    assert first == structural_line
+
+
+@pytest.mark.parametrize("text", BOUNDARY_CASES)
+def test_new_boundary_cases_keep_every_invariant(text: str):
+    max_chars = 120
+    overlap = 30
+    chunks = chunk_text(text, max_chars=max_chars, overlap=overlap)
+
+    assert all(len(chunk) <= max_chars for chunk in chunks)
+    assert is_subsequence(nonspace(text), nonspace("".join(chunks)))
+    for left, right in pairwise(chunks):
+        assert shared_boundary(left, right)
+    assert chunks == chunk_text(text, max_chars=max_chars, overlap=overlap)
