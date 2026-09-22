@@ -19,7 +19,10 @@
       "type": "feat",
       "scope": "worker",
       "desc": "워커가 kind별로 잡을 처리한다 — 관계 잡은 자기 트랜잭션에서 rebuild_document_edges를 돌리고 실패해도 청크·ready가 남는다",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-09-22T22:18:04+0900",
+      "completed_at": "2026-09-22T22:36:36+0900",
+      "summary": "워커가 kind로 갈린다 — ClaimedJob에 kind 추가, claim_job이 RETURNING j.kind로 집고 documents를 processing으로 바꾸는 UPDATE는 kind='embed'일 때만 한다(우선순위 없이 id 순 FIFO 유지). 새 함수 finalize_edge_job(conn, job): 자기 트랜잭션에서 documents를 FOR UPDATE로 잠그고 행이 없으면 False, embedding_status<>'ready'(재임베딩 중)면 잡만 done으로 마감하고 False, 그 외에는 SELECT rebuild_document_edges(...) 후 done — documents는 한 컬럼도 UPDATE하지 않는다. process_once가 job.kind=='edges'면 load_document·chunk_text·embed를 타지 않고 곧바로 finalize_edge_job으로 간다(프로바이더 미호출). fail_job·release_job의 '다른 pending 잡' 판정과 sweep_zombies의 superseded EXISTS·row_number PARTITION을 (document_id, kind)로 좁혔고, 재시도 소진 시 documents.embedding_status='error'는 kind='embed'에만 건다. 테스트 7건 추가(자기 트랜잭션·판정 실패 시 청크와 ready 생존·소진해도 문서 error 아님·재임베딩 중 폐기·두 kind 좀비 회수·소진 좀비 격리·drain FIFO), test_worker.job_rows에 kind 인자와 edge_count·break_edge_rebuild 헬퍼 추가. 관계 잡이 잡 하나로 세어지므로 drain/process_all 건수 단언을 갱신했고(test_worker 4곳·mcp·token·seed), 임베딩 잡만 보려는 곳에는 kind='embed' 필터를 넣었다(documents_api 2곳). ready 전이가 더는 판정을 돌리지 않아 test_system의 rebuild 테스트는 rebuild_document_edges 명시 호출로 전제를 재현하고, seed 테스트는 일괄 적재에서 첫 문서도 전체를 보게 된 사실을 반영해 edge를 직접 비운 뒤 재계산 효과를 본다. ruff 초록 · backend 640 passed(84초). 체크리스트: 앱의 embedding_jobs INSERT 0건, 판정은 DB 함수 한 곳, LISTEN 없이 drain만으로 관계 잡 처리, finalize_job 트랜잭션에서 관계 판정 빠짐(테스트가 임베딩 직후 edge 0건을 단언)."
     },
     {
       "step": 2,
