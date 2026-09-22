@@ -52,7 +52,10 @@
       "type": "docs",
       "scope": "adr",
       "desc": "ADR-029 결정 3 개정(edge_jobs 아웃박스 채택)·ARCHITECTURE 파이프라인·CLAUDE.md·OPERATIONS 갱신",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-09-22T22:53:25+0900",
+      "completed_at": "2026-09-22T23:06:44+0900",
+      "summary": "ADR-029 결정 3 아래에 개정 블록을 쌓아 `edge_jobs` 기각을 뒤집었다 — 원문과 기존 개정 블록은 한 줄도 지우지 않았고 상태 줄에만 2026-09-22(#107)을 더했다. 블록이 담은 것: 트리거가 잡을 기록하고 워커가 자기 트랜잭션에서 판정한다는 변경(판정 규칙·rebuild_document_edges 본체·트리거 WHEN·단방향 저장은 불변) · 재검토 조건이 충족된 근거(기각 근거였던 4청크 2.92ms는 HNSW를 못 타던 상관 LATERAL 값이고 실제 구현 비용은 10청크 0.2초·159청크 2.7초, 그 시간 동안 finalize_job이 documents를 FOR UPDATE로 쥐어 편집·태그·삭제가 대기하고 판정 실패가 청크까지 롤백, 멘토링 권고와 HA 방향도 같다) · 별도 테이블 대신 embedding_jobs.kind를 쓴 이유와 그 대가(한 테이블이 두 뜻·uq_pending_job_per_doc_kind로 넓어진 코얼레싱·잡 카운터가 kind='embed'를 명시해야 함) · 남는 대가는 임베딩 완료와 관계 반영 사이 구간이며 stale_edge_documents로 관측한다는 것 · 관계 잡 실패는 문서를 error로 만들지 않음 · 재임베딩 중이면 판정 없이 잡만 마감 · 결정 6과 ADR-009는 그대로 · 트랜잭션 길이와 동시 편집 대기의 전후 비교는 머지 뒤 실측해 #107에 적는다(\"해소됐다\"로 앞질러 쓰지 않음) · 「m7~m9 구현 대조 결과」의 'edge_jobs는 여전히 도입하지 않는다'도 이 개정으로 뒤집히나 그 문단은 당시 기록이라 고치지 않는다. ARCHITECTURE: 개요도(ready 전이→관계 잡→워커 판정, 워커 박스에 한 줄)·「관계는 두 갈래」 문단·migrations 주석(001~016, 015·016 반영)·worker.py 설명, 절 이름을 「관계 생성 — 트리거가 잡을 만들고 워커가 판정한다」로 바꾸고 build_document_edges SQL을 016 실물로 교체, 불릿 갱신(판정 비용이 임베딩 트랜잭션에서 빠진 것이 분리 이유 · 실패해도 청크와 ready 생존 · 재임베딩 중 마감 신설), 워커 루프에 잡 두 종류 도입 문단·claim RETURNING kind·processing UPDATE는 embed만·FIFO 근거·2·3번 kind 표기·관계 잡은 2·3번을 타지 않는다 설명·finished_at 주석 보강·4·5번의 문서 error는 embed만·공통 예외를 '같은 종류'와 uq_pending_job_per_doc_kind로, 정합성 보장 표에 「관계 반영」 행 추가와 경고 문단에 관계 지연 포함, API 표의 system/status 필드, 관련 문서 절의 참조 문장. CLAUDE.md 첫 CRITICAL에 '잡은 두 종류이고 둘 다 트리거가 만든다 · 앱은 document_edges에도 직접 INSERT하지 않는다'를 보강(단방향 저장 규칙과 함수 정의 SET 규칙은 손대지 않음). OPERATIONS: rebuild-edges 절에 '평소 관계는 워커가 잡으로 처리하므로 워커가 도는지와 관계 미반영 수를 먼저 확인' 불릿, 「워커 장애」 절에 관계 판정도 함께 멈춘다는 점과 정합성 카드 두 수 점검을 추가. 지시 범위 밖이지만 UI_GUIDE의 /admin/status 목록도 step 3이 만든 화면에 맞춰 두 줄 갱신했다(잡 수는 임베딩 잡·관계 반영 지표는 오류 색을 쓰지 않는다). AC: `bash scripts/check.sh` EXIT=0(backend 645 · frontend 190) · 금칙어 grep 0건(검사 대상은 ARCHITECTURE·OPERATIONS이며 CLAUDE.md·ADR.md는 금칙어를 인용하므로 제외). 코드 변경 0줄."
     }
   ],
   "created_at": "2026-09-22T21:12:31+0900"
