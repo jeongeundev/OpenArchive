@@ -279,22 +279,33 @@ class StepExecutor:
             sys.exit(1)
 
         prompt = preamble + step_file.read_text()
-        result = subprocess.run(
-            ["claude", "-p", "--dangerously-skip-permissions",
-             "--model", self._model, "--output-format", "json", prompt],
-            cwd=self._root, capture_output=True, text=True, timeout=1800,
-        )
+        try:
+            result = subprocess.run(
+                ["claude", "-p", "--dangerously-skip-permissions",
+                 "--model", self._model, "--output-format", "json", prompt],
+                cwd=self._root, capture_output=True, text=True, timeout=1800,
+            )
+        except subprocess.TimeoutExpired as e:
+            # 예외를 그대로 올리면 executor가 통째로 죽어 재시도도 error 기록도 남지 않는다
+            # (m15 step 0 — 디스크가 찬 상태에서 전체 스위트가 매달렸다). Codex와 같이
+            # 출력으로 기록해 `_run_step`의 재시도·error 경로가 받아내게 한다.
+            print(f"\n  WARN: Claude가 {e.timeout}초 동안 응답하지 않아 중단함")
+            output = {
+                "step": step_num, "name": step_name, "agent": "claude",
+                "exitCode": None, "timedOut": True,
+                "stdout": self._partial_output(e.stdout), "stderr": self._partial_output(e.stderr),
+            }
+        else:
+            if result.returncode != 0:
+                print(f"\n  WARN: Claude가 비정상 종료됨 (code {result.returncode})")
+                if result.stderr:
+                    print(f"  stderr: {result.stderr[:500]}")
 
-        if result.returncode != 0:
-            print(f"\n  WARN: Claude가 비정상 종료됨 (code {result.returncode})")
-            if result.stderr:
-                print(f"  stderr: {result.stderr[:500]}")
-
-        output = {
-            "step": step_num, "name": step_name, "agent": "claude",
-            "exitCode": result.returncode,
-            "stdout": result.stdout, "stderr": result.stderr,
-        }
+            output = {
+                "step": step_num, "name": step_name, "agent": "claude",
+                "exitCode": result.returncode, "timedOut": False,
+                "stdout": result.stdout, "stderr": result.stderr,
+            }
         out_path = self._phase_dir / f"step{step_num}-output.json"
         with open(out_path, "w") as f:
             json.dump(output, f, indent=2, ensure_ascii=False)
