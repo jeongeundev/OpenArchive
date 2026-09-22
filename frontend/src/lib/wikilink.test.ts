@@ -52,4 +52,25 @@ describe("parseWikilink", () => {
       label: "제목",
     });
   });
+
+  it("양끝 공백 제거는 015의 btrim처럼 공백 문자만 뗀다 — 탭은 저장 제목의 일부다", () => {
+    expect(parseWikilink("", "\t제목")).toEqual({
+      title: "\t제목",
+      label: "\t제목",
+    });
+  });
+
+  it("별칭은 첫 | 뒤 전부다 — 015의 split_part(…, '|', 1)과 같은 자리에서 자른다", () => {
+    expect(parseWikilink("", "A|B|C")).toEqual({
+      title: "A",
+      label: "B|C",
+    });
+  });
+
+  it("빈 별칭은 제목 쪽 표기로 돌아간다", () => {
+    expect(parseWikilink("", "제목|")).toEqual({
+      title: "제목",
+      label: "제목",
+    });
+  });
 });

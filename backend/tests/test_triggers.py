@@ -277,6 +277,21 @@ def test_section_only_and_alias_only_links_are_not_stored(
     assert links_for(conn, doc_id) == []
 
 
+def test_alias_is_cut_at_the_first_bar_and_only_spaces_are_trimmed(
+    conn: psycopg.Connection,
+):
+    """`frontend/src/lib/wikilink.ts`가 복제하는 경계 규칙. `|`는 첫 번째에서 자르고,
+    `btrim`은 공백 문자만 떼므로 탭은 저장 제목에 남는다 — 화면 파서가 탭까지 지우면
+    같은 링크를 다른 제목으로 찾는다."""
+    doc_id = insert_document(
+        conn,
+        "[[A|B|C]] [[\t탭 제목]]",
+        "sha256:links-bar-and-tab",
+    )
+
+    assert {title for title, _ in links_for(conn, doc_id)} == {"A", "\t탭 제목"}
+
+
 def test_wikilink_targets_function_is_the_single_source_of_the_rule(
     conn: psycopg.Connection,
 ):
