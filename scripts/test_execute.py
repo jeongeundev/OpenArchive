@@ -650,8 +650,10 @@ class TestInvokeCodex:
         """한도에 걸린 Codex는 에러 대신 응답 없이 매달린다(m13 step 2). TimeoutExpired가
         executor를 죽이면 폴백이 설 자리가 없으므로, 출력으로 기록하고 돌려준다."""
         step = {"step": 2, "name": "ui"}
+        # `subprocess.run(text=True)`여도 TimeoutExpired가 담는 부분 출력은 bytes다
+        # (CPython `Popen._check_timeout`). str 픽스처는 json.dump가 죽는 실제 경로를 가린다.
         timeout = subprocess.TimeoutExpired(
-            ["codex", "exec"], 1800, output='{"type":"thread.started"}', stderr="partial"
+            ["codex", "exec"], 1800, output=b'{"type":"thread.started"}', stderr=b"partial"
         )
 
         with patch("subprocess.run", side_effect=timeout):
@@ -666,6 +668,15 @@ class TestInvokeCodex:
         data = json.loads((executor._phase_dir / "step2-output.json").read_text())
         assert data["timedOut"] is True
         assert data["exitCode"] is None
+
+    def test_timeout_without_any_output_is_recorded_as_empty(self, executor):
+        timeout = subprocess.TimeoutExpired(["codex", "exec"], 1800)
+
+        with patch("subprocess.run", side_effect=timeout):
+            output = executor._invoke_codex({"step": 2, "name": "ui"}, "preamble")
+
+        assert output["stdout"] == ""
+        assert output["stderr"] == ""
 
     def test_normal_exit_is_not_timed_out(self, executor):
         mock_result = MagicMock(returncode=0, stdout="{}", stderr="")
