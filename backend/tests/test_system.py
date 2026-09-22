@@ -88,7 +88,7 @@ async def test_stale_edge_documents_counts_documents_whose_edge_job_is_not_done(
         title="관계 판정 대상",
         content="관계가 아직 반영되지 않은 문서.",
     )
-    # 임베딩 전에는 관계 잡 자체가 없다 — ready 전이가 만든다 (016).
+    # 임베딩 전에는 관계 잡 자체가 없다 — ready 전이가 만든다 (017).
     assert (await status_of(system_conn)).stale_edge_documents == 0
 
     # 잡 하나만 처리한다. 임베딩 잡이 끝나 ready가 된 직후이고 관계 잡은 아직 pending이다.
@@ -165,7 +165,7 @@ async def test_rebuild_all_edges_lets_earlier_documents_see_later_ones(system_co
         mark_document_ready(setup, first, ["first"], vectors=[unit_vector(0)])
         second = insert_document(setup)
         mark_document_ready(setup, second, ["second"], vectors=[unit_vector(0)])
-        # 016 이후 ready 전이는 관계 잡만 만든다 — 워커가 하는 판정을 여기서 대신 돌려
+        # 017 이후 ready 전이는 관계 잡만 만든다 — 워커가 하는 판정을 여기서 대신 돌려
         # "나중 문서만 자기 관계를 계산한 상태"를 그대로 재현한다.
         setup.execute("SELECT rebuild_document_edges(%s)", (second,))
         assert [(row[0], row[1]) for row in edges_for(setup, first)] == [(second, first)]
@@ -190,6 +190,48 @@ async def test_rebuild_all_edges_skips_documents_that_are_not_ready(system_conn,
         assert setup.execute(
             "SELECT embedding_status FROM documents WHERE id = %s", (pending,)
         ).fetchone() == ("pending",)
+
+
+async def test_rebuild_all_edges_closes_the_edge_jobs_whose_work_it_did(system_conn):
+    """전량 재계산은 **격리된** 관계 잡을 마감한다 — 안 그러면 카운터가 영구히 >0이다.
+
+    관계 잡이 재시도 예산을 소진해 error로 격리되면 그 문서는 관계 미반영 수에 계속
+    세어진다(의도된 동작이다 — 격리했다고 어긋남을 숨기지 않는다). 그 상태의 복구
+    경로로 OPERATIONS가 안내하는 것이 `openarchive rebuild-edges`인데, 재계산이 잡을
+    그대로 두면 관계를 실제로 복구하고도 지표는 영영 내려오지 않는다.
+    """
+    await insert_test_document(
+        system_conn,
+        title="관계 복구",
+        content="관계 판정이 재시도 예산을 소진해 격리된 문서.",
+    )
+    assert await process_once(system_conn, FakeProvider())  # 임베딩 잡 → ready + 관계 잡
+    await system_conn.execute(
+        "UPDATE embedding_jobs SET status = 'error', last_error = 'x' WHERE kind = 'edges'"
+    )
+    assert (await status_of(system_conn)).stale_edge_documents == 1
+
+    assert await rebuild_all_edges(system_conn) == 1
+
+    assert (await status_of(system_conn)).stale_edge_documents == 0
+
+
+async def test_rebuild_all_edges_leaves_the_jobs_the_worker_still_owns(system_conn):
+    """대기·처리 중인 관계 잡은 건드리지 않는다 — 그것은 워커가 가진 잡이다.
+
+    함께 마감하면 재계산이 청크를 읽은 뒤에 커밋된 ready 전이의 잡까지 지워, 마지막
+    청크 교체가 반영되지 않은 관계를 가진 채 카운터만 0이 되는 자리가 생긴다.
+    """
+    await insert_test_document(
+        system_conn,
+        title="워커의 잡",
+        content="관계 잡이 아직 대기 중인 문서.",
+    )
+    assert await process_once(system_conn, FakeProvider())  # 임베딩 잡 → ready + 관계 잡
+
+    assert await rebuild_all_edges(system_conn) == 1
+
+    assert (await status_of(system_conn)).stale_edge_documents == 1
 
 
 @pytest.mark.parametrize("autocommit", [False, True])

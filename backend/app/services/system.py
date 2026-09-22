@@ -99,6 +99,11 @@ async def rebuild_all_edges(
     진행 중인 트랜잭션이 없는 연결을 받는다. 대상 조회와 문서별 재계산을 각각
     커밋해, 중간 실패가 이미 처리한 문서까지 되돌리거나 잠금을 오래 잡지 않는다.
     관계 교체의 원자성은 DB 함수가 지키고 진행 콜백은 커밋 뒤에 호출한다.
+
+    재계산한 문서의 **격리된 관계 잡은 함께 마감한다.** error로 격리된 잡은 워커가 다시
+    집지 않으므로, 이 명령이 그 잡이 요구한 일을 한 것이다. 마감하지 않으면 관계를 실제로
+    복구하고도 관계 미반영 카운터가 영영 내려오지 않는다 — OPERATIONS가 이 명령을 그
+    상태의 복구 경로로 안내한다.
     """
     async with conn.transaction():
         cur = await conn.execute(
@@ -109,6 +114,16 @@ async def rebuild_all_edges(
     for done, (document_id,) in enumerate(documents, start=1):
         async with conn.transaction():
             await conn.execute("SELECT rebuild_document_edges(%s)", (document_id,))
+            # pending·processing은 건드리지 않는다 — 그것은 워커가 가진 잡이고, 여기서
+            # 청크를 읽은 뒤에 커밋된 ready 전이의 잡일 수도 있다. 함께 마감하면 마지막
+            # 청크 교체가 반영되지 않은 관계를 가진 채 카운터만 0이 된다.
+            await conn.execute(
+                """
+                UPDATE embedding_jobs SET status = 'done', finished_at = clock_timestamp()
+                 WHERE document_id = %s AND kind = 'edges' AND status = 'error'
+                """,
+                (document_id,),
+            )
         if on_progress is not None:
             on_progress(done, total)
     return total
