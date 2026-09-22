@@ -204,6 +204,105 @@ def test_wikilinks_are_stored_once_and_replaced_with_the_document_content(
     assert links_for(conn, doc_id) == [("새 대상", None)]
 
 
+def test_alias_section_and_path_are_normalized_to_the_target_title(
+    conn: psycopg.Connection,
+):
+    doc_id = insert_document(
+        conn,
+        (
+            "[[기본 서식 구문#목록|목록]] "
+            "[[Obsidian Web Clipper/템플릿|템플릿]] "
+            "[[내부 링크#헤딩으로 링크]] "
+            "[[폴더/하위/제목]]"
+        ),
+        "sha256:links-normalized-targets",
+    )
+
+    assert {title for title, _ in links_for(conn, doc_id)} == {
+        "기본 서식 구문",
+        "템플릿",
+        "내부 링크",
+        "제목",
+    }
+
+
+def test_links_that_normalize_to_the_same_title_are_stored_once(
+    conn: psycopg.Connection,
+):
+    doc_id = insert_document(
+        conn,
+        "[[A|별칭]] [[A#절]] [[A]]",
+        "sha256:links-normalized-once",
+    )
+
+    assert links_for(conn, doc_id) == [("A", None)]
+
+
+def test_embeds_and_media_attachments_are_not_wikilinks(
+    conn: psycopg.Connection,
+):
+    doc_id = insert_document(
+        conn,
+        "![[첨부.png]] ![[노트 임베드]] [[그림.JPG]] [[영상.mp4]] [[운영 가이드]]",
+        "sha256:links-embeds-media",
+    )
+
+    assert links_for(conn, doc_id) == [("운영 가이드", None)]
+
+
+def test_document_format_attachments_stay_as_written(
+    conn: psycopg.Connection,
+):
+    doc_id = insert_document(
+        conn,
+        "[[규정집.pdf]] [[자료.zip]]",
+        "sha256:links-document-attachments",
+    )
+
+    assert links_for(conn, doc_id) == [
+        ("규정집.pdf", None),
+        ("자료.zip", None),
+    ]
+
+
+def test_section_only_and_alias_only_links_are_not_stored(
+    conn: psycopg.Connection,
+):
+    doc_id = insert_document(
+        conn,
+        "[[#절만]] [[|별칭만]] [[폴더/]]",
+        "sha256:links-empty-after-normalization",
+    )
+
+    assert links_for(conn, doc_id) == []
+
+
+def test_wikilink_targets_function_is_the_single_source_of_the_rule(
+    conn: psycopg.Connection,
+):
+    content = (
+        "[[기본 서식 구문#목록|목록]] "
+        "[[Obsidian Web Clipper/템플릿|템플릿]] "
+        "[[내부 링크#헤딩으로 링크]] "
+        "[[폴더/하위/제목]] "
+        "[[A|별칭]] [[A#절]] [[A]] "
+        "![[첨부.png]] ![[노트 임베드]] "
+        "[[그림.JPG]] [[영상.mp4]] [[운영 가이드]] "
+        "[[규정집.pdf]] [[자료.zip]] "
+        "[[#절만]] [[|별칭만]] [[폴더/]]"
+    )
+    doc_id = insert_document(conn, content, "sha256:links-single-source")
+
+    extracted = conn.execute(
+        "SELECT target FROM wikilink_targets(%s) AS target",
+        (content,),
+    ).fetchall()
+
+    assert {target for (target,) in extracted} == {
+        title for title, _ in links_for(conn, doc_id)
+    }
+
+
 def test_bracket_literals_that_are_not_titles_do_not_become_wikilinks(
     conn: psycopg.Connection,
 ):
