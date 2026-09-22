@@ -28,7 +28,7 @@
 - MCP 서버: Python `mcp` SDK (FastMCP, stdio transport)
 
 ## 아키텍처 규칙
-- CRITICAL: 임베딩 파이프라인의 트리거링(잡 생성·코얼레싱·NOTIFY)은 반드시 DB 계층(트리거·제약·인덱스)에서 처리한다. 애플리케이션 코드에서 `embedding_jobs`에 직접 INSERT 하지 마라. 이유: "원본-벡터 정합성이 DB 안에서 보장된다"가 이 과제의 심사 핵심이다.
+- CRITICAL: 임베딩 파이프라인의 트리거링(잡 생성·코얼레싱·NOTIFY)은 반드시 DB 계층(트리거·제약·인덱스)에서 처리한다. 애플리케이션 코드에서 `embedding_jobs`에 직접 INSERT 하지 마라. **잡은 두 종류(`kind='embed'`·`'edges'`)이고 둘 다 트리거가 만든다** — 관계 잡도 앱이 넣지 않으며, 앱은 `document_edges`에도 직접 INSERT하지 않는다(판정 본체는 DB 함수 `rebuild_document_edges` 하나다 — 016, ADR-029 결정 3 개정). 이유: "원본-벡터 정합성이 DB 안에서 보장된다"가 이 과제의 심사 핵심이다.
 - CRITICAL: 검색은 정형 필터(태그·유형·권한) + 벡터 유사도를 **단일 SQL 쿼리**로 결합한다. DB에서 넓게 가져와 애플리케이션에서 후처리 필터링하지 마라. 이유: 정형+벡터 하이브리드 활용이 가산점 항목이다.
 - CRITICAL: DB 접속은 **OpenProxy VIP 단일 엔드포인트**로 한다. 애플리케이션에 멀티호스트 DSN이나 `target_session_attrs`를 두지 마라. DSN은 환경변수(`DATABASE_URL`)로만 주입한다. 이유: 새 프라이머리 발견·재연결은 OpenProxy가 수행한다. 앱에서 중복 구현하면 OpenSQL 공식 아키텍처를 우회하게 된다 (ADR-006).
 - CRITICAL: 검색 쿼리는 **plain `BEGIN` … `COMMIT`** 블록 안에서 실행한다. `BEGIN READ ONLY`를 쓰지 마라 — OpenProxy가 이를 Replica로 라우팅해 방금 임베딩된 청크가 누락된다. 이유: 트랜잭션 밖 단순 SELECT는 Replica로 가고, 복제 지연 보장이 없다 (ADR-010).

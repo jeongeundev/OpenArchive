@@ -21,7 +21,8 @@
                   │           └──AFTER trigger──▶ document_links  │
                   │              (본문의 [[제목]] — 벡터 불필요)    │
                   │  document_chunks (vector(1024), HNSW)         │
-                  │           └──청크 교체와 같은 트랜잭션──▶       │
+                  │  ready 전이 ──AFTER trigger──▶ 관계 잡(edges)   │
+                  │           └──워커가 별도 트랜잭션에서 판정──▶   │
                   │              document_edges (저장된 관계)      │
                   │  pg_notify('embedding_jobs') — 커밋 시 발행    │
                   └───────────────┬──────────────────────────────┘
@@ -31,6 +32,7 @@
                   │  Embedding Worker (python -m app.worker)      │
                   │  SKIP LOCKED claim → 청킹 → 임베딩 →           │
                   │  해시 재확인 + 청크 교체 + job done (단일 트랜잭션)│
+                  │  관계 잡(edges)은 판정만 — 자기 트랜잭션       │
                   └──────────────────────────────────────────────┘
 ```
 
@@ -40,7 +42,7 @@
 > openSQL 클러스터가 **Storage**, 검색·관계 조회 서비스가 **Retrieval**이다. 공식 용어가
 > 아니며 기존 "DB 계층"·커밋 스코프 어휘를 대체하지 않는다.
 
-**관계는 두 갈래로 만들어지고 시점이 다르다.** `document_links`는 본문이 바뀌는 즉시(벡터 불필요), `document_edges`는 청크가 교체되는 트랜잭션 안에서 생긴다. 둘 다 **DB 계층**이 만들며 애플리케이션은 읽기만 한다 — 관련 문서·태그 추천이 조회 시점 벡터 계산을 그만둔 근거다 (ADR-029 결정 5, ADR-030).
+**관계는 두 갈래로 만들어지고 시점이 다르다.** `document_links`는 본문이 바뀌는 즉시 트리거가 만들고(벡터 불필요), `document_edges`는 임베딩이 끝난 뒤 트리거가 기록한 **관계 잡**(`embedding_jobs.kind = 'edges'`)을 워커가 **별도 트랜잭션**에서 처리해 만든다. 둘 다 잡 생성도 판정도 **DB 계층**에 있고 애플리케이션은 읽기만 한다 — 관련 문서·태그 추천이 조회 시점 벡터 계산을 그만둔 근거다 (ADR-029 결정 3 개정·결정 5, ADR-030).
 
 핵심 프레이밍: **잡 생성·코얼레싱·삭제 정합성은 전부 DB 안**(트리거 함수, 파셜 유니크 인덱스, FK CASCADE)에서 보장된다. 워커는 "DB가 만들어 둔 잡을 집어가는 무상태 실행기"이며, DB 밖 연산은 임베딩 모델 추론뿐이다.
 
@@ -56,9 +58,10 @@ OpenArchive/
 │   └── ingest_text.py            # 표준 라이브러리만 쓰는 독립 HTTP 텍스트 공급 예제
 ├── backend/
 │   ├── pyproject.toml            # fastapi, psycopg[binary,pool], pydantic-settings, mcp<2, pypdf, python-docx / [dev]: pytest, ruff / [local]: sentence-transformers
-│   ├── migrations/               # 001~014: extensions, tables, triggers, indexes,
-│   │                             #   trgm, edges(006~008), auth(009), links(010~011), token(013),
-│   │                             #   edges 재설계(014 — rebuild_document_edges, ADR-029 개정)
+│   ├── migrations/               # 001~016: extensions, tables, triggers, indexes,
+│   │                             #   trgm, edges(006~008), auth(009), links(010~012), token(013),
+│   │                             #   edges 재설계(014 — rebuild_document_edges), 위키링크 정규화(015),
+│   │                             #   관계 잡 분리(016 — embedding_jobs.kind, ADR-029 결정 3 개정)
 │   ├── app/
 │   │   ├── main.py               # FastAPI 앱 조립
 │   │   ├── config.py             # pydantic-settings (DATABASE_URL, EMBEDDING_PROVIDER 등)
@@ -70,7 +73,7 @@ OpenArchive/
 │   │   ├── services/             # parsing, chunking, documents, search, related,
 │   │   │                         #   links, diagnostics, clusters, auth, system, visibility
 │   │   ├── embeddings/           # base.py(Protocol), local.py(bge-m3), fake.py
-│   │   └── worker.py             # 임베딩 워커 진입점
+│   │   └── worker.py             # 워커 진입점 — 임베딩 잡과 관계 잡을 같은 큐에서 처리
 │   ├── mcp_server/server.py      # FastMCP stdio — search_documents, get_document, list_documents, create_document
 │   └── tests/                    # test_chunking.py, test_triggers.py, test_worker.py, test_search_api.py ...
 └── frontend/
@@ -275,12 +278,12 @@ CREATE TRIGGER trg_documents_content_changed
 - **PUT 시**: API는 `documents`의 `version`(+1), `content`, `content_hash`만 UPDATE한다. 이력 기록은 트리거가 **같은 트랜잭션에서** 수행하므로, 본문만 바뀌고 이력이 누락되는 상태가 구조적으로 불가능하다.
 - `ON CONFLICT (document_id, version) DO NOTHING`은 재실행 안전장치다. 같은 버전 번호로 트리거가 두 번 발화해도 이력이 중복되지 않는다.
 
-### 관계 생성 트리거
+### 관계 생성 — 트리거가 잡을 만들고 워커가 판정한다
 
-임베딩이 끝나 `embedding_status`가 `ready`로 **전이**하는 순간, 같은 트랜잭션 안에서 저장 관계(`document_edges`)를 만든다 (ADR-029). 애플리케이션은 `document_edges`에 직접 INSERT하지 않는다 — `embedding_jobs`·`document_versions`와 같은 원칙이다.
+임베딩이 끝나 `embedding_status`가 `ready`로 **전이**하는 순간, AFTER 트리거가 **관계 잡** 한 행을 기록한다(`embedding_jobs`, `kind = 'edges'`). 판정은 워커가 그 잡을 집어 **자기 트랜잭션**에서 수행한다 — 임베딩을 커밋한 트랜잭션 안이 아니다 (ADR-029 결정 3 개정). 애플리케이션은 `document_edges`에도 `embedding_jobs`에도 직접 INSERT하지 않는다 — `document_versions`와 같은 원칙이며, 관계 잡도 트랜잭셔널 아웃박스와 코얼레싱을 그대로 쓴다.
 
 ```sql
--- 판정 본체는 일반 함수다. 트리거와 전량 재계산(openarchive rebuild-edges)이 같은 함수를 부른다 (014)
+-- 판정 본체는 일반 함수다. 관계 잡과 전량 재계산(openarchive rebuild-edges)이 같은 함수를 부른다 (014)
 CREATE FUNCTION rebuild_document_edges(target_document_id uuid) RETURNS void
   LANGUAGE plpgsql
   SET hnsw.ef_search = 200        -- 청크당 이웃 10 < ef_search (ADR-011 보강 4)
@@ -296,11 +299,15 @@ BEGIN
   …
 END; $$;
 
+-- 트리거는 판정하지 않고 잡만 남긴다 (016). 문서당 pending 1건은 파셜 유니크 인덱스가 강제한다
+--   uq_pending_job_per_doc_kind (document_id, kind) WHERE status = 'pending'
 CREATE OR REPLACE FUNCTION build_document_edges() RETURNS trigger
   LANGUAGE plpgsql
 AS $$
 BEGIN
-  PERFORM rebuild_document_edges(NEW.id);
+  INSERT INTO embedding_jobs (document_id, kind) VALUES (NEW.id, 'edges')
+    ON CONFLICT DO NOTHING;
+  PERFORM pg_notify('embedding_jobs', NEW.id::text);   -- 최적화. 유실돼도 폴링이 집어간다
   RETURN NEW;
 END; $$;
 
@@ -312,15 +319,18 @@ CREATE TRIGGER trg_build_document_edges                          -- (008) 정의
 ```
 
 - **저장은 단방향, 조회는 대칭이다.** `src_document_id`가 계산 주체이고 재계산은 자기 `src` 행만 교체한다. 양방향 두 행 + `DELETE both`는 남이 발견한 관계를 지워 재실행만으로 그래프가 흔들렸다(같은 규칙 재실행의 자카드 0.971 → 단방향 0.990). 읽는 쪽(검색 순회·관련 문서·태그 추천·군집·진단)이 `src ∪ dst`로 합친다 (ADR-029 개정).
-- **세 설정은 함수 정의에 둔다.** 함수가 끝나면 호출 전 값으로 복원되어 `finalize_job` 트랜잭션의 나머지를 오염시키지 않는다. `SET LOCAL`로는 안 된다 — OpenProxy 풀 백엔드에 남는 PL/pgSQL generic plan이 이전 계획을 재사용해 `DISCARD PLANS` 뒤에야 먹었다. 실 VM 트리거 비용은 10청크 4.6 s → 0.2 s, 159청크 40 s → 2.7 s다 (`OPENSQL_RESEARCH.md` §16).
-- **트리거는 처리 시점까지의 문서만 이웃 후보로 본다.** 먼저 들어온 문서가 나중 문서를 발견할 기회는 없으므로, 대량 적재 뒤에는 `openarchive rebuild-edges`로 전체 기준으로 수렴시킨다 (ADR-029 결정 6). `scripts/seed_demo.py`는 적재 끝에 이를 한 번 자동으로 한다.
-- **판정이 실패하면 청크 교체도 함께 롤백된다.** 예외를 삼키지 않으며 워커의 재시도·백오프가 처리한다.
+- **세 설정은 함수 정의에 둔다.** 함수가 끝나면 호출 전 값으로 복원되어 관계 잡 트랜잭션의 나머지를 오염시키지 않는다. `SET LOCAL`로는 안 된다 — OpenProxy 풀 백엔드에 남는 PL/pgSQL generic plan이 이전 계획을 재사용해 `DISCARD PLANS` 뒤에야 먹었다. 실 VM 판정 비용은 10청크 4.6 s → 0.2 s, 159청크 40 s → 2.7 s다 (`OPENSQL_RESEARCH.md` §16). **이 시간이 임베딩 트랜잭션에서 빠진 것이 관계 잡 분리의 이유다.**
+- **판정 시점까지의 문서만 이웃 후보로 본다.** 먼저 들어온 문서가 나중 문서를 발견할 기회는 없으므로, 대량 적재 뒤에는 `openarchive rebuild-edges`로 전체 기준으로 수렴시킨다 (ADR-029 결정 6). `scripts/seed_demo.py`는 적재 끝에 이를 한 번 자동으로 한다.
+- **판정이 실패해도 청크와 `ready`는 남는다.** 롤백 범위가 관계 잡 트랜잭션뿐이기 때문이다. 예외를 삼키지 않으며 워커의 재시도·백오프가 처리하고, 예산을 소진하면 **잡만** `error`로 격리된다 — `documents.embedding_status`는 건드리지 않는다(청크가 멀쩡해 검색이 그대로 되므로 임베딩 실패 배지를 붙이면 화면이 거짓말을 한다). 그 문서는 `/api/system/status`의 관계 미반영 수에 계속 세어진다.
+- **재임베딩이 시작됐으면 판정하지 않고 잡만 마감한다.** 워커가 `documents`를 `FOR UPDATE`로 잠그고 `embedding_status <> 'ready'`면 `done`으로 닫는다. 곧 올 `ready` 전이가 새 관계 잡을 만들므로 실패가 아니라 수명이 끝난 것이다 — 워커 루프 3번이 낡은 임베딩 결과를 폐기하면서도 잡을 마감하는 것과 같은 원칙이다.
 
 ### 워커 처리 루프
 
 **기동**: 폴링 루프에 들어가기 전에 임베딩 모델을 한 번 **예열**한다 (ADR-003). `LocalProvider`는 첫 `embed()`까지 모델(~2GB) 로딩을 미루므로, 예열이 없으면 그 지연이 통째로 **첫 업로드**에 붙는다 — 가중치가 이미 캐시된 상태에서도 12~13초다(2026-08-21 실측). 아무도 기다리지 않는 기동 때 치른다. 예열 실패는 삼키고 루프를 계속한다: 최적화이지 새 실패 지점이 아니며, 모델을 못 받는 상황이라면 잡 처리의 기존 실패 경로가 `last_error`로 더 정확히 알린다.
 
 이후 5초 주기 폴링이 **주 경로**. `LISTEN embedding_jobs` 수신은 폴링을 앞당기는 **최적화**이며, 동작하지 않아도 파이프라인은 정상 작동한다 (ADR-009).
+
+**잡은 두 종류다** (`embedding_jobs.kind`). `embed`는 아래 2·3번의 청킹·임베딩·청크 교체이고, `edges`는 이미 저장된 청크 벡터로 관계만 다시 판정한다. **큐·claim·백오프·좀비 회수·재시도 예산은 공유하고 처리 본체만 갈린다.** 관계 잡에 우선순위를 주지 않는 이유는 아래 1번에 있다.
 
 1. 폴링 틱 또는 NOTIFY 수신 시 — 잡을 claim하고 **즉시 커밋**:
 ```sql
@@ -329,18 +339,21 @@ UPDATE embedding_jobs j
  WHERE j.id = (SELECT id FROM embedding_jobs
                 WHERE status='pending' AND next_attempt_at <= now()
                 ORDER BY id LIMIT 1 FOR UPDATE SKIP LOCKED)
-RETURNING j.id, j.document_id;
+RETURNING j.id, j.document_id, j.kind;
 
--- 같은 트랜잭션에서 문서 상태도 processing으로 (UI 표시용)
+-- 임베딩 잡일 때만: 같은 트랜잭션에서 문서 상태도 processing으로 (UI 표시용)
+-- 관계 잡은 documents를 한 컬럼도 건드리지 않는다 — 임베딩은 이미 끝났고 ready가 맞다
 UPDATE documents SET embedding_status='processing'
  WHERE id = %(document_id)s AND embedding_status <> 'processing';
 ```
 
-2. 문서의 최신 `content`와 **`content_hash`를 함께 읽기** → 청킹 → 임베딩
+   **종류를 가리지 않고 `id` 순으로 집는다.** 관계 잡에 우선순위를 주면 그 판정이 뒤에 오는 문서의 임베딩보다 먼저 돌아, 아직 청크가 없는 이웃을 못 보고 관계를 놓친다.
+
+2. (`kind='embed'`) 문서의 최신 `content`와 **`content_hash`를 함께 읽기** → 청킹 → 임베딩
    *DB 밖 연산은 이 단계뿐이며, 시간이 오래 걸린다.*
    `version`은 여기서 읽지 않는다 — 3번에서 잠금을 잡은 뒤 읽는다 (아래 설명).
 
-3. **단일 트랜잭션**으로 결과 반영 — 단, **읽었던 `content_hash`를 재확인**한다:
+3. (`kind='embed'`) **단일 트랜잭션**으로 결과 반영 — 단, **읽었던 `content_hash`를 재확인**한다:
 ```sql
 BEGIN;
   -- 처리 중 문서가 또 수정됐는지 확인. 다르면 이 결과는 낡았으므로 폐기.
@@ -356,7 +369,7 @@ BEGIN;
   INSERT INTO document_chunks (document_id, version, chunk_index, content, embedding)
   VALUES (%(doc_id)s, %(locked_version)s, %(idx)s, %(chunk_text)s, %(vec)s);
 
-  UPDATE documents SET embedding_status='ready' WHERE id = %(doc_id)s;   -- ← 여기서 관계 생성 트리거가 돈다
+  UPDATE documents SET embedding_status='ready' WHERE id = %(doc_id)s;   -- ← 여기서 트리거가 관계 잡을 남긴다
   UPDATE embedding_jobs SET status='done', finished_at=clock_timestamp() WHERE id = %(job_id)s;
 COMMIT;
 ```
@@ -366,13 +379,15 @@ COMMIT;
 >
 > 2번에서 미리 읽지 않는 이유: 본문이 `A → B → A`로 되돌아온 경우 `content_hash`는 원래대로 돌아오지만 `version`은 2 올라가 있다. 해시 재확인은 통과하는데 2번에서 읽은 `version`은 낡은 값이 된다. 잠금 아래에서 읽으면 이 경우에도 잠금 시점의 `version`이 정확히 기록된다.
 
-> **`finished_at`은 `now()`가 아니라 `clock_timestamp()`다.** `now()`는 트랜잭션 시작 시각이라, 같은 트랜잭션 안에서 도는 관계 생성 트리거의 시간이 잡 소요에서 통째로 빠진다 — #93에서 잡 시간으로 트리거 비용을 추정하다 10배 넘게 틀렸다. `fail_job`·마감 경로의 `finished_at`도 같다.
+> **`finished_at`은 `now()`가 아니라 `clock_timestamp()`다.** `now()`는 트랜잭션 시작 시각이라, 같은 트랜잭션 안에서 도는 관계 생성 트리거의 시간이 잡 소요에서 통째로 빠졌다 — #93에서 잡 시간으로 트리거 비용을 추정하다 10배 넘게 틀렸다. 관계 판정이 잡으로 분리된 지금(016) 임베딩 잡에는 그 왜곡 자체가 없지만, **관계 잡의 마감도 같은 이유로 `clock_timestamp()`를 쓴다** — 판정 시간이 그 잡의 소요에 들어가야 한다. `fail_job`·마감 경로의 `finished_at`도 같다.
 
-4. 실패 시: `attempts` 기반 지수 백오프로 `next_attempt_at` 갱신 후 `pending` 복귀. `attempts`는 claim 시점에 이미 올라 있으므로 **3회를 소진하면**(3회째 실패) job `error` + `documents.embedding_status='error'`.
+   **관계 잡(`kind='edges'`)은 2·3번을 타지 않는다.** 본문을 읽지도, 임베딩 모델을 부르지도 않는다. 자기 트랜잭션에서 `documents`를 `FOR UPDATE`로 잠그고 — 판정 도중 청크가 교체되면 방금 계산한 관계가 사라진 청크 번호를 가리킨다 — `embedding_status`가 `ready`인 것을 확인한 뒤 `SELECT rebuild_document_edges(...)` 한 줄을 부르고 잡을 `done`으로 마감한다. 워커는 판정 규칙을 복제하지 않는다: 판정은 DB 함수 하나이고 `openarchive rebuild-edges`의 전량 재계산이 같은 함수를 부른다. 문서가 삭제됐거나 재임베딩이 시작됐으면 판정하지 않는다(위 「관계 생성」 절).
+
+4. 실패 시: `attempts` 기반 지수 백오프로 `next_attempt_at` 갱신 후 `pending` 복귀. `attempts`는 claim 시점에 이미 올라 있으므로 **3회를 소진하면**(3회째 실패) job `error` + `documents.embedding_status='error'`. **문서를 `error`로 떨어뜨리는 것은 임베딩 잡뿐이다** — 관계 잡이 소진되면 잡만 `error`로 남는다.
 
 5. 좀비 회수: `processing` 상태로 설정된 임계(`ZOMBIE_TIMEOUT_MINUTES`, 기본 5분)를 초과한 잡을 `pending`으로 리셋한다. `sweep_zombies()`는 워커 신원으로 거르지 않는 **전역 스윕**이라 다른 워커가 남긴 좀비도 회수한다. 스윕은 워커 **루프 머리**에 있어 첫 반복이 곧 기동 시 1회 스윕이며, 워커가 재기동되면 즉시 실행된다. 별도의 기동 시 스윕이 따로 있는 것은 아니다. 값 `0`은 단일 워커 복구 데모에서만 사용한다.
 
-   **회수에도 4번과 같은 재시도 예산이 걸린다.** 임계를 넘긴 잡의 `attempts`가 이미 3회를 소진했으면 `pending`으로 되돌리지 않고 job `error` + `documents.embedding_status='error'`로 격리한다(`last_error`는 `WorkerCrashLoop: …`). 이것이 없으면 상한이 4번(예외로 잡히는 실패)에만 걸린다 — `claim_job`은 `attempts`를 보지 않으므로, 워커 프로세스를 죽이는 잡은 회수 → 재선점 → 재크래시를 무한 반복하고 그때마다 워커가 함께 죽는다. `attempts`를 초기화하지 않는 것은 이 판정의 전제이지 그 자체로 상한을 만들지는 않는다.
+   **회수에도 4번과 같은 재시도 예산이 걸린다.** 임계를 넘긴 잡의 `attempts`가 이미 3회를 소진했으면 `pending`으로 되돌리지 않고 job `error` + `documents.embedding_status='error'`로 격리한다(`last_error`는 `WorkerCrashLoop: …`). 여기서도 문서 상태를 건드리는 것은 임베딩 잡뿐이며, 회수·격리 판정은 종류를 가리지 않고 `(document_id, kind)` 단위로 이뤄진다. 이것이 없으면 상한이 4번(예외로 잡히는 실패)에만 걸린다 — `claim_job`은 `attempts`를 보지 않으므로, 워커 프로세스를 죽이는 잡은 회수 → 재선점 → 재크래시를 무한 반복하고 그때마다 워커가 함께 죽는다. `attempts`를 초기화하지 않는 것은 이 판정의 전제이지 그 자체로 상한을 만들지는 않는다.
 
    격리해도 청크는 지우지 않는다. 검색은 이전 버전으로 계속되고 정합성 카운터는 어긋난 채 남는다 — 격리했다고 어긋남을 숨기면 계약이 거짓말이 된다. 재개 수단은 문서 재수정이며, 본문을 바꾸지 않고 다시 태우려면 `UPDATE documents SET content_hash = content_hash`를 쓴다(003_triggers.sql).
 
@@ -386,9 +401,9 @@ COMMIT;
 
    **재기동 직후 좀비가 즉시 회수되지는 않는다.** 죽음을 시간으로 판정하므로 임계(기본 5분)를 기다린다. 그 대기가 파이프라인 전체를 멈추지는 않는다 — 좀비는 `processing`이라 `claim_job`의 대상이 아니고, 워커는 남은 `pending` 잡을 그대로 집어간다. 크래시의 영향은 그 잡 하나로 격리된다(`test_pipeline_keeps_draining_while_a_zombie_waits_for_its_timeout`).
 
-> **4번과 5번에는 공통 예외가 있다: 그 문서에 새 `pending` 잡이 이미 있으면 `pending`으로 되돌리지 않고 `done`으로 마감한다.** 6번의 반납도 같다.
+> **4번과 5번에는 공통 예외가 있다: 그 문서에 같은 종류(`kind`)의 새 `pending` 잡이 이미 있으면 `pending`으로 되돌리지 않고 `done`으로 마감한다.** 6번의 반납도 같다.
 >
-> 처리 중 문서가 수정되면 트리거가 새 잡을 만든다. 이때 실패한 잡이나 좀비 잡까지 `pending`으로 되돌리면 **문서당 pending 1건**을 강제하는 `uq_pending_job_per_doc` 위반이 되어 **워커가 죽는다.** 코얼레싱 제약과 재시도 로직이 만나는 지점이며, 파셜 유니크 인덱스를 둔 이상 구조적으로 발생한다.
+> 처리 중 문서가 수정되면 트리거가 새 잡을 만든다. 이때 실패한 잡이나 좀비 잡까지 `pending`으로 되돌리면 **문서·종류당 pending 1건**을 강제하는 `uq_pending_job_per_doc_kind` 위반이 되어 **워커가 죽는다.** 종류가 인덱스 키에 들어간 덕에 같은 문서의 임베딩 잡과 관계 잡은 서로를 밀어내지 않는다 — 재임베딩 중에 만들어진 관계 잡이 코얼레싱에 사라지면 안 되기 때문이다. 코얼레싱 제약과 재시도 로직이 만나는 지점이며, 파셜 유니크 인덱스를 둔 이상 구조적으로 발생한다.
 >
 > 확인과 복귀 사이의 경쟁을 없애려면 **문서 행을 `FOR UPDATE`로 잠근 뒤** 판단한다. 잡 생성은 전부 문서 변경 트리거 안에서 일어나므로 이 잠금이 새 잡의 커밋을 막는다. 잠그지 않으면 READ COMMITTED의 statement 스냅샷 탓에 방금 커밋된 새 잡을 놓치고, 그 `pending` 복귀가 유니크 제약 위반으로 터진다. 마감해도 유실이 아니다 — 최신 내용은 새 잡이 처리하며, 이는 3번에서 낡은 결과를 폐기하면서도 잡을 `done`으로 마감하는 것과 같은 원리다.
 >
@@ -410,9 +425,10 @@ COMMIT;
 | **버전 일관성** | 활성 청크는 **어느 시점에 조회해도 하나의 버전**이며 여러 버전이 섞이지 않는다. 청크 교체가 단일 트랜잭션(`DELETE`+`INSERT`)이라 다른 세션은 커밋 전후만 보고, 검색·관련 문서 쿼리가 모두 **단일 문**이라 READ COMMITTED의 문 단위 스냅샷 안에서 일관된다. `document_chunks.version`이 "지금 검색되는 것이 몇 번 버전인가"를 항상 답할 수 있게 한다 |
 | 검색 공백 없음 | 재임베딩 중에도 결과가 비지 않는다 — **이전 버전 청크가 그대로 검색된다** (검색 쿼리가 `embedding_status`로 거르지 않기 때문 — 검색 데이터 흐름 절 참조). 위 버전 일관성과 짝을 이룬다: 공백이 없고, 그때 나오는 것은 낡았을지언정 **일관된 한 버전**이다 |
 | 읽기 정합성 | 검색을 plain `BEGIN`으로 감싸 OpenProxy가 Primary로 라우팅하게 강제한다. 복제 지연으로 방금 임베딩된 청크가 누락되지 않는다 (ADR-010) |
+| **관계 반영** | 관계 판정은 임베딩과 **다른 트랜잭션**에서 돈다 — `ready` 전이가 관계 잡을 남기고(같은 아웃박스·같은 코얼레싱) 워커가 처리한다. 판정이 실패해도 청크와 `ready`는 남으며, 임베딩 완료와 관계 반영 사이의 구간은 `/api/system/status`의 관계 미반영 문서 수로 **관측한다** (ADR-029 결정 3 개정) |
 | 멱등성 | 청크 교체가 delete+insert라 잡 재실행의 종착 상태가 항상 동일 |
 
-> **이 표는 즉시 반영을 보장하지 않는다.** 재임베딩 중에는 이전 버전이 검색되고, 폴링 주기(5초)와 임베딩 소요만큼 반영이 늦으며, Failover 구간에는 요청이 실패한다. 우리가 보장하는 것은 **버전 일관성**과 **최신으로의 수렴**이며, 그 사이의 어긋난 구간은 정합성 검증 쿼리로 **관측할 수 있다**. 사용자 대상 문구에서 쓰지 않을 표현은 **ADR-015가 문자 그대로 열거한다** — 이 문서에서 되풀이하지 않으니 그쪽을 근거로 삼는다.
+> **이 표는 즉시 반영을 보장하지 않는다.** 재임베딩 중에는 이전 버전이 검색되고, 폴링 주기(5초)와 임베딩 소요만큼 반영이 늦고, **관계는 임베딩이 끝난 뒤 별도 잡으로 계산되므로 그만큼 더 늦으며**, Failover 구간에는 요청이 실패한다. 우리가 보장하는 것은 **버전 일관성**과 **최신으로의 수렴**이며, 그 사이의 어긋난 구간은 정합성 검증 쿼리로 **관측할 수 있다**. 사용자 대상 문구에서 쓰지 않을 표현은 **ADR-015가 문자 그대로 열거한다** — 이 문서에서 되풀이하지 않으니 그쪽을 근거로 삼는다.
 
 ## 고가용성(HA) 전략
 
@@ -544,7 +560,7 @@ OpenSQL `patroni.yml`의 PostgreSQL 파라미터는 `max_connections: 100`이다
 | `GET /api/diagnostics` | **진단.** 고아 문서·깨진 링크·중복 후보 등을 **열람 범위 기준**으로 집계 (ADR-027) |
 | `GET /api/clusters` | **관계 지도.** 관계 그래프의 Louvain 군집. 조회 시점 계산, 열람 범위 기준. 이름은 (군집 안 빈도 − 밖 빈도)가 양수인 태그 중 최대, 없으면 중심 문서 제목 (ADR-042 개정) |
 | `GET /api/admin/users` 등 | 관리자 전용 |
-| `GET /api/system/status` | **로그인 필요 · 운영/데모 전용**: `inet_server_addr()`(현재 접속 노드), pending/processing/error 잡 수, 임베딩 프로바이더명, **정합성 검증 쿼리 결과**(`c.version <> d.version` 건수). `/admin/status`가 소비하며 사용자 화면은 호출하지 않는다. SQL과 결과 모델은 `services/system.py`에 있고 라우터는 인증과 응답 변환만 맡는다 |
+| `GET /api/system/status` | **로그인 필요 · 운영/데모 전용**: `inet_server_addr()`(현재 접속 노드), pending/processing/error **임베딩** 잡 수(`kind='embed'`), 임베딩 프로바이더명, **정합성 검증 쿼리 결과**(`c.version <> d.version` 건수), **관계 미반영 문서 수**(`kind='edges'` 잡이 `done`이 아닌 문서). `/admin/status`가 소비하며 사용자 화면은 호출하지 않는다. SQL과 결과 모델은 `services/system.py`에 있고 라우터는 인증과 응답 변환만 맡는다 |
 
 > **구현 현황 (M11-c 기준)**: 위 표 전체가 구현되어 있다. 파일 업로드와 JSON 텍스트 공급은 같은 INSERT 헬퍼와 DB 트리거 파생 계약을 공유한다. 프로그램은 사람이 발급한 `read_write` 위임 API 토큰으로 세션 쿠키 없이 텍스트를 공급할 수 있다 (ADR-034·035).
 >
@@ -754,7 +770,7 @@ OpenProxy는 `query_parser_read_write_splitting` 활성 시 **트랜잭션 밖�
 
 > **2026-08-11에 방식이 바뀌었다.** 원래는 대상 문서의 `avg(embedding)`을 질의 시점에 계산해 이웃을 찾았다. 그 방식을 고른 근거는 *"조회 시점 계산이라 항상 현재 청크를 따른다"*였는데, 관계 edge를 **청크 교체와 같은 트랜잭션에서** 만드는 트리거를 채택하면서 최신성 차이가 사라졌다. 문서 대표 벡터를 컬럼으로 저장하지 않는다는 원래 판단은 그대로다 — edge는 벡터가 아니라 관계다.
 >
-> 따라서 이 절의 두 쿼리에는 **벡터 연산이 없고, `SET LOCAL` 두 줄도 필요 없다.** 벡터 정렬은 청크가 바뀔 때 트리거가 한 번 수행하며 그 구조는 「자동 임베딩 파이프라인」의 관계 생성 트리거에 있다.
+> 따라서 이 절의 두 쿼리에는 **벡터 연산이 없고, `SET LOCAL` 두 줄도 필요 없다.** 벡터 정렬은 청크가 바뀐 뒤 관계 잡이 한 번 수행하며 그 구조는 「자동 임베딩 파이프라인」의 관계 생성 절에 있다.
 
 ### 세 가지 공통 규칙
 
