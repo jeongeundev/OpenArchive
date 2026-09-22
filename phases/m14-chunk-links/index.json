@@ -30,7 +30,10 @@
       "type": "feat",
       "scope": "frontend",
       "desc": "화면의 위키링크 파서가 015와 같은 정규화·임베드 제외 규칙으로 해석 결과를 찾고 별칭을 표시한다",
-      "status": "pending"
+      "status": "completed",
+      "summary": "parseWikilink가 015와 같은 순서로 제목을 정규화·제외하고 화면은 정규화 제목으로 대상을 찾되 별칭·원문 표기를 표시하며 임베드는 원문으로 남긴다",
+      "started_at": "2026-09-22T15:39:44+0900",
+      "completed_at": "2026-09-22T15:44:51+0900"
     },
     {
       "step": 3,
