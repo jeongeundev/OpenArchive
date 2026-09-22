@@ -2,13 +2,41 @@
   "project": "OpenArchive",
   "phase": "m14-chunk-links",
   "steps": [
-    { "step": 0, "name": "chunk-boundaries", "type": "feat", "scope": "worker",
-      "desc": "청킹 경계에 등급을 둔다 — 문장이 끝난 문단 경계 > 문장 끝·조문 머리 > 문장 중간 문단 경계 > 강제 절단, 헤딩 뒤 경계는 제외", "status": "pending" },
-    { "step": 1, "name": "links-normalize", "type": "feat", "scope": "db",
-      "desc": "위키링크 저장 시 [[제목#절|별칭]]·[[경로/제목]]을 제목으로 정규화하고 임베드·미디어 첨부를 제외한다 (015, 전량 재생성)", "status": "pending" },
-    { "step": 2, "name": "links-frontend", "type": "feat", "scope": "frontend",
-      "desc": "화면의 위키링크 파서가 015와 같은 정규화·임베드 제외 규칙으로 해석 결과를 찾고 별칭을 표시한다", "status": "pending" },
-    { "step": 3, "name": "docs-chunk-links", "type": "docs", "scope": "adr",
-      "desc": "ADR-045 청킹 경계 등급 신설·ADR-030 위키링크 정규화 개정·ARCHITECTURE 청킹 절 갱신", "status": "pending" }
-  ]
+    {
+      "step": 0,
+      "name": "chunk-boundaries",
+      "type": "feat",
+      "scope": "worker",
+      "desc": "청킹 경계에 등급을 둔다 — 문장이 끝난 문단 경계 > 문장 끝·조문 머리 > 문장 중간 문단 경계 > 강제 절단, 헤딩 뒤 경계는 제외",
+      "status": "completed",
+      "summary": "_SENTENCE_END·_ARTICLE_HEAD·_MARKDOWN_STRUCTURE_LINE 상수로 완결 문단 > 문장·조문 > 불완전 문단 > 강제 절단 등급을 적용하고 헤딩 뒤 경계를 제외",
+      "started_at": "2026-09-22T15:27:45+0900",
+      "completed_at": "2026-09-22T15:33:13+0900"
+    },
+    {
+      "step": 1,
+      "name": "links-normalize",
+      "type": "feat",
+      "scope": "db",
+      "desc": "위키링크 저장 시 [[제목#절|별칭]]·[[경로/제목]]을 제목으로 정규화하고 임베드·미디어 첨부를 제외한다 (015, 전량 재생성)",
+      "status": "pending"
+    },
+    {
+      "step": 2,
+      "name": "links-frontend",
+      "type": "feat",
+      "scope": "frontend",
+      "desc": "화면의 위키링크 파서가 015와 같은 정규화·임베드 제외 규칙으로 해석 결과를 찾고 별칭을 표시한다",
+      "status": "pending"
+    },
+    {
+      "step": 3,
+      "name": "docs-chunk-links",
+      "type": "docs",
+      "scope": "adr",
+      "desc": "ADR-045 청킹 경계 등급 신설·ADR-030 위키링크 정규화 개정·ARCHITECTURE 청킹 절 갱신",
+      "status": "pending"
+    }
+  ],
+  "created_at": "2026-09-22T15:27:45+0900"
 }
