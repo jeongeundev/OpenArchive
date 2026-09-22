@@ -303,6 +303,14 @@ class StepExecutor:
 
     # --- Codex 호출 ---
 
+    @staticmethod
+    def _partial_output(data: bytes | str | None) -> str:
+        """TimeoutExpired가 담는 부분 출력. `text=True`여도 bytes라(CPython
+        `Popen._check_timeout`) 그대로 json.dump하면 폴백 직전에 executor가 죽는다."""
+        if data is None:
+            return ""
+        return data.decode(errors="replace") if isinstance(data, bytes) else data
+
     def _invoke_codex(self, step: dict, preamble: str) -> dict:
         step_num, step_name = step["step"], step["name"]
         step_file = self._phase_dir / f"step{step_num}.md"
@@ -324,7 +332,7 @@ class StepExecutor:
             output = {
                 "step": step_num, "name": step_name, "agent": "codex",
                 "exitCode": None, "timedOut": True,
-                "stdout": e.stdout or "", "stderr": e.stderr or "",
+                "stdout": self._partial_output(e.stdout), "stderr": self._partial_output(e.stderr),
             }
         else:
             if result.returncode != 0:
