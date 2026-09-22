@@ -8,7 +8,7 @@ const status: SystemStatus = {
   jobs: { pending: 1, processing: 2, recovery_pending: 1, error: 3 },
   zombie_timeout_minutes: 5,
   last_job_finished_at: "2026-08-11T01:23:45Z",
-  inconsistent_documents: 0, embedding_provider: "BAAI/bge-m3",
+  inconsistent_documents: 0, stale_edge_documents: 0, embedding_provider: "BAAI/bge-m3",
 };
 
 describe("StatusPanel", () => {
@@ -18,6 +18,31 @@ describe("StatusPanel", () => {
     rerender(<StatusPanel status={{ ...status, inconsistent_documents: 2 }} error={null} />);
     expect(screen.getByTestId("consistency-count")).toHaveClass("text-[#a3a3a3]");
     expect(screen.getByTestId("consistency-count")).not.toHaveClass("text-[#ef4444]");
+  });
+
+  it("관계가 다 반영되면 반영됨을 알리고, 남아 있으면 그 건수를 보여준다", () => {
+    const { rerender } = render(<StatusPanel status={status} error={null} />);
+    expect(screen.getByTestId("stale-edge-count")).toHaveTextContent("0");
+    expect(screen.getByText(/관계까지 반영됨/)).toBeInTheDocument();
+    rerender(<StatusPanel status={{ ...status, stale_edge_documents: 4 }} error={null} />);
+    expect(screen.getByTestId("stale-edge-count")).toHaveTextContent("4");
+    expect(screen.queryByText(/관계까지 반영됨/)).not.toBeInTheDocument();
+  });
+
+  it("관계 미반영 건수도 0과 그 외를 색으로 가르되 오류 색을 쓰지 않는다", () => {
+    const { rerender } = render(<StatusPanel status={status} error={null} />);
+    expect(screen.getByTestId("stale-edge-count")).toHaveClass("text-[#22c55e]");
+    rerender(<StatusPanel status={{ ...status, stale_edge_documents: 4 }} error={null} />);
+    expect(screen.getByTestId("stale-edge-count")).toHaveClass("text-[#a3a3a3]");
+    expect(screen.getByTestId("stale-edge-count")).not.toHaveClass("text-[#ef4444]");
+  });
+
+  it("두 수가 무엇을 세는지 레이블로 구분한다", () => {
+    render(<StatusPanel status={{ ...status, inconsistent_documents: 2, stale_edge_documents: 4 }} error={null} />);
+    expect(screen.getByText("원본과 청크 버전")).toBeInTheDocument();
+    expect(screen.getByText("관계")).toBeInTheDocument();
+    expect(screen.getByTestId("consistency-count")).toHaveTextContent("2");
+    expect(screen.getByTestId("stale-edge-count")).toHaveTextContent("4");
   });
 
   it("노드 주소가 없으면 유닉스 소켓과 포트를 표시한다", () => {
