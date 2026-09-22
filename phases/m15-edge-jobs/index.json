@@ -30,7 +30,10 @@
       "type": "feat",
       "scope": "api",
       "desc": "/admin/status가 관계 미반영 문서 수를 세고 임베딩 잡 카운터는 kind='embed'만 센다",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-09-22T22:36:36+0900",
+      "completed_at": "2026-09-22T22:43:54+0900",
+      "summary": "SYSTEM_STATUS_SQL에 stale_edges CTE 추가 — count(DISTINCT document_id) WHERE kind='edges' AND status <> 'done'. 세는 근거는 document_edges 행 수가 아니라 잡 상태다(이웃 0건인 문서와 아직 판정하지 않은 문서가 행 수로는 구분되지 않는다). done이 아닌 것을 다 세므로 error로 격리된 관계 잡도 계속 보인다 — 격리했다고 어긋남을 숨기지 않는다. job_counts CTE에는 WHERE kind='embed'를 걸어 pending·processing·recovery_pending·error·last_job_finished_at 전부 임베딩 잡만 센다(관계 잡이 섞여 '대기 중 임베딩'이 부풀던 것을 고친다). SystemStatusResult·SystemStatus에 stale_edge_documents 추가, cli init 상태 출력에 '관계가 아직 계산되지 않은 문서 N건' 한 줄. 새 라우터·엔드포인트 없음이고 inconsistent_documents 의미는 불변. 테스트 5건 추가(test_system 4: 빈 DB 0 · 잡 상태로 센다(임베딩 전 0 → embed 처리 후 1 → edges 처리 후 0) · error 잡도 센다 · 잡 카운터 4종과 last_job_finished_at이 관계 잡을 무시한다, test_system_api 1: 응답 키·값과 로그인 경계), test_schemas·test_system_api의 기존 단언에 새 필드 반영. mutant 2종으로 판별력 확인 — kind='embed' 제거 시 1건 실패, status<>'done'을 ='pending'으로 좁히면 2건 실패. ruff 초록 · backend 645 passed(84초). 프론트는 범위 밖이라 건드리지 않았다 — types.ts의 SystemStatus에 필드가 없고 /admin/status 화면도 표시하지 않는다(응답에 키가 느는 것뿐이라 동작은 그대로)."
     },
     {
       "step": 3,
