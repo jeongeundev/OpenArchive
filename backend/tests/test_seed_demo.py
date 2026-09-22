@@ -255,7 +255,7 @@ async def test_seed_run_rebuilds_edges_after_embedding(migrated_db: str, monkeyp
             )
         ).fetchone()
         query = "SELECT count(*) FROM document_edges WHERE src_document_id = %s"
-        # 016 이후 관계 판정은 별도 잡이라 임베딩 잡이 전부 끝난 뒤에 돈다 — 일괄 적재에서는
+        # 017 이후 관계 판정은 별도 잡이라 임베딩 잡이 전부 끝난 뒤에 돈다 — 일괄 적재에서는
         # 첫 문서도 나중 문서를 이웃 후보로 보므로, 예전처럼 "첫 문서의 관계가 비어 있는
         # 상태"가 저절로 생기지 않는다(상시 워커에서는 여전히 생긴다 — ADR-029 결정 6).
         # 재계산이 실제로 판정을 다시 돌리는지 보려면 그 자리를 직접 비운다.

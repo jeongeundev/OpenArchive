@@ -175,7 +175,7 @@ async def test_create_uses_mcp_owner_and_starts_all_database_derivatives(
 
     owner, jobs, versions, chunks, links, edges = row
     assert owner == "alice"
-    assert (jobs, versions, links) == (2, 1, ["Target"])  # 잡 2건 = 임베딩 + 관계 (016)
+    assert (jobs, versions, links) == (2, 1, ["Target"])  # 잡 2건 = 임베딩 + 관계 (017)
     assert chunks > 0
     assert edges > 0
 

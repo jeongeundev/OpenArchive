@@ -114,7 +114,7 @@ def test_text_ingest_matches_upload_pipeline_derivatives(
     # 대칭 비교만으로는 두 경로가 나란히 아무것도 만들지 않아도 통과한다.
     # 업로드 쪽 파생이 실제로 존재하는 것을 먼저 못박아 비교의 기준점을 세운다.
     jobs, versions, chunks, links, has_edges = derivatives[0]
-    # 잡 2건 = 임베딩 잡 + ready 전이가 만든 관계 잡 (016)
+    # 잡 2건 = 임베딩 잡 + ready 전이가 만든 관계 잡 (017)
     assert (jobs, versions, links, has_edges) == (2, 1, ["Target"], True)
     assert chunks > 0
     assert derivatives[0] == derivatives[1]
