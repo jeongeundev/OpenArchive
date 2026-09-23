@@ -62,6 +62,10 @@ class InvalidVisibility(Exception):
     """공개범위가 열람 술어가 아는 두 값(public, private) 밖인 경우."""
 
 
+class OriginalFileMissing(Exception):
+    """볼 수 있는 문서에 원본이 없어 다시 추출할 대상이 없는 경우."""
+
+
 class VersionConflict(Exception):
     """낙관적 동시성 충돌 (ADR-017). 클라이언트가 새로고침할 수 있도록 현재 버전을 함께 전달한다."""
 
@@ -387,6 +391,30 @@ async def update_extracted_text(
     (ADR-035 결정 3).
     """
     current_version, filename = await _load_for_write(conn, document_id, user_id)
+    return await _write_text(
+        conn,
+        document_id,
+        content=content,
+        client_version=client_version,
+        current_version=current_version,
+        filename=filename,
+    )
+
+
+async def _write_text(
+    conn: psycopg.AsyncConnection,
+    document_id: UUID,
+    *,
+    content: str,
+    client_version: int,
+    current_version: int,
+    filename: str | None,
+) -> dict:
+    """문서 텍스트 갱신의 본체. 권한은 호출부가 이미 확인했다고 가정한다.
+
+    편집·복원·재추출이 모두 이 한 UPDATE를 지난다 — 텍스트를 바꾸는 경로가 둘이 되면
+    한쪽만 고쳐지는 자리가 생긴다.
+    """
     label = text_label(filename)
     if not content.strip():
         raise EmptyExtractedText(f"{label}는 비어 있을 수 없습니다.")
@@ -521,6 +549,76 @@ async def replace_original_file(
             uploaded_by=user_id,
         )
     return document
+
+
+async def reextract_text(
+    conn: psycopg.AsyncConnection, document_id: UUID, *, expected_version: int
+) -> tuple[dict, bool]:
+    """보관된 최신 원본에서 텍스트를 다시 뽑는다. 권한 검사는 하지 않는다.
+
+    결과가 현재 텍스트와 같으면 아무것도 쓰지 않는다 — `content_hash`를 언급만 해도
+    트리거가 발화해(003) 같은 내용의 텍스트 버전과 재임베딩이 생긴다. 다르면 편집 경로를
+    그대로 지나므로 낙관적 잠금·길이 검증·트리거 발화가 편집과 같다. 원본 판은 만들지 않는다.
+    """
+    row = await (
+        await conn.execute(
+            "SELECT version, filename, content_hash FROM documents WHERE id = %s",
+            (document_id,),
+        )
+    ).fetchone()
+    if row is None:
+        raise DocumentNotFound
+    current_version, filename, content_hash = row
+    # 사람이 고친 텍스트를 덮을 수 있으므로, 결과와 무관하게 호출자가 본 버전이어야 한다.
+    if current_version != expected_version:
+        raise VersionConflict(current_version)
+
+    original = await (
+        await conn.execute(
+            """
+            SELECT filename, data FROM document_files
+            WHERE document_id = %s ORDER BY file_version DESC LIMIT 1
+            """,
+            (document_id,),
+        )
+    ).fetchone()
+    if original is None:
+        raise OriginalFileMissing
+
+    content = extract_text(original[1], detect_content_type(original[0]))
+    if not content.strip():
+        raise EmptyExtractedText(
+            "문서에서 텍스트를 추출하지 못했습니다. 스캔 이미지 PDF는 지원하지 않습니다."
+        )
+    if hashlib.sha256(content.encode("utf-8")).hexdigest() == content_hash:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(
+            f"SELECT {SUMMARY_COLUMNS}, content FROM documents WHERE id = %s",
+            (document_id,),
+        )
+        return await cur.fetchone(), False
+
+    document = await _write_text(
+        conn,
+        document_id,
+        content=content,
+        client_version=expected_version,
+        current_version=current_version,
+        filename=filename,
+    )
+    return document, True
+
+
+async def reextract_document(
+    conn: psycopg.AsyncConnection,
+    document_id: UUID,
+    *,
+    user_id: str,
+    client_version: int,
+) -> tuple[dict, bool]:
+    """사용자 경로의 재추출. 소유자만 할 수 있다 — 편집과 같은 쓰기 권한이다."""
+    await _load_for_write(conn, document_id, user_id)
+    return await reextract_text(conn, document_id, expected_version=client_version)
 
 
 async def get_document_version(

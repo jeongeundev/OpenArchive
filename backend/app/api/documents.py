@@ -23,6 +23,7 @@ from app.api.schemas import (
     DocumentSummary,
     EditDocumentRequest,
     EditDocumentResponse,
+    ReextractResponse,
     RelatedResponse,
     ResolvedLinkItem,
     RestoreVersionRequest,
@@ -296,6 +297,26 @@ async def replace_original_file(
         # 파싱 실패만 여기 온다 — 업로드와 같은 이유로 전역 핸들러에 올리지 않는다.
         raise HTTPException(status_code=400, detail=str(error)) from error
     return DocumentSummary.model_validate(document)
+
+
+@router.post("/{document_id}/reextract", response_model=ReextractResponse)
+async def reextract_document(
+    document_id: UUID,
+    body: RestoreVersionRequest,
+    conn: Connection,
+    user_id: Annotated[str, Depends(require_write_user_id)],
+) -> ReextractResponse:
+    try:
+        document, changed = await service.reextract_document(
+            conn, document_id, user_id=user_id, client_version=body.current_version
+        )
+    except UnsupportedFileType as error:
+        supported = ", ".join(SUPPORTED_CONTENT_TYPES)
+        raise HTTPException(status_code=400, detail=f"{error} 지원 형식: {supported}") from error
+    except ValueError as error:
+        # 파싱 실패만 여기 온다 — 업로드와 같은 이유로 전역 핸들러에 올리지 않는다.
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    return ReextractResponse.model_validate({**document, "changed": changed})
 
 
 @router.put("/{document_id}/tags", response_model=DocumentSummary)

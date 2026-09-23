@@ -73,6 +73,11 @@ class EditDocumentResponse(DocumentSummary):
     content: str
 
 
+class ReextractResponse(EditDocumentResponse):
+    # 재추출 결과가 현재 텍스트와 같으면 false — 새 텍스트 버전을 만들지 않았다는 뜻이다.
+    changed: bool
+
+
 class UpdateTagsRequest(BaseModel):
     tags: list[str]
 

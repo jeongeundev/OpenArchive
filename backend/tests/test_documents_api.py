@@ -471,9 +471,14 @@ def test_read_token_can_read_but_cannot_use_any_document_write_endpoint(
         ),
         db_client.delete(f"/api/documents/{document_id}", headers=headers),
         db_client.post(f"/api/documents/{document_id}/reembed", headers=headers),
+        db_client.post(
+            f"/api/documents/{document_id}/reextract",
+            headers=headers,
+            json={"current_version": 1},
+        ),
     ]
 
-    assert [response.status_code for response in responses] == [403] * 6
+    assert [response.status_code for response in responses] == [403] * 7
 
 
 def test_upload_stores_sha256_of_extracted_text(db_client: TestClient, migrated_db: str):
@@ -1355,3 +1360,191 @@ def test_replace_is_forbidden_for_read_token(db_client: TestClient, migrated_db:
 
     assert response.status_code == 403
     assert len(file_rows(migrated_db, document_id)) == 1
+
+
+# ── 재추출 — 보관된 최신 원본에서 텍스트를 다시 뽑는다 ─────────────────────
+
+
+def reextract(
+    client: TestClient,
+    document_id: str,
+    *,
+    current_version: int = 1,
+    user_id: str | None = "alice",
+):
+    if user_id is not None:
+        login_as(client, user_id)
+    return client.post(
+        f"/api/documents/{document_id}/reextract",
+        json={"current_version": current_version},
+    )
+
+
+def text_version_count(dsn: str, document_id: str) -> int:
+    with psycopg.connect(dsn) as conn:
+        return conn.execute(
+            "SELECT count(*) FROM document_versions WHERE document_id = %s", (document_id,)
+        ).fetchone()[0]
+
+
+def pending_embed_jobs(dsn: str, document_id: str) -> int:
+    with psycopg.connect(dsn) as conn:
+        return conn.execute(
+            """
+            SELECT count(*) FROM embedding_jobs
+            WHERE document_id = %s AND kind = 'embed' AND status = 'pending'
+            """,
+            (document_id,),
+        ).fetchone()[0]
+
+
+def finish_jobs(dsn: str, document_id: str) -> None:
+    with psycopg.connect(dsn) as conn:
+        conn.execute(
+            "UPDATE embedding_jobs SET status = 'done' WHERE document_id = %s", (document_id,)
+        )
+
+
+def test_reextract_creates_a_new_text_version_when_text_differs(
+    db_client: TestClient, migrated_db: str
+):
+    document_id = upload(db_client, content=b"OpenSQL original text").json()["id"]
+    assert edit(db_client, document_id, content="hand edited", version=1).status_code == 200
+    finish_jobs(migrated_db, document_id)
+
+    response = reextract(db_client, document_id, current_version=2)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["changed"] is True
+    assert body["version"] == 3
+    assert body["content"] == "OpenSQL original text"
+    with psycopg.connect(migrated_db) as conn:
+        assert conn.execute(
+            "SELECT content FROM document_versions WHERE document_id = %s AND version = 3",
+            (document_id,),
+        ).fetchone() == ("OpenSQL original text",)
+    assert pending_embed_jobs(migrated_db, document_id) == 1
+    # 원본은 그대로다 — 재추출은 판을 만들지 않는다.
+    assert len(file_rows(migrated_db, document_id)) == 1
+
+
+def test_reextract_without_changes_is_a_no_op(db_client: TestClient, migrated_db: str):
+    document_id = upload(db_client).json()["id"]
+    finish_jobs(migrated_db, document_id)
+
+    response = reextract(db_client, document_id)
+
+    assert response.status_code == 200
+    assert response.json()["changed"] is False
+    assert response.json()["version"] == 1
+    assert text_version_count(migrated_db, document_id) == 1
+    assert pending_embed_jobs(migrated_db, document_id) == 0
+
+
+def test_reextract_uses_the_latest_file_version(db_client: TestClient, migrated_db: str):
+    document_id = upload(db_client, content=b"first file").json()["id"]
+    assert replace_file(db_client, document_id, content=b"second file").status_code == 200
+    assert edit(db_client, document_id, content="hand edited", version=2).status_code == 200
+
+    response = reextract(db_client, document_id, current_version=3)
+
+    assert response.status_code == 200
+    assert response.json()["content"] == "second file"
+    assert response.json()["version"] == 4
+
+
+def test_reextract_applies_an_improved_parser(
+    db_client: TestClient, migrated_db: str, monkeypatch
+):
+    from app.services import documents as service
+
+    document_id = upload(db_client, content=b"OpenSQL guide").json()["id"]
+    finish_jobs(migrated_db, document_id)
+    monkeypatch.setattr(
+        service, "extract_text", lambda data, content_type: "improved: " + data.decode()
+    )
+
+    response = reextract(db_client, document_id)
+
+    assert response.status_code == 200
+    assert response.json()["changed"] is True
+    assert response.json()["version"] == 2
+    assert response.json()["content"] == "improved: OpenSQL guide"
+    assert pending_embed_jobs(migrated_db, document_id) == 1
+
+
+def test_reextract_without_original_is_409(db_client: TestClient, migrated_db: str):
+    login_as(db_client, "alice")
+    text_id = db_client.post(
+        "/api/documents/text", json={"title": "직접 공급", "content": "text only"}
+    ).json()["id"]
+    uploaded_id = upload(db_client).json()["id"]
+    with psycopg.connect(migrated_db) as conn:
+        # 이 기능 이전에 업로드되어 원본이 없는 문서를 흉내 낸다.
+        conn.execute("DELETE FROM document_files WHERE document_id = %s", (uploaded_id,))
+
+    for document_id in (text_id, uploaded_id):
+        response = reextract(db_client, document_id)
+        assert response.status_code == 409
+        assert response.json() == {
+            "detail": "원본 파일이 없는 문서는 다시 추출할 수 없습니다."
+        }
+        assert text_version_count(migrated_db, document_id) == 1
+
+
+def test_reextract_with_stale_version_is_409(db_client: TestClient, migrated_db: str):
+    document_id = upload(db_client).json()["id"]
+    assert edit(db_client, document_id, content="edited", version=1).status_code == 200
+
+    response = reextract(db_client, document_id, current_version=1)
+
+    assert response.status_code == 409
+    assert response.json()["current_version"] == 2
+    assert db_client.get(f"/api/documents/{document_id}").json()["content"] == "edited"
+    assert text_version_count(migrated_db, document_id) == 2
+
+
+def test_reextract_by_non_owner_is_403_and_private_is_404(
+    db_client: TestClient, migrated_db: str
+):
+    public_id = upload(db_client, filename="public.txt").json()["id"]
+    private_id = upload(
+        db_client, filename="private.txt", data={"visibility": "private"}
+    ).json()["id"]
+    for document_id in (public_id, private_id):
+        assert edit(db_client, document_id, content="edited", version=1).status_code == 200
+
+    assert reextract(db_client, public_id, current_version=2, user_id="bob").status_code == 403
+    assert reextract(db_client, private_id, current_version=2, user_id="bob").status_code == 404
+    assert text_version_count(migrated_db, public_id) == 2
+    assert text_version_count(migrated_db, private_id) == 2
+
+
+def test_reextract_rejects_unparseable_and_blank_originals(
+    db_client: TestClient, migrated_db: str
+):
+    document_id = upload(db_client).json()["id"]
+    assert edit(db_client, document_id, content="edited", version=1).status_code == 200
+
+    def swap_original(data: bytes) -> None:
+        with psycopg.connect(migrated_db) as conn:
+            conn.execute(
+                "UPDATE document_files SET data = %s WHERE document_id = %s",
+                (data, document_id),
+            )
+
+    swap_original("한글".encode("cp949"))
+    broken = reextract(db_client, document_id, current_version=2)
+    assert broken.status_code == 400
+    assert broken.json()["detail"] == "텍스트 파일은 UTF-8 인코딩이어야 합니다."
+
+    swap_original(b" \t\r\n\f")
+    blank = reextract(db_client, document_id, current_version=2)
+    assert blank.status_code == 400
+    assert blank.json() == {
+        "detail": "문서에서 텍스트를 추출하지 못했습니다. 스캔 이미지 PDF는 지원하지 않습니다."
+    }
+
+    document = db_client.get(f"/api/documents/{document_id}").json()
+    assert (document["version"], document["content"]) == (2, "edited")

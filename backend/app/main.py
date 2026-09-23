@@ -59,6 +59,14 @@ async def _original_file_not_found(request: Request, error: Exception) -> JSONRe
     return JSONResponse(status_code=404, content={"detail": "원본 파일이 없습니다."})
 
 
+@app.exception_handler(documents_service.OriginalFileMissing)
+async def _original_file_missing(request: Request, error: Exception) -> JSONResponse:
+    return JSONResponse(
+        status_code=409,
+        content={"detail": "원본 파일이 없는 문서는 다시 추출할 수 없습니다."},
+    )
+
+
 @app.exception_handler(documents_service.DocumentAccessDenied)
 async def _document_access_denied(request: Request, error: Exception) -> JSONResponse:
     return JSONResponse(status_code=403, content={"detail": "문서를 수정할 권한이 없습니다."})
