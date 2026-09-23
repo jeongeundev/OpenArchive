@@ -125,21 +125,62 @@ async def create_document(
     tags: list[str] | None = None,
     visibility: str = "public",
 ) -> dict:
-    """업로드 파일에서 텍스트를 추출해 문서를 만든다. 임베딩 잡은 트리거가 만든다."""
+    """업로드 파일에서 텍스트를 추출해 문서를 만들고 원본을 1판으로 보관한다 (ADR-046).
+
+    임베딩 잡·텍스트 버전은 트리거가 만든다. 원본은 문서와 같은 트랜잭션에 들어가므로
+    문서만 커밋되고 원본이 유실되는 상태가 생기지 않는다 — 호출부가 autocommit 연결을
+    넘겨도 이 함수가 트랜잭션을 연다.
+    """
     content_type = detect_content_type(filename)
     content = extract_text(data, content_type)
-    return await _insert_document(
-        conn,
-        title=title or PurePath(filename).stem,
-        filename=filename,
-        content_type=content_type,
-        content=content,
-        owner_id=owner_id,
-        tags=tags,
-        visibility=visibility,
-        empty_message=(
-            "문서에서 텍스트를 추출하지 못했습니다. 스캔 이미지 PDF는 지원하지 않습니다."
-        ),
+    async with conn.transaction():
+        document = await _insert_document(
+            conn,
+            title=title or PurePath(filename).stem,
+            filename=filename,
+            content_type=content_type,
+            content=content,
+            owner_id=owner_id,
+            tags=tags,
+            visibility=visibility,
+            empty_message=(
+                "문서에서 텍스트를 추출하지 못했습니다. 스캔 이미지 PDF는 지원하지 않습니다."
+            ),
+        )
+        await _insert_original_file(
+            conn,
+            document_id=document["id"],
+            file_version=1,
+            filename=filename,
+            data=data,
+            text_version=document["version"],
+            uploaded_by=owner_id,
+        )
+    return document
+
+
+async def _insert_original_file(
+    conn: psycopg.AsyncConnection,
+    *,
+    document_id: UUID,
+    file_version: int,
+    filename: str,
+    data: bytes,
+    text_version: int,
+    uploaded_by: str,
+) -> None:
+    """원본 파일 한 판을 넣는다. 크기와 sha256은 DB가 data에서 계산한다.
+
+    바이트는 `%b`(이진 포맷)로 보낸다. 텍스트 포맷이면 hex 인코딩으로 크기가 두 배가
+    되어, 상한 50MB 파일이 100MB로 OpenProxy를 지난다.
+    """
+    await conn.execute(
+        """
+        INSERT INTO document_files
+            (document_id, file_version, filename, data, text_version, uploaded_by)
+        VALUES (%s, %s, %s, %b, %s, %s)
+        """,
+        (document_id, file_version, filename, data, text_version, uploaded_by),
     )
 
 
@@ -287,7 +328,7 @@ async def update_extracted_text(
 ) -> dict:
     """문서 텍스트를 낙관적 동시성으로 갱신한다 (ADR-017).
 
-    편집 대상은 문서 텍스트이며 원본 파일이 아니다. 원본 파일은 보관하지 않는다.
+    편집 대상은 문서 텍스트이며 원본 파일이 아니다. 원본 파일은 편집하지 않는다(판으로 따로 보관된다).
     업로드로 들어온 문서에서는 그 텍스트가 추출 텍스트이고, 직접 공급된 문서
     (`filename IS NULL`)에는 추출한 대상이 없다 — 거절 문구가 그 구분을 따른다
     (ADR-035 결정 3).

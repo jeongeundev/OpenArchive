@@ -4,10 +4,13 @@ import zipfile
 from uuid import uuid4
 
 import psycopg
+import pytest
 from conftest import login_as, run_embedding_worker
 from conftest import upload_document as upload
 from docx import Document
 from fastapi.testclient import TestClient
+
+from app.config import get_settings
 
 
 def edit(client: TestClient, document_id: str, *, content: str, version: int, user_id="alice"):
@@ -269,13 +272,26 @@ def test_upload_rejects_non_utf8_text(db_client: TestClient):
     assert response.json()["detail"] == "텍스트 파일은 UTF-8 인코딩이어야 합니다."
 
 
+def limit_upload_to_one_mb(monkeypatch) -> int:
+    """업로드 상한을 1MB로 낮추고 그 바이트 수를 반환한다.
+
+    기본값(50MB)으로 경계를 재면 테스트가 수십 MB를 만들어야 한다. 상한이 설정값에서
+    온다는 사실 자체가 이 테스트들의 전제이므로, 작은 값으로 같은 경계를 검사한다.
+    """
+    monkeypatch.setenv("MAX_UPLOAD_MB", "1")
+    get_settings.cache_clear()
+    return 1_000_000
+
+
 def test_oversized_upload_is_rejected_before_read(db_client: TestClient, monkeypatch):
+    limit = limit_upload_to_one_mb(monkeypatch)
+
     async def fail_if_read(*args, **kwargs):
         raise AssertionError("oversized upload must be rejected before read()")
 
     monkeypatch.setattr("starlette.datastructures.UploadFile.read", fail_if_read)
 
-    response = upload(db_client, content=b"x" * (10_000_000 + 1))
+    response = upload(db_client, content=b"x" * (limit + 1))
 
     assert response.status_code == 413
 
@@ -289,7 +305,8 @@ def test_upload_larger_than_its_declared_size_is_rejected(
     사실상 없다. 위 검사는 큰 파일을 읽지 않기 위한 것이고, 경계 자체는 읽어들인
     바이트로도 지켜져야 한다.
     """
-    oversized = b"x" * (10_000_000 + 1)
+    limit = limit_upload_to_one_mb(monkeypatch)
+    oversized = b"x" * (limit + 1)
 
     async def read_oversized(self, size: int = -1) -> bytes:
         return oversized
@@ -301,6 +318,15 @@ def test_upload_larger_than_its_declared_size_is_rejected(
     assert response.status_code == 413
 
 
+def test_upload_limit_comes_from_settings(db_client: TestClient, monkeypatch):
+    limit = limit_upload_to_one_mb(monkeypatch)
+
+    response = upload(db_client, content=b"x" * (limit + 1))
+
+    assert response.status_code == 413
+    assert response.json()["detail"] == "업로드 파일은 1MB를 넘을 수 없습니다."
+
+
 def test_extracted_text_over_service_limit_is_rejected(db_client: TestClient):
     response = upload(db_client, content=b"x" * 500_001)
 
@@ -308,18 +334,93 @@ def test_extracted_text_over_service_limit_is_rejected(db_client: TestClient):
     assert "500KB" in response.json()["detail"]
 
 
-def test_upload_near_file_limit_with_small_extracted_text_succeeds(db_client: TestClient):
+def test_upload_near_file_limit_with_small_extracted_text_succeeds(
+    db_client: TestClient, monkeypatch
+):
+    limit = limit_upload_to_one_mb(monkeypatch)
     buf = io.BytesIO()
     document = Document()
     document.add_paragraph("OpenSQL near-limit document")
     document.save(buf)
     with zipfile.ZipFile(buf, "a", compression=zipfile.ZIP_STORED) as archive:
-        archive.writestr("word/media/padding.bin", b"x" * 9_000_000)
+        archive.writestr("word/media/padding.bin", b"x" * 900_000)
 
     response = upload(db_client, filename="near-limit.docx", content=buf.getvalue())
 
-    assert len(buf.getvalue()) < 10_000_000
+    assert len(buf.getvalue()) < limit
     assert response.status_code == 201
+
+
+def test_upload_stores_the_original_as_file_version_one(
+    db_client: TestClient, migrated_db: str
+):
+    data = b"OpenSQL original bytes"
+    document_id = upload(db_client, filename="original.txt", content=data).json()["id"]
+
+    with psycopg.connect(migrated_db) as conn:
+        rows = conn.execute(
+            """
+            SELECT file_version, text_version, filename, uploaded_by, sha256, size, data
+            FROM document_files WHERE document_id = %s
+            """,
+            (document_id,),
+        ).fetchall()
+
+    assert rows == [
+        (
+            1,
+            1,
+            "original.txt",
+            "alice",
+            hashlib.sha256(data).hexdigest(),
+            len(data),
+            data,
+        )
+    ]
+
+
+def test_original_and_document_are_committed_together(
+    db_client: TestClient, migrated_db: str
+):
+    """원본 INSERT가 실패하면 문서도, 트리거가 만든 파생 행도 남지 않아야 한다."""
+    with psycopg.connect(migrated_db) as conn:
+        conn.execute(
+            """
+            CREATE FUNCTION reject_original() RETURNS trigger LANGUAGE plpgsql AS $$
+            BEGIN
+              RAISE EXCEPTION 'original insert rejected';
+            END; $$
+            """
+        )
+        conn.execute(
+            """
+            CREATE TRIGGER reject_original BEFORE INSERT ON document_files
+              FOR EACH ROW EXECUTE FUNCTION reject_original()
+            """
+        )
+    login_as(db_client, "alice")
+
+    with pytest.raises(psycopg.errors.RaiseException, match="original insert rejected"):
+        upload(db_client, filename="atomic.txt", content=b"OpenSQL atomic")
+
+    with psycopg.connect(migrated_db) as conn:
+        for table in ("documents", "document_versions", "embedding_jobs", "document_files"):
+            assert conn.execute(f"SELECT count(*) FROM {table}").fetchone() == (0,), table
+
+
+def test_text_ingest_has_no_original_file(db_client: TestClient, migrated_db: str):
+    login_as(db_client, "alice")
+    response = db_client.post(
+        "/api/documents/text",
+        json={"title": "직접 공급", "content": "OpenSQL text only"},
+    )
+    assert response.status_code == 201
+
+    with psycopg.connect(migrated_db) as conn:
+        assert conn.execute(
+            "SELECT count(*) FROM document_files WHERE document_id = %s",
+            (response.json()["id"],),
+        ).fetchone() == (0,)
 
 
 def test_upload_requires_user_id(db_client: TestClient):
