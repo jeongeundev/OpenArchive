@@ -63,7 +63,10 @@
       "type": "feat",
       "scope": "api",
       "desc": "openarchive reextract <id> | --all — 파서를 고친 뒤 기존 문서에 적용하는 운영자 경로",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-09-24T01:36:51+0900",
+      "summary": "openarchive reextract <id> | --all [--dsn]: services/system.reextract_all(conn, on_progress)→ReextractSummary(changed, unchanged, failed[(id,사유)]) — document_files가 있는 문서만 대상, 대상 조회와 문서별 reextract_text(expected_version=조회 시점 버전)를 각각 커밋, 파서 ValueError·빈 텍스트·500KB 초과·VersionConflict·삭제된 문서는 failed에 적고 계속, 그 밖의 예외는 전파. CLI 단건은 권한 없이 FOR UPDATE로 현재 버전을 잡아 reextract_text, 원본 없음·문서 없음은 안내 후 exit 1, 실패 1건 이상이면 exit 1, 연결 실패는 rebuild-edges와 같은 문구. 테스트: test_system 3건·test_cli 7건(backend 704 passed)",
+      "completed_at": "2026-09-24T01:42:17+0900"
     },
     {
       "step": 6,
