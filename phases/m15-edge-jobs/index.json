@@ -1,0 +1,63 @@
+{
+  "project": "OpenArchive",
+  "phase": "m15-edge-jobs",
+  "steps": [
+    {
+      "step": 0,
+      "name": "edge-jobs-schema",
+      "type": "feat",
+      "scope": "db",
+      "desc": "관계 판정을 잡으로 분리한다 — ready 트리거는 kind='edges' 잡만 만들고 edge는 만들지 않는다 (016)",
+      "status": "completed",
+      "started_at": "2026-09-22T21:12:31+0900",
+      "completed_at": "2026-09-22T22:17:25+0900",
+      "summary": "016_edge_jobs.sql 추가 — embedding_jobs.kind('embed'|'edges', DEFAULT 'embed') + CHECK, uq_pending_job_per_doc → uq_pending_job_per_doc_kind(document_id, kind) WHERE pending, build_document_edges()가 rebuild 대신 kind='edges' 잡 INSERT + 기존 채널로 pg_notify. rebuild_document_edges 본체·trg_build_document_edges WHEN은 불변. test_triggers.py: 새 테스트 6건(잡 생성·코얼레싱·embed와 edges 공존·DEFAULT kind·NOTIFY·함수 SET 유지), 판정 규칙 테스트는 mark_document_ready 뒤 rebuild_document_edges 명시 호출로 전환. test_triggers/test_tables/test_indexes 88건 초록, ruff 초록. ⛔ 전체 스위트(pytest -q)는 이 step에서 돌리지 않았다 — 워커가 아직 kind를 모르므로 관계 잡을 임베딩 잡으로 처리해 finalize의 ready 전이가 새 관계 잡을 만드는 무한 루프가 된다. 실측으로 테스트 DB가 180MB 이상으로 불어나 Docker VM 디스크를 채우고 PostgreSQL이 죽었다. step 1의 kind 분기가 그 루프를 끊으므로 전체 스위트는 step 1에서 처음 돌린다."
+    },
+    {
+      "step": 1,
+      "name": "worker-edge-jobs",
+      "type": "feat",
+      "scope": "worker",
+      "desc": "워커가 kind별로 잡을 처리한다 — 관계 잡은 자기 트랜잭션에서 rebuild_document_edges를 돌리고 실패해도 청크·ready가 남는다",
+      "status": "completed",
+      "started_at": "2026-09-22T22:18:04+0900",
+      "completed_at": "2026-09-22T22:36:36+0900",
+      "summary": "워커가 kind로 갈린다 — ClaimedJob에 kind 추가, claim_job이 RETURNING j.kind로 집고 documents를 processing으로 바꾸는 UPDATE는 kind='embed'일 때만 한다(우선순위 없이 id 순 FIFO 유지). 새 함수 finalize_edge_job(conn, job): 자기 트랜잭션에서 documents를 FOR UPDATE로 잠그고 행이 없으면 False, embedding_status<>'ready'(재임베딩 중)면 잡만 done으로 마감하고 False, 그 외에는 SELECT rebuild_document_edges(...) 후 done — documents는 한 컬럼도 UPDATE하지 않는다. process_once가 job.kind=='edges'면 load_document·chunk_text·embed를 타지 않고 곧바로 finalize_edge_job으로 간다(프로바이더 미호출). fail_job·release_job의 '다른 pending 잡' 판정과 sweep_zombies의 superseded EXISTS·row_number PARTITION을 (document_id, kind)로 좁혔고, 재시도 소진 시 documents.embedding_status='error'는 kind='embed'에만 건다. 테스트 7건 추가(자기 트랜잭션·판정 실패 시 청크와 ready 생존·소진해도 문서 error 아님·재임베딩 중 폐기·두 kind 좀비 회수·소진 좀비 격리·drain FIFO), test_worker.job_rows에 kind 인자와 edge_count·break_edge_rebuild 헬퍼 추가. 관계 잡이 잡 하나로 세어지므로 drain/process_all 건수 단언을 갱신했고(test_worker 4곳·mcp·token·seed), 임베딩 잡만 보려는 곳에는 kind='embed' 필터를 넣었다(documents_api 2곳). ready 전이가 더는 판정을 돌리지 않아 test_system의 rebuild 테스트는 rebuild_document_edges 명시 호출로 전제를 재현하고, seed 테스트는 일괄 적재에서 첫 문서도 전체를 보게 된 사실을 반영해 edge를 직접 비운 뒤 재계산 효과를 본다. ruff 초록 · backend 640 passed(84초). 체크리스트: 앱의 embedding_jobs INSERT 0건, 판정은 DB 함수 한 곳, LISTEN 없이 drain만으로 관계 잡 처리, finalize_job 트랜잭션에서 관계 판정 빠짐(테스트가 임베딩 직후 edge 0건을 단언)."
+    },
+    {
+      "step": 2,
+      "name": "status-edge-counter",
+      "type": "feat",
+      "scope": "api",
+      "desc": "/admin/status가 관계 미반영 문서 수를 세고 임베딩 잡 카운터는 kind='embed'만 센다",
+      "status": "completed",
+      "started_at": "2026-09-22T22:36:36+0900",
+      "completed_at": "2026-09-22T22:43:54+0900",
+      "summary": "SYSTEM_STATUS_SQL에 stale_edges CTE 추가 — count(DISTINCT document_id) WHERE kind='edges' AND status <> 'done'. 세는 근거는 document_edges 행 수가 아니라 잡 상태다(이웃 0건인 문서와 아직 판정하지 않은 문서가 행 수로는 구분되지 않는다). done이 아닌 것을 다 세므로 error로 격리된 관계 잡도 계속 보인다 — 격리했다고 어긋남을 숨기지 않는다. job_counts CTE에는 WHERE kind='embed'를 걸어 pending·processing·recovery_pending·error·last_job_finished_at 전부 임베딩 잡만 센다(관계 잡이 섞여 '대기 중 임베딩'이 부풀던 것을 고친다). SystemStatusResult·SystemStatus에 stale_edge_documents 추가, cli init 상태 출력에 '관계가 아직 계산되지 않은 문서 N건' 한 줄. 새 라우터·엔드포인트 없음이고 inconsistent_documents 의미는 불변. 테스트 5건 추가(test_system 4: 빈 DB 0 · 잡 상태로 센다(임베딩 전 0 → embed 처리 후 1 → edges 처리 후 0) · error 잡도 센다 · 잡 카운터 4종과 last_job_finished_at이 관계 잡을 무시한다, test_system_api 1: 응답 키·값과 로그인 경계), test_schemas·test_system_api의 기존 단언에 새 필드 반영. mutant 2종으로 판별력 확인 — kind='embed' 제거 시 1건 실패, status<>'done'을 ='pending'으로 좁히면 2건 실패. ruff 초록 · backend 645 passed(84초). 프론트는 범위 밖이라 건드리지 않았다 — types.ts의 SystemStatus에 필드가 없고 /admin/status 화면도 표시하지 않는다(응답에 키가 느는 것뿐이라 동작은 그대로)."
+    },
+    {
+      "step": 3,
+      "name": "status-panel-edges",
+      "type": "feat",
+      "scope": "frontend",
+      "desc": "상태 화면이 관계 미반영 문서 수를 정합성 카드에 함께 보여준다",
+      "status": "completed",
+      "started_at": "2026-09-22T22:43:54+0900",
+      "completed_at": "2026-09-22T22:53:24+0900",
+      "summary": "정합성 검증 카드 안에 둘째 지표를 넣었다 — 카드·화면을 새로 만들지 않고 `md:grid-cols-2`로 두 수를 나란히 두고 레이블로 무엇을 세는지 가른다(「원본과 청크 버전」 / 「관계」). `stale-edge-count`는 0이면 `text-[#22c55e]`, 그 외에는 `text-[#a3a3a3]`로 기존 `consistency-count`와 같은 규칙을 쓰고 오류 색(`#ef4444`)은 쓰지 않는다 — 관계 계산은 정상 처리 중인 상태이고 붉은색은 `jobs.error`의 자리다. 설명 문구는 0이면 「관계까지 반영됨. 관계는 임베딩이 끝난 뒤 별도 잡으로 계산됩니다.」, 0보다 크면 「…임베딩이 끝난 뒤 관계 계산이 따로 처리되며, 그 잡이 끝나면 0으로 돌아옵니다.」다 (ADR-015 금지어 「항상 최신」·「실시간 동기화」·「즉시」 미사용). types.ts `SystemStatus`에 `stale_edge_documents: number` 추가(백엔드 schemas.py 필드명 그대로). 테스트 3건 추가(0이면 반영됨 문구·0 초과면 건수 · 색 구분과 오류 색 배제 · 두 레이블과 두 값 구분)와 StatusPanel/useSystemStatus 픽스처 필드 보강. 먼저 빨강 3건을 확인한 뒤 구현했고, mutant 2종으로 판별력을 봤다 — 색 조건을 상수로 바꾸면 1건, 문구를 항상 「관계까지 반영됨」으로 두면 1건 실패한다. `npm run build:static`으로 동봉 빌드 갱신(변경분은 `backend/app/static/admin/status*`와 해당 청크 하나뿐 — 사용자 화면 산출물은 바뀌지 않았다). 폴링 주기·`useSystemStatus` 동작은 손대지 않았다. tsc --noEmit · lint · frontend 190 passed · `bash scripts/check.sh` EXIT=0(backend 645 passed)."
+    },
+    {
+      "step": 4,
+      "name": "docs-edge-jobs",
+      "type": "docs",
+      "scope": "adr",
+      "desc": "ADR-029 결정 3 개정(edge_jobs 아웃박스 채택)·ARCHITECTURE 파이프라인·CLAUDE.md·OPERATIONS 갱신",
+      "status": "completed",
+      "started_at": "2026-09-22T22:53:25+0900",
+      "completed_at": "2026-09-22T23:06:44+0900",
+      "summary": "ADR-029 결정 3 아래에 개정 블록을 쌓아 `edge_jobs` 기각을 뒤집었다 — 원문과 기존 개정 블록은 한 줄도 지우지 않았고 상태 줄에만 2026-09-22(#107)을 더했다. 블록이 담은 것: 트리거가 잡을 기록하고 워커가 자기 트랜잭션에서 판정한다는 변경(판정 규칙·rebuild_document_edges 본체·트리거 WHEN·단방향 저장은 불변) · 재검토 조건이 충족된 근거(기각 근거였던 4청크 2.92ms는 HNSW를 못 타던 상관 LATERAL 값이고 실제 구현 비용은 10청크 0.2초·159청크 2.7초, 그 시간 동안 finalize_job이 documents를 FOR UPDATE로 쥐어 편집·태그·삭제가 대기하고 판정 실패가 청크까지 롤백, 멘토링 권고와 HA 방향도 같다) · 별도 테이블 대신 embedding_jobs.kind를 쓴 이유와 그 대가(한 테이블이 두 뜻·uq_pending_job_per_doc_kind로 넓어진 코얼레싱·잡 카운터가 kind='embed'를 명시해야 함) · 남는 대가는 임베딩 완료와 관계 반영 사이 구간이며 stale_edge_documents로 관측한다는 것 · 관계 잡 실패는 문서를 error로 만들지 않음 · 재임베딩 중이면 판정 없이 잡만 마감 · 결정 6과 ADR-009는 그대로 · 트랜잭션 길이와 동시 편집 대기의 전후 비교는 머지 뒤 실측해 #107에 적는다(\"해소됐다\"로 앞질러 쓰지 않음) · 「m7~m9 구현 대조 결과」의 'edge_jobs는 여전히 도입하지 않는다'도 이 개정으로 뒤집히나 그 문단은 당시 기록이라 고치지 않는다. ARCHITECTURE: 개요도(ready 전이→관계 잡→워커 판정, 워커 박스에 한 줄)·「관계는 두 갈래」 문단·migrations 주석(001~016, 015·016 반영)·worker.py 설명, 절 이름을 「관계 생성 — 트리거가 잡을 만들고 워커가 판정한다」로 바꾸고 build_document_edges SQL을 016 실물로 교체, 불릿 갱신(판정 비용이 임베딩 트랜잭션에서 빠진 것이 분리 이유 · 실패해도 청크와 ready 생존 · 재임베딩 중 마감 신설), 워커 루프에 잡 두 종류 도입 문단·claim RETURNING kind·processing UPDATE는 embed만·FIFO 근거·2·3번 kind 표기·관계 잡은 2·3번을 타지 않는다 설명·finished_at 주석 보강·4·5번의 문서 error는 embed만·공통 예외를 '같은 종류'와 uq_pending_job_per_doc_kind로, 정합성 보장 표에 「관계 반영」 행 추가와 경고 문단에 관계 지연 포함, API 표의 system/status 필드, 관련 문서 절의 참조 문장. CLAUDE.md 첫 CRITICAL에 '잡은 두 종류이고 둘 다 트리거가 만든다 · 앱은 document_edges에도 직접 INSERT하지 않는다'를 보강(단방향 저장 규칙과 함수 정의 SET 규칙은 손대지 않음). OPERATIONS: rebuild-edges 절에 '평소 관계는 워커가 잡으로 처리하므로 워커가 도는지와 관계 미반영 수를 먼저 확인' 불릿, 「워커 장애」 절에 관계 판정도 함께 멈춘다는 점과 정합성 카드 두 수 점검을 추가. 지시 범위 밖이지만 UI_GUIDE의 /admin/status 목록도 step 3이 만든 화면에 맞춰 두 줄 갱신했다(잡 수는 임베딩 잡·관계 반영 지표는 오류 색을 쓰지 않는다). AC: `bash scripts/check.sh` EXIT=0(backend 645 · frontend 190) · 금칙어 grep 0건(검사 대상은 ARCHITECTURE·OPERATIONS이며 CLAUDE.md·ADR.md는 금칙어를 인용하므로 제외). 코드 변경 0줄."
+    }
+  ],
+  "created_at": "2026-09-22T21:12:31+0900",
+  "completed_at": "2026-09-22T23:06:44+0900"
+}

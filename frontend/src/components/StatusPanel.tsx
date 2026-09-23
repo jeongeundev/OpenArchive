@@ -11,8 +11,18 @@ export function StatusPanel({ status, error }: { status: SystemStatus | null; er
         <div className="grid gap-4 md:grid-cols-2">
           <div className="rounded-lg border border-neutral-800 bg-[#141414] p-6 md:col-span-2">
             <p className="text-sm font-medium text-neutral-400">정합성 검증</p>
-            <p data-testid="consistency-count" className={`mt-2 text-5xl font-semibold ${status.inconsistent_documents === 0 ? "text-[#22c55e]" : "text-[#a3a3a3]"}`}>{status.inconsistent_documents}</p>
-            <p className="mt-3 text-sm text-neutral-400">원본 버전과 청크 버전이 어긋난 문서 수. 재임베딩 중에만 증가했다가 0으로 돌아옵니다.</p>
+            <div className="mt-4 grid gap-5 md:grid-cols-2">
+              <div>
+                <p className="text-sm text-neutral-500">원본과 청크 버전</p>
+                <p data-testid="consistency-count" className={`mt-2 text-5xl font-semibold ${status.inconsistent_documents === 0 ? "text-[#22c55e]" : "text-[#a3a3a3]"}`}>{status.inconsistent_documents}</p>
+                <p className="mt-3 text-sm text-neutral-400">원본 버전과 청크 버전이 어긋난 문서 수. 재임베딩 중에만 증가했다가 0으로 돌아옵니다.</p>
+              </div>
+              <div>
+                <p className="text-sm text-neutral-500">관계</p>
+                <p data-testid="stale-edge-count" className={`mt-2 text-5xl font-semibold ${status.stale_edge_documents === 0 ? "text-[#22c55e]" : "text-[#a3a3a3]"}`}>{status.stale_edge_documents}</p>
+                <p className="mt-3 text-sm text-neutral-400">{status.stale_edge_documents === 0 ? "관계까지 반영됨. 관계는 임베딩이 끝난 뒤 별도 잡으로 계산됩니다." : "관계가 아직 반영되지 않은 문서 수. 임베딩이 끝난 뒤 관계 계산이 따로 처리됩니다. 오래 내려오지 않으면 워커가 도는지 확인하고, 관계 잡이 재시도를 소진했다면 openarchive rebuild-edges로 복구합니다."}</p>
+              </div>
+            </div>
           </div>
           <div className="rounded-lg border border-neutral-800 bg-[#141414] p-6">
             <p className="text-sm font-medium text-neutral-400">접속 DB 노드</p>

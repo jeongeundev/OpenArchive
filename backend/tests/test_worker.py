@@ -34,6 +34,7 @@ from app.worker import (
     claim_job,
     drain,
     fail_job,
+    finalize_edge_job,
     finalize_job,
     load_document,
     process_once,
@@ -129,13 +130,42 @@ async def edit_document(conn, doc_id, content: str, content_hash: str) -> None:
     )
 
 
-async def job_rows(conn, doc_id) -> list[tuple]:
-    """(status, attempts, last_error)를 잡 생성 순서로."""
+async def job_rows(conn, doc_id, kind: str = "embed") -> list[tuple]:
+    """(status, attempts, last_error)를 잡 생성 순서로. **한 종류만** 본다.
+
+    ready 전이가 관계 잡(kind='edges')을 만들므로, 종류를 고정하지 않으면 임베딩 잡의
+    수명을 보는 단언에 관계 잡이 섞여 들어와 "잡이 몇 건인가"가 무의미해진다. 관계 잡은
+    같은 헬퍼에 kind='edges'로 따로 본다.
+    """
     cur = await conn.execute(
-        "SELECT status, attempts, last_error FROM embedding_jobs WHERE document_id = %s ORDER BY id",
-        (doc_id,),
+        "SELECT status, attempts, last_error FROM embedding_jobs"
+        " WHERE document_id = %s AND kind = %s ORDER BY id",
+        (doc_id, kind),
     )
     return await cur.fetchall()
+
+
+async def edge_count(conn, doc_id) -> int:
+    """이 문서가 **계산한** 관계 수 — 저장은 단방향이라 src 기준이다 (ADR-029 개정)."""
+    cur = await conn.execute(
+        "SELECT count(*) FROM document_edges WHERE src_document_id = %s", (doc_id,)
+    )
+    return (await cur.fetchone())[0]
+
+
+async def break_edge_rebuild(conn) -> None:
+    """관계 판정을 항상 실패하게 만든다 — 관계 잡의 실패 경로 검증용.
+
+    원복하지 않는다. clean_db 픽스처가 매 테스트마다 public 스키마를 통째로 갈아 끼우므로
+    다음 테스트로 새지 않는다 (test_slow_edges 트리거와 같은 방식).
+    """
+    await conn.execute(
+        """
+        CREATE OR REPLACE FUNCTION rebuild_document_edges(target_document_id uuid)
+          RETURNS void LANGUAGE plpgsql AS $$
+        BEGIN RAISE EXCEPTION '관계 판정 실패를 재현한다'; END $$;
+        """
+    )
 
 
 async def chunk_rows(conn, doc_id) -> list[tuple]:
@@ -300,7 +330,7 @@ async def test_drain_processes_a_new_document_end_to_end(conn):
 
     processed = await drain(conn, FakeProvider())
 
-    assert processed == 1
+    assert processed == 2  # 임베딩 잡 + 그것이 만든 관계 잡
     expected = chunk_text(DOC_V1)
     assert len(expected) > 1  # 다중 청크가 아니면 교체·순서 검증이 무의미하다
     rows = await chunk_rows(conn, doc_id)
@@ -333,7 +363,7 @@ async def test_reembedding_replaces_chunks_instead_of_accumulating(conn):
     await edit_document(conn, doc_id, DOC_V2, "sha256:v2")
     processed = await drain(conn, FakeProvider())
 
-    assert processed == 1
+    assert processed == 2  # 임베딩 잡 + 그것이 만든 관계 잡
     rows = await chunk_rows(conn, doc_id)
     assert [r[1] for r in rows] == chunk_text(DOC_V2)  # v1 잔재가 없다
     assert all(r[2] == 2 for r in rows)
@@ -743,10 +773,254 @@ async def test_pipeline_keeps_draining_while_a_zombie_waits_for_its_timeout(conn
 
     processed = await drain(conn, FakeProvider())
 
-    assert processed == 2  # 좀비를 뺀 나머지가 전부 처리됐다
+    assert processed == 4  # 좀비를 뺀 나머지가 전부 처리됐다 (문서 2건 × 잡 2종)
     assert (await document_state(conn, healthy_a))[1] == "ready"
     assert (await document_state(conn, healthy_b))[1] == "ready"
     assert [j[0] for j in await job_rows(conn, zombie_doc)] == ["processing"]  # 좀비는 그대로
+
+
+async def test_an_edge_job_is_processed_in_its_own_transaction(conn):
+    """관계 판정은 임베딩과 **다른 트랜잭션**에서 일어난다 (ADR-029 결정 3 개정).
+
+    임베딩 잡이 끝난 시점에 관계가 아직 없고, 관계 잡을 처리한 뒤에야 생긴다는 것이
+    분리의 관측 가능한 형태다. 관계 잡 처리에 `ExplodingProvider`를 넘기는 이유는
+    **프로바이더를 부르지 않음**을 함께 고정하기 위해서다 — 저장된 청크 벡터만으로
+    계산하므로 모델이 필요 없고, 부른다면 이 테스트가 붉어진다.
+    """
+    await insert_document(conn, content=DOC_V2, content_hash="sha256:neighbor")
+    await drain(conn, FakeProvider())  # 관계가 생길 수 있도록 이웃 문서를 먼저 ready로
+    doc_id = await insert_document(conn)
+
+    assert await process_once(conn, FakeProvider()) is True  # 임베딩 잡
+
+    assert (await document_state(conn, doc_id))[1] == "ready"
+    assert len(await chunk_rows(conn, doc_id)) > 0
+    assert await edge_count(conn, doc_id) == 0  # ready 전이는 잡만 만든다 (017)
+    assert [j[0] for j in await job_rows(conn, doc_id, kind="edges")] == ["pending"]
+
+    assert await process_once(conn, ExplodingProvider()) is True  # 관계 잡
+
+    assert await edge_count(conn, doc_id) > 0
+    assert [j[0] for j in await job_rows(conn, doc_id, kind="edges")] == ["done"]
+    cur = await conn.execute(
+        "SELECT finished_at IS NOT NULL FROM embedding_jobs"
+        " WHERE document_id = %s AND kind = 'edges'",
+        (doc_id,),
+    )
+    assert (await cur.fetchone())[0] is True
+
+
+async def test_a_failing_edge_job_leaves_chunks_and_ready_intact(conn):
+    """**이 phase의 핵심 주장** — 관계 판정이 실패해도 청크와 ready는 남는다.
+
+    008까지는 판정이 `finalize_job`과 같은 트랜잭션이라 실패가 임베딩까지 롤백시켰다:
+    관계 하나 때문에 문서가 검색에서 통째로 빠진다. 잡으로 분리하면 관계만 재시도되고
+    검색은 방금 만든 청크로 계속된다.
+    """
+    doc_id = await insert_document(conn)
+    assert await process_once(conn, FakeProvider()) is True
+    chunks_before = await chunk_rows(conn, doc_id)
+    assert len(chunks_before) > 0
+    await break_edge_rebuild(conn)
+
+    assert await process_once(conn, ExplodingProvider()) is True  # 관계 잡 — 판정이 터진다
+
+    assert await chunk_rows(conn, doc_id) == chunks_before  # 청크는 한 줄도 사라지지 않았다
+    assert (await document_state(conn, doc_id))[1] == "ready"
+    assert [j[0] for j in await job_rows(conn, doc_id)] == ["done"]  # 임베딩 잡도 그대로
+    status, attempts, last_error = (await job_rows(conn, doc_id, kind="edges"))[0]
+    assert (status, attempts) == ("pending", 1)  # 백오프 후 재시도
+    # 프로바이더 예외(RuntimeError)가 아니라 판정 예외여야 한다 — 관계 잡은 모델을 부르지 않는다.
+    assert "관계 판정 실패를 재현한다" in last_error
+
+
+async def test_an_exhausted_edge_job_does_not_mark_the_document_as_error(conn):
+    """관계 잡이 재시도를 소진해도 documents.embedding_status는 ready 그대로다.
+
+    임베딩 잡의 소진은 문서를 error로 떨어뜨린다(test_retries_exhaust_into_error_state).
+    관계 잡은 다르다 — 청크가 멀쩡해 검색이 되는데 화면에 "임베딩 실패" 배지가 뜨면
+    상태 표시가 거짓말이 된다. 관계 미반영은 별도 카운터가 관측한다.
+    """
+    doc_id = await insert_document(conn)
+    assert await process_once(conn, FakeProvider()) is True
+    await break_edge_rebuild(conn)
+
+    for attempt in range(1, MAX_ATTEMPTS + 1):
+        assert await process_once(conn, ExplodingProvider()) is True
+        if attempt < MAX_ATTEMPTS:
+            await conn.execute(
+                "UPDATE embedding_jobs SET next_attempt_at = now()"
+                " WHERE document_id = %s AND kind = 'edges'",
+                (doc_id,),
+            )
+
+    status, attempts, _ = (await job_rows(conn, doc_id, kind="edges"))[0]
+    assert (status, attempts) == ("error", MAX_ATTEMPTS)
+    assert (await document_state(conn, doc_id))[1] == "ready"
+    assert len(await chunk_rows(conn, doc_id)) > 0
+    assert await process_once(conn, FakeProvider()) is False  # 더는 집히지 않는다
+
+
+async def test_an_edge_job_judges_with_the_chunks_that_exist_even_during_reembedding(
+    conn, other_conn
+):
+    """재임베딩이 시작된 문서라도 관계 잡은 **지금 있는 청크로** 판정하고 마감한다.
+
+    판정 없이 폐기하지 않는 이유는 폐기의 전제가 거짓이기 때문이다. "새 ready 전이가
+    새 관계 잡을 만든다"는 재임베딩이 성공할 때만 참이고, 재시도 예산을 소진해 error로
+    끝나면 ready 전이가 영영 오지 않는다. 그러면 관계를 한 번도 계산하지 않은 문서가
+    남는데 관계 미반영 카운터는 잡이 done이므로 0을 보고한다.
+
+    지금 계산한 관계가 곧 교체될 청크 기준이어도 손해는 판정 한 번뿐이다 — 재임베딩이
+    끝나면 그 ready 전이의 새 잡이 다시 계산한다 (ADR-029 결정 3 개정).
+    """
+    await insert_document(conn, content=DOC_V2, content_hash="sha256:neighbor")
+    await drain(conn, FakeProvider())  # 판정이 돌면 관계가 생길 이웃을 둔다
+    doc_id = await insert_document(conn)
+    assert await process_once(conn, FakeProvider()) is True  # ready + 관계 잡 pending
+
+    await edit_document(other_conn, doc_id, DOC_V2, "sha256:v2")  # 재임베딩 시작
+
+    job = await claim_job(conn)
+    assert job is not None and job.kind == "edges" and job.document_id == doc_id
+    assert await finalize_edge_job(conn, job) is True
+
+    assert await edge_count(conn, doc_id) > 0  # 판정이 돌았다
+    assert [j[0] for j in await job_rows(conn, doc_id, kind="edges")] == ["done"]
+    assert [j[0] for j in await job_rows(conn, doc_id)] == ["done", "pending"]
+
+
+async def test_edges_remain_when_a_reembedding_ends_in_error(conn, other_conn):
+    """재임베딩이 error로 끝나도 그 문서에는 현재 청크 기준의 관계가 남는다.
+
+    관계 미반영 카운터는 "관계 잡이 done이 아닌 문서"를 센다. 그 0이 참이려면 **done이
+    된 잡은 반드시 판정을 돌렸어야** 한다. 판정 없이 마감하는 경로가 하나라도 있으면
+    여기서 관계가 빈 채로 카운터가 0이 되고, 정합성 지표가 거짓말이 된다.
+    """
+    await insert_document(conn, content=DOC_V2, content_hash="sha256:neighbor")
+    await drain(conn, FakeProvider())
+    doc_id = await insert_document(conn)
+    assert await process_once(conn, FakeProvider()) is True  # ready + 관계 잡 pending
+    chunks_before = await chunk_rows(conn, doc_id)
+
+    await edit_document(other_conn, doc_id, DOC_V2, "sha256:v2")
+    assert await process_once(conn, FakeProvider()) is True  # 잡 id 순 — 관계 잡이 먼저다
+
+    for attempt in range(1, MAX_ATTEMPTS + 1):  # 재임베딩이 예산을 소진한다
+        assert await process_once(conn, ExplodingProvider()) is True
+        if attempt < MAX_ATTEMPTS:
+            await conn.execute(
+                "UPDATE embedding_jobs SET next_attempt_at = now()"
+                " WHERE document_id = %s AND kind = 'embed' AND status = 'pending'",
+                (doc_id,),
+            )
+
+    assert (await document_state(conn, doc_id))[1] == "error"
+    assert await chunk_rows(conn, doc_id) == chunks_before  # 청크는 1판 그대로다
+    assert await edge_count(conn, doc_id) > 0  # 그 청크 기준의 관계도 남아 있다
+    assert [j[0] for j in await job_rows(conn, doc_id, kind="edges")] == ["done"]
+
+
+async def test_sweep_recovers_both_job_kinds(conn):
+    """좀비 회수는 종류를 가리지 않는다 — 임베딩 잡도 관계 잡도 pending으로 돌아온다."""
+    edge_doc = await insert_document(conn, content=DOC_V2, content_hash="sha256:edges")
+    assert await process_once(conn, FakeProvider()) is True  # edge_doc의 관계 잡이 대기한다
+    embed_doc = await insert_document(conn, content_hash="sha256:embed")
+
+    edge_zombie = await claim_job(conn)  # 잡 id 순 — 관계 잡이 먼저다
+    assert edge_zombie is not None and edge_zombie.kind == "edges"
+    assert edge_zombie.document_id == edge_doc
+    embed_zombie = await claim_job(conn)
+    assert embed_zombie is not None and embed_zombie.kind == "embed"
+    assert embed_zombie.document_id == embed_doc
+    await conn.execute(
+        "UPDATE embedding_jobs SET started_at = now() - interval '10 minutes'"
+        " WHERE id = ANY(%s)",
+        ([edge_zombie.job_id, embed_zombie.job_id],),
+    )
+
+    assert await sweep_zombies(conn) == 2
+
+    assert await job_rows(conn, edge_doc, kind="edges") == [("pending", 1, None)]
+    assert await job_rows(conn, embed_doc) == [("pending", 1, None)]
+
+
+async def test_sweep_recovers_both_kinds_of_zombie_on_one_document(conn, other_conn):
+    """**한 문서**에 임베딩 좀비와 관계 좀비가 같이 있어도 둘 다 회수한다.
+
+    rn > 1을 done으로 마감하는 규칙은 같은 (문서, 종류) 안에서만 성립한다. 종류를 빼고
+    문서로만 줄을 세우면 id가 큰 쪽 — 여기서는 새로 생긴 임베딩 잡 — 이 rn=2가 되어
+    아무 이유 없이 done으로 마감된다. 그러면 문서는 수정됐는데 재임베딩이 영영 일어나지
+    않고, 청크가 옛 내용에 머문 채 `ready` 배지만 남는다.
+
+    좀비 둘을 서로 다른 문서에 두면 이 규칙을 지나친다 — 문서가 다르면 종류를 빼도 각자
+    rn=1이라 통과한다. 그래서 **한 문서에** 두 종류를 만든다.
+    """
+    doc_id = await insert_document(conn, content=DOC_V2, content_hash="sha256:both-kinds")
+    assert await process_once(conn, FakeProvider()) is True  # 임베딩 → ready → 관계 잡
+    edge_zombie = await claim_job(conn)
+    assert edge_zombie is not None and edge_zombie.kind == "edges"
+
+    await edit_document(other_conn, doc_id, DOC_V2 + " 수정", "sha256:both-kinds-v2")
+    embed_zombie = await claim_job(conn)
+    assert embed_zombie is not None and embed_zombie.kind == "embed"
+    assert embed_zombie.document_id == doc_id  # 같은 문서에 두 종류의 processing 잡
+
+    await conn.execute(
+        "UPDATE embedding_jobs SET started_at = now() - interval '10 minutes'"
+        " WHERE document_id = %s AND status = 'processing'",
+        (doc_id,),
+    )
+
+    assert await sweep_zombies(conn) == 2  # 종류마다 하나씩, 둘 다 회수된다
+
+    assert await job_rows(conn, doc_id, kind="edges") == [("pending", 1, None)]
+    # 임베딩 잡은 둘이다 — 최초 적재분(정상 done)과 수정으로 생겨 회수된 것.
+    assert await job_rows(conn, doc_id) == [("done", 1, None), ("pending", 1, None)]
+
+
+async def test_sweep_isolates_an_exhausted_edge_zombie_without_flagging_the_document(conn):
+    """소진된 관계 좀비는 error로 격리하되 문서 배지는 건드리지 않는다.
+
+    워커를 반복적으로 죽이는 관계 잡도 예산을 소진하면 멈춰야 하지만(그 상한을 실제로
+    강제하는 것이 이 격리다), 그 격리가 멀쩡한 청크를 가진 문서에 실패 배지를 달아서는
+    안 된다 — 위 소진 테스트의 좀비 경로판이다.
+    """
+    doc_id = await insert_document(conn)
+    assert await process_once(conn, FakeProvider()) is True
+    zombie = await claim_job(conn)
+    assert zombie is not None and zombie.kind == "edges"
+    await conn.execute(
+        "UPDATE embedding_jobs SET attempts = %s, started_at = now() - interval '10 minutes'"
+        " WHERE id = %s",
+        (MAX_ATTEMPTS, zombie.job_id),
+    )
+
+    assert await sweep_zombies(conn) == 0
+
+    assert await job_rows(conn, doc_id, kind="edges") == [
+        ("error", MAX_ATTEMPTS, ZOMBIE_EXHAUSTED_ERROR)
+    ]
+    assert (await document_state(conn, doc_id))[1] == "ready"
+
+
+async def test_drain_processes_the_edge_job_after_the_embedding_job(conn):
+    """drain 한 번이 임베딩 잡과 그것이 만든 관계 잡을 **잡 id 순서대로** 모두 비운다.
+
+    우선순위가 없다는 것이 여기서 결과로 드러난다. 관계 잡을 먼저 집는 큐였다면 doc_a의
+    판정이 doc_b가 ready가 되기 전에 돌아 이웃을 찾지 못한다.
+    """
+    doc_a = await insert_document(conn, content_hash="sha256:a")
+    doc_b = await insert_document(conn, content=DOC_V2, content_hash="sha256:b")
+
+    processed = await drain(conn, FakeProvider())
+
+    assert processed == 4  # 임베딩 2건 + 관계 2건
+    for doc_id in (doc_a, doc_b):
+        assert (await document_state(conn, doc_id))[1] == "ready"
+        assert [j[0] for j in await job_rows(conn, doc_id)] == ["done"]
+        assert [j[0] for j in await job_rows(conn, doc_id, kind="edges")] == ["done"]
+        assert await edge_count(conn, doc_id) > 0
 
 
 async def test_release_returns_the_job_and_refunds_the_attempt(conn):
@@ -816,7 +1090,7 @@ async def test_polling_drain_handles_multiple_documents_without_listen(conn):
         await insert_document(conn, content_hash=f"sha256:doc{i}") for i in range(3)
     ]
 
-    assert await drain(conn, FakeProvider()) == 3
+    assert await drain(conn, FakeProvider()) == 6  # 문서 3건 × (임베딩 + 관계)
 
     for doc_id in ids:
         assert (await document_state(conn, doc_id))[1] == "ready"

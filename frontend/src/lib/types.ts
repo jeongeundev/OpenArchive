@@ -125,6 +125,7 @@ export interface SystemStatus {
   zombie_timeout_minutes: number;
   last_job_finished_at: string | null;
   inconsistent_documents: number;
+  stale_edge_documents: number;
   embedding_provider: string;
 }
 

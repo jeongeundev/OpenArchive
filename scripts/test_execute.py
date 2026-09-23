@@ -557,6 +557,46 @@ class TestInvokeClaude:
 
         assert mock_run.call_args[1]["timeout"] == 1800
 
+    def test_timeout_is_recorded_not_raised(self, executor):
+        """Claude도 30분을 넘기면 TimeoutExpired를 던진다. 예외가 그대로 올라가면
+        executor가 통째로 죽어 재시도도 error 기록도 남지 않는다(m15 step 0 실측 —
+        디스크가 찬 상태에서 전체 스위트가 매달려 phase가 중단됐다). Codex와 같이
+        출력으로 기록해 `_run_step`의 재시도·error 경로가 받아내게 한다."""
+        step = {"step": 2, "name": "ui"}
+        # TimeoutExpired가 담는 부분 출력은 `text=True`여도 bytes다(CPython
+        # `Popen._check_timeout`). str 픽스처는 json.dump가 죽는 실제 경로를 가린다.
+        timeout = subprocess.TimeoutExpired(
+            ["claude", "-p"], 1800, output=b'{"type":"assistant"}', stderr=b"partial"
+        )
+
+        with patch("subprocess.run", side_effect=timeout):
+            output = executor._invoke_claude(step, "preamble")
+
+        assert output["timedOut"] is True
+        assert output["exitCode"] is None
+        assert output["agent"] == "claude"
+        assert output["stdout"] == '{"type":"assistant"}'
+        assert output["stderr"] == "partial"
+
+        data = json.loads((executor._phase_dir / "step2-output.json").read_text())
+        assert data["timedOut"] is True
+        assert data["exitCode"] is None
+
+    def test_timeout_without_any_output_is_recorded_as_empty(self, executor):
+        timeout = subprocess.TimeoutExpired(["claude", "-p"], 1800)
+
+        with patch("subprocess.run", side_effect=timeout):
+            output = executor._invoke_claude({"step": 2, "name": "ui"}, "preamble")
+
+        assert output["stdout"] == ""
+        assert output["stderr"] == ""
+
+    def test_normal_exit_is_not_timed_out(self, executor):
+        mock_result = MagicMock(returncode=0, stdout="{}", stderr="")
+        with patch("subprocess.run", return_value=mock_result):
+            output = executor._invoke_claude({"step": 2, "name": "ui"}, "preamble")
+        assert output["timedOut"] is False
+
 
 # ---------------------------------------------------------------------------
 # 스텝 세션 모델 지정

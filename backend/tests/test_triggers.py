@@ -514,22 +514,61 @@ def test_trigger_definition_keeps_its_three_safety_conditions(conn: psycopg.Conn
     assert "pg_trigger_depth() = 0" in definition
 
 
-def test_ready_document_builds_edges_inside_the_database(conn: psycopg.Connection):
-    """워커가 청크를 확정하고 ready로 바꾸면 애플리케이션 INSERT 없이 관계가 생긴다."""
-    first_id = insert_document(conn, "공통 토큰 alpha beta", "sha256:edge-first")
-    second_id = insert_document(conn, "공통 토큰 alpha gamma", "sha256:edge-second")
-    mark_document_ready(conn, first_id, ["공통 토큰 alpha beta"])
+def test_ready_transition_enqueues_an_edge_job_instead_of_building_edges(conn):
+    first_id = insert_document(conn, "first", "sha256:edge-first")
+    second_id = insert_document(conn, "second", "sha256:edge-second")
+    mark_document_ready(conn, first_id, ["same"], vectors=[unit_vector(0)])
+    mark_document_ready(conn, second_id, ["same"], vectors=[unit_vector(0)])
 
-    mark_document_ready(conn, second_id, ["공통 토큰 alpha gamma"])
+    assert conn.execute("SELECT count(*) FROM document_edges").fetchone()[0] == 0
+    assert conn.execute(
+        "SELECT kind, status FROM embedding_jobs WHERE document_id = %s AND kind = 'edges'",
+        (second_id,),
+    ).fetchall() == [("edges", "pending")]
 
-    (count,) = conn.execute(
-        """
-        SELECT count(*) FROM document_edges
-        WHERE src_document_id = %s OR dst_document_id = %s
-        """,
-        (second_id, second_id),
-    ).fetchone()
-    assert count > 0
+
+def test_edge_jobs_coalesce_per_document_like_embedding_jobs(conn):
+    doc_id = insert_document(conn)
+    mark_document_ready(conn, doc_id, ["text"])
+    conn.execute("UPDATE documents SET embedding_status = 'pending' WHERE id = %s", (doc_id,))
+    mark_document_ready(conn, doc_id, [])
+
+    assert conn.execute(
+        "SELECT count(*) FROM embedding_jobs WHERE document_id = %s "
+        "AND kind = 'edges' AND status = 'pending'", (doc_id,),
+    ).fetchone()[0] == 1
+
+
+def test_an_embedding_job_and_an_edge_job_coexist_for_one_document(conn):
+    doc_id = insert_document(conn)
+    mark_document_ready(conn, doc_id, ["text"])
+
+    assert job_statuses(conn, doc_id) == ["pending", "pending"]
+    assert conn.execute(
+        "SELECT kind FROM embedding_jobs WHERE document_id = %s ORDER BY id", (doc_id,),
+    ).fetchall() == [("embed",), ("edges",)]
+
+
+def test_content_change_still_creates_an_embedding_job_with_the_default_kind(conn):
+    doc_id = insert_document(conn)
+    conn.execute("UPDATE embedding_jobs SET status = 'done' WHERE document_id = %s", (doc_id,))
+    edit_content(conn, doc_id, "changed", "sha256:changed")
+
+    assert job_statuses(conn, doc_id) == ["done", "pending"]
+    assert conn.execute(
+        "SELECT kind FROM embedding_jobs WHERE document_id = %s AND status = 'pending'",
+        (doc_id,),
+    ).fetchall() == [("embed",)]
+
+
+def test_ready_transition_notifies_the_same_channel(conn, listener):
+    doc_id = insert_document(conn)
+    assert [n.payload for n in listener.notifies(timeout=5, stop_after=1)] == [str(doc_id)]
+
+    mark_document_ready(conn, doc_id, ["text"])
+
+    notifications = list(listener.notifies(timeout=5, stop_after=1))
+    assert [(n.channel, n.payload) for n in notifications] == [(CHANNEL, str(doc_id))]
 
 
 def test_edges_are_stored_once_from_the_document_that_computed_them(
@@ -538,7 +577,9 @@ def test_edges_are_stored_once_from_the_document_that_computed_them(
     first_id = insert_document(conn, "first", "sha256:edge-direction-first")
     second_id = insert_document(conn, "second", "sha256:edge-direction-second")
     mark_document_ready(conn, first_id, ["first"], vectors=[unit_vector(0)])
+    conn.execute("SELECT rebuild_document_edges(%s)", (first_id,))
     mark_document_ready(conn, second_id, ["second"], vectors=[unit_vector(0)])
+    conn.execute("SELECT rebuild_document_edges(%s)", (second_id,))
 
     rows = edges_for(conn, second_id)
 
@@ -552,7 +593,9 @@ def test_reembedding_replaces_only_the_rows_this_document_computed(conn: psycopg
     first_id = insert_document(conn, "first", "sha256:edge-reembed-first")
     second_id = insert_document(conn, "second", "sha256:edge-reembed-second")
     mark_document_ready(conn, first_id, ["first"], vectors=[unit_vector(0)])
+    conn.execute("SELECT rebuild_document_edges(%s)", (first_id,))
     mark_document_ready(conn, second_id, ["second"], vectors=[unit_vector(0)])
+    conn.execute("SELECT rebuild_document_edges(%s)", (second_id,))
     conn.execute(
         "UPDATE document_edges SET score = 0.123 WHERE src_document_id = %s",
         (second_id,),
@@ -561,6 +604,7 @@ def test_reembedding_replaces_only_the_rows_this_document_computed(conn: psycopg
     conn.execute("DELETE FROM document_chunks WHERE document_id = %s", (first_id,))
     conn.execute("UPDATE documents SET embedding_status = 'processing' WHERE id = %s", (first_id,))
     mark_document_ready(conn, first_id, ["first changed"], vectors=[unit_vector(1)])
+    conn.execute("SELECT rebuild_document_edges(%s)", (first_id,))
 
     rows = edges_for(conn, first_id)
     assert {(row[0], row[1]) for row in rows} == {
@@ -572,6 +616,7 @@ def test_reembedding_replaces_only_the_rows_this_document_computed(conn: psycopg
     conn.execute("DELETE FROM document_chunks WHERE document_id = %s", (second_id,))
     conn.execute("UPDATE documents SET embedding_status = 'processing' WHERE id = %s", (second_id,))
     mark_document_ready(conn, second_id, ["second changed"], vectors=[unit_vector(1)])
+    conn.execute("SELECT rebuild_document_edges(%s)", (second_id,))
 
     rows = edges_for(conn, second_id)
     assert [row for row in rows if row[0] == first_id] == first_edges
@@ -594,6 +639,7 @@ def test_edge_kind_distinguishes_overlaps_from_related_and_never_emits_points_to
         ["same zero", "same one", "same four"],
         vectors=[unit_vector(0), unit_vector(1), unit_vector(4)],
     )
+    conn.execute("SELECT rebuild_document_edges(%s)", (overlap_id,))
     # partial은 세 청크 중 e0 하나만 source와 겹친다 — 비율 1/3.
     mark_document_ready(
         conn,
@@ -601,12 +647,14 @@ def test_edge_kind_distinguishes_overlaps_from_related_and_never_emits_points_to
         ["only zero", "seven", "eight"],
         vectors=[unit_vector(0), unit_vector(7), unit_vector(8)],
     )
+    conn.execute("SELECT rebuild_document_edges(%s)", (partial_id,))
     # source의 e1 프로브에서 partial을 top-10 밖으로 밀어 매칭 비율을 1/3로 만든다.
     near_one = unit_vector(1)
     near_one[2] = 0.1
     for index in range(10):
         decoy_id = insert_document(conn, f"decoy {index}", f"sha256:kind-decoy:{index}")
         mark_document_ready(conn, decoy_id, [f"decoy {index}"], vectors=[near_one])
+        conn.execute("SELECT rebuild_document_edges(%s)", (decoy_id,))
     # e0·e4 프로브를 채워 직교 청크가 동점으로 끌려와 대목 수에 집계되지 않게 한다.
     for axis in (0, 4):
         near_axis = unit_vector(axis)
@@ -614,12 +662,14 @@ def test_edge_kind_distinguishes_overlaps_from_related_and_never_emits_points_to
         for index in range(9):
             filler_id = insert_document(conn, f"filler {index}", f"sha256:kind-filler:{axis}:{index}")
             mark_document_ready(conn, filler_id, [f"filler {index}"], vectors=[near_axis])
+            conn.execute("SELECT rebuild_document_edges(%s)", (filler_id,))
     mark_document_ready(
         conn,
         source_id,
         ["source zero", "source one", "source four"],
         vectors=[unit_vector(0), unit_vector(1), unit_vector(4)],
     )
+    conn.execute("SELECT rebuild_document_edges(%s)", (source_id,))
 
     kinds = {
         dst_id: kind
@@ -652,8 +702,10 @@ def test_a_single_chunk_document_never_claims_overlaps(conn: psycopg.Connection)
         ["zero", "one", "two"],
         vectors=[unit_vector(0), unit_vector(1), unit_vector(2)],
     )
+    conn.execute("SELECT rebuild_document_edges(%s)", (long_id,))
     # single이 나중에 ready가 되어야 single 기준으로 비율이 계산된다.
     mark_document_ready(conn, single_id, ["zero"], vectors=[unit_vector(0)])
+    conn.execute("SELECT rebuild_document_edges(%s)", (single_id,))
 
     kind = conn.execute(
         "SELECT kind FROM document_edges WHERE src_document_id = %s AND dst_document_id = %s",
@@ -677,12 +729,14 @@ def test_a_long_document_does_not_claim_overlaps_with_a_single_chunk_neighbour(
     for axis in range(3):
         blend[axis] = 1.0 / 3**0.5
     mark_document_ready(conn, single_id, ["blend"], vectors=[blend])
+    conn.execute("SELECT rebuild_document_edges(%s)", (single_id,))
     mark_document_ready(
         conn,
         long_id,
         ["zero", "one", "two"],
         vectors=[unit_vector(0), unit_vector(1), unit_vector(2)],
     )
+    conn.execute("SELECT rebuild_document_edges(%s)", (long_id,))
 
     kind = conn.execute(
         "SELECT kind FROM document_edges WHERE src_document_id = %s AND dst_document_id = %s",
@@ -704,12 +758,14 @@ def test_two_chunk_documents_never_qualify_as_overlaps(conn: psycopg.Connection)
         ["zero", "one"],
         vectors=[unit_vector(0), unit_vector(1)],
     )
+    conn.execute("SELECT rebuild_document_edges(%s)", (twin_id,))
     mark_document_ready(
         conn,
         source_id,
         ["zero", "one"],
         vectors=[unit_vector(0), unit_vector(1)],
     )
+    conn.execute("SELECT rebuild_document_edges(%s)", (source_id,))
 
     kind = conn.execute(
         "SELECT kind FROM document_edges WHERE src_document_id = %s AND dst_document_id = %s",
@@ -729,12 +785,14 @@ def test_three_matching_chunks_on_both_sides_qualify_as_overlaps(conn: psycopg.C
         ["zero", "one", "two"],
         vectors=[unit_vector(0), unit_vector(1), unit_vector(2)],
     )
+    conn.execute("SELECT rebuild_document_edges(%s)", (twin_id,))
     mark_document_ready(
         conn,
         source_id,
         ["zero", "one", "two"],
         vectors=[unit_vector(0), unit_vector(1), unit_vector(2)],
     )
+    conn.execute("SELECT rebuild_document_edges(%s)", (source_id,))
 
     kind = conn.execute(
         "SELECT kind FROM document_edges WHERE src_document_id = %s AND dst_document_id = %s",
@@ -748,7 +806,9 @@ def test_deleting_a_document_cascades_trigger_generated_edges(conn: psycopg.Conn
     first_id = insert_document(conn, "first", "sha256:edge-delete-first")
     second_id = insert_document(conn, "second", "sha256:edge-delete-second")
     mark_document_ready(conn, first_id, ["first"], vectors=[unit_vector(0)])
+    conn.execute("SELECT rebuild_document_edges(%s)", (first_id,))
     mark_document_ready(conn, second_id, ["second"], vectors=[unit_vector(0)])
+    conn.execute("SELECT rebuild_document_edges(%s)", (second_id,))
 
     conn.execute("DELETE FROM documents WHERE id = %s", (second_id,))
 
@@ -759,7 +819,9 @@ def test_metadata_update_does_not_rebuild_edges(conn: psycopg.Connection):
     first_id = insert_document(conn, "first", "sha256:edge-metadata-first")
     second_id = insert_document(conn, "second", "sha256:edge-metadata-second")
     mark_document_ready(conn, first_id, ["first"], vectors=[unit_vector(0)])
+    conn.execute("SELECT rebuild_document_edges(%s)", (first_id,))
     mark_document_ready(conn, second_id, ["second"], vectors=[unit_vector(0)])
+    conn.execute("SELECT rebuild_document_edges(%s)", (second_id,))
     conn.execute(
         "UPDATE document_edges SET score = 0.123 WHERE src_document_id = %s OR dst_document_id = %s",
         (second_id, second_id),
@@ -775,18 +837,18 @@ def test_metadata_update_does_not_rebuild_edges(conn: psycopg.Connection):
 
 
 def test_ready_to_ready_update_does_not_reenter_the_trigger(conn: psycopg.Connection):
-    first_id = insert_document(conn, "first", "sha256:edge-reentry-first")
-    second_id = insert_document(conn, "second", "sha256:edge-reentry-second")
-    mark_document_ready(conn, first_id, ["first"], vectors=[unit_vector(0)])
-    mark_document_ready(conn, second_id, ["second"], vectors=[unit_vector(0)])
+    doc_id = insert_document(conn)
+    mark_document_ready(conn, doc_id, ["text"])
     conn.execute(
-        "UPDATE document_edges SET score = 0.123 WHERE src_document_id = %s OR dst_document_id = %s",
-        (second_id, second_id),
+        "UPDATE embedding_jobs SET status = 'done' WHERE document_id = %s AND kind = 'edges'",
+        (doc_id,),
     )
 
-    conn.execute("UPDATE documents SET embedding_status = 'ready' WHERE id = %s", (second_id,))
+    conn.execute("UPDATE documents SET embedding_status = 'ready' WHERE id = %s", (doc_id,))
 
-    assert all(row[5] == pytest.approx(0.123) for row in edges_for(conn, second_id))
+    assert conn.execute(
+        "SELECT status FROM embedding_jobs WHERE document_id = %s AND kind = 'edges'", (doc_id,),
+    ).fetchall() == [("done",)]
 
 
 @pytest.mark.parametrize("deprecated_kind", ["points_to", "broader"])
@@ -807,7 +869,7 @@ def test_edges_reject_kinds_removed_by_adr_029(
         )
 
 
-def test_edges_trigger_definition_and_function_settings_are_scoped(conn: psycopg.Connection):
+def test_rebuild_document_edges_is_unchanged_and_still_scoped(conn: psycopg.Connection):
     definition, config = conn.execute(
         """
         SELECT pg_get_triggerdef(t.oid), p.proconfig
@@ -828,6 +890,16 @@ def test_edges_trigger_definition_and_function_settings_are_scoped(conn: psycopg
     assert set(rebuild_config) == {
         "hnsw.ef_search=200", "random_page_cost=1.1", "enable_seqscan=off",
     }
+    doc_id = insert_document(conn)
+    mark_document_ready(conn, doc_id, ["text"])
+    with conn.transaction():
+        conn.execute("SET LOCAL hnsw.ef_search = 40")
+        conn.execute("SET LOCAL random_page_cost = 4")
+        conn.execute("SET LOCAL enable_seqscan = on")
+        conn.execute("SELECT rebuild_document_edges(%s)", (doc_id,))
+        assert conn.execute("SHOW hnsw.ef_search").fetchone()[0] == "40"
+        assert conn.execute("SHOW random_page_cost").fetchone()[0] == "4"
+        assert conn.execute("SHOW enable_seqscan").fetchone()[0] == "on"
 
 
 def test_edge_neighbor_constant_probe_can_use_the_hnsw_index(conn: psycopg.Connection):
@@ -835,7 +907,9 @@ def test_edge_neighbor_constant_probe_can_use_the_hnsw_index(conn: psycopg.Conne
     first_id = insert_document(conn, "first", "sha256:edge-plan-first")
     second_id = insert_document(conn, "second", "sha256:edge-plan-second")
     mark_document_ready(conn, first_id, ["first"], vectors=[unit_vector(0)])
+    conn.execute("SELECT rebuild_document_edges(%s)", (first_id,))
     mark_document_ready(conn, second_id, ["second"], vectors=[unit_vector(1)])
+    conn.execute("SELECT rebuild_document_edges(%s)", (second_id,))
     probe = to_pgvector_literal(unit_vector(0))
 
     with conn.transaction():
@@ -873,7 +947,9 @@ def test_rebuild_function_probes_hit_the_hnsw_index_on_repeated_calls(conn: psyc
     first_id = insert_document(conn, "first", "sha256:edge-generic-first")
     second_id = insert_document(conn, "second", "sha256:edge-generic-second")
     mark_document_ready(conn, first_id, ["first"], vectors=[unit_vector(0)])
+    conn.execute("SELECT rebuild_document_edges(%s)", (first_id,))
     mark_document_ready(conn, second_id, ["second"], vectors=[unit_vector(1)])
+    conn.execute("SELECT rebuild_document_edges(%s)", (second_id,))
     # 통계가 없는 표에서는 플래너가 기본 추정치로 인덱스를 고르므로 판별력이 없다.
     # ANALYZE 뒤에는 20행에서도 Seq Scan을 고른다 — 그래서 함수의 SET이 필요하다.
     conn.execute("ANALYZE document_chunks")
@@ -902,6 +978,7 @@ def test_overlaps_requires_the_ratio_on_both_sides(conn: psycopg.Connection):
         conn, long_id, ["zero", "one", "two", "three"],
         vectors=[unit_vector(axis) for axis in range(4)],
     )
+    conn.execute("SELECT rebuild_document_edges(%s)", (long_id,))
     # 세 프로브의 top-10을 채워 long의 네 번째 청크가 동점으로 끌려오지 않게 한다.
     for axis in range(3):
         vector = unit_vector(axis)
@@ -909,11 +986,13 @@ def test_overlaps_requires_the_ratio_on_both_sides(conn: psycopg.Connection):
         for index in range(9):
             filler_id = insert_document(conn, "filler", f"sha256:both:{axis}:{index}")
             mark_document_ready(conn, filler_id, ["filler"], vectors=[vector])
+            conn.execute("SELECT rebuild_document_edges(%s)", (filler_id,))
     short_id = insert_document(conn, "short", "sha256:both-short")
     mark_document_ready(
         conn, short_id, ["zero", "one", "two"],
         vectors=[unit_vector(0), unit_vector(1), unit_vector(2)],
     )
+    conn.execute("SELECT rebuild_document_edges(%s)", (short_id,))
 
     kinds = {row[1]: row[2] for row in edges_for(conn, short_id) if row[0] == short_id}
     assert kinds[long_id] == "related"
@@ -926,9 +1005,11 @@ def test_a_document_keeps_at_most_five_neighbour_documents(conn: psycopg.Connect
         vector[index] = 0.01 * index
         doc_id = insert_document(conn, "candidate", f"sha256:cap:{index}")
         mark_document_ready(conn, doc_id, ["candidate"], vectors=[vector])
+        conn.execute("SELECT rebuild_document_edges(%s)", (doc_id,))
         candidates.append(doc_id)
     source_id = insert_document(conn, "source", "sha256:cap-source")
     mark_document_ready(conn, source_id, ["source"], vectors=[unit_vector(0)])
+    conn.execute("SELECT rebuild_document_edges(%s)", (source_id,))
 
     rows = [row for row in edges_for(conn, source_id) if row[0] == source_id]
     assert len(rows) == 5
@@ -941,16 +1022,19 @@ def test_neighbour_cap_prefers_documents_met_in_more_passages(conn: psycopg.Conn
     for vector in vectors:
         vector[5] = 0.05
     mark_document_ready(conn, twin_id, ["zero", "one"], vectors=vectors)
+    conn.execute("SELECT rebuild_document_edges(%s)", (twin_id,))
     for axis in range(2):
         vector = unit_vector(axis)
         vector[6] = 0.001
         for index in range(9):
             filler_id = insert_document(conn, "filler", f"sha256:passages:{axis}:{index}")
             mark_document_ready(conn, filler_id, ["filler"], vectors=[vector])
+            conn.execute("SELECT rebuild_document_edges(%s)", (filler_id,))
     source_id = insert_document(conn, "source", "sha256:passages-source")
     mark_document_ready(
         conn, source_id, ["zero", "one"], vectors=[unit_vector(0), unit_vector(1)],
     )
+    conn.execute("SELECT rebuild_document_edges(%s)", (source_id,))
 
     rows = [row for row in edges_for(conn, source_id) if row[0] == source_id]
     assert len(rows) == 5
@@ -960,8 +1044,10 @@ def test_neighbour_cap_prefers_documents_met_in_more_passages(conn: psycopg.Conn
 def test_rebuild_lets_an_earlier_document_see_a_later_one(conn: psycopg.Connection):
     first_id = insert_document(conn, "first", "sha256:rebuild-first")
     mark_document_ready(conn, first_id, ["first"], vectors=[unit_vector(0)])
+    conn.execute("SELECT rebuild_document_edges(%s)", (first_id,))
     second_id = insert_document(conn, "second", "sha256:rebuild-second")
     mark_document_ready(conn, second_id, ["second"], vectors=[unit_vector(0)])
+    conn.execute("SELECT rebuild_document_edges(%s)", (second_id,))
     before = edges_for(conn, first_id)
     assert {(row[0], row[1]) for row in before} == {(second_id, first_id)}
 
@@ -975,11 +1061,13 @@ def test_rebuild_lets_an_earlier_document_see_a_later_one(conn: psycopg.Connecti
     assert set(edges_for(conn, first_id)) == rebuilt
 
 
-def test_trigger_and_rebuild_produce_the_same_rows(conn: psycopg.Connection):
+def test_rebuild_produces_the_same_rows_on_repeated_calls(conn: psycopg.Connection):
     first_id = insert_document(conn, "first", "sha256:same-first")
     mark_document_ready(conn, first_id, ["zero", "one"], vectors=[unit_vector(0), unit_vector(1)])
+    conn.execute("SELECT rebuild_document_edges(%s)", (first_id,))
     second_id = insert_document(conn, "second", "sha256:same-second")
     mark_document_ready(conn, second_id, ["zero", "one"], vectors=[unit_vector(0), unit_vector(1)])
+    conn.execute("SELECT rebuild_document_edges(%s)", (second_id,))
     query = """
         SELECT src_document_id, dst_document_id, kind,
                src_chunk_index, dst_chunk_index, round(score::numeric, 6)

@@ -53,6 +53,7 @@ def test_status_reports_operational_fields(db_client: TestClient):
         "zombie_timeout_minutes",
         "last_job_finished_at",
         "inconsistent_documents",
+        "stale_edge_documents",
         "embedding_provider",
     }
     assert "reconnect_events" not in body
@@ -65,6 +66,7 @@ def test_status_reports_operational_fields(db_client: TestClient):
     assert body["zombie_timeout_minutes"] == 5
     assert body["last_job_finished_at"] is None
     assert body["inconsistent_documents"] == 0
+    assert body["stale_edge_documents"] == 0
     assert body["embedding_provider"] == "fake"
     # 접속 노드는 환경마다 다르다. TCP면 주소가, 유닉스 소켓이면 NULL이 온다.
     # 값 자체가 아니라 페일오버 데모가 읽을 수 있는 형태인지를 본다.
@@ -164,3 +166,20 @@ def test_consistency_counter_counts_documents_not_chunks(
     assert response.status_code == 200
 
     assert db_client.get("/api/system/status").json()["inconsistent_documents"] == 1
+
+
+def test_status_reports_documents_whose_relations_are_not_reflected_yet(
+    db_client: TestClient, migrated_db: str
+):
+    upload(db_client)
+    run_embedding_worker(migrated_db)
+    assert db_client.get("/api/system/status").json()["stale_edge_documents"] == 0
+
+    with psycopg.connect(migrated_db) as conn:
+        conn.execute("UPDATE embedding_jobs SET status = 'error' WHERE kind = 'edges'")
+
+    assert db_client.get("/api/system/status").json()["stale_edge_documents"] == 1
+
+    # 새 카운터도 기존 응답과 같은 로그인 경계 안에 있다 (ADR-028).
+    db_client.post("/api/auth/logout")
+    assert db_client.get("/api/system/status").status_code == 401

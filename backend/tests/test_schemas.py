@@ -65,6 +65,7 @@ def test_system_status_accepts_service_dataclasses():
         zombie_timeout_minutes=5,
         last_job_finished_at=None,
         inconsistent_documents=4,
+        stale_edge_documents=2,
         embedding_provider="fake",
     )
 
@@ -73,4 +74,5 @@ def test_system_status_accepts_service_dataclasses():
     assert response.jobs.pending == 1
     assert response.jobs.recovery_pending == 1
     assert response.inconsistent_documents == 4
+    assert response.stale_edge_documents == 2
     assert response.embedding_provider == "fake"

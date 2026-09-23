@@ -209,6 +209,48 @@ def test_a_finished_job_frees_the_slot_for_a_new_pending_job(conn: psycopg.Conne
     assert [s[0] for s in statuses] == ["done", "pending"]
 
 
+def test_a_job_kind_outside_the_two_known_values_is_rejected(conn: psycopg.Connection):
+    """잡 종류는 `embed`·`edges` 둘뿐이다 (016).
+
+    워커는 `kind`로 처리 본체를 가른다. 제약이 없으면 오타 하나가 어느 분기에도
+    걸리지 않는 잡을 만들고, 그 잡은 claim은 되지만 아무 일도 하지 않은 채 영원히
+    큐에 남는다 — 관계 미반영 카운터도 그만큼 0으로 돌아오지 않는다.
+    """
+    doc_id = insert_document(conn)
+    conn.execute("UPDATE embedding_jobs SET status = 'done' WHERE document_id = %s", (doc_id,))
+
+    with pytest.raises(psycopg.errors.CheckViolation) as exc:
+        conn.execute(
+            "INSERT INTO embedding_jobs (document_id, kind) VALUES (%s, 'edge')", (doc_id,)
+        )
+
+    assert "embedding_jobs_kind_valid" in str(exc.value)
+
+
+def test_the_coalescing_key_includes_the_job_kind(conn: psycopg.Connection):
+    """코얼레싱 단위는 (문서, 종류)다 (016).
+
+    종류가 키에 없으면 ready 전이의 관계 잡 INSERT가 같은 문서의 pending 임베딩 잡과
+    충돌해 `ON CONFLICT DO NOTHING`으로 **조용히 사라진다.** 그러면 그 문서의 관계는
+    아무도 계산하지 않는다. 같은 종류 안에서는 여전히 1건으로 접힌다.
+    """
+    doc_id = insert_document(conn)  # 트리거가 pending 임베딩 잡 1건을 만든다
+    conn.execute("INSERT INTO embedding_jobs (document_id, kind) VALUES (%s, 'edges')", (doc_id,))
+
+    kinds = conn.execute(
+        "SELECT kind FROM embedding_jobs WHERE document_id = %s AND status = 'pending' ORDER BY id",
+        (doc_id,),
+    ).fetchall()
+    assert [k[0] for k in kinds] == ["embed", "edges"]
+
+    with pytest.raises(psycopg.errors.UniqueViolation) as exc:
+        conn.execute(
+            "INSERT INTO embedding_jobs (document_id, kind) VALUES (%s, 'edges')", (doc_id,)
+        )
+
+    assert "uq_pending_job_per_doc_kind" in str(exc.value)
+
+
 def test_pending_jobs_of_different_documents_do_not_collide(conn: psycopg.Connection):
     """코얼레싱 단위는 문서다 — 전역으로 pending 1건이 되면 큐가 성립하지 않는다."""
     insert_document(conn, content_hash="sha256:doc-1")

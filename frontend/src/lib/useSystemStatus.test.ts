@@ -11,6 +11,7 @@ const status: SystemStatus = {
   zombie_timeout_minutes: 5,
   last_job_finished_at: null,
   inconsistent_documents: 0,
+  stale_edge_documents: 0,
   embedding_provider: "fake",
 };
 
