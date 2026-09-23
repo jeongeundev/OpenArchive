@@ -1,0 +1,70 @@
+{
+  "project": "OpenArchive",
+  "phase": "m16-original-files",
+  "steps": [
+    {
+      "step": 0,
+      "name": "files-schema",
+      "type": "feat",
+      "scope": "db",
+      "desc": "원본 파일을 판(file_version)으로 쌓는 document_files 테이블 — 크기·sha256은 DB 생성 컬럼 (018)",
+      "status": "pending"
+    },
+    {
+      "step": 1,
+      "name": "file-storage",
+      "type": "feat",
+      "scope": "api",
+      "desc": "업로드가 문서와 같은 트랜잭션에 원본 1판을 저장하고 업로드 상한을 설정값(기본 50MB)으로 옮긴다",
+      "status": "pending"
+    },
+    {
+      "step": 2,
+      "name": "file-download",
+      "type": "feat",
+      "scope": "api",
+      "desc": "문서 상세에 원본 판 목록을 싣고 최신·특정 판 원본을 열람 범위 안에서 내려받는다",
+      "status": "pending"
+    },
+    {
+      "step": 3,
+      "name": "file-replace",
+      "type": "feat",
+      "scope": "api",
+      "desc": "원본 교체 — 이전 원본을 지우지 않고 새 판을 쌓으며 추출 텍스트는 새 버전이 된다",
+      "status": "pending"
+    },
+    {
+      "step": 4,
+      "name": "reextract",
+      "type": "feat",
+      "scope": "api",
+      "desc": "최신 원본에서 텍스트를 다시 추출해 새 텍스트 버전을 만든다 — 같으면 버전을 만들지 않는다",
+      "status": "pending"
+    },
+    {
+      "step": 5,
+      "name": "reextract-cli",
+      "type": "feat",
+      "scope": "api",
+      "desc": "openarchive reextract <id> | --all — 파서를 고친 뒤 기존 문서에 적용하는 운영자 경로",
+      "status": "pending"
+    },
+    {
+      "step": 6,
+      "name": "file-ui",
+      "type": "feat",
+      "scope": "frontend",
+      "desc": "문서 상세에 원본 파일 판 목록·내려받기·교체·다시 추출을 붙이고 업로드 선검사를 50MB로 맞춘다",
+      "status": "pending"
+    },
+    {
+      "step": 7,
+      "name": "docs-original-files",
+      "type": "docs",
+      "scope": "adr",
+      "desc": "ADR-046 원본 보관(bytea·판 이력) 신설과 PRD §4·UI_GUIDE·ARCHITECTURE·OPERATIONS·README 개정",
+      "status": "pending"
+    }
+  ]
+}
