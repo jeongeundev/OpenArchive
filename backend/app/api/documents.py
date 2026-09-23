@@ -1,4 +1,5 @@
 from typing import Annotated, Literal
+from urllib.parse import quote
 from uuid import UUID
 
 from fastapi import (
@@ -126,6 +127,50 @@ async def get_document(
 ) -> DocumentDetail:
     document = await service.get_document(conn, document_id, user_id=user_id)
     return DocumentDetail.model_validate(document)
+
+
+def _original_file_response(original: dict) -> Response:
+    """원본은 항상 내려받기(attachment)로만 보낸다.
+
+    앱과 같은 오리진(ADR-041)에서 세션 쿠키를 가진 채 사용자가 올린 HTML·SVG가 렌더링되면
+    저장형 XSS가 된다. `nosniff`는 브라우저가 내용을 보고 타입을 바꿔 읽는 것을 막는다.
+    """
+    filename = original["filename"]
+    # filename=은 ASCII만 안전하다. 한글 이름은 filename*(RFC 5987)이 나른다.
+    fallback = filename.encode("ascii", "replace").decode("ascii").replace('"', "_")
+    return Response(
+        content=original["data"],
+        media_type=original["media_type"],
+        headers={
+            "Content-Disposition": (
+                f"attachment; filename=\"{fallback}\"; filename*=UTF-8''{quote(filename)}"
+            ),
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
+@router.get("/{document_id}/file")
+async def download_latest_original(
+    document_id: UUID,
+    conn: Connection,
+    user_id: Annotated[str, Depends(require_user_id)],
+) -> Response:
+    original = await service.get_original_file(conn, document_id, user_id=user_id)
+    return _original_file_response(original)
+
+
+@router.get("/{document_id}/files/{file_version}")
+async def download_original(
+    document_id: UUID,
+    file_version: Annotated[int, Path(ge=1)],
+    conn: Connection,
+    user_id: Annotated[str, Depends(require_user_id)],
+) -> Response:
+    original = await service.get_original_file(
+        conn, document_id, user_id=user_id, file_version=file_version
+    )
+    return _original_file_response(original)
 
 
 @router.get("/{document_id}/links", response_model=list[ResolvedLinkItem])

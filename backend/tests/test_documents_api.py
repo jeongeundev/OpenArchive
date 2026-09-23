@@ -1,6 +1,7 @@
 import hashlib
 import io
 import zipfile
+from urllib.parse import quote
 from uuid import uuid4
 
 import psycopg
@@ -940,3 +941,155 @@ def test_restore_endpoint_refuses_a_non_owner_of_a_public_document(
     )
 
     assert response.status_code == 403
+
+
+ORIGINAL_FILE_KEYS = {
+    "file_version",
+    "filename",
+    "size",
+    "sha256",
+    "text_version",
+    "uploaded_by",
+    "uploaded_at",
+}
+
+
+def test_detail_lists_original_file_versions_without_bytes(db_client: TestClient):
+    data = b"OpenSQL original"
+    uploaded_id = upload(db_client, filename="original.txt", content=data).json()["id"]
+    supplied_id = db_client.post(
+        "/api/documents/text", json={"title": "직접 공급", "content": "text only"}
+    ).json()["id"]
+
+    files = db_client.get(f"/api/documents/{uploaded_id}").json()["files"]
+    assert len(files) == 1
+    assert set(files[0]) == ORIGINAL_FILE_KEYS
+    assert files[0]["file_version"] == 1
+    assert files[0]["filename"] == "original.txt"
+    assert files[0]["size"] == len(data)
+    assert files[0]["sha256"] == hashlib.sha256(data).hexdigest()
+    assert files[0]["text_version"] == 1
+    assert files[0]["uploaded_by"] == "alice"
+
+    assert db_client.get(f"/api/documents/{supplied_id}").json()["files"] == []
+
+
+def test_download_returns_the_exact_uploaded_bytes(db_client: TestClient):
+    """추출 텍스트가 아니라 올린 파일 바이트 그대로가 나온다 — DOCX는 둘이 전혀 다르다."""
+    buffer = io.BytesIO()
+    docx = Document()
+    docx.add_paragraph("OpenSQL 원본 보관")
+    docx.save(buffer)
+    data = buffer.getvalue()
+    document_id = upload(db_client, filename="report.docx", content=data).json()["id"]
+
+    response = db_client.get(f"/api/documents/{document_id}/file")
+
+    assert response.status_code == 200
+    assert hashlib.sha256(response.content).hexdigest() == hashlib.sha256(data).hexdigest()
+    assert response.headers["content-type"] == (
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    )
+
+
+def test_download_specific_file_version(db_client: TestClient):
+    data = b"OpenSQL versioned original"
+    document_id = upload(db_client, filename="v.md", content=data).json()["id"]
+
+    response = db_client.get(f"/api/documents/{document_id}/files/1")
+    assert response.status_code == 200
+    assert response.content == data
+
+    missing = db_client.get(f"/api/documents/{document_id}/files/2")
+    assert missing.status_code == 404
+    assert missing.json()["detail"] != "문서를 찾을 수 없습니다."
+
+
+def test_download_of_another_users_private_document_is_404(db_client: TestClient):
+    document_id = upload(
+        db_client, filename="secret.txt", data={"visibility": "private"}
+    ).json()["id"]
+
+    login_as(db_client, "bob")
+    not_found = db_client.get(f"/api/documents/{uuid4()}/file").json()["detail"]
+    for path in ("file", "files/1"):
+        response = db_client.get(f"/api/documents/{document_id}/{path}")
+        assert response.status_code == 404
+        assert response.json()["detail"] == not_found
+
+
+def test_download_without_original_is_404(db_client: TestClient):
+    login_as(db_client, "alice")
+    document_id = db_client.post(
+        "/api/documents/text", json={"title": "원본 없음", "content": "text only"}
+    ).json()["id"]
+
+    response = db_client.get(f"/api/documents/{document_id}/file")
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "원본 파일이 없습니다."
+
+
+@pytest.mark.parametrize(
+    ("filename", "media_type"),
+    [
+        ("한글 문서.md", "text/markdown; charset=utf-8"),
+        ("notes.txt", "text/plain; charset=utf-8"),
+    ],
+)
+def test_download_headers_force_attachment(
+    db_client: TestClient, filename: str, media_type: str
+):
+    document_id = upload(db_client, filename=filename, content=b"OpenSQL").json()["id"]
+
+    response = db_client.get(f"/api/documents/{document_id}/file")
+
+    disposition = response.headers["content-disposition"]
+    assert disposition.startswith("attachment;")
+    assert f"filename*=UTF-8''{quote(filename)}" in disposition
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert response.headers["content-type"] == media_type
+
+
+def test_download_media_type_ignores_the_uploaded_content_type(db_client: TestClient):
+    """업로더가 보낸 Content-Type(text/html)이 응답에 새지 않는다 — 확장자 고정 매핑만 쓴다."""
+    login_as(db_client, "alice")
+    document_id = db_client.post(
+        "/api/documents",
+        files={"file": ("page.txt", b"<script>alert(1)</script>", "text/html")},
+    ).json()["id"]
+
+    response = db_client.get(f"/api/documents/{document_id}/file")
+
+    assert response.headers["content-type"] == "text/plain; charset=utf-8"
+
+
+def test_read_token_can_download(db_client: TestClient, migrated_db: str):
+    data = b"OpenSQL token download"
+    document_id = upload(db_client, content=data).json()["id"]
+    token = "alice-download-token"
+    with psycopg.connect(migrated_db) as conn:
+        user_id = conn.execute(
+            "SELECT id FROM users WHERE username = 'alice'"
+        ).fetchone()[0]
+        conn.execute(
+            "INSERT INTO api_tokens (user_id, name, token_hash, scope) VALUES (%s, 'read-dl', %s, 'read')",
+            (user_id, hashlib.sha256(token.encode()).hexdigest()),
+        )
+
+    db_client.cookies.clear()
+    response = db_client.get(
+        f"/api/documents/{document_id}/file",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    assert response.content == data
+
+
+def test_download_requires_login(db_client: TestClient):
+    document_id = upload(db_client).json()["id"]
+    db_client.post("/api/auth/logout")
+
+    assert db_client.get(f"/api/documents/{document_id}/file").status_code == 401
+    assert db_client.get(f"/api/documents/{document_id}/files/1").status_code == 401

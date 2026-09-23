@@ -37,9 +37,21 @@ class RestoreVersionRequest(BaseModel):
     current_version: int
 
 
+class OriginalFile(BaseModel):
+    # 원본 판의 메타데이터. 바이트는 싣지 않는다 — 내려받기 엔드포인트의 몫이다.
+    file_version: int
+    filename: str
+    size: int
+    sha256: str
+    text_version: int
+    uploaded_by: str
+    uploaded_at: datetime
+
+
 class DocumentDetail(DocumentSummary):
     content: str
     versions: list[TextVersion]
+    files: list[OriginalFile]
     chunk_count: int
     chunk_version: int | None
 

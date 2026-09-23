@@ -11,7 +11,12 @@ from uuid import UUID
 import psycopg
 from psycopg.rows import dict_row
 
-from app.services.parsing import UnsupportedFileType, detect_content_type, extract_text
+from app.services.parsing import (
+    UnsupportedFileType,
+    detect_content_type,
+    extract_text,
+    media_type_for,
+)
 from app.services.visibility import VISIBILITY_VALUES, VISIBLE_TO_USER
 
 # 목록·요약 응답이 쓰는 컬럼. 네 곳에서 같은 나열을 반복하지 않도록 한 곳에 둔다.
@@ -32,6 +37,10 @@ WHERE d.id = %(id)s
 
 class DocumentNotFound(Exception):
     """문서가 없거나, 볼 권한이 없어 존재를 알려주지 않는 경우."""
+
+
+class OriginalFileNotFound(Exception):
+    """볼 수 있는 문서지만 요청한 원본 판이 없는 경우. 문서 없음과 구분해도 누출이 없다."""
 
 
 class DocumentAccessDenied(Exception):
@@ -315,7 +324,51 @@ async def get_document(
         (document_id,),
     )
     document["versions"] = await cur.fetchall()
+
+    # 원본 판은 메타데이터만 싣는다. 상세는 화면이 수시로 부르는 응답이라 바이트를 섞지 않는다.
+    await cur.execute(
+        """
+        SELECT file_version, filename, size, sha256, text_version, uploaded_by, uploaded_at
+        FROM document_files
+        WHERE document_id = %s
+        ORDER BY file_version
+        """,
+        (document_id,),
+    )
+    document["files"] = await cur.fetchall()
     return document
+
+
+async def get_original_file(
+    conn: psycopg.AsyncConnection,
+    document_id: UUID,
+    *,
+    user_id: str | None,
+    file_version: int | None = None,
+) -> dict:
+    """원본 한 판의 바이트를 돌려준다. `file_version`이 없으면 최신 판이다.
+
+    열람 검증을 먼저 한다 — 볼 수 없는 문서는 원본 유무와 관계없이 DocumentNotFound라
+    원본의 존재가 문서의 존재를 누출하지 않는다 (ADR-027).
+    """
+    await ensure_visible(conn, document_id, user_id=user_id)
+    cur = conn.cursor(row_factory=dict_row)
+    await cur.execute(
+        """
+        SELECT filename, data, sha256
+        FROM document_files
+        WHERE document_id = %(id)s
+          AND (%(version)s::int IS NULL OR file_version = %(version)s)
+        ORDER BY file_version DESC
+        LIMIT 1
+        """,
+        {"id": document_id, "version": file_version},
+    )
+    original = await cur.fetchone()
+    if original is None:
+        raise OriginalFileNotFound
+    original["media_type"] = media_type_for(original["filename"])
+    return original
 
 
 async def update_extracted_text(

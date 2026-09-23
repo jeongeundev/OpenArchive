@@ -103,3 +103,12 @@ def test_extract_text_normalizes_invalid_binary_document_errors(
 def test_extract_text_rejects_unsupported_content_type() -> None:
     with pytest.raises(UnsupportedFileType):
         extract_text(b"data", "hwp")
+
+
+def test_media_type_is_fixed_by_extension_with_octet_stream_fallback():
+    from app.services.parsing import media_type_for
+
+    assert media_type_for("a.PDF") == "application/pdf"
+    assert media_type_for("a.md") == "text/markdown; charset=utf-8"
+    assert media_type_for("a.html") == "application/octet-stream"
+    assert media_type_for("noext") == "application/octet-stream"
