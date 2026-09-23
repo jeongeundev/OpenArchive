@@ -85,7 +85,10 @@
       "type": "docs",
       "scope": "adr",
       "desc": "ADR-046 원본 보관(bytea·판 이력) 신설과 PRD §4·UI_GUIDE·ARCHITECTURE·OPERATIONS·README 개정",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-09-24T01:50:26+0900",
+      "summary": "ADR-046(원본 bytea 판 보관: 위치·판·교체/재추출·attachment+nosniff·트레이드오프, 50MB VM 실측은 머지 뒤) 신설 + ADR-017·033·028·039에 이동 주석(OWNED_TABLES 10개). PRD §4 원칙을 원본 보관으로 개정·C1 한 줄·하지 않는 것 문구, UI_GUIDE 검색 링크 이유·용어(원본 파일·판)·원본 파일 절, ARCHITECTURE document_files 스키마·018 목록·API 4종·files·업로드 같은 트랜잭션, OPERATIONS MAX_UPLOAD_MB·원본 보관(크기 쿼리·백업)·openarchive reextract 절, ROADMAP 판 보관 정책·테이블 10개, README 기능표·50MB·원본 내려받기/교체/재추출. 코드 변경 0줄, check.sh 통과(backend 704·frontend 203)",
+      "completed_at": "2026-09-24T01:55:44+0900"
     }
   ],
   "created_at": "2026-09-24T01:10:16+0900"
