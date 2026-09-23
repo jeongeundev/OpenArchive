@@ -5,6 +5,9 @@
 Mock으로는 확인할 수 없다 (CLAUDE.md 개발 프로세스).
 """
 
+import asyncio
+import hashlib
+
 import psycopg
 import pytest
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
@@ -14,6 +17,7 @@ from app.cli import OWNED_TABLES, main, probe_capabilities
 from app.config import ENV_FILE
 from app.migrations import migration_files
 from app.services.auth import hash_password, verify_password
+from app.services.documents import create_document
 
 
 def table_names(dsn: str) -> set[str]:
@@ -495,3 +499,97 @@ def test_rebuild_edges_does_not_report_a_query_failure_as_a_connection_failure(c
     with pytest.raises(psycopg.Error):
         main(["rebuild-edges", "--dsn", clean_db])
     assert "연결하지 못했습니다" not in capsys.readouterr().out
+
+
+# ── openarchive reextract ─────────────────────────────────────────────────
+
+
+def upload_original(dsn: str, text: str) -> str:
+    async def _upload():
+        async with await psycopg.AsyncConnection.connect(dsn, autocommit=True) as conn:
+            document = await create_document(
+                conn, filename="note.txt", data=text.encode("utf-8"), owner_id="alice"
+            )
+            return str(document["id"])
+
+    return asyncio.run(_upload())
+
+
+def edit_text(dsn: str, document_id: str, content: str) -> None:
+    with psycopg.connect(dsn) as conn:
+        conn.execute(
+            """
+            UPDATE documents SET version = version + 1, content = %s, content_hash = %s
+             WHERE id = %s
+            """,
+            (content, hashlib.sha256(content.encode()).hexdigest(), document_id),
+        )
+
+
+def test_reextract_one_document_reports_changed_then_unchanged(migrated_db, capsys):
+    document_id = upload_original(migrated_db, "original")
+    edit_text(migrated_db, document_id, "edited")
+
+    assert main(["reextract", document_id, "--dsn", migrated_db]) == 0
+    assert "바뀜 1건 · 같음 0건 · 실패 0건" in capsys.readouterr().out
+    with psycopg.connect(migrated_db) as conn:
+        assert conn.execute(
+            "SELECT version, content FROM documents WHERE id = %s", (document_id,)
+        ).fetchone() == (3, "original")
+
+    assert main(["reextract", document_id, "--dsn", migrated_db]) == 0
+    assert "바뀜 0건 · 같음 1건 · 실패 0건" in capsys.readouterr().out
+
+
+def test_reextract_one_document_without_original_exits_1(migrated_db, capsys):
+    with psycopg.connect(migrated_db, autocommit=True) as conn:
+        document_id = insert_document(conn)
+
+    assert main(["reextract", str(document_id), "--dsn", migrated_db]) == 1
+    assert "원본 파일이 없는 문서" in capsys.readouterr().out
+
+
+def test_reextract_all_reports_totals_and_exits_1_on_any_failure(migrated_db, capsys):
+    changed = upload_original(migrated_db, "original")
+    edit_text(migrated_db, changed, "edited")
+    broken = upload_original(migrated_db, "broken")
+    with psycopg.connect(migrated_db) as conn:
+        conn.execute(
+            "UPDATE document_files SET data = %s WHERE document_id = %s",
+            (b" \t\r\n\f", broken),
+        )
+
+    assert main(["reextract", "--all", "--dsn", migrated_db]) == 1
+    output = capsys.readouterr().out
+    assert "재임베딩과 관계 재계산이 뒤따릅니다" in output
+    assert "바뀜 1건 · 같음 0건 · 실패 1건" in output
+    assert f"실패 {broken}:" in output
+
+
+def test_reextract_all_without_failures_exits_0(migrated_db, capsys):
+    upload_original(migrated_db, "original")
+
+    assert main(["reextract", "--all", "--dsn", migrated_db]) == 0
+    assert "바뀜 0건 · 같음 1건 · 실패 0건" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["reextract"],
+        ["reextract", "00000000-0000-0000-0000-000000000000", "--all"],
+    ],
+)
+def test_reextract_requires_exactly_one_target(argv):
+    with pytest.raises(SystemExit) as error:
+        main(argv)
+    assert error.value.code == 2
+
+
+def test_reextract_reports_a_connection_failure_without_traceback(capsys):
+    assert main([
+        "reextract", "--all", "--dsn", "postgresql://nobody@127.0.0.1:1/none"
+    ]) == 1
+    output = capsys.readouterr()
+    assert "연결하지 못했습니다" in output.out
+    assert "Traceback" not in output.out + output.err

@@ -1,9 +1,18 @@
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
+from uuid import UUID
 
 import psycopg
 from psycopg.rows import dict_row
+
+from app.services.documents import (
+    DocumentNotFound,
+    EmptyExtractedText,
+    ExtractedTextTooLarge,
+    VersionConflict,
+    reextract_text,
+)
 
 SYSTEM_STATUS_SQL = """
 WITH job_counts AS (
@@ -127,3 +136,62 @@ async def rebuild_all_edges(
         if on_progress is not None:
             on_progress(done, total)
     return total
+
+
+@dataclass(frozen=True)
+class ReextractSummary:
+    changed: int
+    unchanged: int
+    failed: list[tuple[UUID, str]]
+
+
+# 문서 하나의 문제로 끝나는 실패. 그 밖의 예외(연결 끊김 등)는 전체를 멈춘다 —
+# 삼키면 나머지 문서가 전부 같은 이유로 실패한 채 "실패 N건"으로 요약된다.
+_PER_DOCUMENT_FAILURES = (
+    ValueError,  # 파서 실패 — UnsupportedFileType·TextDecodeError 포함
+    EmptyExtractedText,
+    ExtractedTextTooLarge,
+    VersionConflict,
+    DocumentNotFound,  # 대상 조회 뒤 삭제됐다
+)
+
+
+async def reextract_all(
+    conn: psycopg.AsyncConnection,
+    *,
+    on_progress: Callable[[int, int], None] | None = None,
+) -> ReextractSummary:
+    """원본이 있는 문서 전부를 보관된 최신 원본에서 다시 추출한다. 파서를 고친 뒤 쓴다.
+
+    `rebuild_all_edges`와 같은 이유로 대상 조회와 문서별 처리를 각각 커밋한다. 문서마다
+    조회 시점의 버전을 기대 버전으로 넘기므로, 그 사이 누가 편집한 문서는 덮지 않고
+    실패로 알린다. 원본 없는 문서는 대상이 아니다 — 실패가 아니라 정상 상태다.
+    """
+    async with conn.transaction():
+        cur = await conn.execute(
+            """
+            SELECT d.id, d.version FROM documents d
+            WHERE EXISTS (SELECT 1 FROM document_files f WHERE f.document_id = d.id)
+            ORDER BY d.created_at, d.id
+            """
+        )
+        documents = await cur.fetchall()
+    total = len(documents)
+    changed = unchanged = 0
+    failed: list[tuple[UUID, str]] = []
+    for done, (document_id, version) in enumerate(documents, start=1):
+        try:
+            async with conn.transaction():
+                _, was_changed = await reextract_text(
+                    conn, document_id, expected_version=version
+                )
+        except _PER_DOCUMENT_FAILURES as error:
+            failed.append((document_id, str(error) or type(error).__name__))
+        else:
+            if was_changed:
+                changed += 1
+            else:
+                unchanged += 1
+        if on_progress is not None:
+            on_progress(done, total)
+    return ReextractSummary(changed=changed, unchanged=unchanged, failed=failed)
