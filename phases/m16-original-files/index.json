@@ -74,7 +74,10 @@
       "type": "feat",
       "scope": "frontend",
       "desc": "문서 상세에 원본 파일 판 목록·내려받기·교체·다시 추출을 붙이고 업로드 선검사를 50MB로 맞춘다",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-09-24T01:42:18+0900",
+      "summary": "문서 상세에 원본 파일 절(components/OriginalFiles.tsx, DocumentMeta 아래·TextEditor 위): 판 목록(N판·파일명·십진 KB/MB·올린 날짜·텍스트 v{n}, 최신 판 '현재'), <a href download> 내려받기(최신 /file, 이전 /files/{n}), 새 파일로 교체(확인창 → PUT multipart file+current_version, 409는 서버 문구+현재 서버 버전, 50MB 초과는 전송 없이 상한 문구), 원본에서 다시 추출(확인창 → POST reextract, changed=false면 '새 버전을 만들지 않았습니다' 안내). 원본 없으면 '원본 파일이 없습니다'+'원본 파일 올리기'만(추출 문구 없음), 익명은 절 없음, 편집 중 비활성. lib/limits.ts(MAX_UPLOAD_BYTES 50_000_000·UPLOAD_TOO_LARGE)를 UploadDropzone과 공유, 드롭존 안내의 '원본 파일은 보관하지 않습니다'를 내려받기 안내로 교체. types.OriginalFile·DocumentDetail.files, api.originalFileUrl/replaceOriginalFile/reextractDocument. 테스트 12건 + 드롭존 상한 50MB 이전, 동봉 빌드 갱신(frontend 203 · backend 704 passed)",
+      "completed_at": "2026-09-24T01:50:25+0900"
     },
     {
       "step": 7,
