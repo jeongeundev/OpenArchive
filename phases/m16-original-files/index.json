@@ -30,7 +30,10 @@
       "type": "feat",
       "scope": "api",
       "desc": "문서 상세에 원본 판 목록을 싣고 최신·특정 판 원본을 열람 범위 안에서 내려받는다",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-09-24T01:20:38+0900",
+      "summary": "상세 응답에 files(원본 판 메타데이터만, data 제외)를 싣고 GET /api/documents/{id}/file(최신 판)·/files/{n}(특정 판)을 추가. services.get_original_file이 ensure_visible을 먼저 호출해 볼 수 없는 문서는 문서 없음과 같은 404, 원본 없음·없는 판은 OriginalFileNotFound→404 '원본 파일이 없습니다.'. 응답은 항상 attachment(ASCII 대체 filename + filename*=UTF-8'' 퍼센트 인코딩) + nosniff, 미디어 타입은 parsing.MEDIA_TYPES 확장자 고정 매핑(모르면 octet-stream). read 토큰 내려받기 가능. 테스트: test_documents_api 10건(DOCX 바이트 일치·업로더 Content-Type 무시 포함), test_mcp_server 1건(files에 바이트 없음), test_parsing 1건. 프론트 표시는 이 step 범위 밖",
+      "completed_at": "2026-09-24T01:26:02+0900"
     },
     {
       "step": 3,
