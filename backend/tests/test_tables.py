@@ -12,6 +12,8 @@
 하며, 제약 자체가 검증 대상인 여기서는 직접 INSERT가 유일한 수단이다.
 """
 
+import hashlib
+
 import psycopg
 import pytest
 
@@ -25,6 +27,7 @@ CORE_TABLES = {
     "users",
     "sessions",
     "api_tokens",
+    "document_files",
 }
 
 # 임베딩 차원은 vector(1024) 고정이다 (ADR-003).
@@ -609,3 +612,123 @@ def test_deleting_either_document_cascades_to_edges(
 
     (remaining,) = conn.execute("SELECT count(*) FROM document_edges").fetchone()
     assert remaining == 0
+
+
+# --- document_files: 원본 파일의 판 (018_files_tables.sql, #108) -----------------------
+
+ORIGINAL_BYTES = b"%PDF-1.7\n\x00\x01\xff original bytes"
+
+
+def insert_file(
+    conn: psycopg.Connection,
+    document_id: str,
+    file_version: int = 1,
+    data: bytes = ORIGINAL_BYTES,
+    text_version: int = 1,
+    filename: str = "report.pdf",
+) -> None:
+    """원본 한 판을 넣는다. 바이트는 업로드 서비스와 같이 %b(바이너리)로 보낸다."""
+    conn.execute(
+        """
+        INSERT INTO document_files
+          (document_id, file_version, filename, data, text_version, uploaded_by)
+        VALUES (%s, %s, %s, %b, %s, 'alice')
+        """,
+        (document_id, file_version, filename, data, text_version),
+    )
+
+
+def test_document_file_size_and_sha256_are_computed_by_the_database(
+    conn: psycopg.Connection,
+):
+    """저장된 바이트와 크기·해시가 어긋날 수 없다 — 둘 다 DB가 data에서 계산한다."""
+    doc_id = insert_document(conn)
+    insert_file(conn, doc_id)
+
+    size, sha256, data = conn.execute(
+        "SELECT size, sha256, data FROM document_files WHERE document_id = %s",
+        (doc_id,),
+    ).fetchone()
+
+    assert bytes(data) == ORIGINAL_BYTES
+    assert size == len(ORIGINAL_BYTES)
+    assert sha256 == hashlib.sha256(ORIGINAL_BYTES).hexdigest()
+
+
+@pytest.mark.parametrize(
+    ("column", "value"), [("size", 1), ("sha256", "0" * 64)]
+)
+def test_document_file_generated_columns_cannot_be_written(
+    conn: psycopg.Connection, column: str, value: object
+):
+    doc_id = insert_document(conn, content_hash=f"sha256:file-gen:{column}")
+
+    with pytest.raises(psycopg.errors.GeneratedAlways):
+        conn.execute(
+            f"""
+            INSERT INTO document_files
+              (document_id, file_version, filename, data, text_version, uploaded_by,
+               {column})
+            VALUES (%s, 1, 'report.pdf', %b, 1, 'alice', %s)
+            """,
+            (doc_id, ORIGINAL_BYTES, value),
+        )
+
+
+def test_document_files_keep_every_version_per_document(conn: psycopg.Connection):
+    """교체는 이전 판을 덮지 않고 새 판을 쌓는다. 같은 판 번호는 한 번뿐이다."""
+    doc_id = insert_document(conn)
+    insert_file(conn, doc_id, file_version=1, data=b"first original")
+    insert_file(conn, doc_id, file_version=2, data=b"second original")
+
+    rows = conn.execute(
+        "SELECT file_version, data FROM document_files WHERE document_id = %s"
+        " ORDER BY file_version",
+        (doc_id,),
+    ).fetchall()
+    assert [(v, bytes(d)) for v, d in rows] == [
+        (1, b"first original"),
+        (2, b"second original"),
+    ]
+
+    with pytest.raises(psycopg.errors.UniqueViolation):
+        insert_file(conn, doc_id, file_version=2, data=b"overwrite attempt")
+
+
+def test_document_file_requires_an_existing_text_version(conn: psycopg.Connection):
+    """원본이 가리키는 텍스트 버전은 실재해야 한다 — v1은 INSERT 트리거가 만든다."""
+    doc_id = insert_document(conn)
+
+    with pytest.raises(psycopg.errors.ForeignKeyViolation):
+        insert_file(conn, doc_id, text_version=2)
+
+    insert_file(conn, doc_id, text_version=1)
+    (count,) = conn.execute(
+        "SELECT count(*) FROM document_files WHERE document_id = %s", (doc_id,)
+    ).fetchone()
+    assert count == 1
+
+
+def test_deleting_a_document_deletes_its_original_files(conn: psycopg.Connection):
+    doc_id = insert_document(conn)
+    insert_file(conn, doc_id, file_version=1)
+    insert_file(conn, doc_id, file_version=2)
+
+    conn.execute("DELETE FROM documents WHERE id = %s", (doc_id,))
+
+    (remaining,) = conn.execute("SELECT count(*) FROM document_files").fetchone()
+    assert remaining == 0
+
+
+def test_empty_original_file_is_rejected(conn: psycopg.Connection):
+    doc_id = insert_document(conn)
+
+    with pytest.raises(psycopg.errors.CheckViolation):
+        insert_file(conn, doc_id, data=b"")
+
+
+def test_file_version_starts_at_one(conn: psycopg.Connection):
+    doc_id = insert_document(conn)
+
+    with pytest.raises(psycopg.errors.CheckViolation):
+        insert_file(conn, doc_id, file_version=0)

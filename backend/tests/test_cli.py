@@ -42,6 +42,7 @@ def test_owned_tables_match_the_migration_files():
         "api_tokens",
         "document_chunks",
         "document_edges",
+        "document_files",
         "document_links",
         "document_versions",
         "documents",
