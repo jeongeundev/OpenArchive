@@ -1093,3 +1093,265 @@ def test_download_requires_login(db_client: TestClient):
 
     assert db_client.get(f"/api/documents/{document_id}/file").status_code == 401
     assert db_client.get(f"/api/documents/{document_id}/files/1").status_code == 401
+
+
+# ── 원본 교체 — 새 판을 쌓고 이전 판은 지우지 않는다 (ADR-046) ──────────────
+
+
+def replace_file(
+    client: TestClient,
+    document_id: str,
+    *,
+    filename: str = "guide.txt",
+    content: bytes = b"OpenSQL guide v2",
+    current_version: int = 1,
+    user_id: str | None = "alice",
+    headers: dict[str, str] | None = None,
+):
+    if user_id is not None:
+        login_as(client, user_id)
+    return client.put(
+        f"/api/documents/{document_id}/file",
+        files={"file": (filename, content, "application/octet-stream")},
+        data={"current_version": str(current_version)},
+        headers=headers,
+    )
+
+
+def docx_bytes(text: str, *, author: str) -> bytes:
+    """본문은 같고 메타데이터만 다른 DOCX — 바이트는 다르지만 추출 텍스트는 같다."""
+    buffer = io.BytesIO()
+    docx = Document()
+    docx.core_properties.author = author
+    docx.add_paragraph(text)
+    docx.save(buffer)
+    return buffer.getvalue()
+
+
+def file_rows(dsn: str, document_id: str) -> list[tuple]:
+    with psycopg.connect(dsn) as conn:
+        return conn.execute(
+            """
+            SELECT file_version, filename, sha256, text_version, uploaded_by
+            FROM document_files WHERE document_id = %s ORDER BY file_version
+            """,
+            (document_id,),
+        ).fetchall()
+
+
+def test_replace_adds_a_new_file_version_and_keeps_the_old_one(
+    db_client: TestClient, migrated_db: str
+):
+    first = b"OpenSQL guide v1"
+    document_id = upload(db_client, content=first).json()["id"]
+
+    response = replace_file(db_client, document_id, content=b"OpenSQL guide v2")
+
+    assert response.status_code == 200
+    assert [row[0] for row in file_rows(migrated_db, document_id)] == [1, 2]
+    old = db_client.get(f"/api/documents/{document_id}/files/1")
+    assert old.status_code == 200
+    assert old.content == first
+    assert db_client.get(f"/api/documents/{document_id}/file").content == b"OpenSQL guide v2"
+
+
+def test_replace_creates_a_new_text_version_via_trigger(
+    db_client: TestClient, migrated_db: str
+):
+    document_id = upload(db_client).json()["id"]
+    with psycopg.connect(migrated_db) as conn:
+        conn.execute(
+            "UPDATE embedding_jobs SET status = 'done' WHERE document_id = %s", (document_id,)
+        )
+
+    body = replace_file(db_client, document_id, content=b"OpenSQL replaced text").json()
+
+    assert body["version"] == 2
+    with psycopg.connect(migrated_db) as conn:
+        assert conn.execute(
+            "SELECT version, content FROM document_versions WHERE document_id = %s AND version = 2",
+            (document_id,),
+        ).fetchone() == (2, "OpenSQL replaced text")
+        assert conn.execute(
+            """
+            SELECT count(*) FROM embedding_jobs
+            WHERE document_id = %s AND kind = 'embed' AND status = 'pending'
+            """,
+            (document_id,),
+        ).fetchone() == (1,)
+    assert file_rows(migrated_db, document_id)[1][3] == 2
+
+
+def test_replace_updates_filename_and_content_type(db_client: TestClient):
+    document_id = upload(
+        db_client,
+        filename="report.txt",
+        data={"title": "분기 보고", "tags": ["재무"], "visibility": "private"},
+    ).json()["id"]
+
+    body = replace_file(
+        db_client,
+        document_id,
+        filename="report.docx",
+        content=docx_bytes("분기 보고 새 판", author="a"),
+    ).json()
+
+    assert body["id"] == document_id
+    assert body["filename"] == "report.docx"
+    assert body["content_type"] == "docx"
+    assert body["title"] == "분기 보고"
+    assert body["tags"] == ["재무"]
+    assert body["visibility"] == "private"
+
+
+def test_replace_with_identical_bytes_is_a_no_op(db_client: TestClient, migrated_db: str):
+    data = b"OpenSQL same bytes"
+    document_id = upload(db_client, content=data).json()["id"]
+
+    response = replace_file(db_client, document_id, filename="renamed.txt", content=data)
+
+    assert response.status_code == 200
+    assert response.json()["version"] == 1
+    assert response.json()["filename"] == "guide.txt"
+    assert len(file_rows(migrated_db, document_id)) == 1
+    with psycopg.connect(migrated_db) as conn:
+        assert conn.execute(
+            "SELECT count(*) FROM document_versions WHERE document_id = %s", (document_id,)
+        ).fetchone() == (1,)
+        assert conn.execute(
+            "SELECT count(*) FROM embedding_jobs WHERE document_id = %s", (document_id,)
+        ).fetchone() == (1,)
+
+
+def test_replace_with_same_extracted_text_adds_file_but_no_text_version(
+    db_client: TestClient, migrated_db: str
+):
+    first = docx_bytes("같은 본문", author="first")
+    second = docx_bytes("같은 본문", author="second")
+    assert first != second
+    document_id = upload(db_client, filename="same.docx", content=first).json()["id"]
+
+    response = replace_file(
+        db_client, document_id, filename="same-renamed.docx", content=second
+    )
+
+    assert response.status_code == 200
+    assert response.json()["version"] == 1
+    assert response.json()["filename"] == "same-renamed.docx"
+    rows = file_rows(migrated_db, document_id)
+    assert [(row[0], row[1], row[3]) for row in rows] == [
+        (1, "same.docx", 1),
+        (2, "same-renamed.docx", 1),
+    ]
+    with psycopg.connect(migrated_db) as conn:
+        assert conn.execute(
+            "SELECT count(*) FROM document_versions WHERE document_id = %s", (document_id,)
+        ).fetchone() == (1,)
+        assert conn.execute(
+            "SELECT count(*) FROM embedding_jobs WHERE document_id = %s", (document_id,)
+        ).fetchone() == (1,)
+
+
+def test_replace_with_stale_version_is_409(db_client: TestClient, migrated_db: str):
+    document_id = upload(db_client).json()["id"]
+    assert edit(db_client, document_id, content="edited", version=1).status_code == 200
+
+    response = replace_file(db_client, document_id, current_version=1)
+
+    assert response.status_code == 409
+    assert response.json()["current_version"] == 2
+    assert len(file_rows(migrated_db, document_id)) == 1
+    assert db_client.get(f"/api/documents/{document_id}").json()["content"] == "edited"
+
+
+def test_replace_by_non_owner_is_403_and_private_is_404(
+    db_client: TestClient, migrated_db: str
+):
+    public_id = upload(db_client, filename="public.txt").json()["id"]
+    private_id = upload(
+        db_client, filename="private.txt", data={"visibility": "private"}
+    ).json()["id"]
+
+    assert replace_file(db_client, public_id, user_id="bob").status_code == 403
+    assert replace_file(db_client, private_id, user_id="bob").status_code == 404
+    assert len(file_rows(migrated_db, public_id)) == 1
+    assert len(file_rows(migrated_db, private_id)) == 1
+
+
+def test_replace_registers_first_original_for_documents_without_one(
+    db_client: TestClient, migrated_db: str
+):
+    login_as(db_client, "alice")
+    document_id = db_client.post(
+        "/api/documents/text", json={"title": "직접 공급", "content": "text only"}
+    ).json()["id"]
+
+    response = replace_file(
+        db_client, document_id, filename="now-a-file.md", content=b"# from a file"
+    )
+
+    assert response.status_code == 200
+    assert response.json()["filename"] == "now-a-file.md"
+    assert response.json()["version"] == 2
+    assert [(row[0], row[1], row[3]) for row in file_rows(migrated_db, document_id)] == [
+        (1, "now-a-file.md", 2)
+    ]
+
+
+def test_replace_rejects_oversized_file(
+    db_client: TestClient, migrated_db: str, monkeypatch
+):
+    document_id = upload(db_client).json()["id"]
+    limit = limit_upload_to_one_mb(monkeypatch)
+
+    response = replace_file(db_client, document_id, content=b"x" * (limit + 1))
+
+    assert response.status_code == 413
+    assert len(file_rows(migrated_db, document_id)) == 1
+
+
+def test_replace_rejects_unsupported_type_and_blank_text(
+    db_client: TestClient, migrated_db: str
+):
+    document_id = upload(db_client).json()["id"]
+
+    unsupported = replace_file(db_client, document_id, filename="document.hwp")
+    assert unsupported.status_code == 400
+    assert "pdf, docx, txt, md" in unsupported.json()["detail"]
+
+    blank = replace_file(db_client, document_id, content=b" \t\r\n\f")
+    assert blank.status_code == 400
+    assert blank.json() == {
+        "detail": "문서에서 텍스트를 추출하지 못했습니다. 스캔 이미지 PDF는 지원하지 않습니다."
+    }
+
+    non_utf8 = replace_file(db_client, document_id, content="한글".encode("cp949"))
+    assert non_utf8.status_code == 400
+    assert non_utf8.json()["detail"] == "텍스트 파일은 UTF-8 인코딩이어야 합니다."
+
+    assert len(file_rows(migrated_db, document_id)) == 1
+    assert db_client.get(f"/api/documents/{document_id}").json()["version"] == 1
+
+
+def test_replace_is_forbidden_for_read_token(db_client: TestClient, migrated_db: str):
+    document_id = upload(db_client).json()["id"]
+    token = "alice-read-replace-token"
+    with psycopg.connect(migrated_db) as conn:
+        user_id = conn.execute(
+            "SELECT id FROM users WHERE username = 'alice'"
+        ).fetchone()[0]
+        conn.execute(
+            "INSERT INTO api_tokens (user_id, name, token_hash, scope) VALUES (%s, 'read-rp', %s, 'read')",
+            (user_id, hashlib.sha256(token.encode()).hexdigest()),
+        )
+
+    db_client.cookies.clear()
+    response = replace_file(
+        db_client,
+        document_id,
+        user_id=None,
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 403
+    assert len(file_rows(migrated_db, document_id)) == 1

@@ -271,6 +271,33 @@ async def edit_document(
     return EditDocumentResponse.model_validate(document)
 
 
+@router.put("/{document_id}/file", response_model=DocumentSummary)
+async def replace_original_file(
+    document_id: UUID,
+    conn: Connection,
+    user_id: Annotated[str, Depends(require_write_user_id)],
+    file: Annotated[UploadFile, File()],
+    current_version: Annotated[int, Form()],
+) -> DocumentSummary:
+    data = await _read_upload(file)
+    try:
+        document = await service.replace_original_file(
+            conn,
+            document_id,
+            user_id=user_id,
+            filename=file.filename or "",
+            data=data,
+            client_version=current_version,
+        )
+    except UnsupportedFileType as error:
+        supported = ", ".join(SUPPORTED_CONTENT_TYPES)
+        raise HTTPException(status_code=400, detail=f"{error} 지원 형식: {supported}") from error
+    except ValueError as error:
+        # 파싱 실패만 여기 온다 — 업로드와 같은 이유로 전역 핸들러에 올리지 않는다.
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    return DocumentSummary.model_validate(document)
+
+
 @router.put("/{document_id}/tags", response_model=DocumentSummary)
 async def update_tags(
     document_id: UUID,

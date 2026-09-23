@@ -418,6 +418,111 @@ async def update_extracted_text(
     return document
 
 
+async def replace_original_file(
+    conn: psycopg.AsyncConnection,
+    document_id: UUID,
+    *,
+    user_id: str,
+    filename: str,
+    data: bytes,
+    client_version: int,
+) -> dict:
+    """새 원본 파일을 새 판으로 쌓고, 추출 텍스트가 달라졌으면 새 텍스트 버전을 만든다 (ADR-046).
+
+    이전 판은 지우지도 덮지도 않는다 — 덮으면 교체가 비보관이 만들던 원본 유실을 되살린다.
+    문서의 정체성(id·제목·태그·링크·관계·공개범위)은 그대로이고 파일명·유형만 바뀐다.
+    텍스트 버전·잡은 `documents` 트리거가 만든다. 낙관적 잠금은 편집과 같은 규칙이다 (ADR-017).
+    """
+    current_version, _ = await _load_for_write(conn, document_id, user_id)
+    if current_version != client_version:
+        raise VersionConflict(current_version)
+
+    cur = conn.cursor(row_factory=dict_row)
+    await cur.execute(
+        """
+        SELECT sha256 FROM document_files
+        WHERE document_id = %s ORDER BY file_version DESC LIMIT 1
+        """,
+        (document_id,),
+    )
+    latest = await cur.fetchone()
+    if latest is not None and latest["sha256"] == hashlib.sha256(data).hexdigest():
+        # 같은 파일을 다시 올린 것이다. 새 판도 새 텍스트 버전도 만들지 않는다.
+        await cur.execute(
+            f"SELECT {SUMMARY_COLUMNS} FROM documents WHERE id = %s", (document_id,)
+        )
+        return await cur.fetchone()
+
+    content_type = detect_content_type(filename)
+    content = extract_text(data, content_type)
+    if not content.strip():
+        raise EmptyExtractedText(
+            "문서에서 텍스트를 추출하지 못했습니다. 스캔 이미지 PDF는 지원하지 않습니다."
+        )
+    if len(content) > MAX_EXTRACTED_TEXT_LENGTH:
+        raise ExtractedTextTooLarge(f"{text_label(filename)}는 500KB를 넘을 수 없습니다.")
+    content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+    params = {
+        "id": document_id,
+        "client_version": client_version,
+        "filename": filename,
+        "content_type": content_type,
+        "content": content,
+        "hash": content_hash,
+    }
+    async with conn.transaction():
+        # 추출 텍스트가 같으면 content_hash를 SET 절에 넣지 않는다. 값이 같아도 언급만으로
+        # 트리거가 발화해(003) 내용이 같은 텍스트 버전과 쓸모없는 재임베딩이 생긴다.
+        await cur.execute(
+            f"""
+            UPDATE documents
+               SET version = version + 1, content = %(content)s, content_hash = %(hash)s,
+                   filename = %(filename)s, content_type = %(content_type)s,
+                   updated_at = now()
+             WHERE id = %(id)s AND version = %(client_version)s
+               AND content_hash <> %(hash)s
+            RETURNING {SUMMARY_COLUMNS}
+            """,
+            params,
+        )
+        document = await cur.fetchone()
+        if document is None:
+            await cur.execute(
+                f"""
+                UPDATE documents
+                   SET filename = %(filename)s, content_type = %(content_type)s,
+                       updated_at = now()
+                 WHERE id = %(id)s AND version = %(client_version)s
+                   AND content_hash = %(hash)s
+                RETURNING {SUMMARY_COLUMNS}
+                """,
+                params,
+            )
+            document = await cur.fetchone()
+        if document is None:
+            # 권한 확인과 UPDATE 사이에 다른 트랜잭션이 커밋된 경우다.
+            raise VersionConflict(await _current_version(conn, document_id))
+
+        # 위 UPDATE가 문서 행을 잠근 뒤에 판 번호를 정하므로 동시 교체가 같은 번호를 얻지 않는다.
+        row = await (
+            await conn.execute(
+                "SELECT coalesce(max(file_version), 0) + 1 FROM document_files WHERE document_id = %s",
+                (document_id,),
+            )
+        ).fetchone()
+        await _insert_original_file(
+            conn,
+            document_id=document_id,
+            file_version=row[0],
+            filename=filename,
+            data=data,
+            text_version=document["version"],
+            uploaded_by=user_id,
+        )
+    return document
+
+
 async def get_document_version(
     conn: psycopg.AsyncConnection,
     document_id: UUID,
