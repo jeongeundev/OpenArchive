@@ -41,7 +41,10 @@
       "type": "feat",
       "scope": "api",
       "desc": "원본 교체 — 이전 원본을 지우지 않고 새 판을 쌓으며 추출 텍스트는 새 버전이 된다",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-09-24T01:26:02+0900",
+      "summary": "PUT /api/documents/{id}/file(multipart file + current_version)로 원본 교체: services.replace_original_file이 _load_for_write(403/404)·낙관적 잠금(409) 후 최신 판과 sha256이 같으면 무변경 반환, 아니면 추출·검증(업로드와 같은 400 문구) 뒤 한 트랜잭션에서 documents UPDATE(추출 텍스트가 다를 때만 content_hash를 SET해 트리거가 새 텍스트 버전·embed 잡 생성, 같으면 filename·content_type만) → 행 잠금 뒤 max(file_version)+1로 새 판 INSERT(text_version=결과 버전, 이전 판 보존). 제목·태그·공개범위·id 불변, 원본 없던 문서는 판 1 등록. test_documents_api 12건 추가(판 보존·트리거 산출물·파일명/유형·동일 바이트 무변경·동일 추출 텍스트·409·403/404·첫 원본·413·400·read 토큰 403)",
+      "completed_at": "2026-09-24T01:31:12+0900"
     },
     {
       "step": 4,
