@@ -26,6 +26,7 @@ const detail: DocumentDetail = {
   created_at: "2026-08-05T10:00:00Z",
   updated_at: "2026-08-05T11:00:00Z",
   versions: [],
+  files: [],
   chunk_count: 1,
   chunk_version: 2,
 };

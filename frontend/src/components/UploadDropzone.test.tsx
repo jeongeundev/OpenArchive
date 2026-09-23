@@ -233,11 +233,11 @@ describe("UploadDropzone", () => {
     expect(screen.getByLabelText("제목 (선택)")).toBeInTheDocument();
   });
 
-  it("10MB를 넘는 파일은 전송하지 않고 실패로 표시한다", async () => {
+  it("50MB를 넘는 파일은 전송하지 않고 실패로 표시한다", async () => {
     const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(jsonResponse()));
     vi.stubGlobal("fetch", fetchMock);
     const big = new File(["big"], "big.txt");
-    Object.defineProperty(big, "size", { value: 10_000_001 });
+    Object.defineProperty(big, "size", { value: 50_000_001 });
     const small = new File(["small"], "small.txt");
 
     render(<UploadDropzone onUploaded={vi.fn()} />);
@@ -250,7 +250,7 @@ describe("UploadDropzone", () => {
     expect((fetchMock.mock.calls[0][1]?.body as FormData).get("file")).toBe(small);
     expect(screen.getByText("big.txt — 실패")).toBeInTheDocument();
     expect(
-      screen.getByText("업로드 파일은 10MB를 넘을 수 없습니다."),
+      screen.getByText("업로드 파일은 50MB를 넘을 수 없습니다."),
     ).toBeInTheDocument();
     await screen.findByText("일부 파일을 업로드하지 못했습니다.");
   });

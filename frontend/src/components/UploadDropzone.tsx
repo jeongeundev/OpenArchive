@@ -4,12 +4,8 @@ import { useRef, useState } from "react";
 
 import { ApiError, uploadDocument } from "@/lib/api";
 import { SUPPORTED_CONTENT_TYPES, type Visibility } from "@/lib/types";
+import { MAX_UPLOAD_BYTES, UPLOAD_TOO_LARGE } from "@/lib/limits";
 import { expandZip } from "@/lib/zip";
-
-// 백엔드 경계(backend/app/api/documents.py의 MAX_UPLOAD_BYTES)와 같은 값·문구.
-// 선검사는 대형 파일의 전송 비용을 아끼기 위한 것이고, 경계의 최종 권위는 백엔드의 413이다.
-const MAX_UPLOAD_BYTES = 10_000_000;
-const UPLOAD_TOO_LARGE = "업로드 파일은 10MB를 넘을 수 없습니다.";
 
 type UploadItemStatus = "대기" | "업로드 중" | "완료" | "실패" | "건너뜀";
 
@@ -136,7 +132,7 @@ export function UploadDropzone({
       <div>
         <h2 className="text-sm font-medium text-neutral-400">문서 업로드</h2>
         <p className="mt-2 text-sm text-neutral-500">
-          업로드한 파일에서 텍스트만 추출해 저장합니다. 원본 파일은 보관하지 않습니다.
+          업로드한 파일에서 텍스트를 추출해 저장합니다. 원본 파일은 문서 상세에서 내려받을 수 있습니다.
         </p>
       </div>
 

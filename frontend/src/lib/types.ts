@@ -39,9 +39,21 @@ export interface TextVersionDetail extends TextVersion {
   content: string;
 }
 
+/** 원본 파일 한 판의 메타데이터. 바이트는 내려받기 경로로만 받는다. */
+export interface OriginalFile {
+  file_version: number;
+  filename: string;
+  size: number;
+  sha256: string;
+  text_version: number;
+  uploaded_by: string;
+  uploaded_at: string;
+}
+
 export interface DocumentDetail extends DocumentSummary {
   content: string;
   versions: TextVersion[];
+  files: OriginalFile[];
   chunk_count: number;
   chunk_version: number | null;
 }
