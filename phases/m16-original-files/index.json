@@ -52,7 +52,10 @@
       "type": "feat",
       "scope": "api",
       "desc": "최신 원본에서 텍스트를 다시 추출해 새 텍스트 버전을 만든다 — 같으면 버전을 만들지 않는다",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-09-24T01:31:12+0900",
+      "summary": "POST /api/documents/{id}/reextract(body current_version, require_write_user_id) → ReextractResponse(EditDocumentResponse+changed). services: reextract_text(conn, document_id, *, expected_version) -> (dict, bool) 는 권한 검사 없는 본체(step 5 CLI용): 버전 불일치 409 선검사 → 최신 판 filename·data로 detect_content_type+extract_text → 빈 결과 400(업로드 문구) → sha256이 content_hash와 같으면 UPDATE 없이 (문서, False), 다르면 _write_text로 새 버전 (문서, True). reextract_document(conn, id, *, user_id, client_version)는 _load_for_write(403/404) 뒤 reextract_text. update_extracted_text는 _load_for_write + _write_text(conn, id, *, content, client_version, current_version, filename)로 분리(편집·복원·재추출이 같은 UPDATE를 지남, 동작 불변). OriginalFileMissing → 409 '원본 파일이 없는 문서는 다시 추출할 수 없습니다.'. document_files에 쓰지 않음. 테스트 8건 추가 + read 토큰 쓰기 금지 목록에 reextract 추가(backend 694 passed)",
+      "completed_at": "2026-09-24T01:36:51+0900"
     },
     {
       "step": 5,
