@@ -8,7 +8,10 @@
       "type": "feat",
       "scope": "db",
       "desc": "원본 파일을 판(file_version)으로 쌓는 document_files 테이블 — 크기·sha256은 DB 생성 컬럼 (018)",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-09-24T01:10:16+0900",
+      "summary": "backend/migrations/018_files_tables.sql — document_files(document_id·file_version PK, filename, data bytea CHECK>0, size·sha256 GENERATED STORED, text_version FK→document_versions CASCADE, uploaded_by·uploaded_at, file_version>=1, documents CASCADE). test_tables.py에 7종(+파라미터) 테스트, test_cli.py OWNED_TABLES에 document_files 추가, CLAUDE.md 원본 비보관 문장을 판 보관(ADR-046)으로 교체. 남은 문서 갱신: ADR-039의 'OWNED_TABLES 9개' 문구는 step 7에서 10개로",
+      "completed_at": "2026-09-24T01:15:16+0900"
     },
     {
       "step": 1,
@@ -66,5 +69,6 @@
       "desc": "ADR-046 원본 보관(bytea·판 이력) 신설과 PRD §4·UI_GUIDE·ARCHITECTURE·OPERATIONS·README 개정",
       "status": "pending"
     }
-  ]
+  ],
+  "created_at": "2026-09-24T01:10:16+0900"
 }
