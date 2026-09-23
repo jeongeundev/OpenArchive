@@ -19,7 +19,10 @@
       "type": "feat",
       "scope": "api",
       "desc": "업로드가 문서와 같은 트랜잭션에 원본 1판을 저장하고 업로드 상한을 설정값(기본 50MB)으로 옮긴다",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-09-24T01:15:16+0900",
+      "summary": "create_document가 conn.transaction() 안에서 _insert_document 직후 _insert_original_file(%b 이진 전송)로 원본 1판(file_version=1, text_version=문서 버전, uploaded_by=업로더)을 저장. 업로드 상한은 Settings.max_upload_mb(기본 50, 십진 MB)로 옮기고 라우터 헬퍼 _read_upload(선언 크기 선검사+읽은 바이트 검사, 413 문구에 MB)로 모음(step 3 교체도 재사용). test_documents_api.py: 원본 1판·원자성(document_files BEFORE INSERT 예외 트리거로 문서·버전·잡 0행)·텍스트 공급 원본 없음·설정 상한 4건 추가, 기존 상한 3건은 limit_upload_to_one_mb(MAX_UPLOAD_MB=1) 경계로 이전. parsing.py 모듈·update_extracted_text docstring의 비보관 문장 교체. 남은 것: frontend UploadDropzone.tsx의 10MB 하드코딩은 이 step 범위 밖",
+      "completed_at": "2026-09-24T01:20:37+0900"
     },
     {
       "step": 2,
