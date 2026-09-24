@@ -709,6 +709,24 @@ def test_document_file_requires_an_existing_text_version(conn: psycopg.Connectio
     assert count == 1
 
 
+def test_deleting_a_text_version_does_not_silently_delete_original_files(
+    conn: psycopg.Connection,
+):
+    """원본 판은 텍스트 버전을 지운다고 따라 지워지지 않는다 — 판 이력은 append-only다.
+
+    FK가 CASCADE면 이후 텍스트 버전 정리가 원본을 조용히 지워, 판으로 막으려던 유실이
+    다시 생긴다. 원본을 지우는 경로는 문서 삭제 하나다.
+    """
+    doc_id = insert_document(conn)
+    insert_file(conn, doc_id, text_version=1)
+
+    with pytest.raises(psycopg.errors.ForeignKeyViolation):
+        conn.execute(
+            "DELETE FROM document_versions WHERE document_id = %s AND version = 1",
+            (doc_id,),
+        )
+
+
 def test_deleting_a_document_deletes_its_original_files(conn: psycopg.Connection):
     doc_id = insert_document(conn)
     insert_file(conn, doc_id, file_version=1)
