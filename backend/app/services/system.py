@@ -145,15 +145,46 @@ class ReextractSummary:
     failed: list[tuple[UUID, str]]
 
 
-# 문서 하나의 문제로 끝나는 실패. 그 밖의 예외(연결 끊김 등)는 전체를 멈춘다 —
-# 삼키면 나머지 문서가 전부 같은 이유로 실패한 채 "실패 N건"으로 요약된다.
-_PER_DOCUMENT_FAILURES = (
+# 보관된 원본에서 텍스트를 얻지 못한 실패. 문서의 문제이지 명령의 문제가 아니다.
+_EXTRACTION_FAILURES = (
     ValueError,  # 파서 실패 — UnsupportedFileType·TextDecodeError 포함
     EmptyExtractedText,
     ExtractedTextTooLarge,
+)
+
+# 문서 하나의 문제로 끝나는 실패. 그 밖의 예외(연결 끊김 등)는 전체를 멈춘다 —
+# 삼키면 나머지 문서가 전부 같은 이유로 실패한 채 "실패 N건"으로 요약된다.
+_PER_DOCUMENT_FAILURES = (
+    *_EXTRACTION_FAILURES,
     VersionConflict,
     DocumentNotFound,  # 대상 조회 뒤 삭제됐다
 )
+
+
+async def reextract_one(
+    conn: psycopg.AsyncConnection, document_id: UUID
+) -> ReextractSummary:
+    """문서 한 건을 보관된 최신 원본에서 다시 추출한다. 운영자 경로라 권한을 묻지 않는다.
+
+    기대 버전은 지금 버전이다. 조회와 재추출을 한 트랜잭션에 두어 그 사이 편집을 막는다.
+    한 건을 지정한 명령이므로 문서가 없거나 원본이 없으면 요약의 실패가 아니라 예외다.
+    """
+    try:
+        async with conn.transaction():
+            row = await (
+                await conn.execute(
+                    "SELECT version FROM documents WHERE id = %s FOR UPDATE",
+                    (document_id,),
+                )
+            ).fetchone()
+            if row is None:
+                raise DocumentNotFound
+            _, changed = await reextract_text(conn, document_id, expected_version=row[0])
+    except _EXTRACTION_FAILURES as error:
+        return ReextractSummary(
+            changed=0, unchanged=0, failed=[(document_id, str(error) or type(error).__name__)]
+        )
+    return ReextractSummary(changed=int(changed), unchanged=int(not changed), failed=[])
 
 
 async def reextract_all(

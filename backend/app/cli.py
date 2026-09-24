@@ -38,18 +38,13 @@ from app.migrations import (
     run_migrations,
 )
 from app.services.auth import UserNotFound, reset_password
-from app.services.documents import (
-    DocumentNotFound,
-    EmptyExtractedText,
-    ExtractedTextTooLarge,
-    OriginalFileMissing,
-    reextract_text,
-)
+from app.services.documents import DocumentNotFound, OriginalFileMissing
 from app.services.system import (
     ReextractSummary,
     get_system_status,
     rebuild_all_edges,
     reextract_all,
+    reextract_one,
 )
 
 # gen_random_uuid()가 코어에 들어온 버전. 그 아래에서는 002가 기동하지 못한다.
@@ -560,23 +555,8 @@ def run_rebuild_edges(*, dsn: str | None) -> int:
 
 
 async def _reextract_one(dsn: str, document_id: UUID) -> ReextractSummary:
-    """운영자 경로라 권한을 묻지 않는다 — 서버 셸 접근자는 이미 DB를 만질 수 있다.
-    기대 버전은 지금 버전이다. 조회와 재추출을 한 트랜잭션에 두어 그 사이 편집을 막는다."""
     async with await _connect(dsn, autocommit=True) as conn:
-        try:
-            async with conn.transaction():
-                row = await (
-                    await conn.execute(
-                        "SELECT version FROM documents WHERE id = %s FOR UPDATE",
-                        (document_id,),
-                    )
-                ).fetchone()
-                if row is None:
-                    raise DocumentNotFound
-                _, changed = await reextract_text(conn, document_id, expected_version=row[0])
-        except (ValueError, EmptyExtractedText, ExtractedTextTooLarge) as error:
-            return ReextractSummary(changed=0, unchanged=0, failed=[(document_id, str(error))])
-    return ReextractSummary(changed=int(changed), unchanged=int(not changed), failed=[])
+        return await reextract_one(conn, document_id)
 
 
 async def _reextract_all(dsn: str) -> ReextractSummary:
