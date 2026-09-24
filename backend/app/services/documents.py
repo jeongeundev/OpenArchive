@@ -412,7 +412,7 @@ async def _write_text(
 ) -> dict:
     """문서 텍스트 갱신의 본체. 권한은 호출부가 이미 확인했다고 가정한다.
 
-    편집·복원·재추출이 모두 이 한 UPDATE를 지난다 — 텍스트를 바꾸는 경로가 둘이 되면
+    편집·복원·재추출·원본 교체가 모두 이 한 UPDATE를 지난다 — 텍스트를 바꾸는 경로가 둘이 되면
     한쪽만 고쳐지는 자리가 생긴다.
     """
     label = text_label(filename)
@@ -487,47 +487,44 @@ async def replace_original_file(
         raise EmptyExtractedText(
             "문서에서 텍스트를 추출하지 못했습니다. 스캔 이미지 PDF는 지원하지 않습니다."
         )
-    if len(content) > MAX_EXTRACTED_TEXT_LENGTH:
-        raise ExtractedTextTooLarge(f"{text_label(filename)}는 500KB를 넘을 수 없습니다.")
-    content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
+    row = await (
+        await conn.execute("SELECT content_hash FROM documents WHERE id = %s", (document_id,))
+    ).fetchone()
+    if row is None:
+        raise DocumentNotFound
+    text_changed = hashlib.sha256(content.encode("utf-8")).hexdigest() != row[0]
 
-    params = {
-        "id": document_id,
-        "client_version": client_version,
-        "filename": filename,
-        "content_type": content_type,
-        "content": content,
-        "hash": content_hash,
-    }
     async with conn.transaction():
-        # 추출 텍스트가 같으면 content_hash를 SET 절에 넣지 않는다. 값이 같아도 언급만으로
-        # 트리거가 발화해(003) 내용이 같은 텍스트 버전과 쓸모없는 재임베딩이 생긴다.
+        expected_version = client_version
+        if text_changed:
+            # 텍스트가 바뀌면 편집과 같은 한 UPDATE를 지난다 — 낙관적 잠금·길이 검증·
+            # 트리거 발화가 편집과 같다. 같으면 content_hash를 언급하지 않는다. 값이 같아도
+            # 언급만으로 트리거가 발화해(003) 같은 내용의 텍스트 버전과 재임베딩이 생긴다.
+            written = await _write_text(
+                conn,
+                document_id,
+                content=content,
+                client_version=client_version,
+                current_version=current_version,
+                filename=filename,
+            )
+            expected_version = written["version"]
         await cur.execute(
             f"""
             UPDATE documents
-               SET version = version + 1, content = %(content)s, content_hash = %(hash)s,
-                   filename = %(filename)s, content_type = %(content_type)s,
+               SET filename = %(filename)s, content_type = %(content_type)s,
                    updated_at = now()
-             WHERE id = %(id)s AND version = %(client_version)s
-               AND content_hash <> %(hash)s
+             WHERE id = %(id)s AND version = %(version)s
             RETURNING {SUMMARY_COLUMNS}
             """,
-            params,
+            {
+                "id": document_id,
+                "version": expected_version,
+                "filename": filename,
+                "content_type": content_type,
+            },
         )
         document = await cur.fetchone()
-        if document is None:
-            await cur.execute(
-                f"""
-                UPDATE documents
-                   SET filename = %(filename)s, content_type = %(content_type)s,
-                       updated_at = now()
-                 WHERE id = %(id)s AND version = %(client_version)s
-                   AND content_hash = %(hash)s
-                RETURNING {SUMMARY_COLUMNS}
-                """,
-                params,
-            )
-            document = await cur.fetchone()
         if document is None:
             # 권한 확인과 UPDATE 사이에 다른 트랜잭션이 커밋된 경우다.
             raise VersionConflict(await _current_version(conn, document_id))
