@@ -58,17 +58,17 @@ OpenArchive/
 │   └── ingest_text.py            # 표준 라이브러리만 쓰는 독립 HTTP 텍스트 공급 예제
 ├── backend/
 │   ├── pyproject.toml            # fastapi, psycopg[binary,pool], pydantic-settings, mcp<2, pypdf, python-docx / [dev]: pytest, ruff / [local]: sentence-transformers
-│   ├── migrations/               # 001~017: extensions, tables, triggers, indexes,
+│   ├── migrations/               # 001~018: extensions, tables, triggers, indexes,
 │   │                             #   trgm, edges(006~008), auth(009), links(010~012), token(013),
 │   │                             #   edges 재설계(014 — rebuild_document_edges), 위키링크 정규화(015),
 │   │                             #   관계 잡 분리(016 — embedding_jobs.kind / 017 — ready 트리거,
-│   │                             #   ADR-029 결정 3 개정)
+│   │                             #   ADR-029 결정 3 개정), 원본 파일 판 보관(018 — document_files, ADR-046)
 │   ├── app/
 │   │   ├── main.py               # FastAPI 앱 조립
 │   │   ├── config.py             # pydantic-settings (DATABASE_URL, EMBEDDING_PROVIDER 등)
 │   │   ├── db.py                 # AsyncConnectionPool만 — import 시 부작용 없음
 │   │   ├── migrations.py         # 마이그레이션 러너 — API startup과 `openarchive init`이 호출
-│   │   ├── cli.py                # `openarchive init`·`serve`·`reset-password`·`rebuild-edges` — 운영자 CLI (ADR-039·040)
+│   │   ├── cli.py                # `openarchive init`·`serve`·`reset-password`·`rebuild-edges`·`reextract` — 운영자 CLI (ADR-039·040·046)
 │   │   ├── api/                  # 라우터: documents, search, system, auth, admin,
 │   │   │                         #   diagnostics, clusters, retry (+ deps, schemas)
 │   │   ├── services/             # parsing, chunking, documents, search, related,
@@ -99,7 +99,7 @@ MCP 서버는 `app.services`를 직접 재사용한다. `search_documents`는 �
 CREATE TABLE documents (
   id               uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   title            text NOT NULL,
-  filename         text,                   -- 업로드된 원본 파일명 (출처 표시용). 파일 자체는 보관하지 않는다
+  filename         text,                   -- 원본 파일명. 원본이 있으면 최신 판(document_files)의 파일명과 같게 유지된다 (ADR-046)
   content_type     text NOT NULL,          -- pdf | docx | txt | md
   content          text NOT NULL,          -- 문서 텍스트 (현재 버전). 편집·버전 관리·임베딩의 대상
   content_hash     text NOT NULL,          -- sha256, 트리거의 변경 감지 기준
@@ -127,6 +127,23 @@ CREATE TABLE document_versions (
   content_hash text NOT NULL,
   created_at   timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (document_id, version)
+);
+
+-- document_files: 업로드된 원본 파일의 판 이력 (018, ADR-046). append-only — 교체는 새 판이다
+-- documents에 bytea를 두지 않는다: 목록·검색·상세와 행 갱신이 수십 MB 원본과 한 행으로 묶이지 않게
+CREATE TABLE document_files (
+  document_id  uuid NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+  file_version int  NOT NULL CHECK (file_version >= 1),
+  filename     text NOT NULL,
+  data         bytea NOT NULL CHECK (octet_length(data) > 0),
+  size         bigint GENERATED ALWAYS AS (octet_length(data)) STORED,        -- DB가 계산한다
+  sha256       text   GENERATED ALWAYS AS (encode(sha256(data), 'hex')) STORED,
+  text_version int  NOT NULL,      -- 등록(업로드·교체) 시점의 텍스트 버전. 재추출 버전과는 연결되지 않는다
+  uploaded_by  text NOT NULL,
+  uploaded_at  timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (document_id, file_version),
+  FOREIGN KEY (document_id, text_version)   -- CASCADE 없음: 텍스트 버전 정리가 원본 판을 지우지 못한다
+    REFERENCES document_versions (document_id, version)
 );
 
 -- document_chunks: 현재 버전의 청크만 유지 (인덱스 소형화 + 정합성 단순화)
@@ -542,10 +559,13 @@ OpenSQL `patroni.yml`의 PostgreSQL 파라미터는 `max_connections: 100`이다
 
 | 엔드포인트 | 내용 |
 |---|---|
-| `POST /api/documents` | multipart 업로드. pypdf/python-docx/plain 파싱 → INSERT. 여기서 트리거가 파이프라인을 자동 기동 — 임베딩 관련 코드 없음. **텍스트 추출 결과가 비면 400** (아래). **원본 파일은 보관하지 않는다** — 추출 텍스트만 저장하고 파일은 버린다 |
+| `POST /api/documents` | multipart 업로드. pypdf/python-docx/plain 파싱 → INSERT. 여기서 트리거가 파이프라인을 자동 기동 — 임베딩 관련 코드 없음. **텍스트 추출 결과가 비면 400** (아래). **원본 파일은 같은 트랜잭션에서 `document_files`에 1판으로 저장한다** — 원본 저장이 실패하면 문서·텍스트 버전·잡도 남지 않는다. 상한 `MAX_UPLOAD_MB`(기본 50) 초과는 413 |
 | `POST /api/documents/text` | JSON 텍스트 공급(`txt`·`md`). `filename`은 NULL이며, 파생 데이터는 업로드 경로와 동일하게 DB 트리거가 만든다. 빈 문서 텍스트와 500,000자 초과는 400 |
 | `GET /api/documents` | 목록 + `status`/`tag` 필터, embedding_status 포함 |
-| `GET /api/documents/{id}` | 상세 + 텍스트 버전 목록 + 청크 수 + 청크 기준 버전 |
+| `GET /api/documents/{id}` | 상세 + 텍스트 버전 목록 + 청크 수 + 청크 기준 버전 + `files`(원본 판 목록 — 메타데이터만, 바이트는 싣지 않는다) |
+| `GET /api/documents/{id}/file` · `GET /api/documents/{id}/files/{n}` | **원본 내려받기** — 최신 판 · 특정 판. 항상 `Content-Disposition: attachment` + `X-Content-Type-Options: nosniff`, 미디어 타입은 확장자 고정 매핑. 볼 수 없는 문서·원본 없음·없는 판은 404 (ADR-046) |
+| `PUT /api/documents/{id}/file` | **원본 교체.** multipart `file` + `current_version`. 새 판을 쌓고(이전 판 보존), 추출 텍스트가 달라졌을 때만 새 텍스트 버전(트리거가 이력·잡 생성). 최신 판과 같은 바이트면 아무것도 바꾸지 않는다. 버전 불일치 409 · 추출 실패 400 · 상한 초과 413 |
+| `POST /api/documents/{id}/reextract` | **재추출.** `{current_version}`. 최신 판에서 다시 추출해 결과가 다르면 새 텍스트 버전, 같으면 무변경(`changed: false`). 새 판은 만들지 않는다. 원본 없는 문서는 409 |
 | `PUT /api/documents/{id}` | 편집된 문서 텍스트(`{content, version}` JSON) → `version`+1, `content`, `content_hash` UPDATE. **버전 이력 기록과 재임베딩 잡 생성은 트리거가 수행.** 요청의 `version`이 현재 버전과 다르면 **409** (아래) |
 | `PUT /api/documents/{id}/tags` | `{tags: string[]}`로 태그 전체 교체. 트리거는 `UPDATE OF content_hash`에만 걸려 있으므로 **재임베딩을 유발하지 않는다** |
 | `DELETE /api/documents/{id}` | CASCADE로 벡터까지 원자 삭제 |
@@ -567,7 +587,7 @@ OpenSQL `patroni.yml`의 PostgreSQL 파라미터는 `max_connections: 100`이다
 >
 > **모든 조회에 열람 범위가 걸린다.** 검색·관련 문서·링크·백링크·진단 집계·클러스터가 같은 `VISIBLE_TO_USER` 술어를 쓴다. 볼 수 없는 문서는 자리 표시조차 남기지 않는다 — 표시 자체가 존재와 개수를 누출한다 (ADR-027).
 >
-> 새 파일로 교체하는 경로는 없다. 새 파일을 올리려면 업로드 후 이전 문서를 삭제해야 한다.
+> 새 파일로 교체해도 문서의 id·제목·태그·공개범위·관계는 그대로이고 파일명·유형만 바뀐다 (`PUT /api/documents/{id}/file`, ADR-046).
 >
 > 라우터는 얇다. 요청 검증과 상태 코드 변환만 하고 실제 로직은 `services/documents.py`·`services/search.py`·`services/system.py` 등에 있으며, MCP 서버가 문서·검색 서비스를 재사용한다. 도메인 예외를 상태 코드로 옮기는 매핑은 `main.py`의 exception handler 한 곳에 있다.
 
@@ -622,7 +642,7 @@ PUT /api/documents/{id}
 - `WHERE ... AND version = %(client_version)s`로 비교와 갱신을 한 문장에 두어, 확인과 쓰기 사이의 경쟁을 없앤다
 - 저장 직후 `embedding_status`가 `pending`으로 돌아가고, 정합성 카운터(`c.version <> d.version`)가 1 올랐다가 워커 처리 후 0으로 복귀한다. **이 흐름이 데모의 핵심 장면이다**
 
-**원본 파일과 추출 텍스트를 구분한다.** 현재 스키마에 바이너리 컬럼이 없으므로, 편집 후에는 `filename = report.pdf`인데 `content`가 그 PDF의 추출 결과와 다른 상태가 될 수 있다. **결함이 아니라 설계된 동작**이며, 스캔 품질이 나쁜 PDF의 오추출을 고치는 정당한 용도가 있다. UI는 편집 영역을 "본문"이 아니라 **"추출 텍스트"**로 표기한다 — 원본 파일이 없는 문서에서는 **"문서 텍스트"**다 (`UI_GUIDE.md`).
+**원본 파일과 추출 텍스트를 구분한다.** 원본 파일은 `document_files`에 보관되지만 편집 대상이 아니므로, 편집 후에는 `filename = report.pdf`인데 `content`가 그 PDF의 추출 결과와 다른 상태가 될 수 있다. **결함이 아니라 설계된 동작**이며, 스캔 품질이 나쁜 PDF의 오추출을 고치는 정당한 용도가 있다. 재추출(`POST /reextract`)은 그 편집을 원본 기준으로 다시 덮으며, 덮인 텍스트는 버전 이력에 남는다. UI는 편집 영역을 "본문"이 아니라 **"추출 텍스트"**로 표기한다 — 원본 파일이 없는 문서에서는 **"문서 텍스트"**다 (`UI_GUIDE.md`).
 
 ## 검색 데이터 흐름
 

@@ -1,10 +1,18 @@
+import hashlib
+
 import psycopg
 import pytest
 from conftest import insert_test_document, process_all_embedding_jobs
 from test_triggers import edges_for, insert_document, mark_document_ready, unit_vector
 
 from app.embeddings import FakeProvider
-from app.services.system import get_system_status, rebuild_all_edges
+from app.services.documents import DocumentNotFound, OriginalFileMissing, create_document
+from app.services.system import (
+    get_system_status,
+    rebuild_all_edges,
+    reextract_all,
+    reextract_one,
+)
 from app.worker import process_once
 
 
@@ -258,3 +266,138 @@ async def test_rebuild_all_edges_commits_per_document(migrated_db, autocommit):
         ) as conn:
             assert await rebuild_all_edges(conn, on_progress=on_progress) == 3
         assert progress == [(1, 3), (2, 3), (3, 3)]
+
+
+# ── 원본 재추출 전량 (openarchive reextract --all) ─────────────────────────
+
+
+async def upload_original(conn, text: str, *, filename: str = "note.txt"):
+    document = await create_document(
+        conn, filename=filename, data=text.encode("utf-8"), owner_id="alice"
+    )
+    return document["id"]
+
+
+def edit_text(dsn: str, document_id, content: str) -> None:
+    """사람이 텍스트를 고친 상태를 만든다. 원본에서 다시 뽑으면 달라진다."""
+    with psycopg.connect(dsn) as conn:
+        conn.execute(
+            """
+            UPDATE documents SET version = version + 1, content = %s, content_hash = %s
+             WHERE id = %s
+            """,
+            (content, hashlib.sha256(content.encode()).hexdigest(), document_id),
+        )
+
+
+def text_of(dsn: str, document_id) -> tuple[int, str]:
+    with psycopg.connect(dsn) as conn:
+        return conn.execute(
+            "SELECT version, content FROM documents WHERE id = %s", (document_id,)
+        ).fetchone()
+
+
+async def test_reextract_all_counts_changed_unchanged_and_failed(system_conn, migrated_db):
+    changed = await upload_original(system_conn, "original one")
+    edit_text(migrated_db, changed, "edited one")
+    unchanged = await upload_original(system_conn, "original two")
+    broken = await upload_original(system_conn, "original three")
+    with psycopg.connect(migrated_db) as conn:
+        conn.execute(
+            "UPDATE document_files SET data = %s WHERE document_id = %s",
+            ("한글".encode("cp949"), broken),
+        )
+    without_original = await insert_test_document(system_conn, title="직접", content="direct")
+
+    summary = await reextract_all(system_conn)
+
+    assert (summary.changed, summary.unchanged) == (1, 1)
+    assert summary.failed == [(broken, "텍스트 파일은 UTF-8 인코딩이어야 합니다.")]
+    assert text_of(migrated_db, changed) == (3, "original one")
+    assert text_of(migrated_db, unchanged) == (1, "original two")
+    assert text_of(migrated_db, without_original) == (1, "direct")
+
+
+async def test_reextract_all_failure_does_not_roll_back_other_documents(migrated_db):
+    async with await psycopg.AsyncConnection.connect(migrated_db, autocommit=True) as conn:
+        first = await upload_original(conn, "first original")
+        edit_text(migrated_db, first, "first edited")
+        blank = await upload_original(conn, "blank original")
+        with psycopg.connect(migrated_db) as setup:
+            setup.execute(
+                "UPDATE document_files SET data = %s WHERE document_id = %s",
+                (b" \t\r\n\f", blank),
+            )
+
+        summary = await reextract_all(conn)
+
+    assert summary.changed == 1
+    assert [document_id for document_id, _ in summary.failed] == [blank]
+    # 별도 연결에서 보인다 — 실패한 문서가 앞서 바뀐 문서를 되돌리지 않았다.
+    assert text_of(migrated_db, first) == (3, "first original")
+
+
+async def test_reextract_all_skips_documents_changed_concurrently(system_conn, migrated_db):
+    first = await upload_original(system_conn, "first original")
+    edit_text(migrated_db, first, "first edited")
+    second = await upload_original(system_conn, "second original")
+    edit_text(migrated_db, second, "second edited")
+    progress = []
+
+    def on_progress(done, total):
+        progress.append((done, total))
+        if done == 1:
+            # 대상 조회 뒤, 처리 전에 누군가 두 번째 문서를 편집했다.
+            edit_text(migrated_db, second, "second edited again")
+
+    summary = await reextract_all(system_conn, on_progress=on_progress)
+
+    assert summary.changed == 1
+    assert [document_id for document_id, _ in summary.failed] == [second]
+    assert text_of(migrated_db, first) == (3, "first original")
+    assert text_of(migrated_db, second) == (3, "second edited again")
+    assert progress == [(1, 2), (2, 2)]
+
+
+# ── 원본 재추출 한 건 (openarchive reextract <id>) ─────────────────────────
+
+
+async def test_reextract_one_reports_changed_then_unchanged(system_conn, migrated_db):
+    document_id = await upload_original(system_conn, "original")
+    edit_text(migrated_db, document_id, "edited")
+
+    first = await reextract_one(system_conn, document_id)
+    second = await reextract_one(system_conn, document_id)
+
+    assert (first.changed, first.unchanged, first.failed) == (1, 0, [])
+    assert (second.changed, second.unchanged, second.failed) == (0, 1, [])
+    assert text_of(migrated_db, document_id) == (3, "original")
+
+
+async def test_reextract_one_reports_an_extraction_failure_as_failed(
+    system_conn, migrated_db
+):
+    document_id = await upload_original(system_conn, "original")
+    with psycopg.connect(migrated_db) as conn:
+        conn.execute(
+            "UPDATE document_files SET data = %s WHERE document_id = %s",
+            ("한글".encode("cp949"), document_id),
+        )
+
+    summary = await reextract_one(system_conn, document_id)
+
+    assert summary.failed == [(document_id, "텍스트 파일은 UTF-8 인코딩이어야 합니다.")]
+    assert text_of(migrated_db, document_id) == (1, "original")
+
+
+async def test_reextract_one_rejects_a_missing_document(system_conn):
+    """한 건을 지정한 명령이라 요약의 실패 한 줄이 아니라 거절이다."""
+    with pytest.raises(DocumentNotFound):
+        await reextract_one(system_conn, "00000000-0000-0000-0000-000000000000")
+
+
+async def test_reextract_one_rejects_a_document_without_original(system_conn):
+    document_id = await insert_test_document(system_conn, title="직접", content="direct")
+
+    with pytest.raises(OriginalFileMissing):
+        await reextract_one(system_conn, document_id)

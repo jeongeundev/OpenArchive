@@ -1,7 +1,8 @@
 """업로드 파일 바이트에서 추출 텍스트를 만드는 순수 함수.
 
 DB·네트워크·파일시스템을 건드리지 않고 메모리 안에서만 처리한다. 반환된 추출
-텍스트만 저장하며, 입력으로 받은 원본 파일 바이트는 보관하지 않는다 (ADR-017).
+텍스트는 호출부가 저장한다. 이 모듈은 저장하지 않는다 — 원본 보관은
+`services/documents.py`가 `document_files`에 한다.
 
 빈 추출 결과의 거부는 이 모듈 밖에서 한다 — 판정은 `services/documents.py`가
 `EmptyExtractedText`로 하고, 400 응답 매핑은 `app/main.py`의 예외 핸들러가 한다.
@@ -16,6 +17,24 @@ from docx import Document
 from pypdf import PdfReader
 
 SUPPORTED_CONTENT_TYPES: tuple[str, ...] = ("pdf", "docx", "txt", "md")
+
+# 원본을 내려줄 때의 미디어 타입. 업로더가 보낸 Content-Type이나 저장된 값을 믿지 않고
+# 이 고정 매핑만 쓴다 — 조작된 값이 그대로 나가면 브라우저가 다르게 해석한다.
+# 형식이 늘면 여기에 한 줄씩 더한다.
+MEDIA_TYPES: dict[str, str] = {
+    "pdf": "application/pdf",
+    "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "txt": "text/plain; charset=utf-8",
+    "md": "text/markdown; charset=utf-8",
+}
+FALLBACK_MEDIA_TYPE = "application/octet-stream"
+
+
+def media_type_for(filename: str) -> str:
+    """파일명 확장자로 원본 응답의 미디어 타입을 고른다. 모르는 확장자는 octet-stream."""
+    return MEDIA_TYPES.get(
+        PurePath(filename).suffix.removeprefix(".").lower(), FALLBACK_MEDIA_TYPE
+    )
 
 
 class UnsupportedFileType(ValueError):

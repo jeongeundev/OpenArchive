@@ -1,4 +1,5 @@
 from typing import Annotated, Literal
+from urllib.parse import quote
 from uuid import UUID
 
 from fastapi import (
@@ -22,6 +23,8 @@ from app.api.schemas import (
     DocumentSummary,
     EditDocumentRequest,
     EditDocumentResponse,
+    ReextractRequest,
+    ReextractResponse,
     RelatedResponse,
     ResolvedLinkItem,
     RestoreVersionRequest,
@@ -29,6 +32,7 @@ from app.api.schemas import (
     TextVersionDetail,
     UpdateTagsRequest,
 )
+from app.config import get_settings
 from app.services import documents as service
 from app.services.links import find_backlinks, resolve_links
 from app.services.parsing import SUPPORTED_CONTENT_TYPES, UnsupportedFileType
@@ -37,9 +41,23 @@ from app.services.search import MAX_K
 
 router = APIRouter(prefix="/api/documents", tags=["documents"])
 
-# 시연 데이터 최대 파일(약 90KB)의 5배보다 충분히 크면서 단일 요청의 메모리 폭증을 막는다.
-MAX_UPLOAD_BYTES = 10_000_000
-UPLOAD_TOO_LARGE = "업로드 파일은 10MB를 넘을 수 없습니다."
+
+
+async def _read_upload(file: UploadFile) -> bytes:
+    """설정된 상한 안에서 업로드 바이트를 읽는다. 넘으면 413이다.
+
+    선언된 크기를 먼저 보는 것은 큰 파일을 읽지 않기 위해서다. 다만 이 값은 클라이언트가
+    보내는 것이라 없거나 실제와 다를 수 있으므로, 경계 자체는 읽어들인 바이트로 지킨다.
+    """
+    mb = get_settings().max_upload_mb
+    limit = mb * 1_000_000
+    too_large = HTTPException(status_code=413, detail=f"업로드 파일은 {mb}MB를 넘을 수 없습니다.")
+    if file.size is not None and file.size > limit:
+        raise too_large
+    data = await file.read()
+    if len(data) > limit:
+        raise too_large
+    return data
 
 
 @router.post("", response_model=DocumentSummary, status_code=status.HTTP_201_CREATED)
@@ -51,13 +69,7 @@ async def upload_document(
     tags: Annotated[list[str] | None, Form()] = None,
     visibility: Annotated[Literal["public", "private"], Form()] = "public",
 ) -> DocumentSummary:
-    # 선언된 크기를 먼저 보는 것은 큰 파일을 읽지 않기 위해서다. 다만 이 값은 클라이언트가
-    # 보내는 것이라 없거나 실제와 다를 수 있으므로, 경계 자체는 읽어들인 바이트로 지킨다.
-    if file.size is not None and file.size > MAX_UPLOAD_BYTES:
-        raise HTTPException(status_code=413, detail=UPLOAD_TOO_LARGE)
-    data = await file.read()
-    if len(data) > MAX_UPLOAD_BYTES:
-        raise HTTPException(status_code=413, detail=UPLOAD_TOO_LARGE)
+    data = await _read_upload(file)
     try:
         document = await service.create_document(
             conn,
@@ -117,6 +129,50 @@ async def get_document(
 ) -> DocumentDetail:
     document = await service.get_document(conn, document_id, user_id=user_id)
     return DocumentDetail.model_validate(document)
+
+
+def _original_file_response(original: dict) -> Response:
+    """원본은 항상 내려받기(attachment)로만 보낸다.
+
+    앱과 같은 오리진(ADR-041)에서 세션 쿠키를 가진 채 사용자가 올린 HTML·SVG가 렌더링되면
+    저장형 XSS가 된다. `nosniff`는 브라우저가 내용을 보고 타입을 바꿔 읽는 것을 막는다.
+    """
+    filename = original["filename"]
+    # filename=은 ASCII만 안전하다. 한글 이름은 filename*(RFC 5987)이 나른다.
+    fallback = filename.encode("ascii", "replace").decode("ascii").replace('"', "_")
+    return Response(
+        content=original["data"],
+        media_type=original["media_type"],
+        headers={
+            "Content-Disposition": (
+                f"attachment; filename=\"{fallback}\"; filename*=UTF-8''{quote(filename)}"
+            ),
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
+@router.get("/{document_id}/file")
+async def download_latest_original(
+    document_id: UUID,
+    conn: Connection,
+    user_id: Annotated[str, Depends(require_user_id)],
+) -> Response:
+    original = await service.get_original_file(conn, document_id, user_id=user_id)
+    return _original_file_response(original)
+
+
+@router.get("/{document_id}/files/{file_version}")
+async def download_original(
+    document_id: UUID,
+    file_version: Annotated[int, Path(ge=1)],
+    conn: Connection,
+    user_id: Annotated[str, Depends(require_user_id)],
+) -> Response:
+    original = await service.get_original_file(
+        conn, document_id, user_id=user_id, file_version=file_version
+    )
+    return _original_file_response(original)
 
 
 @router.get("/{document_id}/links", response_model=list[ResolvedLinkItem])
@@ -215,6 +271,53 @@ async def edit_document(
         client_version=body.version,
     )
     return EditDocumentResponse.model_validate(document)
+
+
+@router.put("/{document_id}/file", response_model=DocumentSummary)
+async def replace_original_file(
+    document_id: UUID,
+    conn: Connection,
+    user_id: Annotated[str, Depends(require_write_user_id)],
+    file: Annotated[UploadFile, File()],
+    current_version: Annotated[int, Form()],
+) -> DocumentSummary:
+    data = await _read_upload(file)
+    try:
+        document = await service.replace_original_file(
+            conn,
+            document_id,
+            user_id=user_id,
+            filename=file.filename or "",
+            data=data,
+            client_version=current_version,
+        )
+    except UnsupportedFileType as error:
+        supported = ", ".join(SUPPORTED_CONTENT_TYPES)
+        raise HTTPException(status_code=400, detail=f"{error} 지원 형식: {supported}") from error
+    except ValueError as error:
+        # 파싱 실패만 여기 온다 — 업로드와 같은 이유로 전역 핸들러에 올리지 않는다.
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    return DocumentSummary.model_validate(document)
+
+
+@router.post("/{document_id}/reextract", response_model=ReextractResponse)
+async def reextract_document(
+    document_id: UUID,
+    body: ReextractRequest,
+    conn: Connection,
+    user_id: Annotated[str, Depends(require_write_user_id)],
+) -> ReextractResponse:
+    try:
+        document, changed = await service.reextract_document(
+            conn, document_id, user_id=user_id, client_version=body.current_version
+        )
+    except UnsupportedFileType as error:
+        supported = ", ".join(SUPPORTED_CONTENT_TYPES)
+        raise HTTPException(status_code=400, detail=f"{error} 지원 형식: {supported}") from error
+    except ValueError as error:
+        # 파싱 실패만 여기 온다 — 업로드와 같은 이유로 전역 핸들러에 올리지 않는다.
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    return ReextractResponse.model_validate({**document, "changed": changed})
 
 
 @router.put("/{document_id}/tags", response_model=DocumentSummary)

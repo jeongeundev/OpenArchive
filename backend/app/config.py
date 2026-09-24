@@ -35,6 +35,12 @@ class Settings(BaseSettings):
     # 로컬 HTTP에서는 Secure 쿠키가 전송되지 않는다. HTTPS 배포에서만 환경변수로 켠다.
     session_cookie_secure: bool = False
 
+    # 업로드 파일 상한(MB, 십진 — 1MB = 1,000,000바이트). 원본을 DB의 document_files에
+    # 보관하므로(ADR-046) 이 값은 업로드 한 번이 늘릴 수 있는 DB 크기의 상한이기도 하다.
+    # 50MB가 실 OpenSQL에서 OpenProxy 경유 statement_timeout(30s) 안에 들어가는지는 머지 뒤
+    # VM에서 실측한다.
+    max_upload_mb: int = 50
+
     # MCP는 HTTP 헤더가 없으므로 프로세스 환경으로만 사용자 컨텍스트를 고정한다.
     # 미설정(None)이면 서비스 권한 술어에 따라 public 문서만 보인다.
     mcp_user_id: str | None = None

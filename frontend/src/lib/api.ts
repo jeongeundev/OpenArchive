@@ -223,6 +223,42 @@ export function restoreDocumentVersion(
   );
 }
 
+/** 원본 파일 내려받기 경로. 판을 주지 않으면 최신 판이다. */
+export function originalFileUrl(id: string, fileVersion?: number): string {
+  const base = `/api/documents/${encodeURIComponent(id)}`;
+  return fileVersion === undefined ? `${base}/file` : `${base}/files/${fileVersion}`;
+}
+
+/** 이전 판은 지우지 않고 새 판을 쌓는다. 추출 텍스트가 달라지면 새 텍스트 버전이 생긴다. */
+export function replaceOriginalFile(
+  id: string,
+  file: File,
+  currentVersion: number,
+): Promise<DocumentSummary & { content: string }> {
+  const body = new FormData();
+  body.append("file", file);
+  body.append("current_version", String(currentVersion));
+  return request<DocumentSummary & { content: string }>(
+    `/api/documents/${encodeURIComponent(id)}/file`,
+    { method: "PUT", body },
+  );
+}
+
+/** changed=false면 추출 결과가 현재 텍스트와 같아 새 버전을 만들지 않았다. */
+export function reextractDocument(
+  id: string,
+  currentVersion: number,
+): Promise<DocumentSummary & { content: string; changed: boolean }> {
+  return request<DocumentSummary & { content: string; changed: boolean }>(
+    `/api/documents/${encodeURIComponent(id)}/reextract`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ current_version: currentVersion }),
+    },
+  );
+}
+
 export function updateTags(id: string, tags: string[]): Promise<DocumentSummary> {
   return request<DocumentSummary>(`/api/documents/${encodeURIComponent(id)}/tags`, {
     method: "PUT",

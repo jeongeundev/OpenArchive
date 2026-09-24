@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 
 import { DocumentActions } from "@/components/DocumentActions";
 import { DocumentMeta } from "@/components/DocumentMeta";
+import { OriginalFiles } from "@/components/OriginalFiles";
 import { RelatedDocuments } from "@/components/RelatedDocuments";
 import { TagEditor } from "@/components/TagEditor";
 import { TagSuggestions } from "@/components/TagSuggestions";
@@ -99,6 +100,13 @@ export function DocumentDetailView(): React.ReactElement {
           <TagEditor disabled={editing} error={tagError} onChange={setDraftTags} onSave={() => void saveTags(tags)} saving={savingTags} tags={tags} />
         </>
       ) : null}
+
+      <OriginalFiles
+        anonymous={anonymous}
+        disabled={editing}
+        document={document}
+        onChanged={refresh}
+      />
 
       <TextEditor
         disabled={anonymous}

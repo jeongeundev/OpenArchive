@@ -11,7 +11,12 @@ from uuid import UUID
 import psycopg
 from psycopg.rows import dict_row
 
-from app.services.parsing import UnsupportedFileType, detect_content_type, extract_text
+from app.services.parsing import (
+    UnsupportedFileType,
+    detect_content_type,
+    extract_text,
+    media_type_for,
+)
 from app.services.visibility import VISIBILITY_VALUES, VISIBLE_TO_USER
 
 # 목록·요약 응답이 쓰는 컬럼. 네 곳에서 같은 나열을 반복하지 않도록 한 곳에 둔다.
@@ -34,6 +39,10 @@ class DocumentNotFound(Exception):
     """문서가 없거나, 볼 권한이 없어 존재를 알려주지 않는 경우."""
 
 
+class OriginalFileNotFound(Exception):
+    """볼 수 있는 문서지만 요청한 원본 판이 없는 경우. 문서 없음과 구분해도 누출이 없다."""
+
+
 class DocumentAccessDenied(Exception):
     """문서는 보이지만 수정할 권한이 없는 경우."""
 
@@ -51,6 +60,10 @@ class ExtractedTextTooLarge(Exception):
 
 class InvalidVisibility(Exception):
     """공개범위가 열람 술어가 아는 두 값(public, private) 밖인 경우."""
+
+
+class OriginalFileMissing(Exception):
+    """볼 수 있는 문서에 원본이 없어 다시 추출할 대상이 없는 경우."""
 
 
 class VersionConflict(Exception):
@@ -125,21 +138,62 @@ async def create_document(
     tags: list[str] | None = None,
     visibility: str = "public",
 ) -> dict:
-    """업로드 파일에서 텍스트를 추출해 문서를 만든다. 임베딩 잡은 트리거가 만든다."""
+    """업로드 파일에서 텍스트를 추출해 문서를 만들고 원본을 1판으로 보관한다 (ADR-046).
+
+    임베딩 잡·텍스트 버전은 트리거가 만든다. 원본은 문서와 같은 트랜잭션에 들어가므로
+    문서만 커밋되고 원본이 유실되는 상태가 생기지 않는다 — 호출부가 autocommit 연결을
+    넘겨도 이 함수가 트랜잭션을 연다.
+    """
     content_type = detect_content_type(filename)
     content = extract_text(data, content_type)
-    return await _insert_document(
-        conn,
-        title=title or PurePath(filename).stem,
-        filename=filename,
-        content_type=content_type,
-        content=content,
-        owner_id=owner_id,
-        tags=tags,
-        visibility=visibility,
-        empty_message=(
-            "문서에서 텍스트를 추출하지 못했습니다. 스캔 이미지 PDF는 지원하지 않습니다."
-        ),
+    async with conn.transaction():
+        document = await _insert_document(
+            conn,
+            title=title or PurePath(filename).stem,
+            filename=filename,
+            content_type=content_type,
+            content=content,
+            owner_id=owner_id,
+            tags=tags,
+            visibility=visibility,
+            empty_message=(
+                "문서에서 텍스트를 추출하지 못했습니다. 스캔 이미지 PDF는 지원하지 않습니다."
+            ),
+        )
+        await _insert_original_file(
+            conn,
+            document_id=document["id"],
+            file_version=1,
+            filename=filename,
+            data=data,
+            text_version=document["version"],
+            uploaded_by=owner_id,
+        )
+    return document
+
+
+async def _insert_original_file(
+    conn: psycopg.AsyncConnection,
+    *,
+    document_id: UUID,
+    file_version: int,
+    filename: str,
+    data: bytes,
+    text_version: int,
+    uploaded_by: str,
+) -> None:
+    """원본 파일 한 판을 넣는다. 크기와 sha256은 DB가 data에서 계산한다.
+
+    바이트는 `%b`(이진 포맷)로 보낸다. 텍스트 포맷이면 hex 인코딩으로 크기가 두 배가
+    되어, 상한 50MB 파일이 100MB로 OpenProxy를 지난다.
+    """
+    await conn.execute(
+        """
+        INSERT INTO document_files
+            (document_id, file_version, filename, data, text_version, uploaded_by)
+        VALUES (%s, %s, %s, %b, %s, %s)
+        """,
+        (document_id, file_version, filename, data, text_version, uploaded_by),
     )
 
 
@@ -274,7 +328,51 @@ async def get_document(
         (document_id,),
     )
     document["versions"] = await cur.fetchall()
+
+    # 원본 판은 메타데이터만 싣는다. 상세는 화면이 수시로 부르는 응답이라 바이트를 섞지 않는다.
+    await cur.execute(
+        """
+        SELECT file_version, filename, size, sha256, text_version, uploaded_by, uploaded_at
+        FROM document_files
+        WHERE document_id = %s
+        ORDER BY file_version
+        """,
+        (document_id,),
+    )
+    document["files"] = await cur.fetchall()
     return document
+
+
+async def get_original_file(
+    conn: psycopg.AsyncConnection,
+    document_id: UUID,
+    *,
+    user_id: str | None,
+    file_version: int | None = None,
+) -> dict:
+    """원본 한 판의 바이트를 돌려준다. `file_version`이 없으면 최신 판이다.
+
+    열람 검증을 먼저 한다 — 볼 수 없는 문서는 원본 유무와 관계없이 DocumentNotFound라
+    원본의 존재가 문서의 존재를 누출하지 않는다 (ADR-027).
+    """
+    await ensure_visible(conn, document_id, user_id=user_id)
+    cur = conn.cursor(row_factory=dict_row)
+    await cur.execute(
+        """
+        SELECT filename, data, sha256
+        FROM document_files
+        WHERE document_id = %(id)s
+          AND (%(version)s::int IS NULL OR file_version = %(version)s)
+        ORDER BY file_version DESC
+        LIMIT 1
+        """,
+        {"id": document_id, "version": file_version},
+    )
+    original = await cur.fetchone()
+    if original is None:
+        raise OriginalFileNotFound
+    original["media_type"] = media_type_for(original["filename"])
+    return original
 
 
 async def update_extracted_text(
@@ -287,12 +385,36 @@ async def update_extracted_text(
 ) -> dict:
     """문서 텍스트를 낙관적 동시성으로 갱신한다 (ADR-017).
 
-    편집 대상은 문서 텍스트이며 원본 파일이 아니다. 원본 파일은 보관하지 않는다.
+    편집 대상은 문서 텍스트이며 원본 파일이 아니다. 원본 파일은 편집하지 않는다(판으로 따로 보관된다).
     업로드로 들어온 문서에서는 그 텍스트가 추출 텍스트이고, 직접 공급된 문서
     (`filename IS NULL`)에는 추출한 대상이 없다 — 거절 문구가 그 구분을 따른다
     (ADR-035 결정 3).
     """
     current_version, filename = await _load_for_write(conn, document_id, user_id)
+    return await _write_text(
+        conn,
+        document_id,
+        content=content,
+        client_version=client_version,
+        current_version=current_version,
+        filename=filename,
+    )
+
+
+async def _write_text(
+    conn: psycopg.AsyncConnection,
+    document_id: UUID,
+    *,
+    content: str,
+    client_version: int,
+    current_version: int,
+    filename: str | None,
+) -> dict:
+    """문서 텍스트 갱신의 본체. 권한은 호출부가 이미 확인했다고 가정한다.
+
+    편집·복원·재추출·원본 교체가 모두 이 한 UPDATE를 지난다 — 텍스트를 바꾸는 경로가 둘이 되면
+    한쪽만 고쳐지는 자리가 생긴다.
+    """
     label = text_label(filename)
     if not content.strip():
         raise EmptyExtractedText(f"{label}는 비어 있을 수 없습니다.")
@@ -322,6 +444,178 @@ async def update_extracted_text(
         # 권한 확인과 UPDATE 사이에 다른 트랜잭션이 커밋된 경우다.
         raise VersionConflict(await _current_version(conn, document_id))
     return document
+
+
+async def replace_original_file(
+    conn: psycopg.AsyncConnection,
+    document_id: UUID,
+    *,
+    user_id: str,
+    filename: str,
+    data: bytes,
+    client_version: int,
+) -> dict:
+    """새 원본 파일을 새 판으로 쌓고, 추출 텍스트가 달라졌으면 새 텍스트 버전을 만든다 (ADR-046).
+
+    이전 판은 지우지도 덮지도 않는다 — 덮으면 교체가 비보관이 만들던 원본 유실을 되살린다.
+    문서의 정체성(id·제목·태그·링크·관계·공개범위)은 그대로이고 파일명·유형만 바뀐다.
+    텍스트 버전·잡은 `documents` 트리거가 만든다. 낙관적 잠금은 편집과 같은 규칙이다 (ADR-017).
+    """
+    current_version, _ = await _load_for_write(conn, document_id, user_id)
+    if current_version != client_version:
+        raise VersionConflict(current_version)
+
+    cur = conn.cursor(row_factory=dict_row)
+    await cur.execute(
+        """
+        SELECT sha256 FROM document_files
+        WHERE document_id = %s ORDER BY file_version DESC LIMIT 1
+        """,
+        (document_id,),
+    )
+    latest = await cur.fetchone()
+    if latest is not None and latest["sha256"] == hashlib.sha256(data).hexdigest():
+        # 같은 파일을 다시 올린 것이다. 새 판도 새 텍스트 버전도 만들지 않는다.
+        await cur.execute(
+            f"SELECT {SUMMARY_COLUMNS} FROM documents WHERE id = %s", (document_id,)
+        )
+        return await cur.fetchone()
+
+    content_type = detect_content_type(filename)
+    content = extract_text(data, content_type)
+    if not content.strip():
+        raise EmptyExtractedText(
+            "문서에서 텍스트를 추출하지 못했습니다. 스캔 이미지 PDF는 지원하지 않습니다."
+        )
+    row = await (
+        await conn.execute("SELECT content_hash FROM documents WHERE id = %s", (document_id,))
+    ).fetchone()
+    if row is None:
+        raise DocumentNotFound
+    text_changed = hashlib.sha256(content.encode("utf-8")).hexdigest() != row[0]
+
+    async with conn.transaction():
+        expected_version = client_version
+        if text_changed:
+            # 텍스트가 바뀌면 편집과 같은 한 UPDATE를 지난다 — 낙관적 잠금·길이 검증·
+            # 트리거 발화가 편집과 같다. 같으면 content_hash를 언급하지 않는다. 값이 같아도
+            # 언급만으로 트리거가 발화해(003) 같은 내용의 텍스트 버전과 재임베딩이 생긴다.
+            written = await _write_text(
+                conn,
+                document_id,
+                content=content,
+                client_version=client_version,
+                current_version=current_version,
+                filename=filename,
+            )
+            expected_version = written["version"]
+        await cur.execute(
+            f"""
+            UPDATE documents
+               SET filename = %(filename)s, content_type = %(content_type)s,
+                   updated_at = now()
+             WHERE id = %(id)s AND version = %(version)s
+            RETURNING {SUMMARY_COLUMNS}
+            """,
+            {
+                "id": document_id,
+                "version": expected_version,
+                "filename": filename,
+                "content_type": content_type,
+            },
+        )
+        document = await cur.fetchone()
+        if document is None:
+            # 권한 확인과 UPDATE 사이에 다른 트랜잭션이 커밋된 경우다.
+            raise VersionConflict(await _current_version(conn, document_id))
+
+        # 위 UPDATE가 문서 행을 잠근 뒤에 판 번호를 정하므로 동시 교체가 같은 번호를 얻지 않는다.
+        row = await (
+            await conn.execute(
+                "SELECT coalesce(max(file_version), 0) + 1 FROM document_files WHERE document_id = %s",
+                (document_id,),
+            )
+        ).fetchone()
+        await _insert_original_file(
+            conn,
+            document_id=document_id,
+            file_version=row[0],
+            filename=filename,
+            data=data,
+            text_version=document["version"],
+            uploaded_by=user_id,
+        )
+    return document
+
+
+async def reextract_text(
+    conn: psycopg.AsyncConnection, document_id: UUID, *, expected_version: int
+) -> tuple[dict, bool]:
+    """보관된 최신 원본에서 텍스트를 다시 뽑는다. 권한 검사는 하지 않는다.
+
+    결과가 현재 텍스트와 같으면 아무것도 쓰지 않는다 — `content_hash`를 언급만 해도
+    트리거가 발화해(003) 같은 내용의 텍스트 버전과 재임베딩이 생긴다. 다르면 편집 경로를
+    그대로 지나므로 낙관적 잠금·길이 검증·트리거 발화가 편집과 같다. 원본 판은 만들지 않는다.
+    """
+    row = await (
+        await conn.execute(
+            "SELECT version, filename, content_hash FROM documents WHERE id = %s",
+            (document_id,),
+        )
+    ).fetchone()
+    if row is None:
+        raise DocumentNotFound
+    current_version, filename, content_hash = row
+    # 사람이 고친 텍스트를 덮을 수 있으므로, 결과와 무관하게 호출자가 본 버전이어야 한다.
+    if current_version != expected_version:
+        raise VersionConflict(current_version)
+
+    original = await (
+        await conn.execute(
+            """
+            SELECT filename, data FROM document_files
+            WHERE document_id = %s ORDER BY file_version DESC LIMIT 1
+            """,
+            (document_id,),
+        )
+    ).fetchone()
+    if original is None:
+        raise OriginalFileMissing
+
+    content = extract_text(original[1], detect_content_type(original[0]))
+    if not content.strip():
+        raise EmptyExtractedText(
+            "문서에서 텍스트를 추출하지 못했습니다. 스캔 이미지 PDF는 지원하지 않습니다."
+        )
+    if hashlib.sha256(content.encode("utf-8")).hexdigest() == content_hash:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(
+            f"SELECT {SUMMARY_COLUMNS}, content FROM documents WHERE id = %s",
+            (document_id,),
+        )
+        return await cur.fetchone(), False
+
+    document = await _write_text(
+        conn,
+        document_id,
+        content=content,
+        client_version=expected_version,
+        current_version=current_version,
+        filename=filename,
+    )
+    return document, True
+
+
+async def reextract_document(
+    conn: psycopg.AsyncConnection,
+    document_id: UUID,
+    *,
+    user_id: str,
+    client_version: int,
+) -> tuple[dict, bool]:
+    """사용자 경로의 재추출. 소유자만 할 수 있다 — 편집과 같은 쓰기 권한이다."""
+    await _load_for_write(conn, document_id, user_id)
+    return await reextract_text(conn, document_id, expected_version=client_version)
 
 
 async def get_document_version(

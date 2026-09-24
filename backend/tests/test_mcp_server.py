@@ -377,3 +377,37 @@ async def test_get_document_returns_related_kind(monkeypatch, mcp_database):
     for kind in set(kinds):
         scores = [item["score"] for item in items if item["kind"] == kind]
         assert scores == sorted(scores, reverse=True)
+
+
+async def test_get_document_lists_original_files_without_bytes(mcp_database):
+    """상세의 원본 판 목록은 메타데이터만 싣는다 — 바이트가 MCP 응답에 섞이지 않는다."""
+    from mcp_server.server import get_document
+
+    public_id, _ = await _seed_documents(mcp_database)
+    async with await psycopg.AsyncConnection.connect(
+        mcp_database, autocommit=True
+    ) as conn:
+        await conn.execute(
+            """
+            INSERT INTO document_files
+                (document_id, file_version, filename, data, text_version, uploaded_by)
+            VALUES (%s, 1, 'public.md', %b, 1, 'alice')
+            """,
+            (public_id, b"original bytes"),
+        )
+
+    document = await get_document(str(public_id))
+
+    assert [set(item) for item in document["files"]] == [
+        {
+            "file_version",
+            "filename",
+            "size",
+            "sha256",
+            "text_version",
+            "uploaded_by",
+            "uploaded_at",
+        }
+    ]
+    assert document["files"][0]["size"] == len(b"original bytes")
+    assert isinstance(document["files"][0]["uploaded_at"], str)

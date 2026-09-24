@@ -24,6 +24,7 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from uuid import UUID
 
 import psycopg
 
@@ -37,7 +38,14 @@ from app.migrations import (
     run_migrations,
 )
 from app.services.auth import UserNotFound, reset_password
-from app.services.system import get_system_status, rebuild_all_edges
+from app.services.documents import DocumentNotFound, OriginalFileMissing
+from app.services.system import (
+    ReextractSummary,
+    get_system_status,
+    rebuild_all_edges,
+    reextract_all,
+    reextract_one,
+)
 
 # gen_random_uuid()가 코어에 들어온 버전. 그 아래에서는 002가 기동하지 못한다.
 MINIMUM_SERVER_VERSION_NUM = 130000
@@ -546,6 +554,45 @@ def run_rebuild_edges(*, dsn: str | None) -> int:
     return 0
 
 
+async def _reextract_one(dsn: str, document_id: UUID) -> ReextractSummary:
+    async with await _connect(dsn, autocommit=True) as conn:
+        return await reextract_one(conn, document_id)
+
+
+async def _reextract_all(dsn: str) -> ReextractSummary:
+    async with await _connect(dsn, autocommit=True) as conn:
+        return await reextract_all(conn, on_progress=_rebuild_progress)
+
+
+def run_reextract(*, dsn: str | None, document_id: UUID | None) -> int:
+    dsn = dsn or get_settings().database_url
+    try:
+        if document_id is None:
+            print("바뀐 문서마다 재임베딩과 관계 재계산이 뒤따릅니다.")
+            summary = asyncio.run(_reextract_all(dsn))
+            print()
+        else:
+            summary = asyncio.run(_reextract_one(dsn, document_id))
+    except _ConnectionFailed as error:
+        print(f"연결하지 못했습니다: {error}")
+        return 1
+    except DocumentNotFound:
+        print(f"문서 {document_id}이(가) 없습니다.")
+        return 1
+    except OriginalFileMissing:
+        print(f"원본 파일이 없는 문서는 다시 추출할 수 없습니다: {document_id}")
+        return 1
+    print(
+        f"다시 추출했습니다: 바뀜 {summary.changed}건 · 같음 {summary.unchanged}건"
+        f" · 실패 {len(summary.failed)}건"
+    )
+    for failed_id, reason in summary.failed:
+        print(f"  실패 {failed_id}: {reason}")
+    if summary.changed:
+        print("바뀐 문서는 새 텍스트 버전이 되었고 워커가 다시 임베딩합니다.")
+    return 1 if summary.failed else 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="openarchive", description="OpenArchive 운영 CLI")
     subcommands = parser.add_subparsers(dest="command", required=True)
@@ -572,7 +619,19 @@ def main(argv: list[str] | None = None) -> int:
         "rebuild-edges", help=rebuild_help, description=rebuild_help
     )
     rebuild.add_argument("--dsn", help="DB 연결 문자열. 생략하면 DATABASE_URL을 씁니다.")
+    reextract_help = (
+        "보관된 최신 원본에서 텍스트를 다시 추출합니다. 파서를 고친 뒤 기존 문서에 적용합니다."
+    )
+    reextract = subcommands.add_parser(
+        "reextract", help=reextract_help, description=reextract_help
+    )
+    target = reextract.add_mutually_exclusive_group(required=True)
+    target.add_argument("document_id", nargs="?", type=UUID, help="다시 추출할 문서 ID")
+    target.add_argument("--all", action="store_true", help="원본이 있는 문서 전부")
+    reextract.add_argument("--dsn", help="DB 연결 문자열. 생략하면 DATABASE_URL을 씁니다.")
     args = parser.parse_args(argv)
+    if args.command == "reextract":
+        return run_reextract(dsn=args.dsn, document_id=None if args.all else args.document_id)
     if args.command == "rebuild-edges":
         return run_rebuild_edges(dsn=args.dsn)
     if args.command == "serve":

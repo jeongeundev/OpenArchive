@@ -37,9 +37,21 @@ class RestoreVersionRequest(BaseModel):
     current_version: int
 
 
+class OriginalFile(BaseModel):
+    # 원본 판의 메타데이터. 바이트는 싣지 않는다 — 내려받기 엔드포인트의 몫이다.
+    file_version: int
+    filename: str
+    size: int
+    sha256: str
+    text_version: int
+    uploaded_by: str
+    uploaded_at: datetime
+
+
 class DocumentDetail(DocumentSummary):
     content: str
     versions: list[TextVersion]
+    files: list[OriginalFile]
     chunk_count: int
     chunk_version: int | None
 
@@ -59,6 +71,17 @@ class EditDocumentRequest(BaseModel):
 
 class EditDocumentResponse(DocumentSummary):
     content: str
+
+
+class ReextractRequest(BaseModel):
+    # 호출자가 읽어온 현재 버전. 재추출은 사람이 고친 텍스트를 덮을 수 있으므로,
+    # 서버의 현재 버전과 다르면 409다 (ADR-046 결정 3).
+    current_version: int
+
+
+class ReextractResponse(EditDocumentResponse):
+    # 재추출 결과가 현재 텍스트와 같으면 false — 새 텍스트 버전을 만들지 않았다는 뜻이다.
+    changed: bool
 
 
 class UpdateTagsRequest(BaseModel):
