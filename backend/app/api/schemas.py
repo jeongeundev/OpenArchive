@@ -73,6 +73,12 @@ class EditDocumentResponse(DocumentSummary):
     content: str
 
 
+class ReextractRequest(BaseModel):
+    # 호출자가 읽어온 현재 버전. 재추출은 사람이 고친 텍스트를 덮을 수 있으므로,
+    # 서버의 현재 버전과 다르면 409다 (ADR-046 결정 3).
+    current_version: int
+
+
 class ReextractResponse(EditDocumentResponse):
     # 재추출 결과가 현재 텍스트와 같으면 false — 새 텍스트 버전을 만들지 않았다는 뜻이다.
     changed: bool

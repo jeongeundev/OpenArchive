@@ -23,6 +23,7 @@ from app.api.schemas import (
     DocumentSummary,
     EditDocumentRequest,
     EditDocumentResponse,
+    ReextractRequest,
     ReextractResponse,
     RelatedResponse,
     ResolvedLinkItem,
@@ -302,7 +303,7 @@ async def replace_original_file(
 @router.post("/{document_id}/reextract", response_model=ReextractResponse)
 async def reextract_document(
     document_id: UUID,
-    body: RestoreVersionRequest,
+    body: ReextractRequest,
     conn: Connection,
     user_id: Annotated[str, Depends(require_write_user_id)],
 ) -> ReextractResponse:
