@@ -6,8 +6,13 @@ from conftest import insert_test_document, process_all_embedding_jobs
 from test_triggers import edges_for, insert_document, mark_document_ready, unit_vector
 
 from app.embeddings import FakeProvider
-from app.services.documents import create_document
-from app.services.system import get_system_status, rebuild_all_edges, reextract_all
+from app.services.documents import DocumentNotFound, OriginalFileMissing, create_document
+from app.services.system import (
+    get_system_status,
+    rebuild_all_edges,
+    reextract_all,
+    reextract_one,
+)
 from app.worker import process_once
 
 
@@ -352,3 +357,47 @@ async def test_reextract_all_skips_documents_changed_concurrently(system_conn, m
     assert text_of(migrated_db, first) == (3, "first original")
     assert text_of(migrated_db, second) == (3, "second edited again")
     assert progress == [(1, 2), (2, 2)]
+
+
+# ── 원본 재추출 한 건 (openarchive reextract <id>) ─────────────────────────
+
+
+async def test_reextract_one_reports_changed_then_unchanged(system_conn, migrated_db):
+    document_id = await upload_original(system_conn, "original")
+    edit_text(migrated_db, document_id, "edited")
+
+    first = await reextract_one(system_conn, document_id)
+    second = await reextract_one(system_conn, document_id)
+
+    assert (first.changed, first.unchanged, first.failed) == (1, 0, [])
+    assert (second.changed, second.unchanged, second.failed) == (0, 1, [])
+    assert text_of(migrated_db, document_id) == (3, "original")
+
+
+async def test_reextract_one_reports_an_extraction_failure_as_failed(
+    system_conn, migrated_db
+):
+    document_id = await upload_original(system_conn, "original")
+    with psycopg.connect(migrated_db) as conn:
+        conn.execute(
+            "UPDATE document_files SET data = %s WHERE document_id = %s",
+            ("한글".encode("cp949"), document_id),
+        )
+
+    summary = await reextract_one(system_conn, document_id)
+
+    assert summary.failed == [(document_id, "텍스트 파일은 UTF-8 인코딩이어야 합니다.")]
+    assert text_of(migrated_db, document_id) == (1, "original")
+
+
+async def test_reextract_one_rejects_a_missing_document(system_conn):
+    """한 건을 지정한 명령이라 요약의 실패 한 줄이 아니라 거절이다."""
+    with pytest.raises(DocumentNotFound):
+        await reextract_one(system_conn, "00000000-0000-0000-0000-000000000000")
+
+
+async def test_reextract_one_rejects_a_document_without_original(system_conn):
+    document_id = await insert_test_document(system_conn, title="직접", content="direct")
+
+    with pytest.raises(OriginalFileMissing):
+        await reextract_one(system_conn, document_id)
