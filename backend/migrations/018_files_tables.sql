@@ -33,8 +33,12 @@ CREATE TABLE document_files (
   uploaded_by  text NOT NULL,
   uploaded_at  timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (document_id, file_version),
+  -- CASCADE를 두지 않는다: 텍스트 버전을 지우는 경로(이후의 버전 정리 등)가 원본 판을
+  -- 조용히 지우면 판으로 막으려던 유실이 다시 생긴다. 원본을 지우는 경로는 문서 삭제
+  -- 하나다 — 문서 삭제는 위 document_id FK로 판과 텍스트 버전을 같은 문장에서 함께
+  -- 지우므로, 문장 끝에 검사하는 NO ACTION(기본값)과 충돌하지 않는다.
   FOREIGN KEY (document_id, text_version)
-    REFERENCES document_versions (document_id, version) ON DELETE CASCADE
+    REFERENCES document_versions (document_id, version)
 );
 
 -- documents.filename과의 관계: 원본이 있는 문서에서 documents.filename은 최신 판의

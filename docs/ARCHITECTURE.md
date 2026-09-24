@@ -142,8 +142,8 @@ CREATE TABLE document_files (
   uploaded_by  text NOT NULL,
   uploaded_at  timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (document_id, file_version),
-  FOREIGN KEY (document_id, text_version)
-    REFERENCES document_versions (document_id, version) ON DELETE CASCADE
+  FOREIGN KEY (document_id, text_version)   -- CASCADE 없음: 텍스트 버전 정리가 원본 판을 지우지 못한다
+    REFERENCES document_versions (document_id, version)
 );
 
 -- document_chunks: 현재 버전의 청크만 유지 (인덱스 소형화 + 정합성 단순화)
