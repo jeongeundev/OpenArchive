@@ -114,11 +114,17 @@ async def load_document(conn: psycopg.AsyncConnection, document_id: UUID) -> tup
     version은 여기서 읽지 않는다 — 본문이 A → B → A로 되돌아오면 content_hash는
     원래대로지만 version은 2 올라 있어, 해시 재확인은 통과하는데 여기서 읽은 version은
     낡은 값이 된다. version은 finalize_job의 FOR UPDATE 아래에서 읽는다.
+
+    읽기 하나지만 **반드시 트랜잭션 안에서** 한다. HA의 OpenProxy는 트랜잭션 밖 SELECT를
+    replica로 보내고, 비동기 복제라 replica는 방금 커밋된 문서를 아직 모를 수 있다 —
+    그러면 삭제로 오인해 잡을 마감하거나 옛 본문을 임베딩해 폐기하고, 새 잡이 없으니
+    문서가 processing에 멈춘다 (OPENSQL_RESEARCH §6, #110).
     """
-    cur = await conn.execute(
-        "SELECT content, content_hash FROM documents WHERE id = %s", (document_id,)
-    )
-    row = await cur.fetchone()
+    async with conn.transaction():
+        cur = await conn.execute(
+            "SELECT content, content_hash FROM documents WHERE id = %s", (document_id,)
+        )
+        row = await cur.fetchone()
     return (row[0], row[1]) if row is not None else None
 
 

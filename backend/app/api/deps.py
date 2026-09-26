@@ -19,12 +19,16 @@ BEARER_PREFIX = "Bearer "
 
 
 async def get_conn() -> AsyncIterator[psycopg.AsyncConnection]:
-    """요청 하나에 풀 커넥션 하나를 빌려준다."""
+    """요청 하나에 풀 커넥션 하나를 빌려준다. 커밋은 yield 뒤 풀 반납 때 일어난다."""
     async with get_pool().connection() as conn:
         yield conn
 
 
-Connection = Annotated[psycopg.AsyncConnection, Depends(get_conn)]
+# scope="function"이 커밋을 응답 앞에 둔다. 기본값("request")은 yield 뒤 정리를 응답을
+# 보낸 **뒤에** 실행해, 클라이언트가 성공 응답을 받고 보낸 다음 요청이 아직 커밋되지 않은
+# 상태를 본다 — 커밋이 실패하면 이미 나간 2xx가 거짓이 된다 (#110). 응답 본문을 DB에서
+# 스트리밍하는 엔드포인트가 생기면 이 scope에서는 커넥션이 먼저 반납된다는 점에 유의한다.
+Connection = Annotated[psycopg.AsyncConnection, Depends(get_conn, scope="function")]
 
 
 async def current_user(
