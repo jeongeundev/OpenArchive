@@ -501,7 +501,7 @@ psql -U postgres -c "NOTIFY ch1, 'hello from another session';"
 | 제약 | 영향 |
 |---|---|
 | **x86-64 에뮬레이션** | 부팅·쿼리가 느리다. 애플리케이션을 맥 네이티브로 두는 이유 |
-| **single 구성** | 실제 failover 시연 불가 (사무국 지시사항) |
+| **single 구성** | 실제 failover 시연 불가 (사무국 지시사항). 2차 평가용 HA 3노드는 §16에 따로 구축했다 |
 | **라이선스 hostname 고정** | `opensql-dev` 외의 hostname에서는 DB가 기동하지 않는다 |
 | **라이선스 만료 2026/11/13** | 이후 DB 기동 불가. trial 기간이 짧다(초회 38일·재발급 60일). 만료되면 사무국에 재발급을 요청하고 §1 「라이선스 갱신」대로 파일만 교체한다 (ADR-021) |
 
@@ -712,6 +712,113 @@ aws ec2 revoke-security-group-ingress --region ap-northeast-2 \
 `pytest`는 **5432 직결**로 잰 것이다. OpenProxy 경유로는 돌지 않는다 — dbname 자리가 pool 이름이라 `conftest.py`의 `swap_dbname`이 존재하지 않는 풀을 가리킨다(해당 함수 주석 참조).
 
 > **2.0배를 개발 환경 이전의 근거로 쓰지 마라.** #26이 VM에서 잰 11.9배에는 Apple Silicon 에뮬레이션이 섞여 있었고 EC2는 네이티브 x86-64라 격차가 작다. 그렇더라도 로컬 컨테이너가 여전히 두 배 빠르고, EC2는 확인 후 정지하는 자원이다 (ADR-026).
+
+---
+
+## 16. HA 3노드 구성 (#110)
+
+2차 평가를 위해 HA 라이선스(node1~3, 만료 **2026-10-28**)를 받아 VM 3대에 구축했다 (2026-09-25~26 실측). **설치기가 끝난 상태는 공식 HA 구성이 아니다** — 아래 「설치 후 교정」을 전부 해야 앱을 받을 수 있다.
+
+```
+                     VIP 192.168.64.200:6432  (VRRP, node2 MASTER · node3 BACKUP)
+                                  │
+             ┌────────────────────┴────────────────────┐
+     node2 OpenProxy                            node3 OpenProxy
+             └──────────── etcd에서 leader 감시 ────────┘
+                                  │  쓰기·BEGIN → primary / 트랜잭션 밖 SELECT → replica
+   node1 (.201)                node2 (.202)                node3 (.203)
+   PostgreSQL Leader    ──►    Replica (async)     ──►     Replica (async)
+   Patroni · etcd              Patroni · etcd              Patroni · etcd
+```
+
+### VM 준비
+
+- 베이스 VM 하나를 §2~§6대로 만들고(4GB · 4코어 · 64GB — 라이선스에 신고한 1 CPU × 4 core와 맞춘다) `utmctl clone`으로 3대를 뜬다
+- 베이스에 추가로 넣는 것: 방화벽 `5432,6432,6433,2379,2380,8008/tcp` + `--add-protocol=vrrp`, `/etc/hosts`에 node1~3
+- ⚠️ 클론마다 **machine-id·SSH 호스트 키를 재생성**하고 **MAC을 UTM에서 새로 만든다**(같은 MAC이면 DHCP·ARP가 섞인다). 그 뒤 hostname `node1~3`, 고정 IP `192.168.64.201~203`
+- 라이선스는 노드마다 다르다(hostname에 묶임). 설치기 `config/remote.env`의 `NODE{n}_LICENSE_NAME`에 각각 지정한다
+
+### 설치
+
+node1에서 원격 설치기를 돌린다. `config/common.env`에 `NODE{1,2,3}_IP`, `config/remote.env`에 노드 이름·SSH 사용자·라이선스를 채운다.
+
+```bash
+python3 opensql_remote_installer.py --mode 3node
+```
+
+- 약 1시간 20분 걸린다(대부분 pgvectorscale Rust 빌드, 에뮬레이션)
+- SSH 비밀번호를 `getpass`로 묻는다. NOPASSWD sudo면 빈 줄로 넘긴다
+- 결과: Patroni Leader(node1) + Replica 2(streaming, **async**), etcd 3노드, **OpenProxy는 node2·node3에만**
+
+### ⚠️ 설치 후 교정 (필수)
+
+설치기 기본 OpenProxy(`session` · parser off · `default_role=primary`)는 **세션을 역할과 무관하게 세 서버에 무작위로 보낸다.** VIP 경유 쓰기 10건 중 6~8건이 "읽기 전용 트랜잭션" 오류로 실패했다. 설치기 출력은 공식 HA 구성이 아니다 (OPENSQL_RESEARCH §4).
+
+1. **풀 DB 교정** — §10 「풀이 바라보는 데이터베이스」와 같다 (`database = "opensql"`)
+2. **VIP 추가** — 설치기는 `owldb` 모드에서만 `[general.virtual_router]`를 만든다. node2·node3의 `openproxy.toml` `[general]` 뒤에 수동으로 넣고 `setcap cap_net_admin,cap_net_raw+ep /home/opensql/bin/openproxy`
+
+   ```toml
+   [general.virtual_router]
+   interface = "enp0s1"
+   router_id = 50
+   priority = 100                         # node3는 90
+   advert_int = 3
+   vip_addresses = ["192.168.64.200/24"]
+   unicast_peers = ["192.168.64.203"]     # node3는 .202
+   ```
+3. **공식 HA 구성으로** — 두 노드 모두 아래로 바꾸고 재시작한다(`etcd.enabled` 변경은 reload로 반영되지 않는다)
+
+   ```toml
+   [general.etcd]
+   enabled = true
+   endpoints = ["192.168.64.201:2379", "192.168.64.202:2379", "192.168.64.203:2379"]
+   patroni_namespace = "/service"          # Patroni 키가 /service/opensql/… 에 있다
+   patroni_scope = "opensql"
+
+   [pools.opensql]
+   pool_mode = "transaction"
+   query_parser_enabled = true
+   query_parser_read_write_splitting = true
+   # default_role 줄은 지운다 (공식 예시에 없고 효과도 없었다)
+   ```
+   - 먼저 뜬 노드가 자기 파일을 etcd `/service/opensql/openproxy/config/current`에 **초기 설정으로 올리고**, 이후 노드는 로컬 파일을 무시한다. 그래서 두 파일은 `virtual_router`의 `priority`·`unicast_peers`만 다르게 둔다
+   - etcd 모드에서는 **파일 autoreload가 꺼진다.** 공유 설정 변경은 `openproxy edit` 또는 etcd 키로 한다
+   - 역할 감지가 30초 폴링(`Patroni role refresh … 30 second interval`)에서 **etcd leader·members watch**로 바뀐다
+   - 되돌리기: 백업 파일 복원 + 위 etcd 키 삭제 + 재시작
+   - ❌ `session` + splitting은 쓰지 마라. 첫 쿼리로 서버가 고정돼 **한 연결에서 SELECT 후 쓰기가 10/10 실패**했다(로드밸런싱 문서의 경고와 일치)
+4. **systemd 등록** — 설치기 기본(`ENABLE_SERVICE=etcd`)은 etcd만 유닛으로 만든다. Patroni·OpenProxy가 `nohup` 맨 프로세스라 **재부팅한 노드가 클러스터에 돌아오지 않는다**
+   - 설치기 템플릿 `config/patroni.service`(3노드)·`config/openproxy.service`(node2·3)의 `$변수`를 실행 중인 Patroni 환경(`/proc/<pid>/environ`)으로 채워 `/etc/systemd/system/`에 두고 `enable`한다. Patroni 유닛에는 복제 비밀번호가 들어가므로 `600`
+   - 맨 프로세스에서 넘길 때는 **`patronictl pause`** 후 노드별로 옛 Patroni에 SIGTERM → `systemctl start patroni` → `resume`. pause 중에는 Patroni를 멈춰도 PostgreSQL이 살아 있어(PID 불변) failover가 나지 않는다
+   - ⚠️ OpenProxy에는 드롭인을 추가한다. 설치기 템플릿은 `After=network.target`뿐인데 공식 문서 예시는 etcd 뒤에 뜬다. etcd는 `Type=simple`이라 "Started"가 포트 준비를 뜻하지 않고, OpenProxy는 아직 안 열린 **로컬 etcd에 한 번 시도하고 로컬 파일로 대체**해 뜬다(재부팅 실측 2회). 대체된 노드는 이후 etcd 설정 변경을 놓친다
+
+   ```ini
+   # /etc/systemd/system/openproxy.service.d/10-after-etcd.conf
+   [Unit]
+   After=network-online.target opensql-etcd.service
+   Wants=network-online.target
+
+   [Service]
+   ExecStartPre=/bin/sh -c "for i in $(seq 30); do /home/opensql/bin/etcdctl --endpoints=http://127.0.0.1:2379 --dial-timeout=1s endpoint health >/dev/null 2>&1 && exit 0; sleep 1; done; exit 0"
+   ```
+   - 로그: OpenProxy는 journald와 `/home/opensql/logs/<날짜>.openproxy.log`, Patroni는 `/home/opensql/logs/patroni.log`
+
+### 검증 (2026-09-26 실측)
+
+VIP·node2·node3 직접 모두 같은 결과다.
+
+| 확인 | 결과 |
+|---|---|
+| 트랜잭션 밖 SELECT | 20/20 replica (두 replica에 분산) |
+| `BEGIN` 안 SELECT / `BEGIN READ ONLY` 안 SELECT | 10/10 primary / 10/10 replica |
+| 한 연결에서 SELECT 후 CREATE·INSERT | 오류 0 |
+| 트랜잭션 밖 INSERT | 10/10 primary 반영 |
+| 트랜잭션 밖 `SELECT txid_current()` | **10/10 실패** — 쓰기 함수를 SELECT로 부르면 replica로 간다(공식 문서 경고). `BEGIN`으로 감싸면 성공 |
+| OpenProxy `kill -9` | 1초 뒤 재기동 |
+| 실제 Patroni 프로세스 `kill -9` | 1회 재기동, PostgreSQL PID 유지 |
+| node3 재부팅 | etcd·Patroni·OpenProxy 자동 기동(NRestarts 0), replica 재합류, OpenProxy가 etcd 설정 로드 |
+
+- ⚠️ `/home/opensql/bin/patroni`는 **PyInstaller 실행 파일이라 프로세스가 둘**이다(부트로더 → 실제 Patroni). systemd의 MainPID는 부트로더다. 부트로더에 `kill -9`를 보내면 실제 Patroni가 고아로 남아 8008을 쥔 채 클러스터를 계속 관리하고, 새 Patroni는 8초마다 죽는 루프에 빠진다(`KillMode=process`라 systemd가 고아를 정리하지 않는다). 장애 주입은 **자식(`pgrep -P <MainPID> -x patroni`)에** 한다. 고아는 SIGTERM으로 정리한다
+- 아직 확인하지 않은 것: Leader(node1)·VIP MASTER(node2) 장애 시 승격·전환 시간(RTO)과 유실(RPO) — #110 B
 
 ---
 
