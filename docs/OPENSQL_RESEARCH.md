@@ -600,6 +600,16 @@ bash $OPENSQL_HOME/scripts/reload_openproxy.sh   # SIGHUP, 무중단 설정 반�
 구성하지 않은 기능을 사용 중이라고 서술해서는 안 된다. ADR-006 정정은 후속 step에서 이 근거를
 인용한다.
 
+**실측 정정 2 — 3노드 설치기 출력도 공식 HA 구성이 아니다 (2026-09-25~26, #110)**: 원격 설치기
+`--mode 3node`가 만든 node2·node3의 `openproxy.toml`은 `use_patroni = true` + `patroni_port = "8008"` +
+서버 role `auto`이지만 **`[general.etcd]`가 없고** `pool_mode = "session"`, parser off,
+`default_role = "primary"`다. 이 조합은 세션을 역할과 무관하게 무작위로 보내 VIP 경유 쓰기의
+60~80%가 "읽기 전용 트랜잭션"으로 실패했고, 역할은 30초 폴링으로만 갱신됐다. 이 조합의 라우팅은
+문서에 설명이 없다. 위 `[general.etcd]` 설명은 옳다 — 다만 **설치기가 그것을 켜지 않는다.**
+공식 HA 구성(설정 레퍼런스 §9·사용 설명서 §4 = `[general.etcd]` + `transaction` + parser·splitting)으로
+교정한 뒤 역할 감지는 etcd leader·members watch로 바뀌었고 라우팅은 §6 규칙대로 동작했다.
+절차와 실측 표는 `SETUP_OPENSQL.md` §16. 바이너리는 1.1.3(revision 723)이다.
+
 ---
 
 ## 5. Pool Mode와 세션 상태 제약 **[확정]**
@@ -790,6 +800,33 @@ servers = [
 > 2. `scripts/finalize_single_to_ha.sh`가 존재한다. 나중에 HA로 전환하면 원래 근거가 그대로 되살아난다. 지금 트랜잭션으로 감싸두면 전환 시 코드를 고칠 필요가 없다.
 >
 > 즉 "Replica 라우팅 방지"에서 **"세션 상태(`SET LOCAL`) 보장 + HA 전환 대비"**로 근거가 바뀐다.
+
+### HA 3노드 실측 — 원래 근거가 되살아났다 **[실측 2026-09-26, #110]**
+
+공식 HA 구성(`transaction` + parser·splitting)의 3노드에서 라우팅 규칙을 실측했다
+(`SETUP_OPENSQL.md` §16). ADR-010의 원래 근거가 그대로 성립한다.
+
+| 문장 | 간 곳 |
+|---|---|
+| 트랜잭션 밖 SELECT | replica 20/20 |
+| `BEGIN` 안 SELECT | primary 10/10 |
+| `BEGIN READ ONLY` 안 SELECT | replica 10/10 |
+| 트랜잭션 밖 INSERT·CREATE | primary |
+| 트랜잭션 밖 `SELECT txid_current()` | replica → **오류** ("복구 작업 중에는 pg_current_xact_id() …") |
+
+마지막 줄이 새로 드러난 제약이다. **쓰기 부작용이 있는 함수를 트랜잭션 밖 SELECT로 부르면
+replica로 가서 실패한다.**
+
+복제 지연도 실측했다(비동기 streaming, VIP 경유 autocommit 연결에서 커밋 후 트랜잭션 밖 SELECT가
+방금 쓴 행을 못 본 횟수, 각 40회).
+
+| 커밋 후 대기 | 0ms | 5ms | 20ms | 50ms | 200ms |
+|---|---|---|---|---|---|
+| 부하 없음 | 7 | 0 | 0 | 0 | 0 |
+| 20MB `bytea` 연속 쓰기 중 | 22 | 19 | 30 | 17 | **13** |
+
+원본 파일을 DB에 보관하므로(ADR-046) 업로드가 곧 이 부하다. **"쓴 직후 트랜잭션 밖에서 읽는"
+경로는 수백 ms 동안 옛 상태를 본다** — 워커의 본문 읽기가 그 경로였다(#110 C).
 
 ---
 
