@@ -18,6 +18,7 @@ import contextlib
 import os
 import signal
 import threading
+from typing import Self
 
 import psycopg
 import pytest
@@ -353,6 +354,104 @@ async def test_drain_processes_a_new_document_end_to_end(conn):
         (literal, doc_id),
     )
     assert (await cur.fetchone())[0] == pytest.approx(0, abs=1e-6)
+
+
+class WireRecorder:
+    """클라이언트 → 서버 사이에 끼워, 클라이언트가 보낸 SQL을 순서대로 기록하는 TCP 중계기.
+
+    OpenProxy는 이 메시지 순서만 보고 라우팅한다 — `BEGIN` 안이면 primary, 밖의 SELECT는
+    replica (OPENSQL_RESEARCH §6). 로컬 컨테이너에는 프록시가 없으므로, 프록시가 보는 것을
+    직접 기록해 검증한다. libpq trace는 리눅스 전용이라 쓸 수 없다.
+    """
+
+    def __init__(self, dsn: str) -> None:
+        params = psycopg.conninfo.conninfo_to_dict(dsn)
+        self._upstream = (params.get("host") or "localhost", int(params.get("port") or 5432))
+        self._params = params
+        self.sql: list[str] = []
+
+    async def __aenter__(self) -> Self:
+        self._server = await asyncio.start_server(self._relay, "127.0.0.1", 0)
+        port = self._server.sockets[0].getsockname()[1]
+        # SSL·GSS 협상 패킷을 빼야 첫 메시지가 곧 startup이다.
+        self.dsn = psycopg.conninfo.make_conninfo(
+            **{**self._params, "host": "127.0.0.1", "port": str(port)},
+            sslmode="disable",
+            gssencmode="disable",
+        )
+        return self
+
+    async def __aexit__(self, *exc) -> None:
+        self._server.close()
+        await self._server.wait_closed()
+
+    async def _relay(self, client_r, client_w) -> None:
+        server_r, server_w = await asyncio.open_connection(*self._upstream)
+
+        async def pipe(reader, writer, record: bool) -> None:
+            buffer, started = b"", False
+            with contextlib.suppress(ConnectionError):
+                while data := await reader.read(65536):
+                    writer.write(data)
+                    await writer.drain()
+                    if not record:
+                        continue
+                    buffer += data
+                    while True:
+                        if not started:  # startup 패킷에는 타입 바이트가 없다
+                            if len(buffer) < 4 or len(buffer) < int.from_bytes(buffer[:4]):
+                                break
+                            buffer, started = buffer[int.from_bytes(buffer[:4]) :], True
+                            continue
+                        if len(buffer) < 5 or len(buffer) < 1 + int.from_bytes(buffer[1:5]):
+                            break
+                        kind, body = buffer[:1], buffer[5 : 1 + int.from_bytes(buffer[1:5])]
+                        buffer = buffer[1 + int.from_bytes(buffer[1:5]) :]
+                        if kind == b"Q":  # simple query
+                            self.sql.append(body.rstrip(b"\0").decode())
+                        elif kind == b"P":  # extended protocol Parse: name\0query\0...
+                            self.sql.append(body.split(b"\0")[1].decode())
+            writer.close()
+
+        await asyncio.gather(
+            pipe(client_r, server_w, record=True), pipe(server_r, client_w, record=False)
+        )
+
+    def selects_outside_transaction(self) -> list[str]:
+        outside, in_tx = [], False
+        for sql in self.sql:
+            head = sql.lstrip().split(None, 1)[0].upper() if sql.strip() else ""
+            if head == "BEGIN":
+                in_tx = True
+            elif head in ("COMMIT", "ROLLBACK"):
+                in_tx = False
+            elif head == "SELECT" and not in_tx:
+                outside.append(sql)
+        return outside
+
+
+async def test_the_worker_never_reads_outside_a_transaction(conn, migrated_db):
+    """HA에서 워커의 읽기는 전부 `BEGIN` 안에 있어야 한다 (#110 C).
+
+    OpenProxy(공식 HA 구성)는 트랜잭션 밖 SELECT를 replica로 보낸다. 복제는 비동기라
+    replica가 방금 커밋된 문서를 아직 모를 수 있다 — 20MB bytea 쓰기 부하 중에는 커밋
+    200ms 뒤에도 40회 중 13회가 옛 상태를 봤다. 본문을 거기서 읽으면 "삭제됐다"로 잡을
+    마감하거나 옛 본문으로 임베딩해 해시 재확인에서 폐기하고, 어느 쪽이든 새 잡이 없으니
+    문서가 processing에 영원히 멈춘다. 에러는 없다.
+
+    쓰기(UPDATE)는 검사하지 않는다 — 트랜잭션 밖이어도 primary로 간다.
+    """
+    await insert_document(conn)
+
+    async with (
+        WireRecorder(migrated_db) as wire,
+        await psycopg.AsyncConnection.connect(wire.dsn, autocommit=True) as relayed,
+    ):
+        assert await drain(relayed, FakeProvider()) == 2
+
+    # 중계기가 실제로 워커의 SQL을 봤는지 — 아니면 빈 목록이 무조건 통과한다.
+    assert any("FOR UPDATE SKIP LOCKED" in sql for sql in wire.sql)
+    assert wire.selects_outside_transaction() == []
 
 
 async def test_reembedding_replaces_chunks_instead_of_accumulating(conn):
