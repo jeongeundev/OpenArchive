@@ -223,3 +223,32 @@ async def test_request_connections_use_keepalive(request_pool):
 
     assert options[b"keepalives_idle"] == b"30"
     assert options[b"tcp_user_timeout"] == b"60000"
+
+
+async def test_an_endpoint_db_error_reaches_the_connection_through_fastapi(request_pool):
+    """엔드포인트에서 난 DB 오류가 FastAPI를 거쳐 `get_conn`까지 내려와 연결이 버려진다.
+
+    위 테스트는 제너레이터에 직접 던진다. 실제 요청에서는 FastAPI가 예외를 yield 의존성에
+    넘겨줘야 폐기가 일어나므로, 라우터가 쓰는 `Connection` 그대로 엔드포인트를 태운다.
+    """
+    import httpx
+
+    from app.api.deps import Connection
+
+    borrowed = []
+    app = FastAPI()
+
+    @app.get("/boom")
+    async def boom(conn: Connection):
+        borrowed.append(conn)
+        await conn.execute("SELECT 1/0")
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app, raise_app_exceptions=False),
+        base_url="http://test",
+    ) as client:
+        response = await client.get("/boom")
+
+    assert response.status_code == 500
+    assert len(borrowed) == 1
+    assert borrowed[0].closed
