@@ -70,6 +70,26 @@ async def connection() -> AsyncIterator[psycopg.AsyncConnection]:
             raise
 
 
+# 연결 끊김·OpenProxy 백엔드 오류(58000)·승격 중 오류(57P01·57P03)는 전부 OperationalError다.
+# 그중 statement timeout(57014)은 기다려도 풀리지 않는 느린 쿼리라 뺀다.
+_NOT_TRANSIENT = {"57014"}
+# 쓰기가 replica로 간 것(25006)은 InternalError지만, 우리 설계에서 그런 일은 승격 직후
+# 라우팅이 바뀌기 전뿐이다 (#110 B-4).
+_TRANSIENT = {"25006"}
+
+
+def is_unavailable(error: BaseException) -> bool:
+    """DB가 잠시 응답할 수 없는 상태의 오류인지 — 기다렸다 다시 하면 풀리는 것만 참이다
+    (ADR-048 결정 3). 나머지 DB 오류는 코드 결함으로 본다.
+    """
+    if not isinstance(error, psycopg.Error):
+        return False
+    sqlstate = getattr(error, "sqlstate", None)
+    if sqlstate in _TRANSIENT:
+        return True
+    return isinstance(error, psycopg.OperationalError) and sqlstate not in _NOT_TRANSIENT
+
+
 async def close_pool() -> None:
     global _pool
     if _pool is not None:
