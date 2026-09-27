@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager
 from dataclasses import asdict
 from datetime import datetime
 from typing import Any, Literal
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import psycopg
 from mcp.server.fastmcp import FastMCP
@@ -59,8 +59,9 @@ _jitter = random.uniform
 
 
 def with_backoff(tool: Callable[..., Awaitable[dict]]) -> Callable[..., Awaitable[dict]]:
-    """DB 일시 불가용이면 지수 백오프 + 전체 지터로 다시 부른다. **읽기 도구에만 쓴다** —
-    쓰기는 커밋 도달 여부를 알 수 없어 다시 하면 문서가 두 번 생긴다(멱등키는 ADR-047).
+    """DB 일시 불가용이면 지수 백오프 + 전체 지터로 다시 부른다. **읽기와 멱등키가 있는
+    쓰기에만 쓴다** — 키 없는 쓰기는 커밋 도달 여부를 알 수 없어 다시 하면 문서가 두 번
+    생긴다(ADR-047).
 
     매 시도는 도구 본문을 통째로 다시 불러 풀에서 새 연결을 빌린다. 오류 난 연결은
     `connection()`이 이미 버렸다(ADR-048 결정 2).
@@ -209,17 +210,25 @@ async def create_document(
     # owner_id에는 FK도 CHECK도 없어 그대로 두면 소유자 없는 문서가 조용히 저장된다.
     if not user_id or not user_id.strip():
         raise MissingUserContext("문서를 만들려면 MCP_USER_ID 환경변수를 설정해야 합니다.")
-    async with connection() as conn:
-        document = await create_text_document(
-            conn,
-            title=title,
-            content=content,
-            content_type=content_type,
-            owner_id=user_id,
-            tags=tags,
-            visibility=visibility,
-        )
-    return _document_payload(document)
+    # 키는 도구 호출마다 하나다. 백오프 바깥에서 만들어야 재시도가 같은 키를 쓴다.
+    idempotency_key = str(uuid4())
+
+    @with_backoff
+    async def attempt() -> dict:
+        async with connection() as conn:
+            document = await create_text_document(
+                conn,
+                title=title,
+                content=content,
+                content_type=content_type,
+                owner_id=user_id,
+                tags=tags,
+                visibility=visibility,
+                idempotency_key=idempotency_key,
+            )
+        return _document_payload(document)
+
+    return await attempt()
 
 
 mcp.tool()(search_documents)

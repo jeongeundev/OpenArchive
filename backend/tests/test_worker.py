@@ -40,6 +40,7 @@ from app.worker import (
     finalize_job,
     load_document,
     process_once,
+    purge_expired_idempotency_keys,
     release_job,
     run_worker,
     sweep_zombies,
@@ -1616,3 +1617,55 @@ async def test_the_listen_connection_uses_keepalive(migrated_db, monkeypatch):
     assert options[b"keepalives_interval"] == b"10"
     assert options[b"keepalives_count"] == b"3"
     assert options[b"tcp_user_timeout"] == b"60000"
+
+
+async def insert_idempotency_key(conn, doc_id, key: str, age: str) -> None:
+    await conn.execute(
+        """
+        INSERT INTO idempotency_keys (owner_id, key, request_hash, document_id, created_at)
+        VALUES ('alice', %s, 'sha256:request', %s, now() - %s::interval)
+        """,
+        (key, doc_id, age),
+    )
+
+
+async def idempotency_keys(conn) -> list[str]:
+    cur = await conn.execute("SELECT key FROM idempotency_keys ORDER BY key")
+    return [row[0] for row in await cur.fetchall()]
+
+
+async def test_purge_removes_only_idempotency_keys_older_than_24_hours(conn):
+    """키는 24시간 보관한다 (ADR-047 결정 3). 지워지는 것은 키이고 문서는 남는다."""
+    doc_id = await insert_document(conn)
+    await insert_idempotency_key(conn, doc_id, "expired", "24 hours 1 second")
+    await insert_idempotency_key(conn, doc_id, "fresh", "23 hours 59 minutes")
+
+    assert await purge_expired_idempotency_keys(conn) == 1
+
+    assert await idempotency_keys(conn) == ["fresh"]
+    assert await document_state(conn, doc_id) is not None
+
+
+async def test_run_worker_purges_expired_idempotency_keys_on_its_sweep(
+    migrated_db, conn, monkeypatch
+):
+    """별도 스케줄러 없이 워커 스윕 주기에 얹는다 — 기동 시 첫 스윕에서 지워져야 한다."""
+    monkeypatch.setenv("DATABASE_URL", migrated_db)
+    monkeypatch.setenv("EMBEDDING_PROVIDER", "fake")
+    get_settings.cache_clear()
+    await close_pool()
+
+    doc_id = await insert_document(conn)
+    await insert_idempotency_key(conn, doc_id, "expired", "2 days")
+
+    async def purged() -> bool:
+        return await idempotency_keys(conn) == []
+
+    worker = asyncio.create_task(run_worker())
+    try:
+        await wait_until(purged, message="워커 스윕이 만료 키를 지우지 않았다")
+    finally:
+        worker.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await worker
+        await close_pool()

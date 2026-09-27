@@ -558,28 +558,57 @@ async def test_errors_that_do_not_pass_with_time_are_not_retried(monkeypatch, mc
     assert clock.sleeps == []
 
 
-async def test_create_document_is_not_retried_without_an_idempotency_key(
+async def test_create_document_retries_an_ambiguous_commit_with_one_key_per_call(
     monkeypatch, mcp_database, clock
 ):
-    """커밋 도달 여부를 알 수 없는 쓰기를 다시 하면 문서가 두 번 생긴다. 쓰기 재시도는
-    멱등키(ADR-047, #120)와 함께 온다."""
+    """커밋은 됐는데 응답을 잃은 경우(#110 B-6)를 재현한다 — 첫 시도가 문서를 만든 뒤
+    AllServersDown을 낸다. 같은 도구 호출 안의 재시도는 같은 키를 써서 처음 문서를 돌려받고,
+    다음 도구 호출은 새 키로 새 문서를 만든다 (ADR-047, ADR-048 결정 4)."""
     from mcp_server import server
 
     monkeypatch.setenv("MCP_USER_ID", "alice")
     get_settings.cache_clear()
-    calls = []
+    real_create = server.create_text_document
+    keys: list[str] = []
 
-    async def failing_create(conn, **_):
-        calls.append(conn)
+    async def commit_then_lose_the_response(conn, **kwargs):
+        keys.append(kwargs["idempotency_key"])
+        document = await real_create(conn, **kwargs)
+        if len(keys) == 1:
+            await conn.commit()
+            raise ALL_SERVERS_DOWN
+        return document
+
+    monkeypatch.setattr(server, "create_text_document", commit_then_lose_the_response)
+
+    first = await server.create_document(title="t", content="c")
+    second = await server.create_document(title="t", content="c")
+
+    assert clock.sleeps == [1]
+    assert keys[0] == keys[1] != keys[2]
+    assert first["document_id"] != second["document_id"]
+    async with await psycopg.AsyncConnection.connect(mcp_database) as conn:
+        count = await (await conn.execute("SELECT count(*) FROM documents")).fetchone()
+    assert count == (2,)
+
+
+async def test_create_document_gives_up_after_the_backoff_budget(
+    monkeypatch, mcp_database, clock
+):
+    from mcp_server import server
+
+    monkeypatch.setenv("MCP_USER_ID", "alice")
+    get_settings.cache_clear()
+
+    async def always_down(conn, **_):
         raise ALL_SERVERS_DOWN
 
-    monkeypatch.setattr(server, "create_text_document", failing_create)
+    monkeypatch.setattr(server, "create_text_document", always_down)
 
-    with pytest.raises(psycopg.errors.SystemError):
+    with pytest.raises(server.DatabaseUnavailable):
         await server.create_document(title="t", content="c")
 
-    assert len(calls) == 1
-    assert clock.sleeps == []
+    assert clock.now <= 60
 
 
 async def test_wrapped_read_tools_keep_their_argument_schema():
@@ -595,3 +624,7 @@ async def test_wrapped_read_tools_keep_their_argument_schema():
     assert set(tools["get_document"].inputSchema["properties"]) == {"document_id"}
     assert set(tools["list_documents"].inputSchema["properties"]) == {"tag", "status"}
     assert "사내 문서 구절" in tools["search_documents"].description
+    # 멱등키는 서버가 호출마다 만든다 — 에이전트가 고르는 인자가 아니다.
+    assert set(tools["create_document"].inputSchema["properties"]) == {
+        "title", "content", "content_type", "tags", "visibility"
+    }

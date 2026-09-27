@@ -67,6 +67,36 @@ def test_write_request_is_not_retried_but_answers_503():
     assert len(seen) == 1
 
 
+@pytest.mark.parametrize("path", ["/api/documents", "/api/documents/text"])
+def test_document_creation_with_an_idempotency_key_is_retried_with_its_body_replayed(path):
+    """키가 있으면 첫 시도가 커밋됐어도 재시도가 처음 문서를 돌려받는다 (ADR-048 결정 4)."""
+    client, seen = build_app(path, "POST", failures=1)
+
+    response = client.post(path, json={"title": "문서"}, headers={"Idempotency-Key": "k-1"})
+
+    assert response.status_code == 200
+    assert seen == [{"title": "문서"}, {"title": "문서"}]
+
+
+@pytest.mark.parametrize(
+    ("path", "method"),
+    [
+        ("/api/documents/00000000-0000-0000-0000-000000000000", "PUT"),
+        ("/api/documents/00000000-0000-0000-0000-000000000000/reembed", "POST"),
+    ],
+)
+def test_other_writes_are_not_retried_even_with_an_idempotency_key(path, method):
+    """키를 지키는 것은 문서 생성뿐이다. 다른 쓰기는 헤더가 붙어 와도 재시도하면 두 번 실행된다."""
+    client, seen = build_app(path, method, failures=1)
+
+    response = client.request(
+        method, path, json={"title": "문서"}, headers={"Idempotency-Key": "k-1"}
+    )
+
+    assert response.status_code == 503
+    assert len(seen) == 1
+
+
 def test_a_second_failure_is_not_retried_again_and_answers_503():
     """즉시 1회로는 10~40초 중단을 덮지 못한다(#110 B-5). 긴 재시도는 클라이언트 몫이다."""
     client, seen = build_app("/api/documents", "GET", failures=2)

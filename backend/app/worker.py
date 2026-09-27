@@ -447,6 +447,23 @@ async def sweep_zombies(conn: psycopg.AsyncConnection) -> int:
         return sum(1 for _, _, status in decided if status == "pending")
 
 
+# 재시도 창(분 단위)보다 충분히 길고 테이블이 무한히 자라지 않는 값 (ADR-047 결정 3).
+IDEMPOTENCY_KEY_TTL = "24 hours"
+
+
+async def purge_expired_idempotency_keys(conn: psycopg.AsyncConnection) -> int:
+    """보관 기한이 지난 문서 생성 멱등키를 지운다. 지운 건수를 반환한다.
+
+    잡 처리와 무관하지만 별도 스케줄러를 두지 않으려고 스윕 주기에 얹는다(pg_cron은
+    #29에서 기각). 키만 지우며 문서는 그대로다.
+    """
+    cur = await conn.execute(
+        "DELETE FROM idempotency_keys WHERE created_at < now() - %s::interval",
+        (IDEMPOTENCY_KEY_TTL,),
+    )
+    return cur.rowcount
+
+
 async def process_once(
     conn: psycopg.AsyncConnection,
     provider: EmbeddingProvider,
@@ -596,6 +613,9 @@ async def run_worker() -> None:
                         recovered = await sweep_zombies(conn)
                         if recovered:
                             logger.info("좀비 잡 %d건을 pending으로 회수", recovered)
+                        purged = await purge_expired_idempotency_keys(conn)
+                        if purged:
+                            logger.info("만료된 멱등키 %d건 정리", purged)
                         processed = await drain(conn, provider, stop)
                         if processed:
                             logger.info("잡 %d건 처리", processed)

@@ -1548,3 +1548,75 @@ def test_reextract_rejects_unparseable_and_blank_originals(
 
     document = db_client.get(f"/api/documents/{document_id}").json()
     assert (document["version"], document["content"]) == (2, "edited")
+
+
+def count_documents(dsn: str) -> int:
+    with psycopg.connect(dsn) as conn:
+        return conn.execute("SELECT count(*) FROM documents").fetchone()[0]
+
+
+def test_upload_retried_with_the_same_idempotency_key_returns_the_first_document(
+    db_client: TestClient, migrated_db: str
+):
+    """응답을 잃은 업로드를 같은 키로 다시 보내면 처음 문서가 같은 상태 코드로 온다 (ADR-047)."""
+    login_as(db_client, "alice")
+
+    def send():
+        return db_client.post(
+            "/api/documents",
+            files={"file": ("guide.txt", b"OpenSQL guide", "text/plain")},
+            headers={"Idempotency-Key": "upload-1"},
+        )
+
+    first, second = send(), send()
+
+    assert (first.status_code, second.status_code) == (201, 201)
+    assert second.json()["id"] == first.json()["id"]
+    assert count_documents(migrated_db) == 1
+
+
+def test_text_ingest_retried_with_the_same_idempotency_key_returns_the_first_document(
+    db_client: TestClient, migrated_db: str
+):
+    login_as(db_client, "alice")
+    body = {"title": "재시도", "content": "본문"}
+    headers = {"Idempotency-Key": "text-1"}
+
+    first = db_client.post("/api/documents/text", json=body, headers=headers)
+    second = db_client.post("/api/documents/text", json=body, headers=headers)
+
+    assert (first.status_code, second.status_code) == (201, 201)
+    assert second.json()["id"] == first.json()["id"]
+    assert count_documents(migrated_db) == 1
+
+
+def test_reusing_an_idempotency_key_for_a_different_request_is_422(
+    db_client: TestClient, migrated_db: str
+):
+    login_as(db_client, "alice")
+    headers = {"Idempotency-Key": "text-1"}
+    db_client.post("/api/documents/text", json={"title": "a", "content": "본문"}, headers=headers)
+
+    response = db_client.post(
+        "/api/documents/text", json={"title": "a", "content": "다른 본문"}, headers=headers
+    )
+
+    assert response.status_code == 422
+    assert "Idempotency-Key" in response.json()["detail"]
+    assert count_documents(migrated_db) == 1
+
+
+@pytest.mark.parametrize("key", ["", "k" * 256])
+def test_an_idempotency_key_outside_1_to_255_characters_is_rejected(
+    db_client: TestClient, migrated_db: str, key: str
+):
+    login_as(db_client, "alice")
+
+    response = db_client.post(
+        "/api/documents/text",
+        json={"title": "a", "content": "본문"},
+        headers={"Idempotency-Key": key},
+    )
+
+    assert response.status_code == 422
+    assert count_documents(migrated_db) == 0

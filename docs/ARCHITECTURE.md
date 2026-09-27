@@ -58,11 +58,12 @@ OpenArchive/
 │   └── ingest_text.py            # 표준 라이브러리만 쓰는 독립 HTTP 텍스트 공급 예제
 ├── backend/
 │   ├── pyproject.toml            # fastapi, psycopg[binary,pool], pydantic-settings, mcp<2, pypdf, python-docx / [dev]: pytest, ruff / [local]: sentence-transformers
-│   ├── migrations/               # 001~018: extensions, tables, triggers, indexes,
+│   ├── migrations/               # 001~019: extensions, tables, triggers, indexes,
 │   │                             #   trgm, edges(006~008), auth(009), links(010~012), token(013),
 │   │                             #   edges 재설계(014 — rebuild_document_edges), 위키링크 정규화(015),
 │   │                             #   관계 잡 분리(016 — embedding_jobs.kind / 017 — ready 트리거,
-│   │                             #   ADR-029 결정 3 개정), 원본 파일 판 보관(018 — document_files, ADR-046)
+│   │                             #   ADR-029 결정 3 개정), 원본 파일 판 보관(018 — document_files, ADR-046),
+│   │                             #   문서 생성 멱등키(019 — idempotency_keys, ADR-047)
 │   ├── app/
 │   │   ├── main.py               # FastAPI 앱 조립
 │   │   ├── config.py             # pydantic-settings (DATABASE_URL, EMBEDDING_PROVIDER 등)
@@ -144,6 +145,17 @@ CREATE TABLE document_files (
   PRIMARY KEY (document_id, file_version),
   FOREIGN KEY (document_id, text_version)   -- CASCADE 없음: 텍스트 버전 정리가 원본 판을 지우지 못한다
     REFERENCES document_versions (document_id, version)
+);
+
+-- idempotency_keys: 문서 생성 요청의 멱등키 (019, ADR-047). 문서 INSERT와 같은 트랜잭션에서 앱이 넣는다
+-- 파생물이 아니라 요청의 기록이라 트리거 규칙의 대상이 아니다. 24시간 뒤 워커 스윕이 지운다
+CREATE TABLE idempotency_keys (
+  owner_id     text NOT NULL,                  -- 소유자 범위: 남의 같은 키와 부딪히지 않고 존재도 드러나지 않는다
+  key          text NOT NULL CHECK (length(key) BETWEEN 1 AND 255),
+  request_hash text NOT NULL,                  -- 같은 키에 다른 요청이면 422
+  document_id  uuid NOT NULL REFERENCES documents(id) ON DELETE CASCADE,  -- 키와 문서는 함께 있거나 함께 없다
+  created_at   timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (owner_id, key)                  -- 같은 키의 동시 요청을 직렬화한다
 );
 
 -- document_chunks: 현재 버전의 청크만 유지 (인덱스 소형화 + 정합성 단순화)
@@ -503,8 +515,8 @@ DATABASE_URL="postgresql://app@<vip>:6432/<pool_name>"
 ### 애플리케이션이 담당하는 복구 로직
 
 - **API**: `psycopg_pool.AsyncConnectionPool(check=AsyncConnectionPool.check_connection)` — 죽은 연결을 대여 시점에 감지·폐기·재수립. 처리 도중 끊긴 요청은 미들웨어가 **1회 재시도**하되 대상은 **읽기 전용 요청**뿐이다(`GET`·`HEAD`·`POST /api/search`). 쓰기는 커밋 도달 여부를 구분할 수 없어 재시도 시 중복 생성 위험이 있다 (ADR-023).
-- **일시 불가용은 503 + `Retry-After`**: 기다리면 풀리는 DB 오류를 `app.db.is_unavailable` 하나로 가른다 — 연결 유실·풀 대여 시간 초과(SQLSTATE 없는 `OperationalError`), 연결 예외 `08xxx`, OpenProxy `AllServersDown`과 서버 소켓 오류가 올라오는 `58000`, 서버 종료·기동 중인 `57P01`·`57P02`·`57P03`, 승격 직후 쓰기가 replica로 간 `25006`. **나열한 것만** 일시 불가용이다 — `OperationalError`에는 디스크 가득 참(`53100`)·인증 실패(`28P01`)·statement timeout(`57014`)처럼 기다려도 풀리지 않는 것도 섞여 있어, 그것을 503으로 주면 결함이 가려진다. 한계: 잘못된 DSN·비밀번호는 풀에서 `PoolTimeout`으로 보여 장애와 구별되지 않는다. 미들웨어(`api/retry.py`)의 즉시 1회 재시도도 이 기준을 따르고, 끝내 풀리지 않으면 **503 + `Retry-After: 1`**로 응답한다. 쓰기도 503은 받지만 재시도는 하지 않는다. 그 밖의 오류는 500이며, 500은 코드 결함에만 남는다. #110 B에서는 장애 구간 응답이 전부 500이었다(B-5) (ADR-048 결정 3).
-- **긴 재시도는 클라이언트가 한다**: 즉시 1회로는 7~42초 중단을 덮지 못한다. 웹 UI(`lib/api.ts`)와 MCP 읽기 도구 3개(`search_documents`·`get_document`·`list_documents`)가 503·네트워크 오류(MCP는 분류된 DB 오류)를 **지수 백오프(1초 시작·상한 8초) + 전체 지터, 총 60초**로 다시 시도한다. 웹 UI는 503의 `Retry-After`보다 일찍 보내지 않는다 — 간격은 `max(Retry-After, 지터 백오프)`이고, 알린 값이 남은 예산을 넘으면 바로 포기한다(RFC 9110 §10.2.3). MCP는 HTTP를 거치지 않고 서비스를 직접 불러 받을 헤더가 없다. 읽기만이다 — 쓰기 재시도는 멱등키(ADR-047)와 함께 온다. 서버는 요청을 붙잡고 버티지 않는다 (ADR-048 결정 4).
+- **일시 불가용은 503 + `Retry-After`**: 기다리면 풀리는 DB 오류를 `app.db.is_unavailable` 하나로 가른다 — 연결 유실·풀 대여 시간 초과(SQLSTATE 없는 `OperationalError`), 연결 예외 `08xxx`, OpenProxy `AllServersDown`과 서버 소켓 오류가 올라오는 `58000`, 서버 종료·기동 중인 `57P01`·`57P02`·`57P03`, 승격 직후 쓰기가 replica로 간 `25006`. **나열한 것만** 일시 불가용이다 — `OperationalError`에는 디스크 가득 참(`53100`)·인증 실패(`28P01`)·statement timeout(`57014`)처럼 기다려도 풀리지 않는 것도 섞여 있어, 그것을 503으로 주면 결함이 가려진다. 한계: 잘못된 DSN·비밀번호는 풀에서 `PoolTimeout`으로 보여 장애와 구별되지 않는다. 미들웨어(`api/retry.py`)의 즉시 1회 재시도도 이 기준을 따르고, 끝내 풀리지 않으면 **503 + `Retry-After: 1`**로 응답한다. 쓰기도 503은 받지만 즉시 재시도는 `Idempotency-Key`가 있는 문서 생성(`POST /api/documents`·`/api/documents/text`)만 한다 — 다른 쓰기는 헤더가 붙어 와도 키를 지키지 않는다. 그 밖의 오류는 500이며, 500은 코드 결함에만 남는다. #110 B에서는 장애 구간 응답이 전부 500이었다(B-5) (ADR-048 결정 3).
+- **긴 재시도는 클라이언트가 한다**: 즉시 1회로는 7~42초 중단을 덮지 못한다. 웹 UI(`lib/api.ts`)의 읽기와 업로드, MCP 도구 4개(읽기 3개와 `create_document`)가 503·네트워크 오류(MCP는 분류된 DB 오류)를 **지수 백오프(1초 시작·상한 8초) + 전체 지터, 총 60초**로 다시 시도한다. 웹 UI는 503의 `Retry-After`보다 일찍 보내지 않는다 — 간격은 `max(Retry-After, 지터 백오프)`이고, 알린 값이 남은 예산을 넘으면 바로 포기한다(RFC 9110 §10.2.3). MCP는 HTTP를 거치지 않고 서비스를 직접 불러 받을 헤더가 없다. 쓰기는 멱등키가 있는 것만 재시도한다 — 웹 UI는 업로드 동작마다, MCP는 `create_document` 호출마다 키를 하나 만들어 그 요청의 모든 재시도에 쓴다(ADR-047). 편집·태그·삭제 등 다른 쓰기는 재시도하지 않는다. 서버는 요청을 붙잡고 버티지 않는다 (ADR-048 결정 4).
 - **워커 (잡 처리)**: 동일한 풀 정책. 처리 중 연결이 끊기면 트랜잭션이 롤백되고, 잡은 `processing` 상태로 남았다가 좀비 회수 스윕이 `pending`으로 되돌린다.
 - **죽은 연결 감지 (keepalive)**: 풀과 워커 `LISTEN` 연결은 TCP keepalive(`keepalives_idle=30`·`interval=10`·`count=3`)와 `tcp_user_timeout=60000`을 **코드 기본값**으로 연다(`app/db.py`). VIP가 원래 노드로 돌아가는 순간(선점) 응답을 기다리던 연결은 FIN도 RST도 받지 못하는데, OS 기본값으로는 약 2시간 뒤에야 풀려 워커가 멈춰 있었다(#110 B-1). 감지는 약 60초 안에 된다. DSN에 같은 키를 적으면 그 값이 이기며, DSN 문자열 자체는 바꾸지 않는다 — 환경변수 하나·호스트 하나(ADR-006) 그대로다 (ADR-048 결정 1).
 - **오류가 난 연결은 풀에 돌려보내지 않는다**: API 요청·MCP 도구 호출이 DB 오류로 끝나면(`app.db.connection`), 워커 처리 루프는 어떤 오류로든 끝나면 그 연결을 닫아 풀이 버리게 한다. OpenProxy가 `BEGIN`에 `AllServersDown`을 돌려주면 psycopg의 `transaction()` 카운터가 되돌려지지 않은 채 연결이 IDLE로 남고, 풀은 IDLE만 보고 받아들여 그 연결의 다음 `transaction()`마다 `AssertionError`가 났다(#110 B-2, 한때 워커 풀 4개 중 3개). 요청 경로는 HTTP 거절(401·404)로는 닫지 않는다. 워커는 좁히지 않는다 — 잡 처리 중 오염되면 `process_once`가 첫 DB 오류를 잡아 `fail_job`으로 넘기고, 루프에 올라오는 것은 `fail_job`의 `AssertionError`다 (ADR-048 결정 2).
@@ -563,8 +575,8 @@ OpenSQL `patroni.yml`의 PostgreSQL 파라미터는 `max_connections: 100`이다
 
 | 엔드포인트 | 내용 |
 |---|---|
-| `POST /api/documents` | multipart 업로드. pypdf/python-docx/plain 파싱 → INSERT. 여기서 트리거가 파이프라인을 자동 기동 — 임베딩 관련 코드 없음. **텍스트 추출 결과가 비면 400** (아래). **원본 파일은 같은 트랜잭션에서 `document_files`에 1판으로 저장한다** — 원본 저장이 실패하면 문서·텍스트 버전·잡도 남지 않는다. 상한 `MAX_UPLOAD_MB`(기본 50) 초과는 413 |
-| `POST /api/documents/text` | JSON 텍스트 공급(`txt`·`md`). `filename`은 NULL이며, 파생 데이터는 업로드 경로와 동일하게 DB 트리거가 만든다. 빈 문서 텍스트와 500,000자 초과는 400 |
+| `POST /api/documents` | multipart 업로드. pypdf/python-docx/plain 파싱 → INSERT. 여기서 트리거가 파이프라인을 자동 기동 — 임베딩 관련 코드 없음. **텍스트 추출 결과가 비면 400** (아래). **원본 파일은 같은 트랜잭션에서 `document_files`에 1판으로 저장한다** — 원본 저장이 실패하면 문서·텍스트 버전·잡도 남지 않는다. 상한 `MAX_UPLOAD_MB`(기본 50) 초과는 413. 선택 헤더 `Idempotency-Key`(아래) |
+| `POST /api/documents/text` | JSON 텍스트 공급(`txt`·`md`). `filename`은 NULL이며, 파생 데이터는 업로드 경로와 동일하게 DB 트리거가 만든다. 빈 문서 텍스트와 500,000자 초과는 400. 선택 헤더 `Idempotency-Key`(아래) |
 | `GET /api/documents` | 목록 + `status`/`tag` 필터, embedding_status 포함 |
 | `GET /api/documents/{id}` | 상세 + 텍스트 버전 목록 + 청크 수 + 청크 기준 버전 + `files`(원본 판 목록 — 메타데이터만, 바이트는 싣지 않는다) |
 | `GET /api/documents/{id}/file` · `GET /api/documents/{id}/files/{n}` | **원본 내려받기** — 최신 판 · 특정 판. 항상 `Content-Disposition: attachment` + `X-Content-Type-Options: nosniff`, 미디어 타입은 확장자 고정 매핑. 볼 수 없는 문서·원본 없음·없는 판은 404 (ADR-046) |
@@ -597,7 +609,21 @@ OpenSQL `patroni.yml`의 PostgreSQL 파라미터는 `max_connections: 100`이다
 
 ### 일시 불가용 응답 (모든 엔드포인트)
 
-DB가 잠시 응답할 수 없으면(연결 끊김·페일오버·switchover 중) **`503 Service Unavailable`** + **`Retry-After: 1`** + `{"detail": "일시적으로 요청을 처리할 수 없습니다. 잠시 후 다시 시도하세요."}`로 응답한다. `Retry-After`는 중단 예측값이 아니라 "지금 바로 다시 하지는 마라"는 하한이다(RFC 9110 §10.2.3). 외부 클라이언트는 `Retry-After`보다 일찍 보내지 않는 범위에서 지수 백오프 + 지터로 다시 시도하되, **쓰기 요청은 첫 시도가 이미 커밋됐을 수 있으므로** 멱등키(ADR-047) 없이 자동 재시도하지 않는다. 500은 재시도해도 풀리지 않는 결함이다 (ADR-048).
+DB가 잠시 응답할 수 없으면(연결 끊김·페일오버·switchover 중) **`503 Service Unavailable`** + **`Retry-After: 1`** + `{"detail": "일시적으로 요청을 처리할 수 없습니다. 잠시 후 다시 시도하세요."}`로 응답한다. `Retry-After`는 중단 예측값이 아니라 "지금 바로 다시 하지는 마라"는 하한이다(RFC 9110 §10.2.3). 외부 클라이언트는 `Retry-After`보다 일찍 보내지 않는 범위에서 지수 백오프 + 지터로 다시 시도하되, **쓰기 요청은 첫 시도가 이미 커밋됐을 수 있으므로** 아래 멱등키 없이 자동 재시도하지 않는다. 500은 재시도해도 풀리지 않는 결함이다 (ADR-048).
+
+### 멱등키 (`POST /api/documents`, `POST /api/documents/text`)
+
+문서 생성 요청은 선택 헤더 **`Idempotency-Key`**(1~255자)를 받는다. 클라이언트는 사용자 동작(요청) 하나마다 새 키를 만들고, 그 요청의 재시도에는 같은 키를 쓴다 (ADR-047).
+
+| 상황 | 응답 |
+|---|---|
+| 처음 보는 키 | 평소처럼 문서를 만든다(201). 키는 문서와 **같은 트랜잭션**에 기록된다 |
+| 같은 키 + 같은 요청 | 새로 만들지 않고 처음 문서를 **201**로 돌려준다. 본문은 그 문서의 **현재** 요약이다(처음 응답을 저장해 두지 않는다 — 그새 `embedding_status`가 바뀌었을 수 있다) |
+| 같은 키 + 다른 요청 | **422**. 요청 비교는 본문 지문(파일은 파일명·바이트 해시·제목·태그·공개범위, 텍스트는 제목·본문·유형·태그·공개범위)으로 하며, 업로드에 쓴 키를 텍스트 공급에 쓰는 것도 다른 요청이다 |
+| 같은 키의 동시 요청 | 기본키가 직렬화한다. 뒤 요청은 앞 트랜잭션이 끝나기를 기다렸다가, 앞이 커밋했으면 그 문서를, 롤백했으면 자기가 만든 문서를 받는다 |
+| 키 없음 | 지금처럼 동작한다 — 재시도하면 문서가 두 번 생길 수 있다 |
+
+키는 **소유자 범위**다 — 다른 계정의 같은 키와 부딪히지 않고, 그 존재도 드러나지 않는다. 키는 **24시간** 보관되고 워커의 스윕 주기에 지워진다. 그 뒤 같은 키로 다시 보내면 새 문서가 생긴다. 문서를 지우면 그 키도 함께 지워진다(FK CASCADE).
 
 ### 빈 파싱 결과 처리 (`POST /api/documents`)
 
