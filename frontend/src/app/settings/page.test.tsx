@@ -203,3 +203,53 @@ describe("계정 설정 화면", () => {
     );
   });
 });
+
+describe("계정 설정 화면 취소", () => {
+  it("화면을 떠나면 진행 중인 토큰 목록 조회를 취소한다", async () => {
+    const fetchMock = vi
+      .fn((_input: RequestInfo | URL, _init?: RequestInit) => new Promise<Response>(() => {}))
+      .mockResolvedValueOnce(response(alice));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { unmount } = render(<AuthProvider><SettingsPage /></AuthProvider>);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    unmount();
+
+    expect(fetchMock.mock.calls[1][1]?.signal?.aborted).toBe(true);
+    vi.unstubAllGlobals();
+  });
+});
+
+describe("계정 설정 화면 — 동작 뒤 조회 취소", () => {
+  it("발급 뒤 목록을 다시 받는 중에 화면을 떠나면 그 조회를 취소한다 — 발급 요청은 건드리지 않는다", async () => {
+    const fetchMock = vi
+      .fn((_input: RequestInfo | URL, _init?: RequestInit) => new Promise<Response>(() => {}))
+      .mockResolvedValueOnce(response(alice))
+      .mockResolvedValueOnce(response(tokens))
+      .mockResolvedValueOnce(
+        response(
+          {
+            id: "token-2",
+            name: "배치 투입",
+            scope: "read",
+            created_at: "2026-08-21T01:00:00Z",
+            token: "plaintext-shown-once",
+          },
+          201,
+        ),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { unmount } = render(<AuthProvider><SettingsPage /></AuthProvider>);
+    fireEvent.change(await screen.findByRole("textbox", { name: "토큰 이름" }), {
+      target: { value: "배치 투입" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "토큰 발급" }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(4));
+    unmount();
+
+    expect(fetchMock.mock.calls[2][1]?.signal).toBeFalsy();
+    expect(fetchMock.mock.calls[3][1]?.signal?.aborted).toBe(true);
+    vi.unstubAllGlobals();
+  });
+});

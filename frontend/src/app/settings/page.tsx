@@ -13,6 +13,7 @@ import {
 } from "@/lib/api";
 import { markPasswordChanged } from "@/lib/passwordChangeNotice";
 import type { TokenCreated, TokenScope, TokenSummary } from "@/lib/types";
+import { useUnmountSignal } from "@/lib/useUnmountSignal";
 
 const SCOPE_LABEL: Record<TokenScope, string> = {
   read: "읽기 전용",
@@ -40,24 +41,23 @@ export default function SettingsPage(): React.ReactElement {
   const [newPassword, setNewPassword] = useState("");
   const [passwordError, setPasswordError] = useState<string | null>(null);
   const [passwordWorking, setPasswordWorking] = useState(false);
+  const unmountSignal = useUnmountSignal();
 
   useEffect(() => {
     if (authLoading || !auth.authenticated) return;
-    let active = true;
-    listTokens()
+    const controller = new AbortController();
+    listTokens(controller.signal)
       .then((items) => {
-        if (active) setTokens(items);
+        if (!controller.signal.aborted) setTokens(items);
       })
       .catch((reason: unknown) => {
-        if (active) {
+        if (!controller.signal.aborted) {
           setTokenError(
             reason instanceof ApiError ? reason.detail : "토큰 목록을 불러오지 못했습니다.",
           );
         }
       });
-    return () => {
-      active = false;
-    };
+    return () => controller.abort();
   }, [auth.authenticated, authLoading]);
 
   async function issue(event: React.FormEvent<HTMLFormElement>): Promise<void> {
@@ -68,7 +68,7 @@ export default function SettingsPage(): React.ReactElement {
     try {
       setIssued(await createToken({ name, scope }));
       setName("");
-      setTokens(await listTokens());
+      setTokens(await listTokens(unmountSignal()));
     } catch (reason: unknown) {
       setTokenError(reason instanceof ApiError ? reason.detail : "토큰을 발급하지 못했습니다.");
     } finally {
@@ -85,7 +85,7 @@ export default function SettingsPage(): React.ReactElement {
     try {
       await revokeToken(token.id);
       if (issued?.id === token.id) setIssued(null);
-      setTokens(await listTokens());
+      setTokens(await listTokens(unmountSignal()));
     } catch (reason: unknown) {
       setTokenError(reason instanceof ApiError ? reason.detail : "토큰을 폐기하지 못했습니다.");
     } finally {

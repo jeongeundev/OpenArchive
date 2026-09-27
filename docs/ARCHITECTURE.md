@@ -503,6 +503,8 @@ DATABASE_URL="postgresql://app@<vip>:6432/<pool_name>"
 ### 애플리케이션이 담당하는 복구 로직
 
 - **API**: `psycopg_pool.AsyncConnectionPool(check=AsyncConnectionPool.check_connection)` — 죽은 연결을 대여 시점에 감지·폐기·재수립. 처리 도중 끊긴 요청은 미들웨어가 **1회 재시도**하되 대상은 **읽기 전용 요청**뿐이다(`GET`·`HEAD`·`POST /api/search`). 쓰기는 커밋 도달 여부를 구분할 수 없어 재시도 시 중복 생성 위험이 있다 (ADR-023).
+- **일시 불가용은 503 + `Retry-After`**: 기다리면 풀리는 DB 오류를 `app.db.is_unavailable` 하나로 가른다 — 연결 유실·풀 대여 시간 초과(SQLSTATE 없는 `OperationalError`), 연결 예외 `08xxx`, OpenProxy `AllServersDown`과 서버 소켓 오류가 올라오는 `58000`, 서버 종료·기동 중인 `57P01`·`57P02`·`57P03`, 승격 직후 쓰기가 replica로 간 `25006`. **나열한 것만** 일시 불가용이다 — `OperationalError`에는 디스크 가득 참(`53100`)·인증 실패(`28P01`)·statement timeout(`57014`)처럼 기다려도 풀리지 않는 것도 섞여 있어, 그것을 503으로 주면 결함이 가려진다. 한계: 잘못된 DSN·비밀번호는 풀에서 `PoolTimeout`으로 보여 장애와 구별되지 않는다. 미들웨어(`api/retry.py`)의 즉시 1회 재시도도 이 기준을 따르고, 끝내 풀리지 않으면 **503 + `Retry-After: 1`**로 응답한다. 쓰기도 503은 받지만 재시도는 하지 않는다. 그 밖의 오류는 500이며, 500은 코드 결함에만 남는다. #110 B에서는 장애 구간 응답이 전부 500이었다(B-5) (ADR-048 결정 3).
+- **긴 재시도는 클라이언트가 한다**: 즉시 1회로는 7~42초 중단을 덮지 못한다. 웹 UI(`lib/api.ts`)와 MCP 읽기 도구 3개(`search_documents`·`get_document`·`list_documents`)가 503·네트워크 오류(MCP는 분류된 DB 오류)를 **지수 백오프(1초 시작·상한 8초) + 전체 지터, 총 60초**로 다시 시도한다. 웹 UI는 503의 `Retry-After`보다 일찍 보내지 않는다 — 간격은 `max(Retry-After, 지터 백오프)`이고, 알린 값이 남은 예산을 넘으면 바로 포기한다(RFC 9110 §10.2.3). MCP는 HTTP를 거치지 않고 서비스를 직접 불러 받을 헤더가 없다. 읽기만이다 — 쓰기 재시도는 멱등키(ADR-047)와 함께 온다. 서버는 요청을 붙잡고 버티지 않는다 (ADR-048 결정 4).
 - **워커 (잡 처리)**: 동일한 풀 정책. 처리 중 연결이 끊기면 트랜잭션이 롤백되고, 잡은 `processing` 상태로 남았다가 좀비 회수 스윕이 `pending`으로 되돌린다.
 - **죽은 연결 감지 (keepalive)**: 풀과 워커 `LISTEN` 연결은 TCP keepalive(`keepalives_idle=30`·`interval=10`·`count=3`)와 `tcp_user_timeout=60000`을 **코드 기본값**으로 연다(`app/db.py`). VIP가 원래 노드로 돌아가는 순간(선점) 응답을 기다리던 연결은 FIN도 RST도 받지 못하는데, OS 기본값으로는 약 2시간 뒤에야 풀려 워커가 멈춰 있었다(#110 B-1). 감지는 약 60초 안에 된다. DSN에 같은 키를 적으면 그 값이 이기며, DSN 문자열 자체는 바꾸지 않는다 — 환경변수 하나·호스트 하나(ADR-006) 그대로다 (ADR-048 결정 1).
 - **오류가 난 연결은 풀에 돌려보내지 않는다**: API 요청·MCP 도구 호출이 DB 오류로 끝나면(`app.db.connection`), 워커 처리 루프는 어떤 오류로든 끝나면 그 연결을 닫아 풀이 버리게 한다. OpenProxy가 `BEGIN`에 `AllServersDown`을 돌려주면 psycopg의 `transaction()` 카운터가 되돌려지지 않은 채 연결이 IDLE로 남고, 풀은 IDLE만 보고 받아들여 그 연결의 다음 `transaction()`마다 `AssertionError`가 났다(#110 B-2, 한때 워커 풀 4개 중 3개). 요청 경로는 HTTP 거절(401·404)로는 닫지 않는다. 워커는 좁히지 않는다 — 잡 처리 중 오염되면 `process_once`가 첫 DB 오류를 잡아 `fail_job`으로 넘기고, 루프에 올라오는 것은 `fail_job`의 `AssertionError`다 (ADR-048 결정 2).
@@ -592,6 +594,10 @@ OpenSQL `patroni.yml`의 PostgreSQL 파라미터는 `max_connections: 100`이다
 > 새 파일로 교체해도 문서의 id·제목·태그·공개범위·관계는 그대로이고 파일명·유형만 바뀐다 (`PUT /api/documents/{id}/file`, ADR-046).
 >
 > 라우터는 얇다. 요청 검증과 상태 코드 변환만 하고 실제 로직은 `services/documents.py`·`services/search.py`·`services/system.py` 등에 있으며, MCP 서버가 문서·검색 서비스를 재사용한다. 도메인 예외를 상태 코드로 옮기는 매핑은 `main.py`의 exception handler 한 곳에 있다.
+
+### 일시 불가용 응답 (모든 엔드포인트)
+
+DB가 잠시 응답할 수 없으면(연결 끊김·페일오버·switchover 중) **`503 Service Unavailable`** + **`Retry-After: 1`** + `{"detail": "일시적으로 요청을 처리할 수 없습니다. 잠시 후 다시 시도하세요."}`로 응답한다. `Retry-After`는 중단 예측값이 아니라 "지금 바로 다시 하지는 마라"는 하한이다(RFC 9110 §10.2.3). 외부 클라이언트는 `Retry-After`보다 일찍 보내지 않는 범위에서 지수 백오프 + 지터로 다시 시도하되, **쓰기 요청은 첫 시도가 이미 커밋됐을 수 있으므로** 멱등키(ADR-047) 없이 자동 재시도하지 않는다. 500은 재시도해도 풀리지 않는 결함이다 (ADR-048).
 
 ### 빈 파싱 결과 처리 (`POST /api/documents`)
 
@@ -968,6 +974,7 @@ class EmbeddingProvider(Protocol):
 - 사용자 화면: `/`(목록 + 업로드 드롭존), `/documents/[id]`(메타데이터·텍스트 버전 이력·청크 수와 기준 버전 요약·**문서 텍스트 편집**·관련 문서·태그 추천), `/search`(질의 + 태그/유형 필터 + 결과. "실행된 SQL 보기" 토글), `/clusters`(관계 군집 덩어리와 연결), `/diagnostics`(고아·중복 후보·미분류·깨진 링크), `/login`
 - **편집은 Client Component**다. 보기 ↔ 편집 토글, 저장 시 `version`을 함께 전송하고 409를 처리한다. 저장 직후 상태 배지가 `pending → processing → ready`로 바뀌는 것을 2초 폴링으로 보여준다
 - **사용자 화면은 인프라 상태를 노출하지 않는다.** 페일오버가 나도 화면 구성이 달라지지 않으며, 사용자는 업로드·검색이 계속 성공하는 것만 본다 (UI_GUIDE 디자인 원칙 3).
+- **읽기 요청은 503·네트워크 오류를 백오프로 기다린다**(`lib/api.ts`). 읽기 함수는 `signal`을 받고, 훅과 화면 진입 시 조회는 마운트 동안 `AbortController` 하나로 묶어 **화면을 떠나면 진행 중인 요청과 백오프 대기를 함께 취소한다** — 쓸 곳 없는 재시도가 서버에 부하를 더하거나 재시도 안내가 다른 화면에 남지 않게 한다. 새 검색은 이전 검색을 취소한다. 사용자 동작으로 시작한 읽기(버전 본문 열기, 발급·생성 뒤 목록 다시 받기)도 `useUnmountSignal`로 같은 규칙을 따른다 — 앞선 쓰기 요청은 이미 커밋됐을 수 있어 취소하지 않는다. 기다리는 동안에만 `RetryNotice`가 「연결이 원활하지 않아 다시 시도하는 중입니다.」를 보이고 성공하면 사라진다. 무엇이 멈췄는지는 말하지 않는다. `/admin/status`의 `GET /api/system/status`만은 백오프하지 않는다 — 장애를 바로 드러내야 하는 관측 채널이고, 2초 폴링 자체가 재시도다 (ADR-048 결정 4, UI_GUIDE 원칙 3).
 - 관리 화면: `/admin/status` — `GET /api/system/status`를 폴링해 접속 노드·잡 수·프로바이더 표시. **페일오버 데모의 증거 채널**이며 사용자 내비게이션에 노출하지 않는다. `/admin/users` — 계정 발급·삭제 (ADR-028)
 - 화면은 모두 Client Component다. 로그인 세션 확인과 목록·상세·관리 화면의 폴링 때문이다
 - API 연동은 `next.config.js` rewrites로 FastAPI 프록시

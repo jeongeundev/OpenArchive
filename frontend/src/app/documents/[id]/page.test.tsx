@@ -194,3 +194,29 @@ describe("문서 상세 페이지의 위키링크", () => {
     expect(screen.queryByRole("heading", { name: "이 문서를 가리키는 문서" })).not.toBeInTheDocument();
   });
 });
+
+// 응답하지 않는 서버 — 화면을 떠날 때 요청이 취소되는지만 본다.
+function pendingFetch() {
+  return vi.fn((_input: RequestInfo | URL, _init?: RequestInit) => new Promise<Response>(() => {}));
+}
+
+describe("문서 상세 화면 취소", () => {
+  it("화면을 떠나면 문서·관련 문서·링크 조회를 모두 취소한다", () => {
+    const fetchMock = pendingFetch();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { unmount } = render(<AuthProvider><DocumentDetailView /></AuthProvider>);
+    unmount();
+
+    const urls = fetchMock.mock.calls.map(([input]) => String(input));
+    expect(urls).toEqual(
+      expect.arrayContaining([
+        "/api/documents/document-1",
+        "/api/documents/document-1/links",
+        "/api/documents/document-1/backlinks",
+      ]),
+    );
+    for (const [, init] of fetchMock.mock.calls) expect(init?.signal?.aborted).toBe(true);
+    vi.unstubAllGlobals();
+  });
+});

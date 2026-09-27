@@ -22,20 +22,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    let active = true;
-    getAuthStatus()
+    const controller = new AbortController();
+    getAuthStatus(controller.signal)
       .then((status) => {
-        if (active) setAuth(status);
+        if (!controller.signal.aborted) setAuth(status);
       })
       .catch(() => {
-        if (active) setAuth(anonymous);
+        if (!controller.signal.aborted) setAuth(anonymous);
       })
       .finally(() => {
-        if (active) setLoading(false);
+        if (!controller.signal.aborted) setLoading(false);
       });
-    return () => {
-      active = false;
-    };
+    return () => controller.abort();
   }, []);
 
   return <AuthContext value={{ auth, loading, setAuth }}>{children}</AuthContext>;

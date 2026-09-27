@@ -79,3 +79,42 @@ describe("사용자 관리 화면", () => {
     expect(screen.queryByRole("button", { name: "사용자 생성" })).not.toBeInTheDocument();
   });
 });
+
+describe("사용자 관리 화면 취소", () => {
+  it("화면을 떠나면 진행 중인 목록 조회를 취소한다", async () => {
+    const fetchMock = vi
+      .fn((_input: RequestInfo | URL, _init?: RequestInit) => new Promise<Response>(() => {}))
+      .mockResolvedValueOnce(response(admin));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { unmount } = render(<AuthProvider><UsersPage /></AuthProvider>);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    unmount();
+
+    expect(fetchMock.mock.calls[1][1]?.signal?.aborted).toBe(true);
+    vi.unstubAllGlobals();
+  });
+});
+
+describe("사용자 관리 화면 — 동작 뒤 조회 취소", () => {
+  it("생성 뒤 목록을 다시 받는 중에 화면을 떠나면 그 조회를 취소한다 — 생성 요청은 건드리지 않는다", async () => {
+    const fetchMock = vi
+      .fn((_input: RequestInfo | URL, _init?: RequestInit) => new Promise<Response>(() => {}))
+      .mockResolvedValueOnce(response(admin))
+      .mockResolvedValueOnce(response(users))
+      .mockResolvedValueOnce(response({ ...users[0], id: "user-2", username: "bob" }, 201));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { unmount } = render(<AuthProvider><UsersPage /></AuthProvider>);
+    expect(await screen.findByText("alice")).toBeInTheDocument();
+    fireEvent.change(screen.getByRole("textbox", { name: "사용자명" }), { target: { value: "bob" } });
+    fireEvent.change(screen.getByLabelText("비밀번호"), { target: { value: "secret" } });
+    fireEvent.click(screen.getByRole("button", { name: "사용자 생성" }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(4));
+    unmount();
+
+    expect(fetchMock.mock.calls[2][1]?.signal).toBeFalsy();
+    expect(fetchMock.mock.calls[3][1]?.signal?.aborted).toBe(true);
+    vi.unstubAllGlobals();
+  });
+});

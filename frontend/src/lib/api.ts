@@ -34,13 +34,114 @@ export class ApiError extends Error {
   }
 }
 
+// DB 일시 불가용(503)·네트워크 오류는 기다리면 풀린다 (ADR-048 결정 4). 60초는 #110 B의
+// 최악 중단(42초)에 여유를 둔 값이다.
+const BACKOFF_START_MS = 1000;
+const BACKOFF_CAP_MS = 8000;
+const BACKOFF_BUDGET_MS = 60_000;
+
+// 재시도 중인 요청 수. 화면의 재시도 안내(RetryNotice)가 구독한다.
+let retryingRequests = 0;
+const retryListeners = new Set<() => void>();
+
+export function isRetrying(): boolean {
+  return retryingRequests > 0;
+}
+
+export function subscribeRetrying(listener: () => void): () => void {
+  retryListeners.add(listener);
+  return () => {
+    retryListeners.delete(listener);
+  };
+}
+
+function changeRetrying(delta: 1 | -1): void {
+  const before = isRetrying();
+  retryingRequests += delta;
+  if (before !== isRetrying()) for (const listener of retryListeners) listener();
+}
+
+/** 서버 미들웨어와 같은 기준이다 — 검색은 메서드만 POST인 읽기다. */
+function isRead(path: string, init: RequestInit): boolean {
+  const method = (init.method ?? "GET").toUpperCase();
+  return method === "GET" || method === "HEAD" || path === "/api/search";
+}
+
+/** 호출자가 취소하면(화면을 떠나면) 기다리지 않고 AbortError로 끝낸다. */
+function sleep(ms: number, signal: AbortSignal | null | undefined): Promise<void> {
+  return new Promise((resolve, reject) => {
+    signal?.throwIfAborted();
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(signal?.reason);
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+/**
+ * 서버가 알린 최소 대기(ms). RFC 9110 §10.2.3 — 초 수 또는 HTTP 날짜. 없거나 읽을 수 없으면 0.
+ */
+function retryAfterMs(response: Response): number {
+  const value = response.headers.get("Retry-After");
+  if (value === null) return 0;
+  const ms = /^\d+$/.test(value.trim()) ? Number(value) * 1000 : Date.parse(value) - Date.now();
+  return Number.isFinite(ms) ? Math.max(0, ms) : 0;
+}
+
+/**
+ * 읽기만 지수 백오프 + 전체 지터로 다시 보낸다. 503이 `Retry-After`를 알리면 그보다
+ * 일찍 보내지 않는다. 쓰기는 첫 시도가 이미 커밋됐을 수 있어
+ * 다시 보내면 문서가 두 번 생긴다 — 쓰기 재시도는 멱등키와 함께 온다(ADR-047).
+ * 예산을 넘기면 마지막 503 응답(또는 네트워크 오류)을 그대로 돌려준다.
+ */
+async function fetchWithBackoff(path: string, init: RequestInit): Promise<Response> {
+  if (!isRead(path, init)) return fetch(path, init);
+
+  const deadline = Date.now() + BACKOFF_BUDGET_MS;
+  let attempt = 0;
+  let retrying = false;
+  try {
+    for (;;) {
+      let last: Response | TypeError;
+      try {
+        const response = await fetch(path, init);
+        if (response.status !== 503) return response;
+        last = response;
+      } catch (error) {
+        // fetch는 네트워크 실패를 TypeError로만 알린다. 중단(AbortError) 등은 그대로 올린다.
+        if (!(error instanceof TypeError)) throw error;
+        last = error;
+      }
+      const backoff = Math.random() * Math.min(BACKOFF_CAP_MS, BACKOFF_START_MS * 2 ** attempt);
+      const delay = last instanceof Response ? Math.max(retryAfterMs(last), backoff) : backoff;
+      if (Date.now() + delay > deadline) {
+        if (last instanceof Response) return last;
+        throw last;
+      }
+      if (!retrying) {
+        retrying = true;
+        changeRetrying(1);
+      }
+      await sleep(delay, init.signal);
+      attempt += 1;
+    }
+  } finally {
+    if (retrying) changeRetrying(-1);
+  }
+}
+
 async function request<T>(
   path: string,
   init: RequestInit = {},
-  parseResponse = true,
+  { parse = true, backoff = true }: { parse?: boolean; backoff?: boolean } = {},
 ): Promise<T> {
   const headers = new Headers(init.headers);
-  const response = await fetch(path, {
+  const response = await (backoff ? fetchWithBackoff : fetch)(path, {
     ...init,
     credentials: "same-origin",
     headers,
@@ -64,11 +165,11 @@ async function request<T>(
         : undefined;
     throw new ApiError(response.status, detail, currentVersion);
   }
-  return parseResponse ? (response.json() as Promise<T>) : (undefined as T);
+  return parse ? (response.json() as Promise<T>) : (undefined as T);
 }
 
-export function getAuthStatus(): Promise<AuthStatus> {
-  return request<AuthStatus>("/api/auth/me");
+export function getAuthStatus(signal?: AbortSignal): Promise<AuthStatus> {
+  return request<AuthStatus>("/api/auth/me", { signal });
 }
 
 export function login(username: string, password: string): Promise<AuthStatus> {
@@ -97,8 +198,8 @@ export function changePassword(
   });
 }
 
-export function listTokens(): Promise<TokenSummary[]> {
-  return request<TokenSummary[]>("/api/auth/tokens");
+export function listTokens(signal?: AbortSignal): Promise<TokenSummary[]> {
+  return request<TokenSummary[]>("/api/auth/tokens", { signal });
 }
 
 export function createToken(input: {
@@ -113,11 +214,15 @@ export function createToken(input: {
 }
 
 export function revokeToken(id: string): Promise<void> {
-  return request<void>(`/api/auth/tokens/${encodeURIComponent(id)}`, { method: "DELETE" }, false);
+  return request<void>(
+    `/api/auth/tokens/${encodeURIComponent(id)}`,
+    { method: "DELETE" },
+    { parse: false },
+  );
 }
 
-export function listUsers(): Promise<UserSummary[]> {
-  return request<UserSummary[]>("/api/admin/users");
+export function listUsers(signal?: AbortSignal): Promise<UserSummary[]> {
+  return request<UserSummary[]>("/api/admin/users", { signal });
 }
 
 export function createUser(input: {
@@ -133,39 +238,50 @@ export function createUser(input: {
 }
 
 export function deleteUser(id: string): Promise<void> {
-  return request<void>(`/api/admin/users/${encodeURIComponent(id)}`, { method: "DELETE" }, false);
+  return request<void>(
+    `/api/admin/users/${encodeURIComponent(id)}`,
+    { method: "DELETE" },
+    { parse: false },
+  );
 }
 
-export function listDocuments(params?: {
-  status?: EmbeddingStatus;
-  tag?: string;
-}): Promise<DocumentSummary[]> {
+export function listDocuments(
+  params?: {
+    status?: EmbeddingStatus;
+    tag?: string;
+  },
+  signal?: AbortSignal,
+): Promise<DocumentSummary[]> {
   const query = new URLSearchParams();
   if (params?.status !== undefined) query.set("status", params.status);
   if (params?.tag !== undefined) query.set("tag", params.tag);
   const suffix = query.size > 0 ? `?${query}` : "";
-  return request<DocumentSummary[]>(`/api/documents${suffix}`);
+  return request<DocumentSummary[]>(`/api/documents${suffix}`, { signal });
 }
 
-export function getDocument(id: string): Promise<DocumentDetail> {
-  return request<DocumentDetail>(`/api/documents/${encodeURIComponent(id)}`);
+export function getDocument(id: string, signal?: AbortSignal): Promise<DocumentDetail> {
+  return request<DocumentDetail>(`/api/documents/${encodeURIComponent(id)}`, { signal });
 }
 
-export function getDocumentLinks(id: string): Promise<ResolvedLink[]> {
-  return request<ResolvedLink[]>(`/api/documents/${encodeURIComponent(id)}/links`);
+export function getDocumentLinks(id: string, signal?: AbortSignal): Promise<ResolvedLink[]> {
+  return request<ResolvedLink[]>(`/api/documents/${encodeURIComponent(id)}/links`, { signal });
 }
 
-export function getDocumentBacklinks(id: string): Promise<Backlink[]> {
-  return request<Backlink[]>(`/api/documents/${encodeURIComponent(id)}/backlinks`);
+export function getDocumentBacklinks(id: string, signal?: AbortSignal): Promise<Backlink[]> {
+  return request<Backlink[]>(`/api/documents/${encodeURIComponent(id)}/backlinks`, { signal });
 }
 
-export function getRelated(id: string): Promise<RelatedResponse> {
-  return request<RelatedResponse>(`/api/documents/${encodeURIComponent(id)}/related`);
+export function getRelated(id: string, signal?: AbortSignal): Promise<RelatedResponse> {
+  return request<RelatedResponse>(`/api/documents/${encodeURIComponent(id)}/related`, { signal });
 }
 
-export function getTagSuggestions(id: string): Promise<TagSuggestionsResponse> {
+export function getTagSuggestions(
+  id: string,
+  signal?: AbortSignal,
+): Promise<TagSuggestionsResponse> {
   return request<TagSuggestionsResponse>(
     `/api/documents/${encodeURIComponent(id)}/tag-suggestions`,
+    { signal },
   );
 }
 
@@ -201,9 +317,11 @@ export function editDocument(
 export function getDocumentVersion(
   id: string,
   version: number,
+  signal?: AbortSignal,
 ): Promise<TextVersionDetail> {
   return request<TextVersionDetail>(
     `/api/documents/${encodeURIComponent(id)}/versions/${version}`,
+    { signal },
   );
 }
 
@@ -271,7 +389,7 @@ export function deleteDocument(id: string): Promise<void> {
   return request<void>(
     `/api/documents/${encodeURIComponent(id)}`,
     { method: "DELETE" },
-    false,
+    { parse: false },
   );
 }
 
@@ -281,12 +399,15 @@ export function reembedDocument(id: string): Promise<DocumentSummary> {
   });
 }
 
-export function search(input: {
-  query: string;
-  tags?: string[];
-  contentType?: ContentType | null;
-  k?: number;
-}): Promise<SearchResponse> {
+export function search(
+  input: {
+    query: string;
+    tags?: string[];
+    contentType?: ContentType | null;
+    k?: number;
+  },
+  signal?: AbortSignal,
+): Promise<SearchResponse> {
   const body: {
     query: string;
     tags?: string[];
@@ -301,19 +422,24 @@ export function search(input: {
 
   return request<SearchResponse>("/api/search", {
     method: "POST",
+    signal,
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
 }
 
-export function getSystemStatus(): Promise<SystemStatus> {
-  return request<SystemStatus>("/api/system/status");
+/**
+ * 백오프하지 않는다. `/admin/status`는 장애·복구를 보여주는 관측 채널이라 실패를 바로
+ * 드러내야 하고, 2초 폴링 자체가 재시도다.
+ */
+export function getSystemStatus(signal?: AbortSignal): Promise<SystemStatus> {
+  return request<SystemStatus>("/api/system/status", { signal }, { backoff: false });
 }
 
-export function getDiagnostics(): Promise<DiagnosticsResponse> {
-  return request<DiagnosticsResponse>("/api/diagnostics");
+export function getDiagnostics(signal?: AbortSignal): Promise<DiagnosticsResponse> {
+  return request<DiagnosticsResponse>("/api/diagnostics", { signal });
 }
 
-export function getClusters(): Promise<ClustersResponse> {
-  return request<ClustersResponse>("/api/clusters");
+export function getClusters(signal?: AbortSignal): Promise<ClustersResponse> {
+  return request<ClustersResponse>("/api/clusters", { signal });
 }

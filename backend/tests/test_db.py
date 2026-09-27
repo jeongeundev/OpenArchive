@@ -8,6 +8,7 @@ DB 컨테이너 없이 통과해야 한다.
 
 import importlib
 
+import psycopg
 import psycopg_pool
 import pytest
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
@@ -162,3 +163,129 @@ def test_keepalive_written_in_the_dsn_wins_over_the_defaults(monkeypatch, pool_s
     assert params["keepalives_idle"] == "5"
     assert params["tcp_user_timeout"] == "0"
     assert params["keepalives_count"] == "3"
+
+
+# ── 일시 불가용 분류 (ADR-048 결정 3) ──────────────────────────────────────────
+# 오류는 실제 서버가 돌려준 것으로 만든다. OpenProxy 오류는 #110 B 로그
+# (`notes/ha110/b/out/*.log`)에 찍힌 클래스(psycopg `SystemError` — SQLSTATE 58000에만
+# 대응한다)와 문구를 그대로 서버에서 RAISE해 같은 경로로 올라오게 한다.
+
+
+async def _server_error(dsn: str, sql: str) -> psycopg.Error:
+    async with await psycopg.AsyncConnection.connect(dsn, autocommit=True) as conn:
+        try:
+            await conn.execute(sql)
+        except psycopg.Error as error:
+            return error
+    raise AssertionError(f"오류가 나지 않았다: {sql}")
+
+
+def _raise_sql(sqlstate: str, message: str) -> str:
+    return f"DO $$ BEGIN RAISE EXCEPTION '{message}' USING ERRCODE = '{sqlstate}'; END $$"
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "could not get connection from the pool - AllServersDown",
+        (
+            'error receiving data from server: SocketError("Error reading message code from socket'
+            ' - Error Os { code: 110, kind: TimedOut, message: \\"Connection timed out\\" }")'
+        ),
+        (
+            'error receiving data from server: SocketError("Error reading message code from socket'
+            ' - Error Os { code: 104, kind: ConnectionReset, message: \\"Connection reset by peer\\" }")'
+        ),
+        (
+            'error receiving data from server: SocketError("Error reading message code from socket'
+            ' - Error Kind(UnexpectedEof)")'
+        ),
+    ],
+)
+async def test_openproxy_backend_errors_are_unavailable(test_dsn, message):
+    error = await _server_error(test_dsn, _raise_sql("58000", message.replace("'", "''")))
+
+    assert isinstance(error, psycopg.errors.SystemError)
+    assert app.db.is_unavailable(error)
+
+
+async def test_write_routed_to_a_replica_during_promotion_is_unavailable(test_dsn):
+    """승격 직후 쓰기가 아직 replica로 간 경우(#110 B-4). 우리 설계에서 쓰기가 replica로
+    가는 것은 라우팅 전환 중뿐이다."""
+    error = await _server_error(
+        test_dsn, "BEGIN READ ONLY; CREATE TABLE ro_probe (x int); COMMIT"
+    )
+
+    assert isinstance(error, psycopg.errors.ReadOnlySqlTransaction)
+    assert app.db.is_unavailable(error)
+
+
+async def test_terminated_backend_is_unavailable(test_dsn):
+    """Primary가 내려가며 세션을 끊는 경우(57P01)."""
+    async with await psycopg.AsyncConnection.connect(test_dsn, autocommit=True) as victim:
+        async with await psycopg.AsyncConnection.connect(test_dsn, autocommit=True) as killer:
+            await killer.execute("SELECT pg_terminate_backend(%s)", [victim.info.backend_pid])
+        with pytest.raises(psycopg.OperationalError) as caught:
+            await victim.execute("SELECT 1")
+
+    assert app.db.is_unavailable(caught.value)
+
+
+async def test_lost_connection_is_unavailable(test_dsn):
+    """끊긴 연결을 다시 쓰면 서버 응답 없이 클라이언트가 올리는 오류(SQLSTATE 없음) —
+    #110 B 로그의 `the connection is lost`."""
+    async with await psycopg.AsyncConnection.connect(test_dsn, autocommit=True) as victim:
+        async with await psycopg.AsyncConnection.connect(test_dsn, autocommit=True) as killer:
+            await killer.execute("SELECT pg_terminate_backend(%s)", [victim.info.backend_pid])
+        with pytest.raises(psycopg.OperationalError):
+            await victim.execute("SELECT 1")
+        with pytest.raises(psycopg.OperationalError) as caught:
+            await victim.execute("SELECT 1")
+
+    assert caught.value.sqlstate is None
+    assert app.db.is_unavailable(caught.value)
+
+
+def test_pool_timeout_is_unavailable():
+    """장애 중 풀이 연결을 내주지 못하는 경우. 서버 응답이 없어 SQLSTATE도 없다."""
+    assert app.db.is_unavailable(psycopg_pool.PoolTimeout("couldn't get a connection"))
+
+
+@pytest.mark.parametrize(
+    "sqlstate",
+    [
+        "53100",  # disk_full — 공간을 비워야 풀린다
+        "54001",  # statement_too_complex — 쿼리 결함
+        "57P04",  # database_dropped
+        "58P01",  # undefined_file
+        "28P01",  # invalid_password — 설정 결함
+    ],
+)
+async def test_permanent_operational_errors_are_not_unavailable(test_dsn, sqlstate):
+    """psycopg는 이들도 `OperationalError`로 올린다. 기다려도 풀리지 않으므로 503을 주면
+    클라이언트가 60초 백오프 끝에 "일시적"이라는 안내만 보이고 결함이 가려진다."""
+    error = await _server_error(test_dsn, _raise_sql(sqlstate, "permanent"))
+
+    assert isinstance(error, psycopg.OperationalError)
+    assert not app.db.is_unavailable(error)
+
+
+def test_cannot_connect_now_is_unavailable():
+    """기동·복구 중인 서버가 접속을 거절하는 경우(57P03). 실 서버로 만들 수 없어
+    psycopg가 SQLSTATE로 고르는 클래스를 그대로 쓴다."""
+    assert app.db.is_unavailable(psycopg.errors.lookup("57P03")())
+
+
+async def test_statement_timeout_is_not_unavailable(test_dsn):
+    """느린 쿼리는 기다려도 풀리지 않는다. 503을 주면 클라이언트가 같은 쿼리를 되풀이한다."""
+    error = await _server_error(test_dsn, "SET statement_timeout = 10; SELECT pg_sleep(1)")
+
+    assert isinstance(error, psycopg.errors.QueryCanceled)
+    assert not app.db.is_unavailable(error)
+
+
+async def test_code_defects_are_not_unavailable(test_dsn):
+    error = await _server_error(test_dsn, "SELECT * FROM no_such_table")
+
+    assert not app.db.is_unavailable(error)
+    assert not app.db.is_unavailable(RuntimeError("버그"))

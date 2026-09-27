@@ -183,3 +183,27 @@ describe("VersionHistory", () => {
     expect(screen.getAllByRole("button", { name: "본문 보기" })).toHaveLength(3);
   });
 });
+
+describe("VersionHistory 취소", () => {
+  it("본문을 받는 중에 화면을 떠나면 요청을 취소한다", () => {
+    const fetchMock = vi.fn(
+      (_input: RequestInfo | URL, _init?: RequestInit) => new Promise<Response>(() => {}),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const { unmount } = render(
+      <VersionHistory
+        documentId="document-1"
+        versions={versions}
+        currentVersion={3}
+        disabled={false}
+        onRestored={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getAllByRole("button", { name: "본문 보기" })[2]);
+    unmount();
+
+    expect(fetchMock.mock.calls[0][1]?.signal?.aborted).toBe(true);
+    vi.unstubAllGlobals();
+  });
+});

@@ -1,15 +1,21 @@
 """AI 에이전트에 문서 근거를 공급하는 FastMCP stdio 서버."""
 
+import asyncio
+import functools
+import random
+import time
+from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import asdict
 from datetime import datetime
 from typing import Any, Literal
 from uuid import UUID
 
+import psycopg
 from mcp.server.fastmcp import FastMCP
 
 from app.config import get_settings
-from app.db import close_pool, connection, get_pool
+from app.db import close_pool, connection, get_pool, is_unavailable
 from app.embeddings import get_provider
 from app.services.documents import create_text_document
 from app.services.documents import get_document as get_document_service
@@ -37,6 +43,50 @@ class MissingUserContext(Exception):
     """MCP_USER_ID가 없어 공급 주체를 확정할 수 없는 경우."""
 
 
+class DatabaseUnavailable(Exception):
+    """백오프 예산 안에 DB가 돌아오지 않은 경우. 에이전트에게는 이 문구만 보인다."""
+
+
+# 웹 UI와 같은 백오프다 (ADR-048 결정 4). 60초는 #110 B의 최악 중단(42초)에 여유를 둔 값.
+BACKOFF_START_SECONDS = 1
+BACKOFF_CAP_SECONDS = 8
+BACKOFF_BUDGET_SECONDS = 60
+
+# 테스트가 실제로 기다리지 않도록 바꿔 끼우는 자리.
+_now = time.monotonic
+_sleep = asyncio.sleep
+_jitter = random.uniform
+
+
+def with_backoff(tool: Callable[..., Awaitable[dict]]) -> Callable[..., Awaitable[dict]]:
+    """DB 일시 불가용이면 지수 백오프 + 전체 지터로 다시 부른다. **읽기 도구에만 쓴다** —
+    쓰기는 커밋 도달 여부를 알 수 없어 다시 하면 문서가 두 번 생긴다(멱등키는 ADR-047).
+
+    매 시도는 도구 본문을 통째로 다시 불러 풀에서 새 연결을 빌린다. 오류 난 연결은
+    `connection()`이 이미 버렸다(ADR-048 결정 2).
+    """
+
+    @functools.wraps(tool)
+    async def wrapper(*args, **kwargs) -> dict:
+        deadline = _now() + BACKOFF_BUDGET_SECONDS
+        attempt = 0
+        while True:
+            try:
+                return await tool(*args, **kwargs)
+            except psycopg.Error as error:
+                if not is_unavailable(error):
+                    raise
+                delay = _jitter(0, min(BACKOFF_CAP_SECONDS, BACKOFF_START_SECONDS * 2**attempt))
+                if _now() + delay > deadline:
+                    raise DatabaseUnavailable(
+                        "문서 저장소에 일시적으로 연결할 수 없습니다. 잠시 후 다시 시도하세요."
+                    ) from error
+                await _sleep(delay)
+                attempt += 1
+
+    return wrapper
+
+
 def _json_value(value: Any) -> Any:
     if isinstance(value, datetime):
         return value.isoformat()
@@ -49,6 +99,7 @@ def _json_value(value: Any) -> Any:
     return value
 
 
+@with_backoff
 async def search_documents(
     query: str,
     tags: list[str] | None = None,
@@ -106,6 +157,7 @@ def _document_payload(document: dict) -> dict:
     return payload
 
 
+@with_backoff
 async def get_document(document_id: str) -> dict:
     """문서 텍스트·텍스트 버전 목록·청크 상태를 반환합니다.
 
@@ -124,6 +176,7 @@ async def get_document(document_id: str) -> dict:
     return payload
 
 
+@with_backoff
 async def list_documents(tag: str | None = None, status: str | None = None) -> dict:
     """접근 가능한 문서의 메타데이터 요약 목록을 반환합니다.
 

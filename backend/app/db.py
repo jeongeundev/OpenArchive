@@ -70,6 +70,31 @@ async def connection() -> AsyncIterator[psycopg.AsyncConnection]:
             raise
 
 
+# 기다리면 풀리는 것만 나열한다. OperationalError는 디스크 가득 참(53100)·인증 실패(28P01)
+# 같은 영구 오류도 포함해, 그것을 503으로 주면 결함이 "일시적"으로 가려진다.
+# - 08xxx: 연결 예외
+# - 57P01·57P02·57P03: 서버 종료·기동 중 (승격)
+# - 58000: OpenProxy 백엔드 오류(`AllServersDown`·소켓 오류)가 올라오는 자리
+# - 25006: 쓰기가 replica로 간 것. 우리 설계에서는 승격 직후 라우팅이 바뀌기 전뿐이다 (#110 B-4)
+_TRANSIENT = {"57P01", "57P02", "57P03", "58000", "25006"}
+
+
+def is_unavailable(error: BaseException) -> bool:
+    """DB가 잠시 응답할 수 없는 상태의 오류인지 — 기다렸다 다시 하면 풀리는 것만 참이다
+    (ADR-048 결정 3). 나머지 DB 오류는 코드 결함으로 본다.
+
+    SQLSTATE가 없는 `OperationalError`는 서버 응답 없이 클라이언트가 올린 것이다 — 연결
+    유실, 풀 대여 시간 초과(`PoolTimeout`). 잘못된 DSN·비밀번호도 풀에서는 `PoolTimeout`으로
+    보여 장애와 구별할 수 없다.
+    """
+    if not isinstance(error, psycopg.Error):
+        return False
+    sqlstate = error.sqlstate
+    if sqlstate is None:
+        return isinstance(error, psycopg.OperationalError)
+    return sqlstate.startswith("08") or sqlstate in _TRANSIENT
+
+
 async def close_pool() -> None:
     global _pool
     if _pool is not None:
