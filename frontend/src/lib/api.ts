@@ -61,10 +61,27 @@ function changeRetrying(delta: 1 | -1): void {
   if (before !== isRetrying()) for (const listener of retryListeners) listener();
 }
 
-/** 서버 미들웨어와 같은 기준이다 — 검색은 메서드만 POST인 읽기다. */
-function isRead(path: string, init: RequestInit): boolean {
+/**
+ * 서버 미들웨어와 같은 기준이다 — 검색은 메서드만 POST인 읽기다. 멱등키가 붙은 요청은
+ * 다시 보내도 서버가 처음 결과를 돌려주므로 안전하다(ADR-047). 키는 문서 생성 함수만 붙인다.
+ */
+function isRetryable(path: string, init: RequestInit): boolean {
   const method = (init.method ?? "GET").toUpperCase();
-  return method === "GET" || method === "HEAD" || path === "/api/search";
+  return (
+    method === "GET" ||
+    method === "HEAD" ||
+    path === "/api/search" ||
+    new Headers(init.headers).has("Idempotency-Key")
+  );
+}
+
+/**
+ * 사용자 동작 하나에 키 하나. `crypto.randomUUID`는 보안 컨텍스트(https·localhost)에만 있어
+ * 사내망 http 배포에서 없을 수 있다 — `getRandomValues`는 어디서나 있다.
+ */
+function newIdempotencyKey(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
 /** 호출자가 취소하면(화면을 떠나면) 기다리지 않고 AbortError로 끝낸다. */
@@ -94,13 +111,13 @@ function retryAfterMs(response: Response): number {
 }
 
 /**
- * 읽기만 지수 백오프 + 전체 지터로 다시 보낸다. 503이 `Retry-After`를 알리면 그보다
- * 일찍 보내지 않는다. 쓰기는 첫 시도가 이미 커밋됐을 수 있어
- * 다시 보내면 문서가 두 번 생긴다 — 쓰기 재시도는 멱등키와 함께 온다(ADR-047).
+ * 읽기와 멱등키가 있는 쓰기만 지수 백오프 + 전체 지터로 다시 보낸다. 503이 `Retry-After`를
+ * 알리면 그보다 일찍 보내지 않는다. 키 없는 쓰기는 첫 시도가 이미 커밋됐을 수 있어
+ * 다시 보내면 두 번 실행된다. 재시도는 같은 `init`을 다시 보내므로 키도 같다.
  * 예산을 넘기면 마지막 503 응답(또는 네트워크 오류)을 그대로 돌려준다.
  */
 async function fetchWithBackoff(path: string, init: RequestInit): Promise<Response> {
-  if (!isRead(path, init)) return fetch(path, init);
+  if (!isRetryable(path, init)) return fetch(path, init);
 
   const deadline = Date.now() + BACKOFF_BUDGET_MS;
   let attempt = 0;
@@ -297,7 +314,11 @@ export function uploadDocument(input: {
   for (const tag of input.tags) body.append("tags", tag);
   body.append("visibility", input.visibility);
 
-  return request<DocumentSummary>("/api/documents", { method: "POST", body });
+  return request<DocumentSummary>("/api/documents", {
+    method: "POST",
+    body,
+    headers: { "Idempotency-Key": newIdempotencyKey() },
+  });
 }
 
 export function editDocument(
