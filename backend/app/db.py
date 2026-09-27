@@ -53,7 +53,8 @@ def get_pool() -> AsyncConnectionPool:
 
 @asynccontextmanager
 async def connection() -> AsyncIterator[psycopg.AsyncConnection]:
-    """요청 하나가 풀에서 연결을 빌린다. DB 오류로 끝나면 닫아 풀이 버리게 한다 (ADR-048 결정 2).
+    """API 요청·MCP 도구 호출 하나에 풀 연결을 빌려준다. DB 오류로 끝나면 닫아 풀이 버리게 한다
+    (ADR-048 결정 2).
 
     OpenProxy가 `BEGIN`에 AllServersDown을 돌려주면 psycopg의 `transaction()` 카운터가
     되돌려지지 않은 채 연결이 IDLE로 남는다. 풀은 IDLE만 보고 받아들이고, 그 연결의 다음

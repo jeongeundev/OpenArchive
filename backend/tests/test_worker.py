@@ -1437,6 +1437,7 @@ async def cancel_until_done(task: asyncio.Task) -> None:
         task.cancel()
         await asyncio.wait([task], timeout=0.5)
 
+
 def _all_servers_down() -> bytes:
     """OpenProxy가 배정할 서버가 없을 때 돌려주는 응답 — ErrorResponse 뒤 ReadyForQuery(유휴).
 

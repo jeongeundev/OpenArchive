@@ -590,7 +590,7 @@ async def run_worker() -> None:
                 async with pool.connection() as conn:
                     try:
                         # 풀 커넥션은 autocommit이 아니다 — 워커 함수들의 계약에 맞춘다
-                        # (모듈 docstring 참조). app/db.py는 수정하지 않는다.
+                        # (모듈 docstring 참조). 풀 설정(app/db.py)은 API와 함께 쓰므로 여기서 켠다.
                         await conn.set_autocommit(True)
                         # 스윕이 루프 머리에 있으므로 첫 반복이 곧 기동 시 1회 스윕이다.
                         recovered = await sweep_zombies(conn)
