@@ -2132,7 +2132,7 @@ SELinux Enforcing이 기본이고 venv가 홈 아래(`user_home_t`)에 있어, s
 
 **임계를 기다리는 동안에도 파이프라인은 멈추지 않는다.** 좀비는 `processing`이라 `claim_job`의
 대상이 아니고, 워커는 남은 `pending` 잡을 그대로 집어간다 — 크래시의 영향은 그 잡 하나로
-격리된다. 이 동작은 `test_pipeline_keeps_draining_while_a_zombie_waits_for_its_timeout`이
+격리된다. 이 동작은 `test_pipeline_keeps_draining_while_a_zombie_waits_for_its_lease`(ADR-050 이후 이름)가
 단언한다. 진술이 아니라 테스트가 지키는 계약이다.
 
 **트레이드오프**
@@ -2140,6 +2140,8 @@ SELinux Enforcing이 기본이고 venv가 홈 아래(`user_home_t`)에 있어, s
 1. **크래시 복구가 최대 5분 늦다.** 결정 4의 대가다. poison job의 격리는 최대
    3 × (5분 + 재기동 10초) ≒ 15분 30초가 걸리고, 그동안 워커는 5분 주기로 죽는다. 그 사이
    다른 잡은 계속 처리되므로 처리량 손실에 그친다.
+   → **2026-09-27 ADR-050 이후 수치**: 회수 대기는 lease(기본 60초)다. poison job 격리는
+   최대 3 × (60초 + 재기동 10초) ≒ 3분 30초.
 2. **배포 호스트에 systemd와 lingering이 필요해졌다.** user 유닛이라 sudo는
    `loginctl enable-linger` 한 줄에만 쓴다. 로컬 개발(`python -m app.worker`)과
    `demo_recovery.sh`(자체 워커를 띄우고 `kill -STOP`으로 세운다 — 프로세스가 죽지 않으므로
@@ -2981,7 +2983,7 @@ VRRP 선점을 끄는 방법(keepalived의 `nopreempt`)은 OpenProxy 설정 레�
 ---
 
 ### ADR-050: 잡 선점은 짧은 lease를 heartbeat로 연장한다 — 좀비 판정을 시간 임계에서 lease 만료로
-**상태**: 2026-09-27 신규 (#110 B-7). ADR-038 결정 4("시간 기반 판정 유지")와 2026-08-24 경쟁작 조사에서
+**상태**: 2026-09-27 신규 (#110 B-7), 구현 #121(020_lease_tables.sql). ADR-038 결정 4("시간 기반 판정 유지")와 2026-08-24 경쟁작 조사에서
 "lease/heartbeat를 가져오지 않는다"고 한 판단을 뒤집는다.
 
 **배경 — 수렴 시간을 좀비 임계 5분이 정했다**
