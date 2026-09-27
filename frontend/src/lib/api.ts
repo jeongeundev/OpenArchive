@@ -61,16 +61,20 @@ function changeRetrying(delta: 1 | -1): void {
   if (before !== isRetrying()) for (const listener of retryListeners) listener();
 }
 
+// 서버가 멱등키를 지키는 경로 (`retry.py`의 `IDEMPOTENT_CREATE_PATHS`, ADR-047 결정 1).
+const IDEMPOTENT_CREATE_PATHS = ["/api/documents", "/api/documents/text"];
+
 /**
- * 서버 미들웨어와 같은 기준이다 — 검색은 메서드만 POST인 읽기다. 멱등키가 붙은 요청은
- * 다시 보내도 서버가 처음 결과를 돌려주므로 안전하다(ADR-047). 키는 문서 생성 함수만 붙인다.
+ * 서버 미들웨어와 같은 기준이다 — 검색은 메서드만 POST인 읽기다. 문서 생성은 멱등키가 붙어
+ * 있을 때만 다시 보낸다 — 서버가 처음 결과를 돌려주므로 안전하다(ADR-047). 다른 쓰기는
+ * 헤더가 붙어도 서버가 키를 지키지 않으므로 다시 보내지 않는다.
  */
 function isRetryable(path: string, init: RequestInit): boolean {
   const method = (init.method ?? "GET").toUpperCase();
+  if (method === "GET" || method === "HEAD" || path === "/api/search") return true;
   return (
-    method === "GET" ||
-    method === "HEAD" ||
-    path === "/api/search" ||
+    method === "POST" &&
+    IDEMPOTENT_CREATE_PATHS.includes(path) &&
     new Headers(init.headers).has("Idempotency-Key")
   );
 }
