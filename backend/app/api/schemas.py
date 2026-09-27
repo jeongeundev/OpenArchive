@@ -135,7 +135,7 @@ class SystemStatus(BaseModel):
     node_address: str | None
     node_port: int
     jobs: JobCounts
-    zombie_timeout_minutes: int
+    job_lease_seconds: int
     last_job_finished_at: datetime | None
     inconsistent_documents: int
     stale_edge_documents: int

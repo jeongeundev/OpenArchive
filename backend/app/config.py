@@ -2,6 +2,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # `.env`는 이 패키지 옆(`backend/.env`)에 두고, 실행 디렉토리와 무관하게 그 파일만 읽는다.
@@ -25,9 +26,9 @@ class Settings(BaseSettings):
     # local = BAAI/bge-m3, fake = 결정론적 해시 벡터(테스트·CI). 상용 API 프로바이더는 없다 (ADR-003).
     embedding_provider: Literal["local", "fake"] = "fake"
 
-    # 0은 단일 워커 복구 데모 전용이다. 여러 워커에서 쓰면 정상 처리 중인 잡을 서로
-    # 회수한다. 데모는 워커가 하나이고 run_worker의 sweep → drain 루프가 순차라 안전하다.
-    zombie_timeout_minutes: int = 5
+    # 잡 선점 lease(초). 워커는 처리 중 이 값의 1/3마다 연장하고, 연장이 끊긴 잡은 lease
+    # 만료 뒤 회수된다 (ADR-050). 스윕도 drain 중 이 주기로 돈다.
+    job_lease_seconds: int = Field(default=60, gt=0)
 
     # 한 근무일 동안 재로그인 없이 쓰되, 장기 토큰으로 남지 않도록 24시간으로 제한한다.
     session_lifetime_hours: int = 24
