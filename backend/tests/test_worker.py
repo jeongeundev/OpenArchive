@@ -1424,6 +1424,19 @@ async def _warmed_up(provider) -> bool:
     return bool(provider.calls)
 
 
+async def cancel_until_done(task: asyncio.Task) -> None:
+    """태스크가 끝날 때까지 취소를 되풀이한다.
+
+    psycopg_pool은 대여 시점 확인(`check_connection`) 중에 난 `CancelledError`를 확인 실패로
+    다룬다 — 연결을 반납하고 다음 연결을 빌려 계속한다(`_getconn_with_check_loop`). 취소가
+    그 순간에 닿으면 삼켜지고 run_worker는 다음 주기를 돈다. 폴링 주기를 0.02초로 줄인
+    테스트에서는 이 겹침이 잦아(12회 중 3회) 한 번만 취소하고 기다리면 끝나지 않는다.
+    배포의 워커는 취소가 아니라 SIGTERM으로 멈추므로 이 경로를 타지 않는다.
+    """
+    while not task.done():
+        task.cancel()
+        await asyncio.wait([task], timeout=0.5)
+
 def _all_servers_down() -> bytes:
     """OpenProxy가 배정할 서버가 없을 때 돌려주는 응답 — ErrorResponse 뒤 ReadyForQuery(유휴).
 
@@ -1443,7 +1456,7 @@ def _all_servers_down() -> bytes:
 
 
 class BeginFailer:
-    """`arm()` 뒤 첫 `BEGIN` 하나에 서버 대신 AllServersDown을 돌려주는 TCP 중계기 (#110 B-2).
+    """`arm()` 뒤 `skip`개를 흘려보낸 다음 `BEGIN` 하나에 서버 대신 AllServersDown을 돌려주는 TCP 중계기 (#110 B-2).
 
     OpenProxy(transaction 모드)는 `BEGIN`을 받는 순간 백엔드를 배정하고, 배정할 서버가 없으면
     그 `BEGIN`에 오류를 돌려주되 클라이언트 연결은 유휴로 남긴다. psycopg의 `transaction()`은
@@ -1458,10 +1471,11 @@ class BeginFailer:
         self._upstream = (params.get("host") or "localhost", int(params.get("port") or 5432))
         self._params = params
         self._armed = False
+        self._skip = 0
         self.injected = 0
 
-    def arm(self) -> None:
-        self._armed = True
+    def arm(self, skip: int = 0) -> None:
+        self._armed, self._skip = True, skip
 
     async def __aenter__(self) -> Self:
         self._server = await asyncio.start_server(self._relay, "127.0.0.1", 0)
@@ -1488,7 +1502,10 @@ class BeginFailer:
                     kind = await client_r.readexactly(1)
                     size = await client_r.readexactly(4)
                     body = await client_r.readexactly(int.from_bytes(size) - 4)
-                    if self._armed and kind == b"Q" and body.lstrip().upper().startswith(b"BEGIN"):
+                    begin = kind == b"Q" and body.lstrip().upper().startswith(b"BEGIN")
+                    if self._armed and begin and self._skip:
+                        self._skip -= 1
+                    elif self._armed and begin:
                         self._armed = False
                         self.injected += 1
                         client_w.write(_all_servers_down())
@@ -1508,17 +1525,30 @@ class BeginFailer:
         await asyncio.gather(upstream(), downstream())
 
 
+@pytest.mark.parametrize(
+    ("skip", "expected_errors"),
+    [
+        # 스윕의 BEGIN — HA 실측에서 난 자리다. 오류가 곧장 루프로 올라온다.
+        (0, [psycopg.errors.SystemError]),
+        # 스윕·claim 다음의 load BEGIN — process_once가 첫 오류를 잡아 fail_job으로 넘기고,
+        # 오염된 연결 위의 fail_job이 AssertionError를 낸다. 루프에 오는 것은 DB 오류가
+        # 아니므로, 루프가 DB 오류일 때만 연결을 버리면 이 경로가 새어 나간다.
+        (2, [psycopg.errors.SystemError, AssertionError]),
+    ],
+    ids=["sweep", "job"],
+)
 async def test_a_connection_broken_by_a_failed_begin_does_not_return_to_the_pool(
-    migrated_db, monkeypatch, caplog
+    migrated_db, conn, monkeypatch, caplog, skip, expected_errors
 ):
-    """처리 루프가 DB 오류로 끝나면 그 연결은 풀에 남지 않는다 (ADR-048 결정 2, #110 B-2).
+    """처리 루프가 오류로 끝나면 그 연결은 풀에 남지 않는다 (ADR-048 결정 2, #110 B-2).
 
     HA 실측에서 OpenProxy가 스윕의 `BEGIN`에 AllServersDown을 돌려준 뒤, 트랜잭션 카운터가
     어긋난 연결이 풀로 돌아가 이후 그 연결을 빌릴 때마다 `AssertionError`가 났다 — 한때
     풀 4개 중 3개가 오염됐다. 장애는 한 번인데 오류가 끝없이 반복된다. 풀은 연결을 돌려
     쓰므로(먼저 반납된 것부터) 수십 주기면 오염된 연결을 반드시 다시 빌린다. 그래서 주입한
-    한 번 외에 오류가 없어야 한다.
+    장애 한 번이 낸 오류 외에는 없어야 한다.
     """
+    await insert_document(conn)  # 첫 주기가 잡을 집어 BEGIN 순서가 스윕·claim·load로 정해진다
     real_sweep = sweep_zombies
     sweeps = 0
 
@@ -1539,20 +1569,18 @@ async def test_a_connection_broken_by_a_failed_begin_does_not_return_to_the_pool
         monkeypatch.setenv("DATABASE_URL", relay.dsn)
         get_settings.cache_clear()
         await close_pool()
-        relay.arm()  # 기동 직후 첫 스윕의 BEGIN이 맞는다
+        relay.arm(skip)
         worker = asyncio.create_task(run_worker())
         try:
             await wait_until(swept_enough, message="워커가 스윕 주기를 충분히 돌지 못했다")
         finally:
-            worker.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await worker
+            await cancel_until_done(worker)
             await close_pool()
 
     # 주입이 실제로 일어났는지 — 아니면 오류 0건으로 무조건 통과한다.
     assert relay.injected == 1
     errors = [r.exc_info[1] for r in caplog.records if r.name == "app.worker" and r.exc_info]
-    assert [type(e) for e in errors] == [psycopg.errors.SystemError]
+    assert [type(e) for e in errors] == expected_errors
 
 
 async def test_the_listen_connection_uses_keepalive(migrated_db, monkeypatch):
