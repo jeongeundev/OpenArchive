@@ -16,6 +16,7 @@ UPDATE해 상황을 만든다. heartbeat처럼 시간이 흘러야만 드러나�
 
 import asyncio
 import contextlib
+import dataclasses
 import logging
 import os
 import signal
@@ -659,10 +660,12 @@ async def test_exhausted_retries_yield_to_a_newer_job_without_flagging_an_error(
     """
     doc_id = await insert_document(conn)
     job = await claim_job(conn)
-    # 백오프를 기다리지 않는다 — 소진 직전 상태를 attempts로 직접 만든다.
+    # 백오프를 기다리지 않는다 — 소진 직전 상태를 attempts로 직접 만든다. attempts는
+    # 선점의 소유권이기도 하므로 손에 든 선점도 같은 값으로 맞춘다 (lock_owned_job).
     await conn.execute(
         "UPDATE embedding_jobs SET attempts = %s WHERE id = %s", (MAX_ATTEMPTS, job.job_id)
     )
+    job = dataclasses.replace(job, attempts=MAX_ATTEMPTS)
     await edit_document(other_conn, doc_id, DOC_V2, "sha256:v2")  # 새 pending 잡
 
     await fail_job(conn, job, RuntimeError("소진 시점의 실패"))
