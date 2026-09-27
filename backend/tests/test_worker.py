@@ -1736,7 +1736,7 @@ async def test_extend_lease_pushes_the_deadline_of_a_processing_job(conn, other_
         (job.job_id,),
     )
 
-    assert await extend_lease(other_conn, job.job_id) is True
+    assert await extend_lease(other_conn, job) is True
 
     assert await lease_is_live(conn, job.job_id) is True
 
@@ -1750,7 +1750,7 @@ async def test_extend_lease_refuses_a_job_that_is_no_longer_processing(conn, oth
     job = await claim_job(conn)
     await release_job(conn, job)  # 회수된 것과 같은 상태 — pending
 
-    assert await extend_lease(other_conn, job.job_id) is False
+    assert await extend_lease(other_conn, job) is False
 
     assert [j[0] for j in await job_rows(conn, doc_id)] == ["pending"]
 
@@ -1944,3 +1944,141 @@ async def test_run_worker_keeps_the_lease_of_the_job_it_is_embedding(
         with contextlib.suppress(asyncio.CancelledError):
             await worker
         await close_pool()
+
+
+# --- 잡 소유권 (ADR-050 결정 2, #121 리뷰) --------------------------------------------
+#
+# heartbeat가 잡을 잃었다고 알아채는 것은 늦을 수 있다 — 연장 주기 사이, 풀 대여를 기다리는
+# 동안, 확인과 반영 사이. 그래서 "남의 잡을 쓰지 않는다"는 로컬 판정이 아니라 쓰는 순간 DB가
+# 판정한다. 소유권은 (id, attempts)다: 선점마다 attempts가 오르고 스윕은 그것을 건드리지
+# 않으므로, 회수 뒤 다른 워커가 다시 집은 잡은 attempts가 다르다.
+
+
+async def expire_and_sweep(conn, job) -> None:
+    """heartbeat가 멈춘 잡을 스윕이 회수한 상태를 만든다 — pending 복귀."""
+    await conn.execute(
+        "UPDATE embedding_jobs SET lease_expires_at = now() - interval '1 second' WHERE id = %s",
+        (job.job_id,),
+    )
+    assert await sweep_zombies(conn) == 1
+
+
+async def reclaim_by_another_worker(conn, other_conn, job):
+    """회수된 잡을 다른 워커가 다시 선점한 상태를 만든다 — 잡은 이제 그 워커의 것이다."""
+    await expire_and_sweep(conn, job)
+    reclaimed = await claim_job(other_conn)
+    assert reclaimed.job_id == job.job_id
+    return reclaimed
+
+
+async def job_status(conn, job_id) -> tuple:
+    cur = await conn.execute(
+        "SELECT status, attempts, last_error FROM embedding_jobs WHERE id = %s", (job_id,)
+    )
+    return await cur.fetchone()
+
+
+async def test_extend_lease_refuses_a_job_reclaimed_by_another_worker(conn, other_conn):
+    """다시 선점된 잡은 processing이지만 이 워커의 것이 아니다 — 연장하면 안 된다.
+
+    status만 보면 연장이 성공해, 잡을 잃은 워커가 끝까지 자기 것으로 여기고 새 소유자의
+    lease를 대신 늘려 준다.
+    """
+    await insert_document(conn)
+    job = await claim_job(conn)
+    await reclaim_by_another_worker(conn, other_conn, job)
+
+    assert await extend_lease(conn, job) is False
+
+
+async def test_finalize_does_not_finish_a_job_the_sweep_took_back(conn):
+    """스윕이 pending으로 돌려놓은 잡에 결과를 쓰지 않는다 — 다음 선점자가 처리한다."""
+    doc_id = await insert_document(conn)
+    job = await claim_job(conn)
+    chunks = chunk_text(DOC_V1)
+    vectors = FakeProvider().embed(chunks)
+    await expire_and_sweep(conn, job)
+
+    assert await finalize_job(conn, job, "sha256:v1", chunks, vectors) is False
+
+    assert await chunk_rows(conn, doc_id) == []
+    assert await job_status(conn, job.job_id) == ("pending", 1, None)
+
+
+async def test_finalize_does_not_finish_a_job_reclaimed_by_another_worker(conn, other_conn):
+    """남이 다시 선점한 잡을 done으로 마감하지 않는다 — 그 워커의 선점을 지우게 된다."""
+    doc_id = await insert_document(conn)
+    job = await claim_job(conn)
+    chunks = chunk_text(DOC_V1)
+    vectors = FakeProvider().embed(chunks)
+    await reclaim_by_another_worker(conn, other_conn, job)
+
+    assert await finalize_job(conn, job, "sha256:v1", chunks, vectors) is False
+
+    assert await chunk_rows(conn, doc_id) == []
+    assert await job_status(conn, job.job_id) == ("processing", 2, None)
+
+
+async def test_an_edge_job_reclaimed_by_another_worker_is_not_finished(conn, other_conn):
+    """관계 잡도 같다 — 임베딩이 없어 짧을 뿐, 확인과 반영 사이에 잃을 수 있다."""
+    doc_id = await insert_document(conn)
+    await drain(conn, FakeProvider())  # 임베딩 → 관계 잡까지 소진
+    await edit_document(conn, doc_id, DOC_V2, "sha256:v2")
+    await process_once(conn, FakeProvider())  # 새 임베딩 → ready 전이가 관계 잡을 만든다
+    job = await claim_job(conn)
+    assert job.kind == "edges"
+    await reclaim_by_another_worker(conn, other_conn, job)
+
+    assert await finalize_edge_job(conn, job) is False
+
+    assert await job_status(conn, job.job_id) == ("processing", 2, None)
+
+
+async def test_fail_job_does_not_touch_a_job_reclaimed_by_another_worker(conn, other_conn):
+    """남의 잡에 실패를 기록하지 않는다 — 처리 중인 잡이 백오프로 pending에 돌아가면
+    세 번째 워커가 같은 잡을 또 집는다."""
+    await insert_document(conn)
+    job = await claim_job(conn)
+    await reclaim_by_another_worker(conn, other_conn, job)
+
+    await fail_job(conn, job, RuntimeError("잃은 뒤에 난 실패"))
+
+    assert await job_status(conn, job.job_id) == ("processing", 2, None)
+
+
+async def test_finishing_a_job_does_not_cut_a_heartbeat_in_flight(conn, migrated_db, monkeypatch):
+    """처리가 끝나도 연장 중인 heartbeat를 도중에 끊지 않는다 (#110 B-2).
+
+    취소는 풀 연결을 트랜잭션 중간에 되돌린다. `CancelledError`는 DB 오류가 아니라서
+    `app.db.connection`의 폐기 분기도 타지 않는다. 연장이 임베딩보다 늦게 끝나도록 붙잡아
+    두고, 연결이 예외 없이 반납되는지 본다.
+    """
+    monkeypatch.setenv("JOB_LEASE_SECONDS", "1")
+    doc_id = await insert_document(conn)
+    provider = blocking_provider()
+    real_extend = extend_lease
+
+    async def slow_extend(connection, job):
+        provider.release.set()  # 연장이 도는 사이에 임베딩이 끝난다
+        await asyncio.sleep(0.5)
+        return await real_extend(connection, job)
+
+    monkeypatch.setattr("app.worker.extend_lease", slow_extend)
+    interrupted: list[BaseException] = []
+
+    async with await psycopg.AsyncConnection.connect(migrated_db, autocommit=True) as hb:
+
+        @contextlib.asynccontextmanager
+        async def lease_conn():
+            try:
+                yield hb
+            except BaseException as exc:
+                interrupted.append(exc)
+                raise
+
+        assert await asyncio.wait_for(
+            process_once(conn, provider, lease_conn=lease_conn), timeout=15
+        ) is True
+
+    assert interrupted == []
+    assert (await document_state(conn, doc_id))[1] == "ready"
