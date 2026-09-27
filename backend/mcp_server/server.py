@@ -9,7 +9,7 @@ from uuid import UUID
 from mcp.server.fastmcp import FastMCP
 
 from app.config import get_settings
-from app.db import close_pool, get_pool
+from app.db import close_pool, connection, get_pool
 from app.embeddings import get_provider
 from app.services.documents import create_text_document
 from app.services.documents import get_document as get_document_service
@@ -59,7 +59,7 @@ async def search_documents(
 
     AI가 답변 근거로 사용할 사내 문서 구절을 찾을 때 사용합니다.
     """
-    async with get_pool().connection() as conn:
+    async with connection() as conn:
         hits = await search_documents_service(
             conn,
             provider,
@@ -111,7 +111,7 @@ async def get_document(document_id: str) -> dict:
 
     검색 결과의 문서 전체 내용과 색인 기준 버전을 확인할 때 사용합니다.
     """
-    async with get_pool().connection() as conn:
+    async with connection() as conn:
         parsed_id = UUID(document_id)
         document = await get_document_service(
             conn, parsed_id, user_id=get_settings().mcp_user_id
@@ -129,7 +129,7 @@ async def list_documents(tag: str | None = None, status: str | None = None) -> d
 
     검색 전에 사용 가능한 문서를 태그나 임베딩 상태로 둘러볼 때 사용합니다.
     """
-    async with get_pool().connection() as conn:
+    async with connection() as conn:
         documents = await list_documents_service(
             conn,
             user_id=get_settings().mcp_user_id,
@@ -156,7 +156,7 @@ async def create_document(
     # owner_id에는 FK도 CHECK도 없어 그대로 두면 소유자 없는 문서가 조용히 저장된다.
     if not user_id or not user_id.strip():
         raise MissingUserContext("문서를 만들려면 MCP_USER_ID 환경변수를 설정해야 합니다.")
-    async with get_pool().connection() as conn:
+    async with connection() as conn:
         document = await create_text_document(
             conn,
             title=title,

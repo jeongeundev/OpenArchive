@@ -24,7 +24,7 @@ cd backend && cp .env.example .env
 
 | 환경변수 | 기본값 | 설명 |
 |---|---:|---|
-| `DATABASE_URL` | 로컬 컨테이너 | 실 OpenSQL은 OpenProxy 단일 엔드포인트 `postgresql://app@<vip>:6432/<pool_name>` (ADR-006) |
+| `DATABASE_URL` | 로컬 컨테이너 | 실 OpenSQL은 OpenProxy 단일 엔드포인트 `postgresql://app@<vip>:6432/<pool_name>` (ADR-006). 앱은 여기에 없는 TCP keepalive 설정(`keepalives_idle=30`·`keepalives_interval=10`·`keepalives_count=3`·`tcp_user_timeout=60000`)을 기본값으로 채워, 죽은 연결을 약 60초 안에 감지합니다. 바꾸려면 DSN에 같은 키를 적습니다 — 적은 값이 이깁니다 (ADR-048) |
 | `EMBEDDING_PROVIDER` | `fake` | `local` — `BAAI/bge-m3` · `fake` — 테스트용. 아래 「임베딩 프로바이더」 |
 | `ZOMBIE_TIMEOUT_MINUTES` | `5` | 좀비 잡 회수 임계. `0`은 단일 워커 복구 데모에서만 |
 | `SESSION_LIFETIME_HOURS` | `24` | 서버 세션과 로그인 쿠키의 수명 |

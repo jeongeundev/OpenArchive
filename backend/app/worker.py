@@ -38,7 +38,7 @@ from uuid import UUID
 import psycopg
 
 from app.config import get_settings
-from app.db import close_pool, get_pool
+from app.db import close_pool, get_pool, keepalive_kwargs
 from app.embeddings import EmbeddingProvider, get_provider, warm_up
 from app.services.chunking import chunk_text
 from app.vectors import to_pgvector_literal
@@ -527,7 +527,11 @@ async def _listen_for_jobs(dsn: str, wake: asyncio.Event) -> None:
     delay = 1.0
     while True:
         try:
-            async with await psycopg.AsyncConnection.connect(dsn, autocommit=True) as conn:
+            # 풀과 같은 keepalive — 유휴로 알림을 기다리는 연결이라 죽은 상대를 스스로
+            # 알아챌 방법이 이것뿐이다 (ADR-048 결정 1).
+            async with await psycopg.AsyncConnection.connect(
+                dsn, autocommit=True, **keepalive_kwargs(dsn)
+            ) as conn:
                 await conn.execute(f"LISTEN {CHANNEL}")
                 logger.info("LISTEN 등록 — 알림이 오면 폴링을 앞당긴다")
                 delay = 1.0
@@ -584,16 +588,26 @@ async def run_worker() -> None:
         while not stop.is_set():
             try:
                 async with pool.connection() as conn:
-                    # 풀 커넥션은 autocommit이 아니다 — 워커 함수들의 계약에 맞춘다
-                    # (모듈 docstring 참조). app/db.py는 수정하지 않는다.
-                    await conn.set_autocommit(True)
-                    # 스윕이 루프 머리에 있으므로 첫 반복이 곧 기동 시 1회 스윕이다.
-                    recovered = await sweep_zombies(conn)
-                    if recovered:
-                        logger.info("좀비 잡 %d건을 pending으로 회수", recovered)
-                    processed = await drain(conn, provider, stop)
-                    if processed:
-                        logger.info("잡 %d건 처리", processed)
+                    try:
+                        # 풀 커넥션은 autocommit이 아니다 — 워커 함수들의 계약에 맞춘다
+                        # (모듈 docstring 참조). app/db.py는 수정하지 않는다.
+                        await conn.set_autocommit(True)
+                        # 스윕이 루프 머리에 있으므로 첫 반복이 곧 기동 시 1회 스윕이다.
+                        recovered = await sweep_zombies(conn)
+                        if recovered:
+                            logger.info("좀비 잡 %d건을 pending으로 회수", recovered)
+                        processed = await drain(conn, provider, stop)
+                        if processed:
+                            logger.info("잡 %d건 처리", processed)
+                    except Exception:
+                        # 루프가 오류로 끝난 연결은 풀에 돌려보내지 않는다 (ADR-048 결정 2).
+                        # `transaction()` 진입 중 서버 오류는 psycopg의 트랜잭션 카운터를
+                        # 어긋난 채 IDLE로 남기고, 풀은 그것을 정상으로 받아 이후 빌릴 때마다
+                        # AssertionError가 난다(#110 B-2). 요청 경로(app.db.connection)와 달리
+                        # DB 오류로 좁히지 않는다 — 잡 처리 중 오염되면 process_once가 그 예외를
+                        # 삼키고 fail_job이 AssertionError를 내므로, 루프까지 오는 것은 그쪽이다.
+                        await conn.close()
+                        raise
             except Exception:
                 # 연결 끊김 등 — 처리 중이던 잡은 processing으로 남고 좀비 스윕이 되살린다.
                 logger.exception("처리 루프 실패 — 다음 폴링에서 재시도한다")
