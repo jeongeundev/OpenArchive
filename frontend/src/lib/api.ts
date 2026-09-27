@@ -138,8 +138,7 @@ async function fetchWithBackoff(path: string, init: RequestInit): Promise<Respon
 async function request<T>(
   path: string,
   init: RequestInit = {},
-  parseResponse = true,
-  backoff = true,
+  { parse = true, backoff = true }: { parse?: boolean; backoff?: boolean } = {},
 ): Promise<T> {
   const headers = new Headers(init.headers);
   const response = await (backoff ? fetchWithBackoff : fetch)(path, {
@@ -166,7 +165,7 @@ async function request<T>(
         : undefined;
     throw new ApiError(response.status, detail, currentVersion);
   }
-  return parseResponse ? (response.json() as Promise<T>) : (undefined as T);
+  return parse ? (response.json() as Promise<T>) : (undefined as T);
 }
 
 export function getAuthStatus(signal?: AbortSignal): Promise<AuthStatus> {
@@ -215,7 +214,11 @@ export function createToken(input: {
 }
 
 export function revokeToken(id: string): Promise<void> {
-  return request<void>(`/api/auth/tokens/${encodeURIComponent(id)}`, { method: "DELETE" }, false);
+  return request<void>(
+    `/api/auth/tokens/${encodeURIComponent(id)}`,
+    { method: "DELETE" },
+    { parse: false },
+  );
 }
 
 export function listUsers(signal?: AbortSignal): Promise<UserSummary[]> {
@@ -235,7 +238,11 @@ export function createUser(input: {
 }
 
 export function deleteUser(id: string): Promise<void> {
-  return request<void>(`/api/admin/users/${encodeURIComponent(id)}`, { method: "DELETE" }, false);
+  return request<void>(
+    `/api/admin/users/${encodeURIComponent(id)}`,
+    { method: "DELETE" },
+    { parse: false },
+  );
 }
 
 export function listDocuments(
@@ -382,7 +389,7 @@ export function deleteDocument(id: string): Promise<void> {
   return request<void>(
     `/api/documents/${encodeURIComponent(id)}`,
     { method: "DELETE" },
-    false,
+    { parse: false },
   );
 }
 
@@ -426,7 +433,7 @@ export function search(
  * 드러내야 하고, 2초 폴링 자체가 재시도다.
  */
 export function getSystemStatus(signal?: AbortSignal): Promise<SystemStatus> {
-  return request<SystemStatus>("/api/system/status", { signal }, true, false);
+  return request<SystemStatus>("/api/system/status", { signal }, { backoff: false });
 }
 
 export function getDiagnostics(signal?: AbortSignal): Promise<DiagnosticsResponse> {
