@@ -173,6 +173,19 @@ SELECT pg_size_pretty(pg_total_relation_size('document_files'));
 `MAX_UPLOAD_MB`(기본 50)가 한 판의 상한입니다. 실 OpenSQL에서 OpenProxy를 거친 50MB 원본 저장이
 시간 제한 안에 들어가는지는 아직 측정하지 않았습니다 — 큰 파일을 다루는 설치라면 먼저 확인하세요.
 
+## 문서 생성 멱등키
+
+`POST /api/documents`·`/api/documents/text`에 붙은 `Idempotency-Key`는 `idempotency_keys` 테이블에
+문서와 함께 기록됩니다(ADR-047). **24시간**이 지난 키는 워커가 좀비 스윕과 같은 주기에 지우므로,
+워커가 멈춰 있으면 정리도 멈춥니다(재시도 판정에는 영향이 없고 테이블만 자랍니다). 행 하나는 키와 해시
+정도라 작습니다.
+
+```sql
+SELECT count(*), min(created_at) FROM idempotency_keys;
+```
+
+`min(created_at)`이 24시간보다 한참 전이면 워커가 도는지 확인하세요.
+
 ## 인증과 계정
 
 초기 계정은 환경변수로 자동 생성되지 않습니다. 스키마가 적용된 뒤 `scripts/create_admin.py`를
