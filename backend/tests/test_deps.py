@@ -159,3 +159,67 @@ async def test_a_write_is_committed_before_the_response_starts(monkeypatch, migr
 
     assert statuses == [200]
     assert visible_at_response_start == [1]
+
+
+@pytest.fixture
+async def request_pool(monkeypatch, migrated_db):
+    """테스트 DB로 연 실제 풀 — lifespan 없이 요청 경로가 쓰는 것만."""
+    from app.config import get_settings
+    from app.db import close_pool, get_pool
+
+    monkeypatch.setenv("DATABASE_URL", migrated_db)
+    get_settings.cache_clear()
+    await close_pool()
+    pool = get_pool()
+    await pool.open()
+    yield pool
+    await close_pool()
+
+
+async def test_a_request_that_ends_in_a_db_error_does_not_return_its_connection(request_pool):
+    """요청이 DB 오류로 끝나면 그 연결을 닫아 풀이 버리게 한다 (ADR-048 결정 2, #110 B-2).
+
+    OpenProxy가 `BEGIN`에 AllServersDown을 돌려주면 psycopg의 트랜잭션 카운터가 어긋난 채
+    연결이 IDLE로 남는다. 풀은 IDLE만 보고 받아들여, 그 연결을 빌리는 요청마다 `transaction()`이
+    `AssertionError`를 낸다. 어떤 DB 오류가 연결을 그렇게 만드는지 앱이 가려낼 수 없으므로
+    DB 오류로 끝난 연결은 전부 버린다 — 새로 여는 비용이 오염된 연결을 돌려쓰는 위험보다 작다.
+    """
+    import psycopg
+
+    from app.api.deps import get_conn
+
+    requests = get_conn()
+    conn = await anext(requests)
+    with pytest.raises(psycopg.errors.SystemError):
+        await requests.athrow(psycopg.errors.SystemError("AllServersDown"))
+
+    assert conn.closed
+
+
+async def test_a_request_that_ends_in_an_http_error_keeps_its_connection(request_pool):
+    """404·401 같은 평범한 거절로는 연결을 버리지 않는다 — 요청마다 새 연결을 열게 된다."""
+    from app.api.deps import get_conn
+
+    requests = get_conn()
+    conn = await anext(requests)
+    with pytest.raises(HTTPException):
+        await requests.athrow(HTTPException(status_code=404))
+
+    assert not conn.closed
+
+
+async def test_request_connections_use_keepalive(request_pool):
+    """풀의 실제 연결이 keepalive 기본값으로 열렸는지 libpq에서 읽는다 (ADR-048 결정 1).
+
+    인자만 넘기고 libpq가 모르는 키면 연결 자체가 실패하므로, 실제 연결로 확인한다.
+    """
+    from app.api.deps import get_conn
+
+    requests = get_conn()
+    conn = await anext(requests)
+    options = {o.keyword: o.val for o in conn.pgconn.info}
+    with pytest.raises(StopAsyncIteration):
+        await anext(requests)
+
+    assert options[b"keepalives_idle"] == b"30"
+    assert options[b"tcp_user_timeout"] == b"60000"
