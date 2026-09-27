@@ -28,6 +28,7 @@ CORE_TABLES = {
     "sessions",
     "api_tokens",
     "document_files",
+    "idempotency_keys",
 }
 
 # 임베딩 차원은 vector(1024) 고정이다 (ADR-003).
@@ -750,3 +751,70 @@ def test_file_version_starts_at_one(conn: psycopg.Connection):
 
     with pytest.raises(psycopg.errors.CheckViolation):
         insert_file(conn, doc_id, file_version=0)
+
+
+def insert_idempotency_key(
+    conn: psycopg.Connection,
+    document_id: str,
+    owner_id: str = "alice",
+    key: str = "upload-1",
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO idempotency_keys (owner_id, key, request_hash, document_id)
+        VALUES (%s, %s, 'sha256:request', %s)
+        """,
+        (owner_id, key, document_id),
+    )
+
+
+def test_an_idempotency_key_is_unique_per_owner(conn: psycopg.Connection):
+    """같은 소유자의 같은 키는 한 번뿐이다 — 동시 재시도를 기본키가 직렬화한다 (ADR-047).
+
+    다른 소유자의 같은 키는 충돌하지 않는다. 키는 클라이언트가 고르므로 소유자 범위가
+    아니면 남의 키와 부딪혀 그 존재를 알게 된다.
+    """
+    doc_id = insert_document(conn)
+    insert_idempotency_key(conn, doc_id, owner_id="alice")
+    insert_idempotency_key(conn, doc_id, owner_id="bob")
+
+    with pytest.raises(psycopg.errors.UniqueViolation):
+        insert_idempotency_key(conn, doc_id, owner_id="alice")
+
+
+def test_an_idempotency_key_records_when_it_was_created(conn: psycopg.Connection):
+    """만료 정리(24시간)의 기준 시각이 DB에서 채워진다."""
+    doc_id = insert_document(conn)
+    insert_idempotency_key(conn, doc_id)
+
+    (age_is_fresh,) = conn.execute(
+        "SELECT now() - created_at < interval '1 minute' FROM idempotency_keys"
+    ).fetchone()
+    assert age_is_fresh is True
+
+
+@pytest.mark.parametrize("key", ["", "k" * 256])
+def test_an_idempotency_key_must_be_1_to_255_characters(
+    conn: psycopg.Connection, key: str
+):
+    doc_id = insert_document(conn)
+
+    with pytest.raises(psycopg.errors.CheckViolation):
+        insert_idempotency_key(conn, doc_id, key=key)
+
+
+def test_an_idempotency_key_must_point_to_an_existing_document(conn: psycopg.Connection):
+    with pytest.raises(psycopg.errors.ForeignKeyViolation):
+        insert_idempotency_key(conn, "00000000-0000-0000-0000-000000000000")
+
+
+def test_deleting_a_document_deletes_its_idempotency_key(conn: psycopg.Connection):
+    """키와 문서는 함께 있거나 함께 없다 (ADR-047 결정 2) — 지운 문서를 가리키는 키가
+    남으면 재시도에 돌려줄 문서가 없다."""
+    doc_id = insert_document(conn)
+    insert_idempotency_key(conn, doc_id)
+
+    conn.execute("DELETE FROM documents WHERE id = %s", (doc_id,))
+
+    (remaining,) = conn.execute("SELECT count(*) FROM idempotency_keys").fetchone()
+    assert remaining == 0
