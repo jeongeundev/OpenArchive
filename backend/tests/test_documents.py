@@ -459,7 +459,10 @@ async def test_create_document_with_the_same_key_stores_one_document_and_one_ori
     documents_conn,
 ):
     request = {
-        "filename": "guide.md", "data": "업로드 본문".encode(), "owner_id": "alice", "idempotency_key": "k-1"
+        "filename": "guide.md",
+        "data": "업로드 본문".encode(),
+        "owner_id": "alice",
+        "idempotency_key": "k-1",
     }
 
     first = await create_document(documents_conn, **request)
@@ -472,7 +475,12 @@ async def test_create_document_with_the_same_key_stores_one_document_and_one_ori
 
 @pytest.mark.parametrize(
     "changed",
-    [{"content": "다른 본문"}, {"title": "다른 제목"}, {"tags": ["다른"]}, {"visibility": "private"}],
+    [
+        {"content": "다른 본문"},
+        {"title": "다른 제목"},
+        {"tags": ["다른"]},
+        {"visibility": "private"},
+    ],
 )
 async def test_the_same_key_with_a_different_request_is_rejected(documents_conn, changed):
     """같은 키에 다른 본문은 재시도가 아니라 키 재사용이다. 처음 문서를 돌려주면
