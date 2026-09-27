@@ -206,7 +206,7 @@ describe("API responses", () => {
   });
 });
 
-// ADR-048 결정 4 — 1초 시작, 상한 8초, 전체 지터, 총 60초. 읽기만.
+// ADR-048 결정 4 — 1초 시작, 상한 8초, 전체 지터, 총 60초. 읽기와 멱등키가 있는 문서 생성만.
 describe("API retry on temporary unavailability", () => {
   function unavailable(): Response {
     return new Response(
@@ -323,19 +323,54 @@ describe("API retry on temporary unavailability", () => {
     expect(fetchMock.mock.calls[1][1]?.body).toBe(JSON.stringify({ query: "정합성" }));
   });
 
-  it("does not retry a write — the first attempt may already be committed", async () => {
+  // ADR-047 — 첫 시도가 커밋된 채 응답만 잃었어도, 같은 키로 다시 보내면 처음 문서가 온다.
+  it("retries an upload with the same Idempotency-Key on every attempt", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(unavailable())
+      .mockRejectedValueOnce(new TypeError("Failed to fetch"))
+      .mockResolvedValueOnce(ok({ id: "document-1" }));
+    vi.stubGlobal("fetch", fetchMock);
+    const file = new File(["x"], "a.txt");
+
+    const result = uploadDocument({ file, tags: [], visibility: "public" });
+    await vi.advanceTimersByTimeAsync(3000);
+
+    await expect(result).resolves.toEqual({ id: "document-1" });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    const keys = fetchMock.mock.calls.map(([, init]) =>
+      new Headers(init?.headers).get("Idempotency-Key"),
+    );
+    expect(keys[0]).toMatch(/^[0-9a-f]{32}$/);
+    expect(new Set(keys)).toEqual(new Set([keys[0]]));
+    expect((fetchMock.mock.calls[2][1]?.body as FormData).get("file")).toBe(file);
+  });
+
+  it("gives every upload its own Idempotency-Key", async () => {
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(ok({})));
+    vi.stubGlobal("fetch", fetchMock);
+    const upload = () =>
+      uploadDocument({ file: new File(["x"], "a.txt"), tags: [], visibility: "public" });
+
+    await upload();
+    await upload();
+
+    const [first, second] = fetchMock.mock.calls.map(([, init]) =>
+      new Headers(init?.headers).get("Idempotency-Key"),
+    );
+    expect(first).not.toBe(second);
+  });
+
+  it("does not retry other writes — only document creation honours the key", async () => {
     const fetchMock = vi.fn().mockResolvedValue(unavailable());
     vi.stubGlobal("fetch", fetchMock);
 
-    const error = await uploadDocument({
-      file: new File(["x"], "a.txt"),
-      tags: [],
-      visibility: "public",
-    }).catch((reason: unknown) => reason);
+    const error = await updateTags("document-1", ["태그"]).catch((reason: unknown) => reason);
 
     expect(error).toBeInstanceOf(ApiError);
     expect((error as ApiError).status).toBe(503);
     expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(new Headers(fetchMock.mock.calls[0][1]?.headers).has("Idempotency-Key")).toBe(false);
   });
 
   it("does not retry a 500 — it will not pass with time", async () => {
