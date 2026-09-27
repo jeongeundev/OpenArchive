@@ -10,9 +10,11 @@
 경우는 남는다. 재시도가 미들웨어에 있는 이유는 핸들러에 이미 주입된 연결을 다시 써봐야
 소용이 없기 때문이다 — 요청 전체를 다시 태워야 의존성이 새로 풀리고 풀에서 새 연결을 빌린다.
 
-**쓰기는 재시도하지 않는다.** COMMIT이 서버에 닿은 뒤 응답만 잃은 경우와 아예 닿지
-못한 경우를 구분할 수 없어, 재시도하면 문서가 두 번 생길 수 있다. 문서의 "요청 핸들러는
-1회 재시도"보다 좁은 범위다. 503은 쓰기에도 준다 — 다시 할지는 클라이언트가 정한다.
+**쓰기는 `Idempotency-Key`가 있는 문서 생성만 재시도한다.** COMMIT이 서버에 닿은 뒤
+응답만 잃은 경우와 아예 닿지 못한 경우를 구분할 수 없어, 키 없이 재시도하면 문서가 두 번
+생길 수 있다. 키가 있으면 서비스가 처음 문서를 돌려주므로 안전하다(ADR-047). 다른 쓰기는
+헤더가 붙어 와도 키를 지키지 않으므로 재시도하지 않는다. 503은 쓰기에도 준다 — 다시 할지는
+클라이언트가 정한다.
 
 `BaseHTTPMiddleware`를 쓰지 않는다 — 그쪽 `call_next`는 두 번 호출하면 앱은 다시 돌지만
 첫 시도에 저장해 둔 예외를 그대로 다시 던진다(Starlette 1.3.1 실측). 재시도하려면
@@ -37,19 +39,30 @@ Receive = Callable[[], Awaitable[Message]]
 Send = Callable[[Message], Awaitable[None]]
 
 
+# 멱등키를 지키는 경로 (ADR-047 결정 1). 서비스의 `_create_once`를 타는 곳만 넣는다.
+IDEMPOTENT_CREATE_PATHS = ("/api/documents", "/api/documents/text")
+
+
 def is_retryable(scope: dict) -> bool:
-    """재시도해도 중복 쓰기가 없는 읽기 전용 요청인지 판별한다.
+    """재시도해도 중복 쓰기가 없는 요청인지 판별한다.
 
     POST /api/search는 메서드만 POST인 읽기라 포함한다 — 페일오버 중에도 검색이
     계속 성공해야 한다는 것이 이 재시도의 목적이다.
     """
-    return scope["method"] in ("GET", "HEAD") or scope["path"] == "/api/search"
+    if scope["method"] in ("GET", "HEAD") or scope["path"] == "/api/search":
+        return True
+    return (
+        scope["method"] == "POST"
+        and scope["path"] in IDEMPOTENT_CREATE_PATHS
+        and any(name == b"idempotency-key" for name, _ in scope["headers"])
+    )
 
 
 async def _buffer_body(receive: Receive) -> bytes:
     """본문을 모두 읽어 둔다. 두 번째 시도에 다시 흘려보내야 하기 때문이다.
 
-    재시도 대상은 읽기 요청뿐이라 본문이 작다. 업로드는 이 경로로 오지 않는다.
+    키가 있는 업로드는 파일 전체(상한 50MB)가 여기서 한 벌 더 메모리에 올라온다. 라우터도
+    파일을 통째로 읽으므로 요청당 메모리가 약 두 배가 될 뿐 자릿수는 같다.
     """
     chunks: list[bytes] = []
     while True:
