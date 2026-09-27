@@ -436,3 +436,162 @@ async def test_a_tool_call_that_ends_in_a_db_error_does_not_return_its_connectio
 
     assert len(borrowed) == 1
     assert borrowed[0].closed
+
+
+# ── 일시 불가용 백오프 (ADR-048 결정 4) ─────────────────────────────────────────
+
+
+class FakeClock:
+    """실제로 기다리지 않고 흘러간 시간만 센다."""
+
+    def __init__(self) -> None:
+        self.now = 0.0
+        self.sleeps: list[float] = []
+
+    def monotonic(self) -> float:
+        return self.now
+
+    async def sleep(self, seconds: float) -> None:
+        self.sleeps.append(seconds)
+        self.now += seconds
+
+
+@pytest.fixture
+def clock(monkeypatch):
+    from mcp_server import server
+
+    fake = FakeClock()
+    monkeypatch.setattr(server, "_now", fake.monotonic)
+    monkeypatch.setattr(server, "_sleep", fake.sleep)
+    # 전체 지터의 상한을 그대로 돌려줘 대기 간격이 결정적이 되게 한다.
+    monkeypatch.setattr(server, "_jitter", lambda low, high: high)
+    return fake
+
+
+ALL_SERVERS_DOWN = psycopg.errors.lookup("58000")(
+    "could not get connection from the pool - AllServersDown"
+)
+
+
+def _failing_then(real, failures: int, borrowed: list):
+    async def call(conn, *args, **kwargs):
+        borrowed.append(conn)
+        if len(borrowed) <= failures:
+            raise ALL_SERVERS_DOWN
+        return await real(conn, *args, **kwargs)
+
+    return call
+
+
+async def test_read_tools_wait_out_an_outage(monkeypatch, mcp_database, clock):
+    """#110 B의 쓰기 중단은 7~42초였다. 읽기 도구는 그동안 기다렸다 성공해야 한다."""
+    from mcp_server import server
+
+    await _seed_documents(mcp_database)
+    borrowed: list = []
+    monkeypatch.setattr(
+        server,
+        "list_documents_service",
+        _failing_then(server.list_documents_service, failures=3, borrowed=borrowed),
+    )
+
+    result = await server.list_documents()
+
+    assert result["items"]
+    assert len(borrowed) == 4
+    # 오류 난 연결은 버려지고 매번 새 연결을 빌린다 (ADR-048 결정 2).
+    assert all(conn.closed for conn in borrowed[:3])
+    # 1초에서 시작해 두 배씩 — 전체 지터의 상한.
+    assert clock.sleeps == [1, 2, 4]
+
+
+async def test_backoff_is_capped_and_gives_up_after_a_minute(monkeypatch, mcp_database, clock):
+    from mcp_server import server
+
+    borrowed: list = []
+    monkeypatch.setattr(
+        server,
+        "search_documents_service",
+        _failing_then(server.search_documents_service, failures=10_000, borrowed=borrowed),
+    )
+
+    with pytest.raises(server.DatabaseUnavailable) as caught:
+        await server.search_documents("정합성")
+
+    assert max(clock.sleeps) == 8
+    assert clock.sleeps[:5] == [1, 2, 4, 8, 8]
+    assert clock.now <= 60
+    # 다음 대기가 60초를 넘기면 거기서 멈춘다 — 한 번 더 기다릴 수 있었으면 기다렸다.
+    assert clock.now + 8 > 60
+    assert "잠시 후" in str(caught.value)
+    assert isinstance(caught.value.__cause__, psycopg.errors.SystemError)
+
+
+async def test_get_document_also_waits_out_an_outage(monkeypatch, mcp_database, clock):
+    from mcp_server import server
+
+    ids = await _seed_documents(mcp_database)
+    borrowed: list = []
+    monkeypatch.setattr(
+        server,
+        "find_related",
+        _failing_then(server.find_related, failures=1, borrowed=borrowed),
+    )
+
+    document = await server.get_document(str(ids[0]))
+
+    assert document["document_id"]
+    assert clock.sleeps == [1]
+
+
+async def test_errors_that_do_not_pass_with_time_are_not_retried(monkeypatch, mcp_database, clock):
+    from mcp_server import server
+
+    async def failing_list(conn, **_):
+        await conn.execute("SELECT 1/0")
+
+    monkeypatch.setattr(server, "list_documents_service", failing_list)
+
+    with pytest.raises(psycopg.errors.DivisionByZero):
+        await server.list_documents()
+
+    assert clock.sleeps == []
+
+
+async def test_create_document_is_not_retried_without_an_idempotency_key(
+    monkeypatch, mcp_database, clock
+):
+    """커밋 도달 여부를 알 수 없는 쓰기를 다시 하면 문서가 두 번 생긴다. 쓰기 재시도는
+    멱등키(ADR-047, #120)와 함께 온다."""
+    from mcp_server import server
+
+    monkeypatch.setenv("MCP_USER_ID", "alice")
+    get_settings.cache_clear()
+    calls = []
+
+    async def failing_create(conn, **_):
+        calls.append(conn)
+        raise ALL_SERVERS_DOWN
+
+    monkeypatch.setattr(server, "create_text_document", failing_create)
+
+    with pytest.raises(psycopg.errors.SystemError):
+        await server.create_document(title="t", content="c")
+
+    assert len(calls) == 1
+    assert clock.sleeps == []
+
+
+async def test_wrapped_read_tools_keep_their_argument_schema():
+    """백오프로 감싸도 에이전트가 보는 도구 인자는 그대로여야 한다."""
+    from mcp_server.server import mcp
+
+    tools = {tool.name: tool for tool in await mcp.list_tools()}
+
+    assert set(tools["search_documents"].inputSchema["properties"]) == {
+        "query", "tags", "content_type", "k"
+    }
+    assert tools["search_documents"].inputSchema["required"] == ["query"]
+    assert set(tools["get_document"].inputSchema["properties"]) == {"document_id"}
+    assert set(tools["list_documents"].inputSchema["properties"]) == {"tag", "status"}
+    assert "사내 문서 구절" in tools["search_documents"].description
