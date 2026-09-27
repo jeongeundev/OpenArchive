@@ -4,7 +4,7 @@ from typing import Annotated
 import psycopg
 from fastapi import Cookie, Depends, Header, HTTPException, Request
 
-from app.db import get_pool
+from app.db import connection
 from app.embeddings.base import EmbeddingProvider
 from app.services.auth import (
     CREDENTIAL_SESSION,
@@ -20,7 +20,7 @@ BEARER_PREFIX = "Bearer "
 
 async def get_conn() -> AsyncIterator[psycopg.AsyncConnection]:
     """요청 하나에 풀 커넥션 하나를 빌려준다. 커밋은 yield 뒤 풀 반납 때 일어난다."""
-    async with get_pool().connection() as conn:
+    async with connection() as conn:
         yield conn
 
 

@@ -10,6 +10,7 @@ import importlib
 
 import psycopg_pool
 import pytest
+from psycopg.conninfo import conninfo_to_dict, make_conninfo
 from psycopg_pool import AsyncConnectionPool
 
 import app.db
@@ -120,3 +121,44 @@ async def test_close_pool_without_a_pool_is_noop():
     await app.db.close_pool()
 
     assert app.db._pool is None
+
+
+def _effective_params(pool) -> dict:
+    """풀이 새 연결을 열 때 libpq에 넘길 최종 설정 — DSN 위에 풀의 kwargs가 얹힌다."""
+    return conninfo_to_dict(make_conninfo(pool.conninfo, **pool.kwargs.get("kwargs", {})))
+
+
+def test_pool_connections_detect_a_dead_peer_within_a_minute(monkeypatch, pool_spy):
+    """keepalive를 코드 기본값으로 건다 — DSN에 붙이는 것을 잊어도 B-1이 재발하지 않게 (ADR-048).
+
+    VIP가 원래 노드로 돌아가는 순간 응답을 기다리던 연결은 FIN도 RST도 받지 못한다. OS 기본
+    keepalive로는 약 2시간 뒤에야 끊김을 알아, HA 실측에서 워커가 영구 정지했다(#110 B-1).
+    DSN 문자열은 건드리지 않는다 — 여전히 환경변수 하나, 호스트 하나다(ADR-006).
+    """
+    monkeypatch.setenv("DATABASE_URL", "postgresql://app@openproxy.example:6432/pool_a")
+    get_settings.cache_clear()
+
+    app.db.get_pool()
+
+    assert pool_spy[0].conninfo == "postgresql://app@openproxy.example:6432/pool_a"
+    params = _effective_params(pool_spy[0])
+    assert params["keepalives_idle"] == "30"
+    assert params["keepalives_interval"] == "10"
+    assert params["keepalives_count"] == "3"
+    assert params["tcp_user_timeout"] == "60000"
+
+
+def test_keepalive_written_in_the_dsn_wins_over_the_defaults(monkeypatch, pool_spy):
+    """기본값은 비어 있는 자리만 채운다 — 운영자가 DSN에 적은 값을 덮어쓰면 기본값이 아니다."""
+    monkeypatch.setenv(
+        "DATABASE_URL",
+        "postgresql://app@openproxy.example:6432/pool_a?keepalives_idle=5&tcp_user_timeout=0",
+    )
+    get_settings.cache_clear()
+
+    app.db.get_pool()
+
+    params = _effective_params(pool_spy[0])
+    assert params["keepalives_idle"] == "5"
+    assert params["tcp_user_timeout"] == "0"
+    assert params["keepalives_count"] == "3"

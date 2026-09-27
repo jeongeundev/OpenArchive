@@ -411,3 +411,28 @@ async def test_get_document_lists_original_files_without_bytes(mcp_database):
     ]
     assert document["files"][0]["size"] == len(b"original bytes")
     assert isinstance(document["files"][0]["uploaded_at"], str)
+
+
+async def test_a_tool_call_that_ends_in_a_db_error_does_not_return_its_connection(
+    monkeypatch, mcp_database
+):
+    """MCP 도구 호출도 DB 오류로 끝나면 그 연결을 닫아 풀이 버리게 한다 (ADR-048 결정 2).
+
+    API와 같은 풀 규칙이다 — 오염된 연결이 풀로 돌아가면 이후 도구 호출마다
+    `transaction()`이 `AssertionError`를 낸다(#110 B-2).
+    """
+    from mcp_server import server
+
+    borrowed = []
+
+    async def failing_list(conn, **_):
+        borrowed.append(conn)
+        await conn.execute("SELECT 1/0")
+
+    monkeypatch.setattr(server, "list_documents_service", failing_list)
+
+    with pytest.raises(psycopg.errors.DivisionByZero):
+        await server.list_documents()
+
+    assert len(borrowed) == 1
+    assert borrowed[0].closed
