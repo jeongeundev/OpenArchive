@@ -446,7 +446,7 @@ async def test_create_text_document_with_the_same_key_returns_the_first_document
     documents_conn,
 ):
     """모호한 커밋 뒤의 재시도는 문서를 두 번 만들지 않는다 (ADR-047)."""
-    request = dict(title="재시도", content="본문", owner_id="alice", idempotency_key="k-1")
+    request = {"title": "재시도", "content": "본문", "owner_id": "alice", "idempotency_key": "k-1"}
 
     first = await create_text_document(documents_conn, **request)
     second = await create_text_document(documents_conn, **request)
@@ -458,9 +458,9 @@ async def test_create_text_document_with_the_same_key_returns_the_first_document
 async def test_create_document_with_the_same_key_stores_one_document_and_one_original(
     documents_conn,
 ):
-    request = dict(
-        filename="guide.md", data="업로드 본문".encode(), owner_id="alice", idempotency_key="k-1"
-    )
+    request = {
+        "filename": "guide.md", "data": "업로드 본문".encode(), "owner_id": "alice", "idempotency_key": "k-1"
+    }
 
     first = await create_document(documents_conn, **request)
     second = await create_document(documents_conn, **request)
@@ -477,7 +477,7 @@ async def test_create_document_with_the_same_key_stores_one_document_and_one_ori
 async def test_the_same_key_with_a_different_request_is_rejected(documents_conn, changed):
     """같은 키에 다른 본문은 재시도가 아니라 키 재사용이다. 처음 문서를 돌려주면
     호출자는 자기가 보낸 것이 저장됐다고 믿는다."""
-    request = dict(title="재시도", content="본문", owner_id="alice", idempotency_key="k-1")
+    request = {"title": "재시도", "content": "본문", "owner_id": "alice", "idempotency_key": "k-1"}
     await create_text_document(documents_conn, **request)
 
     with pytest.raises(IdempotencyKeyReused):
@@ -520,7 +520,7 @@ async def test_a_concurrent_request_with_the_same_key_waits_and_returns_the_firs
 ):
     """동시 요청은 기본키가 직렬화한다 — 뒤 요청은 앞 트랜잭션이 끝나기를 기다렸다가
     커밋된 문서를 돌려준다. 앞 트랜잭션을 열어 둔 채로 뒤 요청을 보내 겹침을 보장한다."""
-    request = dict(title="동시", content="본문", owner_id="alice", idempotency_key="k-1")
+    request = {"title": "동시", "content": "본문", "owner_id": "alice", "idempotency_key": "k-1"}
     async with await psycopg.AsyncConnection.connect(migrated_db) as first_conn:
         first = await create_text_document(first_conn, **request)  # 아직 커밋 전
         second_task = asyncio.create_task(create_text_document(documents_conn, **request))
@@ -537,7 +537,7 @@ async def test_a_concurrent_request_proceeds_when_the_first_one_rolls_back(
     migrated_db, documents_conn
 ):
     """앞 요청이 롤백되면 키도 없으므로 뒤 요청이 문서를 만든다."""
-    request = dict(title="동시", content="본문", owner_id="alice", idempotency_key="k-1")
+    request = {"title": "동시", "content": "본문", "owner_id": "alice", "idempotency_key": "k-1"}
     async with await psycopg.AsyncConnection.connect(migrated_db) as first_conn:
         await create_text_document(first_conn, **request)
         second_task = asyncio.create_task(create_text_document(documents_conn, **request))
@@ -553,7 +553,7 @@ async def test_a_concurrent_request_proceeds_when_the_first_one_rolls_back(
 
 async def test_create_without_a_key_records_nothing(documents_conn):
     """키가 없으면 지금처럼 동작한다 — 선택 헤더다."""
-    request = dict(title="키 없음", content="본문", owner_id="alice")
+    request = {"title": "키 없음", "content": "본문", "owner_id": "alice"}
     await create_text_document(documents_conn, **request)
     await create_text_document(documents_conn, **request)
 

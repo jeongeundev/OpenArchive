@@ -5,6 +5,8 @@ MCP 서버는 HTTPException을 쓸 수 없으므로 이 경계가 필요하다.
 """
 
 import hashlib
+import json
+from collections.abc import Awaitable, Callable
 from pathlib import PurePath
 from uuid import UUID
 
@@ -64,6 +66,17 @@ class InvalidVisibility(Exception):
 
 class OriginalFileMissing(Exception):
     """볼 수 있는 문서에 원본이 없어 다시 추출할 대상이 없는 경우."""
+
+
+class IdempotencyKeyReused(Exception):
+    """같은 멱등키에 다른 요청이 온 경우. 재시도가 아니라 키 재사용이다 (ADR-047).
+
+    처음 문서를 돌려주면 호출자는 자기가 보낸 내용이 저장됐다고 믿게 된다.
+    """
+
+
+class _KeyTaken(Exception):
+    """동시 요청이 같은 키를 먼저 커밋했다. 이 요청의 트랜잭션을 되돌리는 신호다."""
 
 
 class VersionConflict(Exception):
@@ -137,16 +150,18 @@ async def create_document(
     title: str | None = None,
     tags: list[str] | None = None,
     visibility: str = "public",
+    idempotency_key: str | None = None,
 ) -> dict:
     """업로드 파일에서 텍스트를 추출해 문서를 만들고 원본을 1판으로 보관한다 (ADR-046).
 
     임베딩 잡·텍스트 버전은 트리거가 만든다. 원본은 문서와 같은 트랜잭션에 들어가므로
     문서만 커밋되고 원본이 유실되는 상태가 생기지 않는다 — 호출부가 autocommit 연결을
-    넘겨도 이 함수가 트랜잭션을 연다.
+    넘겨도 이 함수가 트랜잭션을 연다. 멱등키는 `_create_once`를 본다.
     """
     content_type = detect_content_type(filename)
     content = extract_text(data, content_type)
-    async with conn.transaction():
+
+    async def insert() -> dict:
         document = await _insert_document(
             conn,
             title=title or PurePath(filename).stem,
@@ -169,7 +184,93 @@ async def create_document(
             text_version=document["version"],
             uploaded_by=owner_id,
         )
-    return document
+        return document
+
+    return await _create_once(
+        conn,
+        owner_id=owner_id,
+        idempotency_key=idempotency_key,
+        request_hash=_request_hash(
+            "file",
+            filename=filename,
+            data=hashlib.sha256(data).hexdigest(),
+            title=title,
+            tags=tags,
+            visibility=visibility,
+        ),
+        insert=insert,
+    )
+
+
+def _request_hash(kind: str, **fields: object) -> str:
+    """같은 키로 온 요청이 처음 요청과 같은지 가르는 지문. 입구(파일·텍스트)도 포함한다."""
+    payload = json.dumps({"kind": kind, **fields}, ensure_ascii=False, sort_keys=True)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+async def _replay(
+    conn: psycopg.AsyncConnection, *, owner_id: str, key: str, request_hash: str
+) -> dict | None:
+    """이미 기록된 키면 그 문서의 현재 요약을 돌려준다. 없으면 None이다."""
+    row = await (
+        await conn.execute(
+            "SELECT request_hash, document_id FROM idempotency_keys"
+            " WHERE owner_id = %s AND key = %s",
+            (owner_id, key),
+        )
+    ).fetchone()
+    if row is None:
+        return None
+    if row[0] != request_hash:
+        raise IdempotencyKeyReused("같은 Idempotency-Key로 다른 요청을 보낼 수 없습니다.")
+    cur = conn.cursor(row_factory=dict_row)
+    await cur.execute(f"SELECT {SUMMARY_COLUMNS} FROM documents WHERE id = %s", (row[1],))
+    return await cur.fetchone()
+
+
+async def _create_once(
+    conn: psycopg.AsyncConnection,
+    *,
+    owner_id: str,
+    idempotency_key: str | None,
+    request_hash: str,
+    insert: Callable[[], Awaitable[dict]],
+) -> dict:
+    """`insert`를 트랜잭션 하나로 실행하고, 키가 있으면 같은 트랜잭션에 기록한다 (ADR-047).
+
+    같은 키가 이미 있으면 `insert` 없이 처음 문서를 돌려준다. 동시 요청은 기본키가
+    직렬화한다 — 키 INSERT가 앞 트랜잭션의 끝을 기다렸다가, 앞이 커밋했으면 아무것도
+    넣지 않는다. 그러면 이 트랜잭션(문서 행 포함)을 되돌리고 커밋된 행을 읽는다. 앞이
+    롤백했으면 키가 들어가 이 요청이 처음 요청이 된다.
+    """
+    if idempotency_key is None:
+        async with conn.transaction():
+            return await insert()
+    while True:
+        existing = await _replay(
+            conn, owner_id=owner_id, key=idempotency_key, request_hash=request_hash
+        )
+        if existing is not None:
+            return existing
+        try:
+            async with conn.transaction():
+                document = await insert()
+                recorded = await conn.execute(
+                    """
+                    INSERT INTO idempotency_keys (owner_id, key, request_hash, document_id)
+                    VALUES (%s, %s, %s, %s)
+                    ON CONFLICT DO NOTHING
+                    RETURNING 1
+                    """,
+                    (owner_id, idempotency_key, request_hash, document["id"]),
+                )
+                if await recorded.fetchone() is None:
+                    raise _KeyTaken
+        except _KeyTaken:
+            # 다시 돌면 _replay가 커밋된 행을 찾는다. 그 사이 문서가 지워졌다면 키도
+            # 함께 지워졌으므로(CASCADE) 새로 만든다.
+            continue
+        return document
 
 
 async def _insert_original_file(
@@ -206,6 +307,7 @@ async def create_text_document(
     owner_id: str,
     tags: list[str] | None = None,
     visibility: str = "public",
+    idempotency_key: str | None = None,
 ) -> dict:
     """공급자가 이미 가진 텍스트로 문서를 만든다. 원본 파일이 없으므로 filename은 NULL이다."""
     # REST는 pydantic Literal이 먼저 422로 막아 이 가드에 닿지 않는다. 그래도 두는 것은
@@ -213,16 +315,33 @@ async def create_text_document(
     # 자기 계약을 스스로 지킨다.
     if content_type not in TEXT_CONTENT_TYPES:
         raise UnsupportedFileType("텍스트로 공급할 수 있는 유형은 txt, md입니다.")
-    return await _insert_document(
+
+    async def insert() -> dict:
+        return await _insert_document(
+            conn,
+            title=title,
+            filename=None,
+            content_type=content_type,
+            content=content,
+            owner_id=owner_id,
+            tags=tags,
+            visibility=visibility,
+            empty_message="문서 텍스트는 비어 있을 수 없습니다.",
+        )
+
+    return await _create_once(
         conn,
-        title=title,
-        filename=None,
-        content_type=content_type,
-        content=content,
         owner_id=owner_id,
-        tags=tags,
-        visibility=visibility,
-        empty_message="문서 텍스트는 비어 있을 수 없습니다.",
+        idempotency_key=idempotency_key,
+        request_hash=_request_hash(
+            "text",
+            title=title,
+            content=content,
+            content_type=content_type,
+            tags=tags,
+            visibility=visibility,
+        ),
+        insert=insert,
     )
 
 
