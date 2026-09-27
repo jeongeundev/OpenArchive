@@ -504,7 +504,7 @@ DATABASE_URL="postgresql://app@<vip>:6432/<pool_name>"
 
 - **API**: `psycopg_pool.AsyncConnectionPool(check=AsyncConnectionPool.check_connection)` — 죽은 연결을 대여 시점에 감지·폐기·재수립. 처리 도중 끊긴 요청은 미들웨어가 **1회 재시도**하되 대상은 **읽기 전용 요청**뿐이다(`GET`·`HEAD`·`POST /api/search`). 쓰기는 커밋 도달 여부를 구분할 수 없어 재시도 시 중복 생성 위험이 있다 (ADR-023).
 - **일시 불가용은 503 + `Retry-After`**: 기다리면 풀리는 DB 오류를 `app.db.is_unavailable` 하나로 가른다 — 연결 유실·풀 대여 시간 초과(SQLSTATE 없는 `OperationalError`), 연결 예외 `08xxx`, OpenProxy `AllServersDown`과 서버 소켓 오류가 올라오는 `58000`, 서버 종료·기동 중인 `57P01`·`57P02`·`57P03`, 승격 직후 쓰기가 replica로 간 `25006`. **나열한 것만** 일시 불가용이다 — `OperationalError`에는 디스크 가득 참(`53100`)·인증 실패(`28P01`)·statement timeout(`57014`)처럼 기다려도 풀리지 않는 것도 섞여 있어, 그것을 503으로 주면 결함이 가려진다. 한계: 잘못된 DSN·비밀번호는 풀에서 `PoolTimeout`으로 보여 장애와 구별되지 않는다. 미들웨어(`api/retry.py`)의 즉시 1회 재시도도 이 기준을 따르고, 끝내 풀리지 않으면 **503 + `Retry-After: 1`**로 응답한다. 쓰기도 503은 받지만 재시도는 하지 않는다. 그 밖의 오류는 500이며, 500은 코드 결함에만 남는다. #110 B에서는 장애 구간 응답이 전부 500이었다(B-5) (ADR-048 결정 3).
-- **긴 재시도는 클라이언트가 한다**: 즉시 1회로는 7~42초 중단을 덮지 못한다. 웹 UI(`lib/api.ts`)와 MCP 읽기 도구 3개(`search_documents`·`get_document`·`list_documents`)가 503·네트워크 오류(MCP는 분류된 DB 오류)를 **지수 백오프(1초 시작·상한 8초) + 전체 지터, 총 60초**로 다시 시도한다. 읽기만이다 — 쓰기 재시도는 멱등키(ADR-047)와 함께 온다. 서버는 요청을 붙잡고 버티지 않는다 (ADR-048 결정 4).
+- **긴 재시도는 클라이언트가 한다**: 즉시 1회로는 7~42초 중단을 덮지 못한다. 웹 UI(`lib/api.ts`)와 MCP 읽기 도구 3개(`search_documents`·`get_document`·`list_documents`)가 503·네트워크 오류(MCP는 분류된 DB 오류)를 **지수 백오프(1초 시작·상한 8초) + 전체 지터, 총 60초**로 다시 시도한다. 웹 UI는 503의 `Retry-After`보다 일찍 보내지 않는다 — 간격은 `max(Retry-After, 지터 백오프)`이고, 알린 값이 남은 예산을 넘으면 바로 포기한다(RFC 9110 §10.2.3). MCP는 HTTP를 거치지 않고 서비스를 직접 불러 받을 헤더가 없다. 읽기만이다 — 쓰기 재시도는 멱등키(ADR-047)와 함께 온다. 서버는 요청을 붙잡고 버티지 않는다 (ADR-048 결정 4).
 - **워커 (잡 처리)**: 동일한 풀 정책. 처리 중 연결이 끊기면 트랜잭션이 롤백되고, 잡은 `processing` 상태로 남았다가 좀비 회수 스윕이 `pending`으로 되돌린다.
 - **죽은 연결 감지 (keepalive)**: 풀과 워커 `LISTEN` 연결은 TCP keepalive(`keepalives_idle=30`·`interval=10`·`count=3`)와 `tcp_user_timeout=60000`을 **코드 기본값**으로 연다(`app/db.py`). VIP가 원래 노드로 돌아가는 순간(선점) 응답을 기다리던 연결은 FIN도 RST도 받지 못하는데, OS 기본값으로는 약 2시간 뒤에야 풀려 워커가 멈춰 있었다(#110 B-1). 감지는 약 60초 안에 된다. DSN에 같은 키를 적으면 그 값이 이기며, DSN 문자열 자체는 바꾸지 않는다 — 환경변수 하나·호스트 하나(ADR-006) 그대로다 (ADR-048 결정 1).
 - **오류가 난 연결은 풀에 돌려보내지 않는다**: API 요청·MCP 도구 호출이 DB 오류로 끝나면(`app.db.connection`), 워커 처리 루프는 어떤 오류로든 끝나면 그 연결을 닫아 풀이 버리게 한다. OpenProxy가 `BEGIN`에 `AllServersDown`을 돌려주면 psycopg의 `transaction()` 카운터가 되돌려지지 않은 채 연결이 IDLE로 남고, 풀은 IDLE만 보고 받아들여 그 연결의 다음 `transaction()`마다 `AssertionError`가 났다(#110 B-2, 한때 워커 풀 4개 중 3개). 요청 경로는 HTTP 거절(401·404)로는 닫지 않는다. 워커는 좁히지 않는다 — 잡 처리 중 오염되면 `process_once`가 첫 DB 오류를 잡아 `fail_job`으로 넘기고, 루프에 올라오는 것은 `fail_job`의 `AssertionError`다 (ADR-048 결정 2).
@@ -597,7 +597,7 @@ OpenSQL `patroni.yml`의 PostgreSQL 파라미터는 `max_connections: 100`이다
 
 ### 일시 불가용 응답 (모든 엔드포인트)
 
-DB가 잠시 응답할 수 없으면(연결 끊김·페일오버·switchover 중) **`503 Service Unavailable`** + **`Retry-After: 1`** + `{"detail": "일시적으로 요청을 처리할 수 없습니다. 잠시 후 다시 시도하세요."}`로 응답한다. `Retry-After`는 중단 예측값이 아니라 "지금 바로 다시 하지는 마라"는 하한이다. 외부 클라이언트는 지수 백오프 + 지터로 다시 시도하되, **쓰기 요청은 첫 시도가 이미 커밋됐을 수 있으므로** 멱등키(ADR-047) 없이 자동 재시도하지 않는다. 500은 재시도해도 풀리지 않는 결함이다 (ADR-048).
+DB가 잠시 응답할 수 없으면(연결 끊김·페일오버·switchover 중) **`503 Service Unavailable`** + **`Retry-After: 1`** + `{"detail": "일시적으로 요청을 처리할 수 없습니다. 잠시 후 다시 시도하세요."}`로 응답한다. `Retry-After`는 중단 예측값이 아니라 "지금 바로 다시 하지는 마라"는 하한이다(RFC 9110 §10.2.3). 외부 클라이언트는 `Retry-After`보다 일찍 보내지 않는 범위에서 지수 백오프 + 지터로 다시 시도하되, **쓰기 요청은 첫 시도가 이미 커밋됐을 수 있으므로** 멱등키(ADR-047) 없이 자동 재시도하지 않는다. 500은 재시도해도 풀리지 않는 결함이다 (ADR-048).
 
 ### 빈 파싱 결과 처리 (`POST /api/documents`)
 

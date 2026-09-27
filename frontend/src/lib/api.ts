@@ -68,7 +68,18 @@ function isRead(path: string, init: RequestInit): boolean {
 }
 
 /**
- * 읽기만 지수 백오프 + 전체 지터로 다시 보낸다. 쓰기는 첫 시도가 이미 커밋됐을 수 있어
+ * 서버가 알린 최소 대기(ms). RFC 9110 §10.2.3 — 초 수 또는 HTTP 날짜. 없거나 읽을 수 없으면 0.
+ */
+function retryAfterMs(response: Response): number {
+  const value = response.headers.get("Retry-After");
+  if (value === null) return 0;
+  const ms = /^\d+$/.test(value.trim()) ? Number(value) * 1000 : Date.parse(value) - Date.now();
+  return Number.isFinite(ms) ? Math.max(0, ms) : 0;
+}
+
+/**
+ * 읽기만 지수 백오프 + 전체 지터로 다시 보낸다. 503이 `Retry-After`를 알리면 그보다
+ * 일찍 보내지 않는다. 쓰기는 첫 시도가 이미 커밋됐을 수 있어
  * 다시 보내면 문서가 두 번 생긴다 — 쓰기 재시도는 멱등키와 함께 온다(ADR-047).
  * 예산을 넘기면 마지막 503 응답(또는 네트워크 오류)을 그대로 돌려준다.
  */
@@ -89,7 +100,8 @@ async function fetchWithBackoff(path: string, init: RequestInit): Promise<Respon
         if (!(error instanceof TypeError)) throw error;
         last = error;
       }
-      const delay = Math.random() * Math.min(BACKOFF_CAP_MS, BACKOFF_START_MS * 2 ** attempt);
+      const backoff = Math.random() * Math.min(BACKOFF_CAP_MS, BACKOFF_START_MS * 2 ** attempt);
+      const delay = last instanceof Response ? Math.max(retryAfterMs(last), backoff) : backoff;
       if (Date.now() + delay > deadline) {
         if (last instanceof Response) return last;
         throw last;

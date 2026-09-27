@@ -224,6 +224,8 @@ describe("API retry on temporary unavailability", () => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
     vi.useFakeTimers();
+    // HTTP 날짜는 초 단위라 시계를 정각에 맞춘다.
+    vi.setSystemTime(new Date("2026-09-27T00:00:00Z"));
     // 전체 지터의 상한 — 대기 간격이 결정적이 된다.
     vi.spyOn(Math, "random").mockReturnValue(0.999999);
   });
