@@ -7,6 +7,7 @@ import {
   deleteDocument,
   editDocument,
   getAuthStatus,
+  getDocument,
   isRetrying,
   listDocuments,
   listTokens,
@@ -357,6 +358,37 @@ describe("API retry on temporary unavailability", () => {
     expect(error).toBeInstanceOf(ApiError);
     expect((error as ApiError).status).toBe(503);
     expect(fetchMock).toHaveBeenCalledTimes(10);
+  });
+
+  // 화면을 떠난 요청은 응답을 쓸 곳이 없다. 기다리던 재시도까지 멈춰야 서버 부하와
+  // 재시도 안내가 남지 않는다(React "Fetching data" 정리 함수 관례).
+  it("stops the backoff when the caller aborts while waiting", async () => {
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(unavailable()));
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+
+    const result = listDocuments(undefined, controller.signal).catch((reason: unknown) => reason);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(isRetrying()).toBe(true);
+    controller.abort();
+    const error = await result;
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect((error as Error).name).toBe("AbortError");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(isRetrying()).toBe(false);
+  });
+
+  it("hands the caller's signal to fetch so an in-flight read is cancelled too", async () => {
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(ok([])));
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+
+    await getDocument("document-1", controller.signal);
+    await search({ query: "정합성" }, controller.signal);
+
+    expect(fetchMock.mock.calls[0][1]?.signal).toBe(controller.signal);
+    expect(fetchMock.mock.calls[1][1]?.signal).toBe(controller.signal);
   });
 
   it("reports that a retry is in progress until the request settles", async () => {

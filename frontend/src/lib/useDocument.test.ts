@@ -118,3 +118,26 @@ describe("useDocument", () => {
     expect(result.current.error).toBe("문서를 찾을 수 없습니다.");
   });
 });
+
+// 응답하지 않는 서버 — 화면을 떠날 때 요청이 취소되는지만 본다.
+function pendingFetch() {
+  return vi.fn((_input: RequestInfo | URL, _init?: RequestInit) => new Promise<Response>(() => {}));
+}
+
+function expectAllAborted(fetchMock: ReturnType<typeof pendingFetch>): void {
+  expect(fetchMock.mock.calls.length).toBeGreaterThan(0);
+  for (const [, init] of fetchMock.mock.calls) expect(init?.signal?.aborted).toBe(true);
+}
+
+describe("useDocument 취소", () => {
+  it("언마운트하면 진행 중인 조회를 취소한다", () => {
+    const fetchMock = pendingFetch();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { unmount } = renderHook(() => useDocument("document-1"));
+    unmount();
+
+    expectAllAborted(fetchMock);
+    vi.unstubAllGlobals();
+  });
+});

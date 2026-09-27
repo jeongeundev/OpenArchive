@@ -203,3 +203,19 @@ describe("계정 설정 화면", () => {
     );
   });
 });
+
+describe("계정 설정 화면 취소", () => {
+  it("화면을 떠나면 진행 중인 토큰 목록 조회를 취소한다", async () => {
+    const fetchMock = vi
+      .fn((_input: RequestInfo | URL, _init?: RequestInit) => new Promise<Response>(() => {}))
+      .mockResolvedValueOnce(response(alice));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { unmount } = render(<AuthProvider><SettingsPage /></AuthProvider>);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    unmount();
+
+    expect(fetchMock.mock.calls[1][1]?.signal?.aborted).toBe(true);
+    vi.unstubAllGlobals();
+  });
+});

@@ -79,3 +79,19 @@ describe("사용자 관리 화면", () => {
     expect(screen.queryByRole("button", { name: "사용자 생성" })).not.toBeInTheDocument();
   });
 });
+
+describe("사용자 관리 화면 취소", () => {
+  it("화면을 떠나면 진행 중인 목록 조회를 취소한다", async () => {
+    const fetchMock = vi
+      .fn((_input: RequestInfo | URL, _init?: RequestInit) => new Promise<Response>(() => {}))
+      .mockResolvedValueOnce(response(admin));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { unmount } = render(<AuthProvider><UsersPage /></AuthProvider>);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    unmount();
+
+    expect(fetchMock.mock.calls[1][1]?.signal?.aborted).toBe(true);
+    vi.unstubAllGlobals();
+  });
+});

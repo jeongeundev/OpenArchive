@@ -94,3 +94,27 @@ describe("useRelated", () => {
     expect(result.current.error).toBe("추천을 불러오지 못했습니다.");
   });
 });
+
+// 응답하지 않는 서버 — 화면을 떠날 때 요청이 취소되는지만 본다.
+function pendingFetch() {
+  return vi.fn((_input: RequestInfo | URL, _init?: RequestInit) => new Promise<Response>(() => {}));
+}
+
+function expectAllAborted(fetchMock: ReturnType<typeof pendingFetch>): void {
+  expect(fetchMock.mock.calls.length).toBeGreaterThan(0);
+  for (const [, init] of fetchMock.mock.calls) expect(init?.signal?.aborted).toBe(true);
+}
+
+describe("useRelated 취소", () => {
+  it("언마운트하면 관련 문서·태그 추천 조회를 모두 취소한다", () => {
+    const fetchMock = pendingFetch();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { unmount } = renderHook(() => useRelated("document-1", 1));
+    unmount();
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expectAllAborted(fetchMock);
+    vi.unstubAllGlobals();
+  });
+});

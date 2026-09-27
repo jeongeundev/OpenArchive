@@ -50,3 +50,21 @@ describe("관계 지도 화면", () => {
     ).toBeInTheDocument();
   });
 });
+
+// 응답하지 않는 서버 — 화면을 떠날 때 요청이 취소되는지만 본다.
+function pendingFetch() {
+  return vi.fn((_input: RequestInfo | URL, _init?: RequestInit) => new Promise<Response>(() => {}));
+}
+
+describe("관계 지도 화면 취소", () => {
+  it("화면을 떠나면 진행 중인 조회를 취소한다", () => {
+    const fetchMock = pendingFetch();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { unmount } = render(<ClustersPage />);
+    unmount();
+
+    expect(fetchMock.mock.calls[0][1]?.signal?.aborted).toBe(true);
+    vi.unstubAllGlobals();
+  });
+});

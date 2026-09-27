@@ -78,3 +78,21 @@ describe("문서 진단 화면", () => {
     expect(screen.queryByText(/같은 내용인지 확인하고/)).not.toBeInTheDocument();
   });
 });
+
+// 응답하지 않는 서버 — 화면을 떠날 때 요청이 취소되는지만 본다.
+function pendingFetch() {
+  return vi.fn((_input: RequestInfo | URL, _init?: RequestInit) => new Promise<Response>(() => {}));
+}
+
+describe("문서 진단 화면 취소", () => {
+  it("화면을 떠나면 진행 중인 조회를 취소한다", () => {
+    const fetchMock = pendingFetch();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { unmount } = render(<DiagnosticsPage />);
+    unmount();
+
+    expect(fetchMock.mock.calls[0][1]?.signal?.aborted).toBe(true);
+    vi.unstubAllGlobals();
+  });
+});
