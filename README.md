@@ -170,6 +170,10 @@ curl -X POST http://localhost:8000/api/search \
   -d '{"query": "OpenProxy 풀 설정", "tags": ["opensql"], "content_type": "pdf", "k": 10}'
 ```
 
+DB가 잠시 응답할 수 없는 동안(페일오버·switchover 등) API는 **`503` + `Retry-After`**를 돌려줍니다.
+프로그램에서 호출한다면 지수 백오프로 다시 시도하되, 쓰기 요청은 첫 시도가 이미 반영됐을 수 있으니
+자동으로 다시 보내지 마세요. 웹 화면과 MCP 읽기 도구는 최대 60초까지 알아서 기다립니다.
+
 ### 문서 다듬기
 
 문서 상세(`/documents/[id]`)에서 **추출 텍스트를 직접 편집**하면 텍스트 버전이 하나 쌓이고
