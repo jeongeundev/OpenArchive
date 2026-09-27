@@ -211,22 +211,24 @@ async def create_document(
     if not user_id or not user_id.strip():
         raise MissingUserContext("문서를 만들려면 MCP_USER_ID 환경변수를 설정해야 합니다.")
     # 키는 도구 호출마다 하나다. 백오프 바깥에서 만들어야 재시도가 같은 키를 쓴다.
-    return await _create_text_once(
-        title=title,
-        content=content,
-        content_type=content_type,
-        owner_id=user_id,
-        tags=tags,
-        visibility=visibility,
-        idempotency_key=str(uuid4()),
-    )
+    idempotency_key = str(uuid4())
 
+    @with_backoff
+    async def attempt() -> dict:
+        async with connection() as conn:
+            document = await create_text_document(
+                conn,
+                title=title,
+                content=content,
+                content_type=content_type,
+                owner_id=user_id,
+                tags=tags,
+                visibility=visibility,
+                idempotency_key=idempotency_key,
+            )
+        return _document_payload(document)
 
-@with_backoff
-async def _create_text_once(**kwargs) -> dict:
-    async with connection() as conn:
-        document = await create_text_document(conn, **kwargs)
-    return _document_payload(document)
+    return await attempt()
 
 
 mcp.tool()(search_documents)
