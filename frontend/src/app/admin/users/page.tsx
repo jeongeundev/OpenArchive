@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { useAuth } from "@/components/AuthProvider";
 import { ApiError, createUser, deleteUser, listUsers } from "@/lib/api";
 import type { UserSummary } from "@/lib/types";
+import { useUnmountSignal } from "@/lib/useUnmountSignal";
 
 export default function UsersPage(): React.ReactElement {
   const { auth, loading: authLoading } = useAuth();
@@ -14,9 +15,10 @@ export default function UsersPage(): React.ReactElement {
   const [isAdmin, setIsAdmin] = useState(false);
   const [working, setWorking] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const unmountSignal = useUnmountSignal();
 
   async function refresh(): Promise<void> {
-    setUsers(await listUsers());
+    setUsers(await listUsers(unmountSignal()));
   }
 
   useEffect(() => {

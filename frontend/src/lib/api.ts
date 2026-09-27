@@ -310,9 +310,11 @@ export function editDocument(
 export function getDocumentVersion(
   id: string,
   version: number,
+  signal?: AbortSignal,
 ): Promise<TextVersionDetail> {
   return request<TextVersionDetail>(
     `/api/documents/${encodeURIComponent(id)}/versions/${version}`,
+    { signal },
   );
 }
 

@@ -4,6 +4,7 @@ import { useState } from "react";
 
 import { ApiError, getDocumentVersion, restoreDocumentVersion } from "@/lib/api";
 import type { TextVersion } from "@/lib/types";
+import { useUnmountSignal } from "@/lib/useUnmountSignal";
 
 function formatDate(value: string): string {
   return new Intl.DateTimeFormat("ko-KR", {
@@ -31,6 +32,7 @@ export function VersionHistory({
   const [confirming, setConfirming] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const unmountSignal = useUnmountSignal();
 
   async function toggleText(version: number): Promise<void> {
     setError(null);
@@ -42,7 +44,7 @@ export function VersionHistory({
     // 한 번 읽은 버전은 다시 받지 않는다 — 과거 버전의 본문은 바뀌지 않는다.
     if (texts[version] !== undefined) return;
     try {
-      const detail = await getDocumentVersion(documentId, version);
+      const detail = await getDocumentVersion(documentId, version, unmountSignal());
       setTexts((previous) => ({ ...previous, [version]: detail.content }));
     } catch (reason: unknown) {
       setOpenVersion(null);
