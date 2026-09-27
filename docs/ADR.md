@@ -3003,6 +3003,11 @@ VRRP 선점을 끄는 방법(keepalived의 `nopreempt`)은 OpenProxy 설정 레�
 1. `embedding_jobs`에 `lease_expires_at`을 둔다. `claim_job`이 `now() + lease`(60초)로 찍는다.
 2. 워커는 잡을 처리하는 동안 **별도 연결**로 20초마다 lease를 연장한다. 연장은 자기 잡이 여전히
    `processing`일 때만 성공하며(`WHERE id = … AND status = 'processing'`), 실패하면 처리를 포기한다.
+   → **2026-09-27 보강(#121 리뷰)**: "자기 잡"은 `status`만으로 판정할 수 없다 — 회수 뒤 다른 워커가
+   다시 집은 잡도 `processing`이다. 소유권은 `(id, attempts)`로 본다(선점마다 오르고 스윕은 건드리지
+   않는다). 또 워커의 포기 판정은 늦을 수 있으므로(연장 주기 사이·풀 대여 대기·확인과 반영 사이)
+   보장은 쓰는 쪽에 둔다: 결과 반영·관계 판정·실패 기록은 트랜잭션 안에서 잡을 같은 조건으로 잠가
+   확인하고, 아니면 쓰지 않는다. heartbeat는 처리가 끝나도 취소하지 않고 종료 신호로 멈춘다(#110 B-2).
 3. `sweep_zombies`의 판정 조건을 `started_at < now() - 5분`에서 `lease_expires_at < now()`로 바꾼다.
    superseded·`rn > 1`·예산 소진 판정(ADR-038 결정 2)과 문서 행 선점 순서는 그대로다.
 4. 스윕은 루프 머리뿐 아니라 drain 중에도 주기적으로(lease 주기) 돈다.
