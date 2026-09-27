@@ -18,9 +18,9 @@ SYSTEM_STATUS_SQL = """
 WITH job_counts AS (
   SELECT count(*) FILTER (WHERE status = 'pending') AS pending,
          count(*) FILTER (WHERE status = 'processing') AS processing,
+         -- 스윕이 다음 주기에 회수할 잡 — sweep_zombies와 같은 판정이다 (ADR-050).
          count(*) FILTER (
-           WHERE status = 'processing'
-             AND started_at < now() - make_interval(mins => %(zombie_timeout_minutes)s)
+           WHERE status = 'processing' AND lease_expires_at < now()
          ) AS recovery_pending,
          count(*) FILTER (WHERE status = 'error') AS error,
          max(finished_at) AS last_job_finished_at
@@ -59,7 +59,7 @@ class SystemStatusResult:
     node_address: str | None
     node_port: int
     jobs: JobCounts
-    zombie_timeout_minutes: int
+    job_lease_seconds: int
     last_job_finished_at: datetime | None
     inconsistent_documents: int
     stale_edge_documents: int
@@ -69,14 +69,11 @@ class SystemStatusResult:
 async def get_system_status(
     conn: psycopg.AsyncConnection,
     *,
-    zombie_timeout_minutes: int,
+    job_lease_seconds: int,
     embedding_provider: str,
 ) -> SystemStatusResult:
     cur = conn.cursor(row_factory=dict_row)
-    await cur.execute(
-        SYSTEM_STATUS_SQL,
-        {"zombie_timeout_minutes": zombie_timeout_minutes},
-    )
+    await cur.execute(SYSTEM_STATUS_SQL)
     row = await cur.fetchone()
     # 정합성 카운터는 청크 수가 아니라 어긋난 문서 수를 센다. 관계 카운터도 문서 수이며,
     # 세는 근거는 `document_edges` 행 수가 아니라 관계 잡의 상태다 — 이웃이 없어 edge가
@@ -90,7 +87,7 @@ async def get_system_status(
             recovery_pending=row["recovery_pending"],
             error=row["error"],
         ),
-        zombie_timeout_minutes=zombie_timeout_minutes,
+        job_lease_seconds=job_lease_seconds,
         last_job_finished_at=row["last_job_finished_at"],
         inconsistent_documents=row["inconsistent_documents"],
         stale_edge_documents=row["stale_edge_documents"],

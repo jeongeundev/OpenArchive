@@ -46,7 +46,7 @@ RestartSec=10
 
 # 워커는 SIGTERM을 받으면 처리 중인 잡을 마치고 스스로 멈춘다(run_worker). 임베딩 한
 # 건이 끝날 시간을 주고, 그 안에 못 끝내면 systemd가 SIGKILL을 보낸다 — 그때 남는
-# 좀비는 다음 워커의 sweep_zombies가 임계(ZOMBIE_TIMEOUT_MINUTES) 후에 회수한다.
+# 좀비는 lease(JOB_LEASE_SECONDS) 만료 뒤 sweep_zombies가 회수한다 (ADR-050).
 KillSignal=SIGTERM
 TimeoutStopSec=120
 

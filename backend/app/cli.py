@@ -235,7 +235,7 @@ async def _read_status(dsn: str):
     async with await psycopg.AsyncConnection.connect(dsn) as conn:
         return await get_system_status(
             conn,
-            zombie_timeout_minutes=settings.zombie_timeout_minutes,
+            job_lease_seconds=settings.job_lease_seconds,
             embedding_provider=settings.embedding_provider,
         )
 

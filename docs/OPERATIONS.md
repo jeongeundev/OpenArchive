@@ -26,7 +26,7 @@ cd backend && cp .env.example .env
 |---|---:|---|
 | `DATABASE_URL` | 로컬 컨테이너 | 실 OpenSQL은 OpenProxy 단일 엔드포인트 `postgresql://app@<vip>:6432/<pool_name>` (ADR-006). 앱은 여기에 없는 TCP keepalive 설정(`keepalives_idle=30`·`keepalives_interval=10`·`keepalives_count=3`·`tcp_user_timeout=60000`)을 기본값으로 채워, 죽은 연결을 약 60초 안에 감지합니다. 바꾸려면 DSN에 같은 키를 적습니다 — 적은 값이 이깁니다 (ADR-048) |
 | `EMBEDDING_PROVIDER` | `fake` | `local` — `BAAI/bge-m3` · `fake` — 테스트용. 아래 「임베딩 프로바이더」 |
-| `ZOMBIE_TIMEOUT_MINUTES` | `5` | 좀비 잡 회수 임계. `0`은 단일 워커 복구 데모에서만 |
+| `JOB_LEASE_SECONDS` | `60` | 잡 선점 lease. 워커가 처리 중 1/3마다 연장하고, 연장이 끊긴 잡(워커 사망·연결 끊김)은 이만큼 뒤에 회수됩니다. 스윕도 drain 중 이 주기로 돕니다 (ADR-050). 옛 `ZOMBIE_TIMEOUT_MINUTES`는 없어졌습니다 — 남아 있어도 무시됩니다 |
 | `SESSION_LIFETIME_HOURS` | `24` | 서버 세션과 로그인 쿠키의 수명 |
 | `SESSION_COOKIE_SECURE` | `false` | 로컬 HTTP에서는 `false`. HTTPS 상시 배포에서는 반드시 `true` |
 | `MAX_UPLOAD_MB` | `50` | 업로드·원본 교체 한 건의 상한(십진 MB). 원본 한 판이 DB에 차지하는 크기의 상한이기도 하다 — 아래 「원본 파일 보관」 |
@@ -143,8 +143,9 @@ openarchive reextract --all --dsn "postgresql://app@<vip>:6432/<pool_name>"
 
 ### 워커 장애
 
-워커 프로세스가 강제 종료되면 systemd 유닛이 되살리고, 재기동한 워커가 방치된 잡을
-`ZOMBIE_TIMEOUT_MINUTES` 뒤에 회수합니다. 그 회수를 기다리는 동안에도 나머지 잡은 계속 처리되며,
+워커 프로세스가 강제 종료되면 systemd 유닛이 되살리고, 방치된 잡은 lease(`JOB_LEASE_SECONDS`,
+기본 60초)가 만료된 뒤 회수됩니다. 워커는 살아 있는데 DB 연결만 끊긴 경우(HA의 failover·
+switchover)도 같은 경로입니다. 그 회수를 기다리는 동안에도 나머지 잡은 계속 처리되며,
 워커를 반복적으로 죽이는 잡은 재시도 예산을 소진한 뒤 `error`로 격리되어 파이프라인을 막지
 않습니다 (ADR-038).
 

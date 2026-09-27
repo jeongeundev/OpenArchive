@@ -134,7 +134,7 @@ export interface SystemStatus {
   node_address: string | null;
   node_port: number;
   jobs: JobCounts;
-  zombie_timeout_minutes: number;
+  job_lease_seconds: number;
   last_job_finished_at: string | null;
   inconsistent_documents: number;
   stale_edge_documents: number;

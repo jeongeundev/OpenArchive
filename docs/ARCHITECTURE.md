@@ -179,7 +179,11 @@ CREATE TABLE embedding_jobs (
   last_error      text,
   created_at      timestamptz NOT NULL DEFAULT now(),
   started_at      timestamptz,
-  finished_at     timestamptz
+  finished_at     timestamptz,
+  -- 선점 lease. heartbeat가 연장하고, 만료되면 스윕이 회수한다 (020, ADR-050)
+  lease_expires_at timestamptz,
+  CONSTRAINT embedding_jobs_processing_has_lease
+    CHECK (status <> 'processing' OR lease_expires_at IS NOT NULL)
 );
 
 -- 핵심: 문서당 pending 잡은 1개만 — DB 계층 코얼레싱
@@ -365,7 +369,8 @@ CREATE TRIGGER trg_build_document_edges                          -- (008) 정의
 1. 폴링 틱 또는 NOTIFY 수신 시 — 잡을 claim하고 **즉시 커밋**:
 ```sql
 UPDATE embedding_jobs j
-   SET status='processing', attempts=attempts+1, started_at=now()
+   SET status='processing', attempts=attempts+1, started_at=now(),
+       lease_expires_at = now() + make_interval(secs => :job_lease_seconds)  -- 기본 60초
  WHERE j.id = (SELECT id FROM embedding_jobs
                 WHERE status='pending' AND next_attempt_at <= now()
                 ORDER BY id LIMIT 1 FOR UPDATE SKIP LOCKED)
@@ -415,21 +420,25 @@ COMMIT;
 
 4. 실패 시: `attempts` 기반 지수 백오프로 `next_attempt_at` 갱신 후 `pending` 복귀. `attempts`는 claim 시점에 이미 올라 있으므로 **3회를 소진하면**(3회째 실패) job `error` + `documents.embedding_status='error'`. **문서를 `error`로 떨어뜨리는 것은 임베딩 잡뿐이다** — 관계 잡이 소진되면 잡만 `error`로 남는다.
 
-5. 좀비 회수: `processing` 상태로 설정된 임계(`ZOMBIE_TIMEOUT_MINUTES`, 기본 5분)를 초과한 잡을 `pending`으로 리셋한다. `sweep_zombies()`는 워커 신원으로 거르지 않는 **전역 스윕**이라 다른 워커가 남긴 좀비도 회수한다. 스윕은 워커 **루프 머리**에 있어 첫 반복이 곧 기동 시 1회 스윕이며, 워커가 재기동되면 즉시 실행된다. 별도의 기동 시 스윕이 따로 있는 것은 아니다. 값 `0`은 단일 워커 복구 데모에서만 사용한다.
+5. 좀비 회수: **lease가 만료된** `processing` 잡을 `pending`으로 리셋한다 (ADR-050). `claim_job`이 `lease_expires_at = now() + JOB_LEASE_SECONDS`(기본 60초)를 찍고, 워커는 처리하는 동안 **처리 연결과 다른 연결**로 lease의 1/3(20초)마다 연장한다. 연장은 `WHERE id = … AND status = 'processing' AND attempts = …`라 이미 회수된 잡을 되살리지도, 회수 뒤 다른 워커가 다시 집은 잡의 lease를 대신 늘리지도 못한다 — 선점마다 `attempts`가 오르고 스윕은 그것을 건드리지 않으므로 `(id, attempts)`가 한 번의 선점을 가리킨다. 워커가 죽든, 워커는 살아 있는데 연결이 끊기든 연장이 멈추므로 lease 뒤에 회수된다 — 판정 기준이 "얼마나 오래 걸렸나"가 아니라 "소유자가 아직 살아 있나"라서, 정상적으로 오래 걸리는 잡은 회수되지 않는다. `processing`인데 lease가 없는 행은 스윕이 영원히 회수하지 못하므로 제약(`embedding_jobs_processing_has_lease`, 020)이 막는다.
 
-   **회수에도 4번과 같은 재시도 예산이 걸린다.** 임계를 넘긴 잡의 `attempts`가 이미 3회를 소진했으면 `pending`으로 되돌리지 않고 job `error` + `documents.embedding_status='error'`로 격리한다(`last_error`는 `WorkerCrashLoop: …`). 여기서도 문서 상태를 건드리는 것은 임베딩 잡뿐이며, 회수·격리 판정은 종류를 가리지 않고 `(document_id, kind)` 단위로 이뤄진다. 이것이 없으면 상한이 4번(예외로 잡히는 실패)에만 걸린다 — `claim_job`은 `attempts`를 보지 않으므로, 워커 프로세스를 죽이는 잡은 회수 → 재선점 → 재크래시를 무한 반복하고 그때마다 워커가 함께 죽는다. `attempts`를 초기화하지 않는 것은 이 판정의 전제이지 그 자체로 상한을 만들지는 않는다.
+   `sweep_zombies()`는 워커 신원으로 거르지 않는 **전역 스윕**이라 다른 워커가 남긴 좀비도 회수한다. 스윕은 워커 **루프 머리**에 있어 첫 반복이 곧 기동 시 1회 스윕이고, **drain 중에도 잡과 잡 사이에서 lease 주기로** 돈다. 머리에서만 돌면 drain이 끝날 때까지 회수가 밀린다(#110 B의 S2-4는 약 13분).
+
+   **잡을 잃은 워커는 결과를 쓰지 않는다.** 연장이 0행이거나 lease 동안 한 번도 성공하지 못하면 잃은 것으로 보고, 임베딩 뒤·반영 전에 포기한다 — 청크를 쓰지도, 잡을 마감하거나 실패로 기록하지도 않는다. 잡은 이제 되찾아 간 쪽의 것이다. 연결 오류 한 번으로는 포기하지 않는다(lease가 주기의 세 배다). 처리 중인 태스크를 취소하지 않는 것은 트랜잭션 중간에 끊긴 연결이 풀을 오염시키기 때문이다(#110 B-2) — heartbeat도 같은 이유로 취소하지 않고 종료 신호로 멈춘다. 다만 워커가 잃었다고 알아채는 것은 늦을 수 있다(연장 주기 사이, 풀 대여 대기, 확인과 반영 사이). 그래서 이 포기는 헛일을 줄이는 최적화이고, **남의 잡에 쓰지 않는 보장은 DB가 쓰는 순간 한다** — 결과 반영·관계 판정·실패 기록 트랜잭션은 문서 행을 잠근 뒤 잡을 `(id, attempts)`와 `processing`으로 다시 잠가 확인하고(`lock_owned_job`), 아니면 아무것도 쓰지 않는다. 문서 → 잡 잠금 순서가 스윕과 같아, 확인한 뒤 커밋까지 스윕이 끼어들지 못한다.
+
+   **회수에도 4번과 같은 재시도 예산이 걸린다.** lease가 만료된 잡의 `attempts`가 이미 3회를 소진했으면 `pending`으로 되돌리지 않고 job `error` + `documents.embedding_status='error'`로 격리한다(`last_error`는 `WorkerCrashLoop: …`). 여기서도 문서 상태를 건드리는 것은 임베딩 잡뿐이며, 회수·격리 판정은 종류를 가리지 않고 `(document_id, kind)` 단위로 이뤄진다. 이것이 없으면 상한이 4번(예외로 잡히는 실패)에만 걸린다 — `claim_job`은 `attempts`를 보지 않으므로, 워커 프로세스를 죽이는 잡은 회수 → 재선점 → 재크래시를 무한 반복하고 그때마다 워커가 함께 죽는다. `attempts`를 초기화하지 않는 것은 이 판정의 전제이지 그 자체로 상한을 만들지는 않는다.
 
    격리해도 청크는 지우지 않는다. 검색은 이전 버전으로 계속되고 정합성 카운터는 어긋난 채 남는다 — 격리했다고 어긋남을 숨기면 계약이 거짓말이 된다. 재개 수단은 문서 재수정이며, 본문을 바꾸지 않고 다시 태우려면 `UPDATE documents SET content_hash = content_hash`를 쓴다(003_triggers.sql).
 
-   남는 한계는 상태 표시다. 워커가 죽어 있는 동안 `/api/system/status`의 `jobs.processing`은 방치된 잡을 계속 세므로, **처리 중이 아닌 잡이 처리 중으로 보인다.** 재기동 후 임계가 지나면 회수되므로 데이터 문제는 아니지만, 그 구간에는 화면이 사실과 다르다. `recovery_pending`(임계를 넘긴 `processing`)이 그 구간을 따로 세므로 구분은 가능하다.
+   남는 한계는 상태 표시다. 워커가 죽어 있는 동안 `/api/system/status`의 `jobs.processing`은 방치된 잡을 계속 세므로, **처리 중이 아닌 잡이 처리 중으로 보인다.** lease가 지나면 회수되므로 데이터 문제는 아니지만, 그 구간에는 화면이 사실과 다르다. `recovery_pending`(lease가 만료된 `processing`)이 그 구간을 따로 세므로 구분은 가능하다.
 
 6. 정상 종료: `SIGTERM`(배포의 `systemctl stop`)·`SIGINT`(Ctrl-C)를 받으면 **처리 중인 잡을 마치고** 루프를 빠져나온다. 임베딩을 시작하기 전이었다면 선점을 반납한다 — `pending` 복귀 + **`attempts` 원복**. 배포로 워커를 세우는 것은 잡의 실패가 아니므로 예산을 소비하면 안 된다. 원복하지 않으면 배포를 3회 반복하는 것만으로 멀쩡한 문서가 5번의 소진 판정에 걸려 `error`가 된다. 반납은 백오프를 걸지 않아 다음 워커가 곧바로 이어받는다.
 
-   반납하지 못하고 죽어도(SIGKILL·OOM) 정합성은 깨지지 않는다. 잡이 좀비로 남아 5번이 임계 후에 회수할 뿐이다. 반납은 그 5분을 없애는 최적화다.
+   반납하지 못하고 죽어도(SIGKILL·OOM) 정합성은 깨지지 않는다. 잡이 좀비로 남아 5번이 lease 만료 후에 회수할 뿐이다. 반납은 그 대기를 없애는 최적화다.
 
 7. 프로세스 감독: 워커가 `SIGKILL`·OOM으로 사라지면 스스로 살아날 수 없고, **되살리지 않으면 임베딩 파이프라인이 통째로 멈춘다** — 새 문서는 영원히 검색되지 않고 수정된 문서는 옛 벡터로 검색된다. 배포 호스트에서는 systemd **user** 유닛(`scripts/openarchive-worker.service` → `~/.config/systemd/user/`, `Restart=always`)이 이를 되살린다. system 유닛이 아닌 이유는 SELinux다 — Enforcing에서 `init_t`가 홈 아래 venv를 실행하지 못한다. 재부팅 생존은 여전히 없다 — 그건 DB도 함께 사라지는 문제라 워커만 살려도 붙을 곳이 없다 ([ADR-038](ADR.md)).
 
-   **재기동 직후 좀비가 즉시 회수되지는 않는다.** 죽음을 시간으로 판정하므로 임계(기본 5분)를 기다린다. 그 대기가 파이프라인 전체를 멈추지는 않는다 — 좀비는 `processing`이라 `claim_job`의 대상이 아니고, 워커는 남은 `pending` 잡을 그대로 집어간다. 크래시의 영향은 그 잡 하나로 격리된다(`test_pipeline_keeps_draining_while_a_zombie_waits_for_its_timeout`).
+   **재기동 직후 좀비가 즉시 회수되지는 않는다.** 소유자의 죽음을 lease 만료로 판정하므로 lease(기본 60초)를 기다린다. 그 대기가 파이프라인 전체를 멈추지는 않는다 — 좀비는 `processing`이라 `claim_job`의 대상이 아니고, 워커는 남은 `pending` 잡을 그대로 집어간다. 크래시의 영향은 그 잡 하나로 격리된다(`test_pipeline_keeps_draining_while_a_zombie_waits_for_its_lease`).
 
 > **4번과 5번에는 공통 예외가 있다: 그 문서에 같은 종류(`kind`)의 새 `pending` 잡이 이미 있으면 `pending`으로 되돌리지 않고 `done`으로 마감한다.** 6번의 반납도 같다.
 >

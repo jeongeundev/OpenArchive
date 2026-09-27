@@ -50,7 +50,7 @@ def test_status_reports_operational_fields(db_client: TestClient):
         "node_address",
         "node_port",
         "jobs",
-        "zombie_timeout_minutes",
+        "job_lease_seconds",
         "last_job_finished_at",
         "inconsistent_documents",
         "stale_edge_documents",
@@ -63,7 +63,7 @@ def test_status_reports_operational_fields(db_client: TestClient):
         "recovery_pending": 0,
         "error": 0,
     }
-    assert body["zombie_timeout_minutes"] == 5
+    assert body["job_lease_seconds"] == 60
     assert body["last_job_finished_at"] is None
     assert body["inconsistent_documents"] == 0
     assert body["stale_edge_documents"] == 0
@@ -107,14 +107,16 @@ def test_status_distinguishes_fresh_processing_jobs_from_recovery_pending_jobs(
         conn.execute(
             """
             UPDATE embedding_jobs
-               SET status = 'processing', started_at = now()
+               SET status = 'processing', started_at = now(),
+                   lease_expires_at = now() + interval '60 seconds'
              WHERE id = (SELECT min(id) FROM embedding_jobs)
             """
         )
         conn.execute(
             """
             UPDATE embedding_jobs
-               SET status = 'processing', started_at = now() - interval '10 minutes'
+               SET status = 'processing', started_at = now() - interval '2 minutes',
+                   lease_expires_at = now() - interval '1 second'
              WHERE id = (SELECT max(id) FROM embedding_jobs)
             """
         )
@@ -127,7 +129,7 @@ def test_status_distinguishes_fresh_processing_jobs_from_recovery_pending_jobs(
         "recovery_pending": 1,
         "error": 0,
     }
-    assert body["zombie_timeout_minutes"] == 5
+    assert body["job_lease_seconds"] == 60
 
 
 def test_status_observes_version_drift_and_convergence(

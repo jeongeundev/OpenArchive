@@ -6,7 +6,7 @@ import { StatusPanel } from "./StatusPanel";
 const status: SystemStatus = {
   node_address: "192.168.64.4", node_port: 6432,
   jobs: { pending: 1, processing: 2, recovery_pending: 1, error: 3 },
-  zombie_timeout_minutes: 5,
+  job_lease_seconds: 60,
   last_job_finished_at: "2026-08-11T01:23:45Z",
   inconsistent_documents: 0, stale_edge_documents: 0, embedding_provider: "BAAI/bge-m3",
 };
@@ -70,10 +70,10 @@ describe("StatusPanel", () => {
     expect(screen.queryByText("재연결 이벤트")).not.toBeInTheDocument();
   });
 
-  it("임계를 넘은 처리 중 잡을 회수 대기로 표시하고 관측 가능한 완료 시각만 보여준다", () => {
+  it("lease가 만료된 처리 중 잡을 회수 대기로 표시하고 관측 가능한 완료 시각만 보여준다", () => {
     render(<StatusPanel status={status} error={null} />);
     expect(screen.getByText("회수 대기").parentElement).toHaveTextContent("회수 대기1");
-    expect(screen.getByText("5분을 넘긴 잡은 워커의 다음 폴링에서 회수됩니다.")).toBeInTheDocument();
+    expect(screen.getByText("워커가 60초 동안 처리 중임을 알리지 않은 잡은 회수됩니다.")).toBeInTheDocument();
     expect(screen.getByText(/최근 잡 완료 시각/)).toBeInTheDocument();
     expect(screen.queryByText(/워커 정상/)).not.toBeInTheDocument();
   });

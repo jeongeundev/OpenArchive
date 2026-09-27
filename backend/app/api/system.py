@@ -22,7 +22,7 @@ async def get_system_status(
 ) -> SystemStatus:
     result = await service.get_system_status(
         conn,
-        zombie_timeout_minutes=get_settings().zombie_timeout_minutes,
+        job_lease_seconds=get_settings().job_lease_seconds,
         embedding_provider=provider.name,
     )
     return SystemStatus.model_validate(result)

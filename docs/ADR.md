@@ -2132,7 +2132,7 @@ SELinux Enforcing이 기본이고 venv가 홈 아래(`user_home_t`)에 있어, s
 
 **임계를 기다리는 동안에도 파이프라인은 멈추지 않는다.** 좀비는 `processing`이라 `claim_job`의
 대상이 아니고, 워커는 남은 `pending` 잡을 그대로 집어간다 — 크래시의 영향은 그 잡 하나로
-격리된다. 이 동작은 `test_pipeline_keeps_draining_while_a_zombie_waits_for_its_timeout`이
+격리된다. 이 동작은 `test_pipeline_keeps_draining_while_a_zombie_waits_for_its_lease`(ADR-050 이후 이름)가
 단언한다. 진술이 아니라 테스트가 지키는 계약이다.
 
 **트레이드오프**
@@ -2140,6 +2140,8 @@ SELinux Enforcing이 기본이고 venv가 홈 아래(`user_home_t`)에 있어, s
 1. **크래시 복구가 최대 5분 늦다.** 결정 4의 대가다. poison job의 격리는 최대
    3 × (5분 + 재기동 10초) ≒ 15분 30초가 걸리고, 그동안 워커는 5분 주기로 죽는다. 그 사이
    다른 잡은 계속 처리되므로 처리량 손실에 그친다.
+   → **2026-09-27 ADR-050 이후 수치**: 회수 대기는 lease(기본 60초)다. poison job 격리는
+   최대 3 × (60초 + 재기동 10초) ≒ 3분 30초.
 2. **배포 호스트에 systemd와 lingering이 필요해졌다.** user 유닛이라 sudo는
    `loginctl enable-linger` 한 줄에만 쓴다. 로컬 개발(`python -m app.worker`)과
    `demo_recovery.sh`(자체 워커를 띄우고 `kill -STOP`으로 세운다 — 프로세스가 죽지 않으므로
@@ -2981,7 +2983,7 @@ VRRP 선점을 끄는 방법(keepalived의 `nopreempt`)은 OpenProxy 설정 레�
 ---
 
 ### ADR-050: 잡 선점은 짧은 lease를 heartbeat로 연장한다 — 좀비 판정을 시간 임계에서 lease 만료로
-**상태**: 2026-09-27 신규 (#110 B-7). ADR-038 결정 4("시간 기반 판정 유지")와 2026-08-24 경쟁작 조사에서
+**상태**: 2026-09-27 신규 (#110 B-7), 구현 #121(020_lease_tables.sql). ADR-038 결정 4("시간 기반 판정 유지")와 2026-08-24 경쟁작 조사에서
 "lease/heartbeat를 가져오지 않는다"고 한 판단을 뒤집는다.
 
 **배경 — 수렴 시간을 좀비 임계 5분이 정했다**
@@ -3001,6 +3003,11 @@ VRRP 선점을 끄는 방법(keepalived의 `nopreempt`)은 OpenProxy 설정 레�
 1. `embedding_jobs`에 `lease_expires_at`을 둔다. `claim_job`이 `now() + lease`(60초)로 찍는다.
 2. 워커는 잡을 처리하는 동안 **별도 연결**로 20초마다 lease를 연장한다. 연장은 자기 잡이 여전히
    `processing`일 때만 성공하며(`WHERE id = … AND status = 'processing'`), 실패하면 처리를 포기한다.
+   → **2026-09-27 보강(#121 리뷰)**: "자기 잡"은 `status`만으로 판정할 수 없다 — 회수 뒤 다른 워커가
+   다시 집은 잡도 `processing`이다. 소유권은 `(id, attempts)`로 본다(선점마다 오르고 스윕은 건드리지
+   않는다). 또 워커의 포기 판정은 늦을 수 있으므로(연장 주기 사이·풀 대여 대기·확인과 반영 사이)
+   보장은 쓰는 쪽에 둔다: 결과 반영·관계 판정·실패 기록은 트랜잭션 안에서 잡을 같은 조건으로 잠가
+   확인하고, 아니면 쓰지 않는다. heartbeat는 처리가 끝나도 취소하지 않고 종료 신호로 멈춘다(#110 B-2).
 3. `sweep_zombies`의 판정 조건을 `started_at < now() - 5분`에서 `lease_expires_at < now()`로 바꾼다.
    superseded·`rn > 1`·예산 소진 판정(ADR-038 결정 2)과 문서 행 선점 순서는 그대로다.
 4. 스윕은 루프 머리뿐 아니라 drain 중에도 주기적으로(lease 주기) 돈다.
