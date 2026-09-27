@@ -3,6 +3,7 @@ import { Geist, Geist_Mono } from "next/font/google";
 import { SiteHeader } from "@/components/SiteHeader";
 import { AuthProvider } from "@/components/AuthProvider";
 import { RequireAuth } from "@/components/RequireAuth";
+import { RetryNotice } from "@/components/RetryNotice";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -30,6 +31,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
         <AuthProvider>
           <SiteHeader />
           <main className="mx-auto w-full max-w-5xl flex-1 px-6 py-8">
+            <RetryNotice />
             <RequireAuth>{children}</RequireAuth>
           </main>
         </AuthProvider>

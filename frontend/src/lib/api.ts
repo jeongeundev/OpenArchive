@@ -34,13 +34,82 @@ export class ApiError extends Error {
   }
 }
 
+// DB 일시 불가용(503)·네트워크 오류는 기다리면 풀린다 (ADR-048 결정 4). 60초는 #110 B의
+// 최악 중단(42초)에 여유를 둔 값이다.
+const BACKOFF_START_MS = 1000;
+const BACKOFF_CAP_MS = 8000;
+const BACKOFF_BUDGET_MS = 60_000;
+
+// 재시도 중인 요청 수. 화면의 재시도 안내(RetryNotice)가 구독한다.
+let retryingRequests = 0;
+const retryListeners = new Set<() => void>();
+
+export function isRetrying(): boolean {
+  return retryingRequests > 0;
+}
+
+export function subscribeRetrying(listener: () => void): () => void {
+  retryListeners.add(listener);
+  return () => {
+    retryListeners.delete(listener);
+  };
+}
+
+function changeRetrying(delta: 1 | -1): void {
+  const before = isRetrying();
+  retryingRequests += delta;
+  if (before !== isRetrying()) for (const listener of retryListeners) listener();
+}
+
+/** 서버 미들웨어와 같은 기준이다 — 검색은 메서드만 POST인 읽기다. */
+function isRead(path: string, init: RequestInit): boolean {
+  const method = (init.method ?? "GET").toUpperCase();
+  return method === "GET" || method === "HEAD" || path === "/api/search";
+}
+
+/**
+ * 읽기만 지수 백오프 + 전체 지터로 다시 보낸다. 쓰기는 첫 시도가 이미 커밋됐을 수 있어
+ * 다시 보내면 문서가 두 번 생긴다 — 쓰기 재시도는 멱등키와 함께 온다(ADR-047).
+ * 예산을 넘기면 마지막 503 응답(또는 네트워크 오류)을 그대로 돌려준다.
+ */
+async function fetchWithBackoff(path: string, init: RequestInit): Promise<Response> {
+  if (!isRead(path, init)) return fetch(path, init);
+
+  const deadline = Date.now() + BACKOFF_BUDGET_MS;
+  let attempt = 0;
+  try {
+    for (;;) {
+      let last: Response | TypeError;
+      try {
+        const response = await fetch(path, init);
+        if (response.status !== 503) return response;
+        last = response;
+      } catch (error) {
+        // fetch는 네트워크 실패를 TypeError로만 알린다. 중단(AbortError) 등은 그대로 올린다.
+        if (!(error instanceof TypeError)) throw error;
+        last = error;
+      }
+      const delay = Math.random() * Math.min(BACKOFF_CAP_MS, BACKOFF_START_MS * 2 ** attempt);
+      if (Date.now() + delay > deadline) {
+        if (last instanceof Response) return last;
+        throw last;
+      }
+      if (attempt === 0) changeRetrying(1);
+      await new Promise((resolve) => setTimeout(resolve, delay));
+      attempt += 1;
+    }
+  } finally {
+    if (attempt > 0) changeRetrying(-1);
+  }
+}
+
 async function request<T>(
   path: string,
   init: RequestInit = {},
   parseResponse = true,
 ): Promise<T> {
   const headers = new Headers(init.headers);
-  const response = await fetch(path, {
+  const response = await fetchWithBackoff(path, {
     ...init,
     credentials: "same-origin",
     headers,
