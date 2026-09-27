@@ -7,6 +7,7 @@ from fastapi import (
     Depends,
     File,
     Form,
+    Header,
     HTTPException,
     Path,
     Query,
@@ -41,6 +42,9 @@ from app.services.search import MAX_K
 
 router = APIRouter(prefix="/api/documents", tags=["documents"])
 
+# 문서 생성 요청의 선택 헤더 (ADR-047). 같은 키로 다시 오면 처음 문서를 돌려준다.
+IdempotencyKey = Annotated[str | None, Header(min_length=1, max_length=255)]
+
 
 
 async def _read_upload(file: UploadFile) -> bytes:
@@ -68,6 +72,7 @@ async def upload_document(
     title: Annotated[str | None, Form()] = None,
     tags: Annotated[list[str] | None, Form()] = None,
     visibility: Annotated[Literal["public", "private"], Form()] = "public",
+    idempotency_key: IdempotencyKey = None,
 ) -> DocumentSummary:
     data = await _read_upload(file)
     try:
@@ -79,6 +84,7 @@ async def upload_document(
             title=title,
             tags=tags,
             visibility=visibility,
+            idempotency_key=idempotency_key,
         )
     except UnsupportedFileType as error:
         supported = ", ".join(SUPPORTED_CONTENT_TYPES)
@@ -95,6 +101,7 @@ async def create_text_document(
     body: CreateTextDocumentRequest,
     conn: Connection,
     user_id: Annotated[str, Depends(require_write_user_id)],
+    idempotency_key: IdempotencyKey = None,
 ) -> DocumentSummary:
     document = await service.create_text_document(
         conn,
@@ -104,6 +111,7 @@ async def create_text_document(
         owner_id=user_id,
         tags=body.tags,
         visibility=body.visibility,
+        idempotency_key=idempotency_key,
     )
     return DocumentSummary.model_validate(document)
 

@@ -82,6 +82,11 @@ async def _extracted_text_too_large(request: Request, error: Exception) -> JSONR
     return JSONResponse(status_code=400, content={"detail": str(error)})
 
 
+@app.exception_handler(documents_service.IdempotencyKeyReused)
+async def _idempotency_key_reused(request: Request, error: Exception) -> JSONResponse:
+    return JSONResponse(status_code=422, content={"detail": str(error)})
+
+
 @app.exception_handler(documents_service.VersionConflict)
 async def _version_conflict(
     request: Request, error: documents_service.VersionConflict
