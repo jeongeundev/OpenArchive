@@ -51,6 +51,7 @@ def test_owned_tables_match_the_migration_files():
         "document_versions",
         "documents",
         "embedding_jobs",
+        "idempotency_keys",
         "sessions",
         "users",
     }
