@@ -239,11 +239,12 @@ describe("API retry on temporary unavailability", () => {
       .mockResolvedValueOnce(unavailable())
       .mockResolvedValueOnce(ok([]));
     vi.stubGlobal("fetch", fetchMock);
-    // 지터가 상한의 절반을 고르면 간격은 500ms, 1000ms — 경계가 ms 단위로 딱 떨어진다.
+    // 지터가 상한의 절반을 고르면 백오프는 500ms, 1000ms다. 첫 간격은 Retry-After(1초)보다
+    // 짧아 1초로 올라가고, 둘째는 그대로 1초다 — 경계가 ms 단위로 딱 떨어진다.
     vi.spyOn(Math, "random").mockReturnValue(0.5);
 
     const result = listDocuments();
-    await vi.advanceTimersByTimeAsync(499);
+    await vi.advanceTimersByTimeAsync(999);
     expect(fetchMock).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(1);
     expect(fetchMock).toHaveBeenCalledTimes(2);
@@ -253,6 +254,56 @@ describe("API retry on temporary unavailability", () => {
 
     await expect(result).resolves.toEqual([]);
     expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  // RFC 9110 §10.2.3 — Retry-After는 초 수 또는 HTTP 날짜다. 그보다 일찍 다시 보내지 않는다.
+  it.each([
+    ["delay-seconds", () => "5"],
+    ["HTTP-date", () => new Date(Date.now() + 5000).toUTCString()],
+  ])("does not retry before Retry-After given as %s", async (_form, retryAfter) => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response("", { status: 503, headers: { "Retry-After": retryAfter() } }),
+      )
+      .mockResolvedValueOnce(ok([]));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = listDocuments();
+    await vi.advanceTimersByTimeAsync(4999);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+
+    await expect(result).resolves.toEqual([]);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("uses the jittered backoff alone after a network error, which carries no Retry-After", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValueOnce(new TypeError("Failed to fetch"))
+      .mockResolvedValueOnce(ok([]));
+    vi.stubGlobal("fetch", fetchMock);
+    vi.spyOn(Math, "random").mockReturnValue(0.5);
+
+    const result = listDocuments();
+    await vi.advanceTimersByTimeAsync(499);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+
+    await expect(result).resolves.toEqual([]);
+  });
+
+  it("gives up at once when Retry-After is beyond the one-minute budget", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response("", { status: 503, headers: { "Retry-After": "120" } }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const error = await listDocuments().catch((reason: unknown) => reason);
+
+    expect((error as ApiError).status).toBe(503);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("retries search, which is a read sent as POST, after a network error", async () => {
