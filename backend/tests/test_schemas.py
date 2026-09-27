@@ -62,7 +62,7 @@ def test_system_status_accepts_service_dataclasses():
         node_address="127.0.0.1",
         node_port=5432,
         jobs=JobCounts(pending=1, processing=2, recovery_pending=1, error=3),
-        zombie_timeout_minutes=5,
+        job_lease_seconds=60,
         last_job_finished_at=None,
         inconsistent_documents=4,
         stale_edge_documents=2,

@@ -818,3 +818,78 @@ def test_deleting_a_document_deletes_its_idempotency_key(conn: psycopg.Connectio
 
     (remaining,) = conn.execute("SELECT count(*) FROM idempotency_keys").fetchone()
     assert remaining == 0
+
+
+# --- 잡 lease (020, ADR-050) -------------------------------------------------------
+
+
+def test_a_processing_job_must_carry_a_lease(conn: psycopg.Connection):
+    """`processing`은 lease 없이 있을 수 없다 (ADR-050 결정 1).
+
+    좀비 판정이 `lease_expires_at < now()`이므로 lease가 NULL인 processing 잡은 **영원히
+    회수되지 않는다** — 에러 없이 문서 하나가 processing에 멈춘다. lease를 찍지 않는 옛
+    워커가 배포 중에 남아 있으면 바로 그 행을 만든다. 제약이 그것을 조용한 멈춤 대신
+    선점 실패로 바꾼다.
+    """
+    doc_id = insert_document(conn)
+
+    with pytest.raises(psycopg.errors.CheckViolation) as exc:
+        conn.execute(
+            "UPDATE embedding_jobs SET status = 'processing' WHERE document_id = %s", (doc_id,)
+        )
+
+    assert "embedding_jobs_processing_has_lease" in str(exc.value)
+
+
+def test_a_job_leaves_its_lease_behind_when_it_stops_processing(conn: psycopg.Connection):
+    """lease는 processing에서만 요구된다 — 반납·실패·마감이 lease를 지울 필요는 없다."""
+    doc_id = insert_document(conn)
+    conn.execute(
+        "UPDATE embedding_jobs SET status = 'processing', lease_expires_at = now()"
+        " WHERE document_id = %s",
+        (doc_id,),
+    )
+
+    for status in ("pending", "done", "error"):
+        conn.execute(
+            "UPDATE embedding_jobs SET status = %s WHERE document_id = %s", (status, doc_id)
+        )
+
+
+async def test_the_lease_migration_keeps_the_old_deadline_for_jobs_in_flight(
+    clean_db: str, tmp_path
+):
+    """이행 순간 이미 processing인 잡은 옛 판정과 같은 시각(`started_at + 5분`)에 회수된다.
+
+    NULL로 두면 위 제약에 걸려 마이그레이션이 실패하고, `now()`로 두면 배포 직후 스윕이
+    아직 살아 있을 수 있는 잡을 즉시 회수한다. 옛 임계를 그대로 옮기는 것만이 이행 전후로
+    판정을 바꾸지 않는다.
+    """
+    import shutil
+
+    from app.migrations import MIGRATIONS_DIR, run_migrations
+
+    before = tmp_path / "before"
+    before.mkdir()
+    for path in sorted(MIGRATIONS_DIR.glob("*.sql")):
+        if path.name < "020":
+            shutil.copy(path, before / path.name)
+    await run_migrations(clean_db, before)
+
+    with psycopg.connect(clean_db, autocommit=True) as c:
+        doc_id = insert_document(c)
+        c.execute(
+            "UPDATE embedding_jobs SET status = 'processing',"
+            " started_at = now() - interval '2 minutes' WHERE document_id = %s",
+            (doc_id,),
+        )
+
+    await run_migrations(clean_db)
+
+    with psycopg.connect(clean_db, autocommit=True) as c:
+        (deadline_matches,) = c.execute(
+            "SELECT lease_expires_at = started_at + interval '5 minutes'"
+            " FROM embedding_jobs WHERE document_id = %s",
+            (doc_id,),
+        ).fetchone()
+    assert deadline_matches is True

@@ -24,10 +24,10 @@ async def system_conn(migrated_db: str):
         yield conn
 
 
-async def status_of(conn, *, zombie_timeout_minutes: int = 5):
+async def status_of(conn, *, job_lease_seconds: int = 60):
     return await get_system_status(
         conn,
-        zombie_timeout_minutes=zombie_timeout_minutes,
+        job_lease_seconds=job_lease_seconds,
         embedding_provider="fake",
     )
 
@@ -35,7 +35,7 @@ async def status_of(conn, *, zombie_timeout_minutes: int = 5):
 async def test_empty_database_has_no_jobs_or_finished_job(system_conn):
     result = await get_system_status(
         system_conn,
-        zombie_timeout_minutes=5,
+        job_lease_seconds=60,
         embedding_provider="fake",
     )
 
@@ -55,7 +55,7 @@ async def test_pending_job_becomes_finished_after_embedding(system_conn):
 
     pending = await get_system_status(
         system_conn,
-        zombie_timeout_minutes=5,
+        job_lease_seconds=60,
         embedding_provider="fake",
     )
     assert pending.jobs.pending == 1
@@ -64,7 +64,7 @@ async def test_pending_job_becomes_finished_after_embedding(system_conn):
 
     completed = await get_system_status(
         system_conn,
-        zombie_timeout_minutes=5,
+        job_lease_seconds=60,
         embedding_provider="fake",
     )
     assert completed.jobs.pending == 0
@@ -74,11 +74,11 @@ async def test_pending_job_becomes_finished_after_embedding(system_conn):
 async def test_status_includes_values_supplied_by_the_caller(system_conn):
     result = await get_system_status(
         system_conn,
-        zombie_timeout_minutes=17,
+        job_lease_seconds=17,
         embedding_provider="test-provider",
     )
 
-    assert result.zombie_timeout_minutes == 17
+    assert result.job_lease_seconds == 17
     assert result.embedding_provider == "test-provider"
 
 
@@ -144,7 +144,8 @@ async def test_job_counters_only_count_embedding_jobs(system_conn):
     await system_conn.execute(
         """
         UPDATE embedding_jobs
-           SET status = 'processing', started_at = now() - interval '10 minutes'
+           SET status = 'processing', started_at = now() - interval '10 minutes',
+               lease_expires_at = now() - interval '1 second'
          WHERE kind = 'edges'
         """
     )

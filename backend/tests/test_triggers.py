@@ -427,7 +427,9 @@ def test_editing_while_processing_creates_a_new_pending_job(conn: psycopg.Connec
     """
     doc_id = insert_document(conn)
     conn.execute(
-        "UPDATE embedding_jobs SET status = 'processing' WHERE document_id = %s", (doc_id,)
+        "UPDATE embedding_jobs SET status = 'processing', lease_expires_at = now() + interval '1 minute'"
+        " WHERE document_id = %s",
+        (doc_id,),
     )
 
     edit_content(conn, doc_id, "v2 추출 텍스트", "sha256:v2")

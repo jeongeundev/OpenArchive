@@ -9,8 +9,9 @@
 테스트는 `embedding_jobs`에 직접 INSERT하지 않는다 — 문서를 INSERT/UPDATE하면
 트리거가 잡을 만든다. 워커 경쟁은 커넥션 두 개(`conn`·`other_conn`)로 재현한다.
 
-시간(좀비 임계·백오프)은 기다리지 않는다 — `started_at`·`next_attempt_at`을 직접
-UPDATE해 상황을 만든다. 5분을 기다리는 테스트는 존재할 수 없다.
+시간(lease 만료·백오프)은 기다리지 않는다 — `lease_expires_at`·`next_attempt_at`을 직접
+UPDATE해 상황을 만든다. heartbeat처럼 시간이 흘러야만 드러나는 것은 lease를 1초로 줄여
+잰다.
 """
 
 import asyncio
@@ -19,6 +20,7 @@ import logging
 import os
 import signal
 import threading
+import time
 from typing import Self
 
 import psycopg
@@ -35,6 +37,7 @@ from app.worker import (
     _listen_for_jobs,
     claim_job,
     drain,
+    extend_lease,
     fail_job,
     finalize_edge_job,
     finalize_job,
@@ -216,10 +219,12 @@ async def test_claim_marks_job_and_document_processing_and_commits(conn, other_c
     assert job is not None
     assert job.document_id == doc_id
     cur = await other_conn.execute(
-        "SELECT status, attempts, started_at IS NOT NULL FROM embedding_jobs WHERE id = %s",
+        "SELECT status, attempts, started_at IS NOT NULL,"
+        " lease_expires_at BETWEEN now() + interval '59 seconds' AND now() + interval '61 seconds'"
+        " FROM embedding_jobs WHERE id = %s",
         (job.job_id,),
     )
-    assert await cur.fetchone() == ("processing", 1, True)
+    assert await cur.fetchone() == ("processing", 1, True, True)  # 기본 lease 60초 (ADR-050)
     cur = await other_conn.execute(
         "SELECT embedding_status FROM documents WHERE id = %s", (doc_id,)
     )
@@ -666,18 +671,23 @@ async def test_exhausted_retries_yield_to_a_newer_job_without_flagging_an_error(
     assert (await document_state(conn, doc_id))[1] != "error"
 
 
-async def test_sweep_uses_zero_timeout_from_settings(conn, monkeypatch):
-    """데모 설정 0은 방금 processing이 된 잡도 즉시 회수한다."""
-    monkeypatch.setenv("ZOMBIE_TIMEOUT_MINUTES", "0")
-    doc_id = await insert_document(conn)
-    await claim_job(conn)
+async def test_claim_takes_the_lease_length_from_settings(conn, other_conn, monkeypatch):
+    """lease 길이는 `JOB_LEASE_SECONDS` 하나로 정한다 — heartbeat 주기도 여기서 나온다."""
+    monkeypatch.setenv("JOB_LEASE_SECONDS", "90")
+    await insert_document(conn)
 
-    assert await sweep_zombies(conn) == 1
-    assert await job_rows(conn, doc_id) == [("pending", 1, None)]
+    job = await claim_job(conn)
+
+    cur = await other_conn.execute(
+        "SELECT lease_expires_at BETWEEN now() + interval '89 seconds'"
+        " AND now() + interval '91 seconds' FROM embedding_jobs WHERE id = %s",
+        (job.job_id,),
+    )
+    assert (await cur.fetchone())[0] is True
 
 
-async def test_sweep_keeps_fresh_job_with_default_timeout(conn):
-    """기본 5분 임계에서는 방금 processing이 된 잡을 회수하지 않는다."""
+async def test_sweep_keeps_a_job_whose_lease_is_live(conn):
+    """lease가 남은 잡은 회수하지 않는다 — 방금 선점된 잡이 그렇다."""
     doc_id = await insert_document(conn)
     await claim_job(conn)
 
@@ -686,7 +696,7 @@ async def test_sweep_keeps_fresh_job_with_default_timeout(conn):
 
 
 async def test_sweep_returns_old_processing_jobs_to_pending(conn):
-    """좀비 회수 — 임계(5분)를 넘긴 processing 잡만 pending으로 되돌린다.
+    """좀비 회수 — lease가 만료된 processing 잡만 pending으로 되돌린다 (ADR-050).
 
     attempts는 초기화하지 않는다 — 매번 초기화하면 계속 죽는 잡이 영원히 재시도되어
     MAX_ATTEMPTS가 무의미해진다.
@@ -697,16 +707,16 @@ async def test_sweep_returns_old_processing_jobs_to_pending(conn):
     assert stale_job.document_id == stale_doc
     await claim_job(conn)
 
-    # 죽은 워커를 재현한다 — 임계보다 오래 processing인 잡
+    # 죽은 워커를 재현한다 — heartbeat가 멈춰 lease가 지난 잡
     await conn.execute(
-        "UPDATE embedding_jobs SET started_at = now() - interval '10 minutes' WHERE id = %s",
+        "UPDATE embedding_jobs SET lease_expires_at = now() - interval '1 second' WHERE id = %s",
         (stale_job.job_id,),
     )
 
     assert await sweep_zombies(conn) == 1
 
     assert await job_rows(conn, stale_doc) == [("pending", 1, None)]  # attempts 유지
-    assert [j[0] for j in await job_rows(conn, fresh_doc)] == ["processing"]  # 임계 이내
+    assert [j[0] for j in await job_rows(conn, fresh_doc)] == ["processing"]  # lease 이내
 
 
 async def test_sweep_completes_a_zombie_whose_document_moved_on(conn, other_conn):
@@ -719,7 +729,7 @@ async def test_sweep_completes_a_zombie_whose_document_moved_on(conn, other_conn
     zombie = await claim_job(conn)
     await edit_document(other_conn, doc_id, DOC_V2, "sha256:v2")  # 새 pending 잡
     await conn.execute(
-        "UPDATE embedding_jobs SET started_at = now() - interval '10 minutes' WHERE id = %s",
+        "UPDATE embedding_jobs SET lease_expires_at = now() - interval '1 second' WHERE id = %s",
         (zombie.job_id,),
     )
 
@@ -742,7 +752,7 @@ async def test_sweep_waits_for_an_uncommitted_edit_before_deciding(conn, other_c
     doc_id = await insert_document(conn)
     zombie = await claim_job(conn)
     await conn.execute(
-        "UPDATE embedding_jobs SET started_at = now() - interval '10 minutes' WHERE id = %s",
+        "UPDATE embedding_jobs SET lease_expires_at = now() - interval '1 second' WHERE id = %s",
         (zombie.job_id,),
     )
 
@@ -767,7 +777,7 @@ async def test_sweep_errors_out_a_zombie_that_exhausted_its_budget(conn):
     doc_id = await insert_document(conn)
     job = await claim_job(conn)
     await conn.execute(
-        "UPDATE embedding_jobs SET attempts = %s, started_at = now() - interval '10 minutes'"
+        "UPDATE embedding_jobs SET attempts = %s, lease_expires_at = now() - interval '1 second'"
         " WHERE id = %s",
         (MAX_ATTEMPTS, job.job_id),
     )
@@ -788,7 +798,7 @@ async def test_sweep_recovers_a_zombie_one_attempt_below_the_budget(conn):
     doc_id = await insert_document(conn)
     job = await claim_job(conn)
     await conn.execute(
-        "UPDATE embedding_jobs SET attempts = %s, started_at = now() - interval '10 minutes'"
+        "UPDATE embedding_jobs SET attempts = %s, lease_expires_at = now() - interval '1 second'"
         " WHERE id = %s",
         (MAX_ATTEMPTS - 1, job.job_id),
     )
@@ -810,7 +820,7 @@ async def test_sweep_completes_an_exhausted_zombie_whose_document_moved_on(conn,
     zombie = await claim_job(conn)
     await edit_document(other_conn, doc_id, DOC_V2, "sha256:v2")  # 새 pending 잡
     await conn.execute(
-        "UPDATE embedding_jobs SET attempts = %s, started_at = now() - interval '10 minutes'"
+        "UPDATE embedding_jobs SET attempts = %s, lease_expires_at = now() - interval '1 second'"
         " WHERE id = %s",
         (MAX_ATTEMPTS, zombie.job_id),
     )
@@ -840,7 +850,7 @@ async def test_sweep_handles_two_processing_zombies_on_one_document(conn, other_
     job2 = await claim_job(conn)  # job2도 processing — 이제 좀비 후보가 둘이다
     assert job2 is not None and job2.job_id != job1.job_id
     await conn.execute(
-        "UPDATE embedding_jobs SET started_at = now() - interval '10 minutes'"
+        "UPDATE embedding_jobs SET lease_expires_at = now() - interval '1 second'"
         " WHERE document_id = %s",
         (doc_id,),
     )
@@ -854,11 +864,11 @@ async def test_sweep_handles_two_processing_zombies_on_one_document(conn, other_
     assert reclaimed is not None and reclaimed.job_id == job1.job_id
 
 
-async def test_pipeline_keeps_draining_while_a_zombie_waits_for_its_timeout(conn, other_conn):
-    """좀비가 임계를 기다리는 동안에도 다른 pending 잡은 계속 처리된다.
+async def test_pipeline_keeps_draining_while_a_zombie_waits_for_its_lease(conn, other_conn):
+    """좀비의 lease가 만료되기를 기다리는 동안에도 다른 pending 잡은 계속 처리된다.
 
-    재기동한 워커는 좀비를 **즉시** 회수하지 않는다 — 죽음을 시간으로 판정하므로
-    임계(기본 5분)를 기다려야 한다. 이 대기가 파이프라인 전체를 멈추지 않는다는 것이
+    재기동한 워커는 좀비를 **즉시** 회수하지 않는다 — 소유자의 죽음을 lease 만료로
+    판정하므로 lease(기본 60초)를 기다려야 한다. 이 대기가 파이프라인 전체를 멈추지 않는다는 것이
     이 테스트의 주장이다: 좀비는 `processing`이라 `claim_job`의 대상이 아니고, 워커는
     남은 pending 잡을 그대로 집어간다. 크래시의 영향은 그 잡 하나로 격리된다.
     """
@@ -869,7 +879,7 @@ async def test_pipeline_keeps_draining_while_a_zombie_waits_for_its_timeout(conn
     healthy_a = await insert_document(other_conn, content=DOC_V2, content_hash="sha256:a")
     healthy_b = await insert_document(other_conn, content=DOC_V1, content_hash="sha256:b")
 
-    # 재기동한 워커의 첫 스윕 — 임계가 아직 안 지나 좀비는 회수 대상이 아니다
+    # 재기동한 워커의 첫 스윕 — lease가 아직 남아 좀비는 회수 대상이 아니다
     assert await sweep_zombies(conn) == 0
 
     processed = await drain(conn, FakeProvider())
@@ -1035,7 +1045,7 @@ async def test_sweep_recovers_both_job_kinds(conn):
     assert embed_zombie is not None and embed_zombie.kind == "embed"
     assert embed_zombie.document_id == embed_doc
     await conn.execute(
-        "UPDATE embedding_jobs SET started_at = now() - interval '10 minutes'"
+        "UPDATE embedding_jobs SET lease_expires_at = now() - interval '1 second'"
         " WHERE id = ANY(%s)",
         ([edge_zombie.job_id, embed_zombie.job_id],),
     )
@@ -1068,7 +1078,7 @@ async def test_sweep_recovers_both_kinds_of_zombie_on_one_document(conn, other_c
     assert embed_zombie.document_id == doc_id  # 같은 문서에 두 종류의 processing 잡
 
     await conn.execute(
-        "UPDATE embedding_jobs SET started_at = now() - interval '10 minutes'"
+        "UPDATE embedding_jobs SET lease_expires_at = now() - interval '1 second'"
         " WHERE document_id = %s AND status = 'processing'",
         (doc_id,),
     )
@@ -1092,7 +1102,7 @@ async def test_sweep_isolates_an_exhausted_edge_zombie_without_flagging_the_docu
     zombie = await claim_job(conn)
     assert zombie is not None and zombie.kind == "edges"
     await conn.execute(
-        "UPDATE embedding_jobs SET attempts = %s, started_at = now() - interval '10 minutes'"
+        "UPDATE embedding_jobs SET attempts = %s, lease_expires_at = now() - interval '1 second'"
         " WHERE id = %s",
         (MAX_ATTEMPTS, zombie.job_id),
     )
@@ -1160,7 +1170,7 @@ async def test_drain_releases_the_claimed_job_when_shutdown_is_requested(conn):
     """종료 신호를 받으면 새로 집은 잡을 반납하고 드레인을 멈춘다.
 
     임베딩을 **시작하기 전에** 신호를 확인하므로, 배포로 세운 워커가 잡을 processing으로
-    붙든 채 사라지지 않는다 — 다음 워커가 좀비 임계 5분을 기다릴 필요가 없어진다.
+    붙든 채 사라지지 않는다 — 다음 워커가 lease 만료를 기다릴 필요가 없어진다.
     """
     doc_a = await insert_document(conn, content_hash="sha256:a")
     doc_b = await insert_document(conn, content=DOC_V2, content_hash="sha256:b")
@@ -1233,7 +1243,7 @@ async def test_run_worker_stops_itself_on_sigterm(migrated_db, conn, monkeypatch
     """SIGTERM에 루프를 빠져나와 **스스로** 종료한다 — 배포의 `systemctl stop` 경로다.
 
     이 경로가 없으면 감독자가 워커를 세울 때마다 진행 중이던 잡이 좀비로 남아, 다음
-    워커가 임계(기본 5분)를 기다려야 처리가 이어진다. `worker.cancel()`로는 검증할 수
+    워커가 lease 만료(기본 60초)를 기다려야 처리가 이어진다. `worker.cancel()`로는 검증할 수
     없다 — 취소는 바깥에서 태스크를 죽이는 것이고, 여기서 확인할 것은 워커가 자기
     판단으로 루프를 빠져나오는가다. 그래서 취소하지 않고 끝나기를 기다린다.
 
@@ -1665,6 +1675,271 @@ async def test_run_worker_purges_expired_idempotency_keys_on_its_sweep(
     try:
         await wait_until(purged, message="워커 스윕이 만료 키를 지우지 않았다")
     finally:
+        worker.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await worker
+        await close_pool()
+
+
+# --- lease + heartbeat (ADR-050, #121) ---------------------------------------------
+#
+# 좀비 판정은 "소유자가 아직 살아 있나"다. 살아 있는 워커는 처리 중 별도 연결로 lease를
+# 연장하고, 연장이 끊기면 lease 뒤에 다른 워커(또는 자기 다음 스윕)가 회수한다. 그래서
+# 이 절이 고정하는 것은 셋이다: 연장이 오래 걸리는 잡을 지키는가, 잃은 잡을 끝까지
+# 쓰지 않는가, 스윕이 긴 drain에 밀리지 않는가.
+
+
+def lease_conn_from(connection):
+    """heartbeat가 빌려 쓸 연결 공급자 — run_worker에서는 풀이 이 자리에 온다."""
+
+    @contextlib.asynccontextmanager
+    async def factory():
+        yield connection
+
+    return factory
+
+
+class SlowProvider:
+    """임베딩마다 일정 시간이 걸리는 프로바이더 — drain을 lease보다 길게 끈다."""
+
+    name = "slow"
+    dimension = 1024
+
+    def __init__(self, seconds: float) -> None:
+        self.seconds = seconds
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        time.sleep(self.seconds)
+        return FakeProvider().embed(texts)
+
+
+def blocking_provider() -> "BlockingProvider":
+    """처리 중인 잡을 붙잡아 두는 프로바이더. process_once를 직접 부르므로 예열이 없다."""
+    provider = BlockingProvider()
+    provider.warmed_up = True
+    return provider
+
+
+async def lease_is_live(conn, job_id) -> bool:
+    cur = await conn.execute(
+        "SELECT lease_expires_at > now() + interval '59 seconds' FROM embedding_jobs WHERE id = %s",
+        (job_id,),
+    )
+    return (await cur.fetchone())[0]
+
+
+async def test_extend_lease_pushes_the_deadline_of_a_processing_job(conn, other_conn):
+    await insert_document(conn)
+    job = await claim_job(conn)
+    await conn.execute(
+        "UPDATE embedding_jobs SET lease_expires_at = now() + interval '1 second' WHERE id = %s",
+        (job.job_id,),
+    )
+
+    assert await extend_lease(other_conn, job.job_id) is True
+
+    assert await lease_is_live(conn, job.job_id) is True
+
+
+async def test_extend_lease_refuses_a_job_that_is_no_longer_processing(conn, other_conn):
+    """연장은 자기 잡이 여전히 processing일 때만 성공한다 (ADR-050 결정 2).
+
+    lease가 지나 스윕이 회수한 잡을 연장이 되살리면 두 워커가 한 잡을 제 것으로 여긴다.
+    """
+    doc_id = await insert_document(conn)
+    job = await claim_job(conn)
+    await release_job(conn, job)  # 회수된 것과 같은 상태 — pending
+
+    assert await extend_lease(other_conn, job.job_id) is False
+
+    assert [j[0] for j in await job_rows(conn, doc_id)] == ["pending"]
+
+
+async def test_a_heartbeat_keeps_a_long_job_from_being_reclaimed(
+    conn, other_conn, migrated_db, monkeypatch
+):
+    """lease보다 오래 걸리는 잡도 heartbeat가 도는 한 회수되지 않는다.
+
+    5분 임계가 필요했던 이유는 "정상적으로 오래 걸리는 잡"과 "버려진 잡"을 시간만으로
+    구별할 수 없어서였다. heartbeat가 그 구별을 주므로 lease를 짧게 둘 수 있다. lease의
+    두 배를 붙잡아 둔 뒤 다른 워커가 스윕해도 가져가지 못해야 한다.
+    """
+    monkeypatch.setenv("JOB_LEASE_SECONDS", "1")
+    doc_id = await insert_document(conn)
+    provider = blocking_provider()
+
+    async with await psycopg.AsyncConnection.connect(migrated_db, autocommit=True) as hb:
+        task = asyncio.create_task(
+            process_once(conn, provider, lease_conn=lease_conn_from(hb))
+        )
+        try:
+            await wait_until(
+                lambda: _embedding_started(provider), message="임베딩에 진입하지 않았다"
+            )
+            await asyncio.sleep(2.0)
+            assert await sweep_zombies(other_conn) == 0
+        finally:
+            provider.release.set()
+            assert await asyncio.wait_for(task, timeout=15) is True
+
+    assert (await document_state(conn, doc_id))[1] == "ready"
+    assert [j[0] for j in await job_rows(conn, doc_id)] == ["done"]
+
+
+async def test_a_worker_that_lost_its_lease_does_not_finish_the_job(
+    conn, other_conn, migrated_db, monkeypatch
+):
+    """연장이 실패하면 처리를 포기한다 — 결과를 쓰지도, 잡을 마감하지도 않는다.
+
+    heartbeat가 닿지 않는 사이 lease가 지나 다른 워커가 잡을 되찾은 상황이다. 잡은 이제
+    그 워커의 것이므로 여기서 done으로 마감하면 남의 선점을 지운다. 되찾기는 스윕의
+    결과(pending 복귀)로 재현한다.
+    """
+    monkeypatch.setenv("JOB_LEASE_SECONDS", "1")
+    doc_id = await insert_document(conn)
+    provider = blocking_provider()
+
+    async with await psycopg.AsyncConnection.connect(migrated_db, autocommit=True) as hb:
+        task = asyncio.create_task(
+            process_once(conn, provider, lease_conn=lease_conn_from(hb))
+        )
+        try:
+            await wait_until(
+                lambda: _embedding_started(provider), message="임베딩에 진입하지 않았다"
+            )
+            await other_conn.execute(
+                "UPDATE embedding_jobs SET status = 'pending'"
+                " WHERE document_id = %s AND kind = 'embed'",
+                (doc_id,),
+            )
+            await asyncio.sleep(1.0)  # heartbeat 주기(lease/3)가 몇 번 돈다
+        finally:
+            provider.release.set()
+            assert await asyncio.wait_for(task, timeout=15) is True
+
+    assert await chunk_rows(conn, doc_id) == []
+    assert await job_rows(conn, doc_id) == [("pending", 1, None)]  # 새 소유자의 몫
+    assert (await document_state(conn, doc_id))[1] != "ready"
+
+
+def flaky_lease_conn(connection, failures: int | None):
+    """처음 `failures`번은 연결을 못 여는 공급자. None이면 끝까지 못 연다."""
+    attempts = 0
+
+    @contextlib.asynccontextmanager
+    async def factory():
+        nonlocal attempts
+        attempts += 1
+        if failures is None or attempts <= failures:
+            raise psycopg.OperationalError("heartbeat 연결 실패를 재현한다")
+        yield connection
+
+    return factory
+
+
+async def test_a_worker_gives_up_when_heartbeats_fail_for_a_whole_lease(
+    conn, monkeypatch
+):
+    """연장을 lease 동안 한 번도 못 하면 처리를 포기한다.
+
+    그 사이 DB 쪽 lease는 이미 지났고 다른 워커가 잡을 되찾았을 수 있다 — 연장이 0행으로
+    돌아온 경우와 같이 다룬다. 잡은 processing으로 남아 스윕이 회수한다.
+    """
+    monkeypatch.setenv("JOB_LEASE_SECONDS", "1")
+    doc_id = await insert_document(conn)
+    provider = blocking_provider()
+
+    task = asyncio.create_task(
+        process_once(conn, provider, lease_conn=flaky_lease_conn(None, failures=None))
+    )
+    try:
+        await wait_until(lambda: _embedding_started(provider), message="임베딩에 진입하지 않았다")
+        await asyncio.sleep(1.5)
+    finally:
+        provider.release.set()
+        assert await asyncio.wait_for(task, timeout=15) is True
+
+    assert await chunk_rows(conn, doc_id) == []
+    assert [j[0] for j in await job_rows(conn, doc_id)] == ["processing"]
+
+
+async def test_a_single_failed_heartbeat_does_not_abandon_the_job(
+    conn, migrated_db, monkeypatch
+):
+    """한 번의 연장 실패로는 포기하지 않는다 — lease가 주기의 세 배인 이유다.
+
+    failover 중 연결 하나가 끊기는 것은 흔하다. 한 번에 포기하면 멀쩡히 끝날 잡을 버리고
+    lease 뒤 회수 → 재처리로 같은 일을 두 번 한다.
+    """
+    monkeypatch.setenv("JOB_LEASE_SECONDS", "1")
+    doc_id = await insert_document(conn)
+    provider = blocking_provider()
+
+    async with await psycopg.AsyncConnection.connect(migrated_db, autocommit=True) as hb:
+        task = asyncio.create_task(
+            process_once(conn, provider, lease_conn=flaky_lease_conn(hb, failures=1))
+        )
+        try:
+            await wait_until(
+                lambda: _embedding_started(provider), message="임베딩에 진입하지 않았다"
+            )
+            await asyncio.sleep(1.5)
+        finally:
+            provider.release.set()
+            assert await asyncio.wait_for(task, timeout=15) is True
+
+    assert (await document_state(conn, doc_id))[1] == "ready"
+
+
+async def test_drain_sweeps_zombies_while_it_runs(conn):
+    """스윕은 루프 머리뿐 아니라 drain 중에도 lease 주기로 돈다 (ADR-050 결정 4).
+
+    머리에서만 돌면 drain이 끝날 때까지 좀비 회수가 밀린다 — #110 B의 S2-4는 그렇게
+    약 13분이 걸렸다. 좀비의 lease가 **drain 도중에** 만료되게 두어, 시작 시 한 번의
+    스윕으로는 통과할 수 없게 한다.
+    """
+    zombie_doc = await insert_document(conn, content_hash="sha256:zombie")
+    zombie = await claim_job(conn)
+    assert zombie.document_id == zombie_doc
+    await conn.execute(
+        "UPDATE embedding_jobs SET lease_expires_at = now() + interval '0.5 seconds'"
+        " WHERE id = %s",
+        (zombie.job_id,),
+    )
+    for i in range(3):
+        await insert_document(conn, content=DOC_V2, content_hash=f"sha256:healthy-{i}")
+
+    await drain(conn, SlowProvider(0.4), sweep_interval=0.5)
+
+    assert (await document_state(conn, zombie_doc))[1] == "ready"
+
+
+async def test_run_worker_keeps_the_lease_of_the_job_it_is_embedding(
+    migrated_db, conn, other_conn, monkeypatch
+):
+    """run_worker가 heartbeat를 실제로 붙인다 — process_once에 연결 공급자를 넘기는지.
+
+    위 테스트들은 공급자를 직접 넘기므로, run_worker가 그것을 빠뜨려도 통과한다.
+    """
+    monkeypatch.setenv("JOB_LEASE_SECONDS", "1")
+    provider = BlockingProvider()
+    monkeypatch.setattr("app.worker.get_provider", lambda: provider)
+    monkeypatch.setenv("DATABASE_URL", migrated_db)
+    get_settings.cache_clear()
+    await close_pool()
+
+    doc_id = await insert_document(conn)
+
+    worker = asyncio.create_task(run_worker())
+    try:
+        await wait_until(
+            lambda: _embedding_started(provider), message="워커가 임베딩에 진입하지 않았다"
+        )
+        await asyncio.sleep(2.0)
+        assert await sweep_zombies(other_conn) == 0
+        assert [j[0] for j in await job_rows(other_conn, doc_id)] == ["processing"]
+    finally:
+        provider.release.set()
         worker.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await worker

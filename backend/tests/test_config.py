@@ -53,6 +53,19 @@ def test_unknown_embedding_provider_is_rejected(monkeypatch):
         Settings()
 
 
+@pytest.mark.parametrize("value", ["0", "-5"])
+def test_job_lease_must_be_positive(monkeypatch, value):
+    """lease가 0 이하면 heartbeat가 쉬지 않고 돌고, 방금 선점한 잡도 즉시 좀비가 된다 (ADR-050).
+
+    옛 `ZOMBIE_TIMEOUT_MINUTES=0`(단일 워커 복구 데모)에 해당하는 값은 없다 — lease는
+    heartbeat가 지키므로 짧게 둬도 정상 잡을 회수하지 않는다.
+    """
+    monkeypatch.setenv("JOB_LEASE_SECONDS", value)
+
+    with pytest.raises(ValidationError):
+        Settings(**NO_ENV_FILE)
+
+
 def test_get_settings_is_cached():
     assert get_settings() is get_settings()
 
