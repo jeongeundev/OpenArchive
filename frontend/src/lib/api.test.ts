@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   ApiError,
@@ -7,10 +7,12 @@ import {
   deleteDocument,
   editDocument,
   getAuthStatus,
+  isRetrying,
   listDocuments,
   listTokens,
   revokeToken,
   search,
+  subscribeRetrying,
   updateTags,
   uploadDocument,
 } from "./api";
@@ -200,5 +202,127 @@ describe("API responses", () => {
     expect(JSON.parse(fetchMock.mock.calls[0][1]?.body as string)).toEqual({
       tags: ["OpenSQL", "pgvector"],
     });
+  });
+});
+
+// ADR-048 결정 4 — 1초 시작, 상한 8초, 전체 지터, 총 60초. 읽기만.
+describe("API retry on temporary unavailability", () => {
+  function unavailable(): Response {
+    return new Response(
+      JSON.stringify({ detail: "일시적으로 요청을 처리할 수 없습니다. 잠시 후 다시 시도하세요." }),
+      { status: 503, headers: { "Content-Type": "application/json", "Retry-After": "1" } },
+    );
+  }
+
+  function ok(body: unknown): Response {
+    return new Response(JSON.stringify(body), {
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+    vi.useFakeTimers();
+    // 전체 지터의 상한 — 대기 간격이 결정적이 된다.
+    vi.spyOn(Math, "random").mockReturnValue(0.999999);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("waits out a 503 on a read with exponential backoff", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(unavailable())
+      .mockResolvedValueOnce(unavailable())
+      .mockResolvedValueOnce(ok([]));
+    vi.stubGlobal("fetch", fetchMock);
+    // 지터가 상한의 절반을 고르면 간격은 500ms, 1000ms — 경계가 ms 단위로 딱 떨어진다.
+    vi.spyOn(Math, "random").mockReturnValue(0.5);
+
+    const result = listDocuments();
+    await vi.advanceTimersByTimeAsync(499);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(999);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(1);
+
+    await expect(result).resolves.toEqual([]);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("retries search, which is a read sent as POST, after a network error", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValueOnce(new TypeError("Failed to fetch"))
+      .mockResolvedValueOnce(ok({ items: [] }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = search({ query: "정합성" });
+    await vi.advanceTimersByTimeAsync(1000);
+
+    await expect(result).resolves.toEqual({ items: [] });
+    expect(fetchMock.mock.calls[1][1]?.body).toBe(JSON.stringify({ query: "정합성" }));
+  });
+
+  it("does not retry a write — the first attempt may already be committed", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(unavailable());
+    vi.stubGlobal("fetch", fetchMock);
+
+    const error = await uploadDocument({
+      file: new File(["x"], "a.txt"),
+      tags: [],
+      visibility: "public",
+    }).catch((reason: unknown) => reason);
+
+    expect(error).toBeInstanceOf(ApiError);
+    expect((error as ApiError).status).toBe(503);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not retry a 500 — it will not pass with time", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response("", { status: 500 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(listDocuments()).rejects.toBeInstanceOf(ApiError);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("caps the wait at 8 seconds and gives up after a minute", async () => {
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(unavailable()));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = listDocuments().catch((reason: unknown) => reason);
+    // 1+2+4+8×6 = 55초까지 기다린 뒤, 다음 8초는 60초를 넘기므로 멈춘다.
+    await vi.advanceTimersByTimeAsync(55_000);
+    const error = await result;
+
+    expect(error).toBeInstanceOf(ApiError);
+    expect((error as ApiError).status).toBe(503);
+    expect(fetchMock).toHaveBeenCalledTimes(10);
+  });
+
+  it("reports that a retry is in progress until the request settles", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(unavailable())
+      .mockResolvedValueOnce(ok([]));
+    vi.stubGlobal("fetch", fetchMock);
+    const changes: boolean[] = [];
+    const unsubscribe = subscribeRetrying(() => changes.push(isRetrying()));
+
+    const result = listDocuments();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(isRetrying()).toBe(true);
+    await vi.advanceTimersByTimeAsync(1000);
+    await result;
+
+    expect(isRetrying()).toBe(false);
+    expect(changes).toEqual([true, false]);
+    unsubscribe();
   });
 });
