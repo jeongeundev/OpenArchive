@@ -16,21 +16,23 @@ export function useDocument(id: string): {
   const [document, setDocument] = useState<DocumentDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const mountedRef = useRef(false);
+  // 마운트 동안의 요청을 묶는다. 정리할 때 취소해 백오프 대기까지 멈춘다(ADR-048 결정 4).
+  const controllerRef = useRef<AbortController | null>(null);
   const inFlightRef = useRef(false);
 
   const refresh = useCallback(() => {
-    if (inFlightRef.current) return;
+    const controller = controllerRef.current;
+    if (controller === null || inFlightRef.current) return;
 
     inFlightRef.current = true;
-    void getDocument(id)
+    void getDocument(id, controller.signal)
       .then((nextDocument) => {
-        if (!mountedRef.current) return;
+        if (controller.signal.aborted) return;
         setDocument(nextDocument);
         setError(null);
       })
       .catch((reason: unknown) => {
-        if (!mountedRef.current) return;
+        if (controller.signal.aborted) return;
         // 422는 경로가 UUID가 아닐 때 FastAPI가 내는 검증 실패다. 사용자에게는 없는
         // 문서와 같은 사실이고, 다르게 보이면 「없는 문서」가 입력 형태에 따라 두 얼굴을
         // 갖는다. 폴백 문구는 상태 코드를 노출하므로 여기서 걸러야 한다.
@@ -43,17 +45,21 @@ export function useDocument(id: string): {
         );
       })
       .finally(() => {
+        if (controller.signal.aborted) return;
         inFlightRef.current = false;
-        if (mountedRef.current) setLoading(false);
+        setLoading(false);
       });
   }, [id]);
 
   useEffect(() => {
-    mountedRef.current = true;
+    const controller = new AbortController();
+    controllerRef.current = controller;
     refresh();
 
     return () => {
-      mountedRef.current = false;
+      controller.abort();
+      controllerRef.current = null;
+      inFlightRef.current = false;
     };
   }, [refresh]);
 

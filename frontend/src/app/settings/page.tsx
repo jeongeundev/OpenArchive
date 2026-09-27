@@ -43,21 +43,19 @@ export default function SettingsPage(): React.ReactElement {
 
   useEffect(() => {
     if (authLoading || !auth.authenticated) return;
-    let active = true;
-    listTokens()
+    const controller = new AbortController();
+    listTokens(controller.signal)
       .then((items) => {
-        if (active) setTokens(items);
+        if (!controller.signal.aborted) setTokens(items);
       })
       .catch((reason: unknown) => {
-        if (active) {
+        if (!controller.signal.aborted) {
           setTokenError(
             reason instanceof ApiError ? reason.detail : "토큰 목록을 불러오지 못했습니다.",
           );
         }
       });
-    return () => {
-      active = false;
-    };
+    return () => controller.abort();
   }, [auth.authenticated, authLoading]);
 
   async function issue(event: React.FormEvent<HTMLFormElement>): Promise<void> {

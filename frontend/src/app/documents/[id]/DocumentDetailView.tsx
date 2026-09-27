@@ -36,25 +36,26 @@ export function DocumentDetailView(): React.ReactElement {
   const anonymous = !auth.authenticated;
 
   useEffect(() => {
-    let active = true;
-    void Promise.all([getDocumentLinks(id), getDocumentBacklinks(id)])
+    const controller = new AbortController();
+    void Promise.all([
+      getDocumentLinks(id, controller.signal),
+      getDocumentBacklinks(id, controller.signal),
+    ])
       .then(([nextLinks, nextBacklinks]) => {
-        if (!active) return;
+        if (controller.signal.aborted) return;
         setLinks(nextLinks);
         setBacklinks(nextBacklinks);
         setLinksError(null);
       })
       .catch(() => {
-        if (!active) return;
+        if (controller.signal.aborted) return;
         // links를 []로 두면 본문의 모든 링크가 깨진 링크로 보인다. 해석 결과가 없다는
         // 것을 그대로 남기고 실패를 말한다.
         setLinks(null);
         setBacklinks([]);
         setLinksError("문서 링크를 불러오지 못했습니다.");
       });
-    return () => {
-      active = false;
-    };
+    return () => controller.abort();
   }, [id, document?.version]);
 
   if (loading) return <p className="text-sm text-neutral-500">불러오는 중…</p>;

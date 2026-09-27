@@ -50,17 +50,15 @@ export default function DiagnosticsPage(): React.ReactElement {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    let active = true;
-    getDiagnostics()
+    const controller = new AbortController();
+    getDiagnostics(controller.signal)
       .then((result) => {
-        if (active) setDiagnostics(result);
+        if (!controller.signal.aborted) setDiagnostics(result);
       })
       .catch((reason: unknown) => {
-        if (active) setError(reason instanceof ApiError ? reason.detail : "진단 결과를 불러오지 못했습니다.");
+        if (!controller.signal.aborted) setError(reason instanceof ApiError ? reason.detail : "진단 결과를 불러오지 못했습니다.");
       });
-    return () => {
-      active = false;
-    };
+    return () => controller.abort();
   }, []);
 
   return (

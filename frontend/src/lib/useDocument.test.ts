@@ -1,4 +1,5 @@
 import { act, renderHook } from "@testing-library/react";
+import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { DocumentDetail } from "./types";
@@ -138,6 +139,30 @@ describe("useDocument 취소", () => {
     unmount();
 
     expectAllAborted(fetchMock);
+    vi.unstubAllGlobals();
+  });
+});
+
+describe("useDocument StrictMode", () => {
+  // 개발 모드의 StrictMode는 마운트 → 정리 → 재마운트를 한다. 정리가 첫 조회를 취소해도
+  // 재마운트한 쪽의 조회가 막히면 문서가 끝내 뜨지 않는다(폴링도 없다).
+  it("정리 후 재마운트해도 문서를 불러온다", async () => {
+    const fetchMock = vi.fn(
+      (_input: RequestInfo | URL, init?: RequestInit) =>
+        new Promise<Response>((resolve, reject) => {
+          init?.signal?.addEventListener("abort", () =>
+            reject(new DOMException("aborted", "AbortError")),
+          );
+          queueMicrotask(() => resolve(jsonResponse(document)));
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { result } = renderHook(() => useDocument("document-1"), { wrapper: StrictMode });
+    await flushRequest();
+
+    expect(result.current.document).toEqual(document);
+    expect(result.current.error).toBeNull();
     vi.unstubAllGlobals();
   });
 });

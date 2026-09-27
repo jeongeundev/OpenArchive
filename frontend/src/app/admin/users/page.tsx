@@ -21,19 +21,17 @@ export default function UsersPage(): React.ReactElement {
 
   useEffect(() => {
     if (!authLoading && auth.is_admin) {
-      let active = true;
-      listUsers()
+      const controller = new AbortController();
+      listUsers(controller.signal)
         .then((items) => {
-          if (active) setUsers(items);
+          if (!controller.signal.aborted) setUsers(items);
         })
         .catch((reason: unknown) => {
-          if (active) {
+          if (!controller.signal.aborted) {
             setError(reason instanceof ApiError ? reason.detail : "사용자 목록을 불러오지 못했습니다.");
           }
         });
-      return () => {
-        active = false;
-      };
+      return () => controller.abort();
     }
   }, [auth.is_admin, authLoading]);
 

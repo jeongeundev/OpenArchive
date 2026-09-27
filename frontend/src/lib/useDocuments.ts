@@ -21,36 +21,42 @@ export function useDocuments(params?: {
   const [documents, setDocuments] = useState<DocumentSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const mountedRef = useRef(false);
+  // 마운트 동안의 요청을 묶는다. 정리할 때 취소해 백오프 대기까지 멈춘다(ADR-048 결정 4).
+  const controllerRef = useRef<AbortController | null>(null);
   const inFlightRef = useRef(false);
 
   const refresh = useCallback(() => {
-    if (inFlightRef.current) return;
+    const controller = controllerRef.current;
+    if (controller === null || inFlightRef.current) return;
 
     inFlightRef.current = true;
-    void listDocuments(status === undefined ? undefined : { status })
+    void listDocuments(status === undefined ? undefined : { status }, controller.signal)
       .then((nextDocuments) => {
-        if (!mountedRef.current) return;
+        if (controller.signal.aborted) return;
         setDocuments(nextDocuments);
         setError(null);
       })
       .catch((reason: unknown) => {
-        if (!mountedRef.current) return;
+        if (controller.signal.aborted) return;
         setError(reason instanceof Error ? reason.message : "문서를 불러오지 못했습니다.");
       })
       .finally(() => {
+        if (controller.signal.aborted) return;
         inFlightRef.current = false;
-        if (mountedRef.current) setLoading(false);
+        setLoading(false);
       });
   }, [status]);
 
   useEffect(() => {
-    mountedRef.current = true;
+    const controller = new AbortController();
+    controllerRef.current = controller;
     refresh();
     const timer = window.setInterval(refresh, intervalMs);
 
     return () => {
-      mountedRef.current = false;
+      controller.abort();
+      controllerRef.current = null;
+      inFlightRef.current = false;
       window.clearInterval(timer);
     };
   }, [intervalMs, refresh]);

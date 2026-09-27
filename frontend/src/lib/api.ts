@@ -67,6 +67,22 @@ function isRead(path: string, init: RequestInit): boolean {
   return method === "GET" || method === "HEAD" || path === "/api/search";
 }
 
+/** 호출자가 취소하면(화면을 떠나면) 기다리지 않고 AbortError로 끝낸다. */
+function sleep(ms: number, signal: AbortSignal | null | undefined): Promise<void> {
+  return new Promise((resolve, reject) => {
+    signal?.throwIfAborted();
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(signal?.reason);
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
 /**
  * 서버가 알린 최소 대기(ms). RFC 9110 §10.2.3 — 초 수 또는 HTTP 날짜. 없거나 읽을 수 없으면 0.
  */
@@ -88,6 +104,7 @@ async function fetchWithBackoff(path: string, init: RequestInit): Promise<Respon
 
   const deadline = Date.now() + BACKOFF_BUDGET_MS;
   let attempt = 0;
+  let retrying = false;
   try {
     for (;;) {
       let last: Response | TypeError;
@@ -106,12 +123,15 @@ async function fetchWithBackoff(path: string, init: RequestInit): Promise<Respon
         if (last instanceof Response) return last;
         throw last;
       }
-      if (attempt === 0) changeRetrying(1);
-      await new Promise((resolve) => setTimeout(resolve, delay));
+      if (!retrying) {
+        retrying = true;
+        changeRetrying(1);
+      }
+      await sleep(delay, init.signal);
       attempt += 1;
     }
   } finally {
-    if (attempt > 0) changeRetrying(-1);
+    if (retrying) changeRetrying(-1);
   }
 }
 
@@ -149,8 +169,8 @@ async function request<T>(
   return parseResponse ? (response.json() as Promise<T>) : (undefined as T);
 }
 
-export function getAuthStatus(): Promise<AuthStatus> {
-  return request<AuthStatus>("/api/auth/me");
+export function getAuthStatus(signal?: AbortSignal): Promise<AuthStatus> {
+  return request<AuthStatus>("/api/auth/me", { signal });
 }
 
 export function login(username: string, password: string): Promise<AuthStatus> {
@@ -179,8 +199,8 @@ export function changePassword(
   });
 }
 
-export function listTokens(): Promise<TokenSummary[]> {
-  return request<TokenSummary[]>("/api/auth/tokens");
+export function listTokens(signal?: AbortSignal): Promise<TokenSummary[]> {
+  return request<TokenSummary[]>("/api/auth/tokens", { signal });
 }
 
 export function createToken(input: {
@@ -198,8 +218,8 @@ export function revokeToken(id: string): Promise<void> {
   return request<void>(`/api/auth/tokens/${encodeURIComponent(id)}`, { method: "DELETE" }, false);
 }
 
-export function listUsers(): Promise<UserSummary[]> {
-  return request<UserSummary[]>("/api/admin/users");
+export function listUsers(signal?: AbortSignal): Promise<UserSummary[]> {
+  return request<UserSummary[]>("/api/admin/users", { signal });
 }
 
 export function createUser(input: {
@@ -218,36 +238,43 @@ export function deleteUser(id: string): Promise<void> {
   return request<void>(`/api/admin/users/${encodeURIComponent(id)}`, { method: "DELETE" }, false);
 }
 
-export function listDocuments(params?: {
-  status?: EmbeddingStatus;
-  tag?: string;
-}): Promise<DocumentSummary[]> {
+export function listDocuments(
+  params?: {
+    status?: EmbeddingStatus;
+    tag?: string;
+  },
+  signal?: AbortSignal,
+): Promise<DocumentSummary[]> {
   const query = new URLSearchParams();
   if (params?.status !== undefined) query.set("status", params.status);
   if (params?.tag !== undefined) query.set("tag", params.tag);
   const suffix = query.size > 0 ? `?${query}` : "";
-  return request<DocumentSummary[]>(`/api/documents${suffix}`);
+  return request<DocumentSummary[]>(`/api/documents${suffix}`, { signal });
 }
 
-export function getDocument(id: string): Promise<DocumentDetail> {
-  return request<DocumentDetail>(`/api/documents/${encodeURIComponent(id)}`);
+export function getDocument(id: string, signal?: AbortSignal): Promise<DocumentDetail> {
+  return request<DocumentDetail>(`/api/documents/${encodeURIComponent(id)}`, { signal });
 }
 
-export function getDocumentLinks(id: string): Promise<ResolvedLink[]> {
-  return request<ResolvedLink[]>(`/api/documents/${encodeURIComponent(id)}/links`);
+export function getDocumentLinks(id: string, signal?: AbortSignal): Promise<ResolvedLink[]> {
+  return request<ResolvedLink[]>(`/api/documents/${encodeURIComponent(id)}/links`, { signal });
 }
 
-export function getDocumentBacklinks(id: string): Promise<Backlink[]> {
-  return request<Backlink[]>(`/api/documents/${encodeURIComponent(id)}/backlinks`);
+export function getDocumentBacklinks(id: string, signal?: AbortSignal): Promise<Backlink[]> {
+  return request<Backlink[]>(`/api/documents/${encodeURIComponent(id)}/backlinks`, { signal });
 }
 
-export function getRelated(id: string): Promise<RelatedResponse> {
-  return request<RelatedResponse>(`/api/documents/${encodeURIComponent(id)}/related`);
+export function getRelated(id: string, signal?: AbortSignal): Promise<RelatedResponse> {
+  return request<RelatedResponse>(`/api/documents/${encodeURIComponent(id)}/related`, { signal });
 }
 
-export function getTagSuggestions(id: string): Promise<TagSuggestionsResponse> {
+export function getTagSuggestions(
+  id: string,
+  signal?: AbortSignal,
+): Promise<TagSuggestionsResponse> {
   return request<TagSuggestionsResponse>(
     `/api/documents/${encodeURIComponent(id)}/tag-suggestions`,
+    { signal },
   );
 }
 
@@ -363,12 +390,15 @@ export function reembedDocument(id: string): Promise<DocumentSummary> {
   });
 }
 
-export function search(input: {
-  query: string;
-  tags?: string[];
-  contentType?: ContentType | null;
-  k?: number;
-}): Promise<SearchResponse> {
+export function search(
+  input: {
+    query: string;
+    tags?: string[];
+    contentType?: ContentType | null;
+    k?: number;
+  },
+  signal?: AbortSignal,
+): Promise<SearchResponse> {
   const body: {
     query: string;
     tags?: string[];
@@ -383,6 +413,7 @@ export function search(input: {
 
   return request<SearchResponse>("/api/search", {
     method: "POST",
+    signal,
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
@@ -392,14 +423,14 @@ export function search(input: {
  * 백오프하지 않는다. `/admin/status`는 장애·복구를 보여주는 관측 채널이라 실패를 바로
  * 드러내야 하고, 2초 폴링 자체가 재시도다.
  */
-export function getSystemStatus(): Promise<SystemStatus> {
-  return request<SystemStatus>("/api/system/status", {}, true, false);
+export function getSystemStatus(signal?: AbortSignal): Promise<SystemStatus> {
+  return request<SystemStatus>("/api/system/status", { signal }, true, false);
 }
 
-export function getDiagnostics(): Promise<DiagnosticsResponse> {
-  return request<DiagnosticsResponse>("/api/diagnostics");
+export function getDiagnostics(signal?: AbortSignal): Promise<DiagnosticsResponse> {
+  return request<DiagnosticsResponse>("/api/diagnostics", { signal });
 }
 
-export function getClusters(): Promise<ClustersResponse> {
-  return request<ClustersResponse>("/api/clusters");
+export function getClusters(signal?: AbortSignal): Promise<ClustersResponse> {
+  return request<ClustersResponse>("/api/clusters", { signal });
 }

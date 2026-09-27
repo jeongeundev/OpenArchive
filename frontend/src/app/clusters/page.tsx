@@ -25,17 +25,15 @@ export default function ClustersPage(): React.ReactElement {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    let active = true;
-    getClusters()
+    const controller = new AbortController();
+    getClusters(controller.signal)
       .then((result) => {
-        if (active) setData(result);
+        if (!controller.signal.aborted) setData(result);
       })
       .catch((reason: unknown) => {
-        if (active) setError(reason instanceof ApiError ? reason.detail : "관계 지도를 불러오지 못했습니다.");
+        if (!controller.signal.aborted) setError(reason instanceof ApiError ? reason.detail : "관계 지도를 불러오지 못했습니다.");
       });
-    return () => {
-      active = false;
-    };
+    return () => controller.abort();
   }, []);
 
   const positions = useMemo(() => {
