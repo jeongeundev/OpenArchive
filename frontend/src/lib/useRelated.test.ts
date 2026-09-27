@@ -81,7 +81,7 @@ describe("useRelated", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockImplementation(() =>
-        Promise.resolve(jsonResponse({ detail: "추천을 불러오지 못했습니다." }, 503)),
+        Promise.resolve(jsonResponse({ detail: "추천을 불러오지 못했습니다." }, 500)),
       ),
     );
 

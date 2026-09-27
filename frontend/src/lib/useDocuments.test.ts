@@ -103,7 +103,7 @@ describe("useDocuments", () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(jsonResponse([document]))
-      .mockResolvedValueOnce(jsonResponse({ detail: "잠시 연결할 수 없습니다." }, 503));
+      .mockResolvedValueOnce(jsonResponse({ detail: "잠시 연결할 수 없습니다." }, 500));
     vi.stubGlobal("fetch", fetchMock);
 
     const { result } = renderHook(() => useDocuments());

@@ -49,7 +49,7 @@ describe("useSearch", () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(jsonResponse(response))
-      .mockResolvedValueOnce(jsonResponse({ detail: "검색할 수 없습니다." }, 503));
+      .mockResolvedValueOnce(jsonResponse({ detail: "검색할 수 없습니다." }, 500));
     vi.stubGlobal("fetch", fetchMock);
     const { result } = renderHook(() => useSearch());
 

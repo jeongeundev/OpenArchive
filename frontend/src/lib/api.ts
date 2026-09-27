@@ -107,9 +107,10 @@ async function request<T>(
   path: string,
   init: RequestInit = {},
   parseResponse = true,
+  backoff = true,
 ): Promise<T> {
   const headers = new Headers(init.headers);
-  const response = await fetchWithBackoff(path, {
+  const response = await (backoff ? fetchWithBackoff : fetch)(path, {
     ...init,
     credentials: "same-origin",
     headers,
@@ -375,8 +376,12 @@ export function search(input: {
   });
 }
 
+/**
+ * 백오프하지 않는다. `/admin/status`는 장애·복구를 보여주는 관측 채널이라 실패를 바로
+ * 드러내야 하고, 2초 폴링 자체가 재시도다.
+ */
 export function getSystemStatus(): Promise<SystemStatus> {
-  return request<SystemStatus>("/api/system/status");
+  return request<SystemStatus>("/api/system/status", {}, true, false);
 }
 
 export function getDiagnostics(): Promise<DiagnosticsResponse> {
