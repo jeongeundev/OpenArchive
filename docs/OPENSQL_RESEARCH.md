@@ -83,7 +83,7 @@ pg_repack 1.5.2
 |---|---|
 | ~~LISTEN 연결의 `idle_timeout` 실동작~~ | ✅ **M1 이후 측정됨** (§12 6번) — 유휴 세션은 끊기지 않았으나 애초에 알림이 오지 않는다. **폴링 주기 상향은 철회됐다** (§7-3) |
 | ~~`avg`가 HNSW 인덱스를 타는지~~ | ✅ **M1 이후 측정됨** (§12 12·16·17번) — `avg`는 무죄. ~~문제는 벡터 정렬 서브쿼리 안의 JOIN이었다~~ → **17번 재측정에서 반증됨. JOIN은 막지 않는다.** 실제 변수는 `random_page_cost`였다 (16번) |
-| Failover | ⛔ replica가 없어 리더 선출·승격은 불가. 다만 **PostgreSQL 프로세스 장애 자동 복구는 실측 완료** (아래 Single 장애 주입 실측, ADR-020) |
+| ~~Failover~~ | ~~⛔ replica가 없어 리더 선출·승격은 불가.~~ Single에서는 **PostgreSQL 프로세스 장애 자동 복구만 실측** (아래 Single 장애 주입 실측). ✅ **2026-09-28 3노드에서 실측 완료** — §12 「⛔ → ✅」, ADR-020 2026-09-28 개정 |
 
 ### Single 장애 주입 실측 [실측 2026-08-09]
 
@@ -333,6 +333,8 @@ AI 준비도 지도의 기준으로 재면 ARIA 컬럼 암호화는 외부 벡�
 
 **Single 모드도 4개 컴포넌트를 전부 설치한다** — 공식 가이드의 "클러스터 모드별 노드 역할" 표에 `single | PG + Patroni + etcd + OpenProxy`로 명시되어 있다. 따라서 OpenProxy 경유 경로(ADR-006·009·010)는 **그대로 검증 가능**하며, **실제 failover만 불가능**하다(승격 대상 replica 없음). 대응은 ADR-020.
 
+> **2차 평가 (2026-09-21)**: 평가 기준에 고가용성이 추가되어 노드별 HA 라이선스 3장(`node1`~`node3`, 만료 2026-10-28)이 발급됐다. Single 지시는 1차 제출에 한정된다. 3노드 구축은 `SETUP_OPENSQL.md` §16, 실측은 §3 끝·§6 「HA 3노드 실측」·§12, 결정은 ADR-020 2026-09-28 개정.
+
 ### 아키텍처 **[배포판 확정]**
 
 ```
@@ -469,6 +471,30 @@ REST API: `listen: 0.0.0.0:8008`
 > **이 값들은 Patroni 일반 기본값이 아니라 OpenSQL이 지정한 템플릿 값이다.** 따라서 리더 장애 감지부터 새 Primary 승격까지 **수십 초 단위**가 걸린다는 추론은 문서 확인된 수치에 기반한다. **"무중단"이 아니라 "짧은 중단 후 자동 복구"**가 정확한 표현이다.
 >
 > **`max_connections = 100`은 설계 제약이다.** API 커넥션 풀 + 워커 잡 처리 풀 + 워커 LISTEN 전용 연결이 모두 이 안에 들어가야 한다. OpenProxy가 앞단에서 풀링해 완화해주지만, `pool_size` 설정과 함께 계산해야 한다.
+
+### 3노드 실측 — 이 프로젝트가 바꾼 값과 잰 시간 **[실측 2026-09-27~28, #110·#122]**
+
+템플릿 값(`ttl 30 / loop_wait 10 / retry_timeout 10 / maximum_lag_on_failover 1MB`)은 그대로 두고
+두 가지를 Patroni DCS 설정으로 더했다(재시작 없음, `SETUP_OPENSQL.md` §16 교정 5·6).
+
+| 추가한 것 | 이유 |
+|---|---|
+| `synchronous_mode: true` · strict off · 동기 1대 | 설치기 기본은 **비동기**라 failover에서 커밋 응답을 받은 데이터를 잃을 수 있다(`maximum_lag_on_failover`만큼). 동기 1대로 닫는다 (ADR-049) |
+| `tcp_keepalives_*` 30/10/3 · `tcp_user_timeout` 60000 · `idle_in_transaction_session_timeout` 60s | 기본값이면 죽은 OpenProxy 노드를 거치던 트랜잭션이 Primary에 약 2시간 락을 쥔 채 남는다 (ADR-051) |
+
+부하(업로드 약 2건/초 · 검색 · 100ms 쓰기 probe) 중 측정한 쓰기 중단:
+
+| 장애 | 쓰기 중단 | 승격 |
+|---|---|---|
+| Primary 노드 전원 차단 ×3 | 30.7~40.7초 | 동기 standby로 3/3, `timeline` 증가 |
+| switchover ×3 | 10.3초 | 동기 standby로 3/3 |
+| VIP MASTER(OpenProxy) 노드 전원 차단 | 8.2초 (VIP만 옮긴 회차) | — |
+| Primary postmaster `kill -9` | 11.4초 | 없음 — 제자리 재기동 |
+| 동기 standby 전원 차단 | 24.5초 (커밋 대기 — 다른 replica가 동기로 지정될 때까지) | — |
+| etcd 팔로워·리더 정지 | 0 | — |
+
+전 회차 유실 0, 사용자 가시 실패 0(백오프 뒤), 원시 500 0. 위 "수십 초 단위" 추론이 실측으로 확인됐다.
+동기 모드에서는 switchover 후보가 `sync_standby`만 된다(`412`). 원자료는 #110 코멘트.
 
 ### 승격 규칙
 - 복제 가능한 Replica 중에서 선출
@@ -1241,19 +1267,22 @@ failover를 시연한 것이 아니다. 상세 조건과 타임라인은 §0 "Si
 |---|---|---|---|
 | 18 | `rpc=4`에서도 플래너가 HNSW를 고르기 시작하는 **규모** | 청크를 수만~수십만 행으로 늘려 `EXPLAIN` | 순차 스캔 비용은 행 수에 선형, HNSW는 거의 로그이므로 어느 지점부터는 기본값에서도 인덱스를 고른다. `rpc=1.1`은 그 지점을 앞당기는 것이며 데모 규모에서 필요한 이유가 그것이다. **교차점을 모른다고 해서 지금 결정이 바뀌지는 않는다** — 근거 보강 성격이다 |
 
-### ⛔ Single 구성에서 검증 불가능한 항목
+### ⛔ Single 구성에서 검증 불가능한 항목 → 3노드에서 재측정 (2026-09-28)
 
-| # | 항목 | 사유 |
-|---|---|---|
-| 7 | 리더 선출·승격·`timeline` 증가 | 승격 대상 replica가 없고 `patronictl history`도 `[]`다 |
-| 8 | OpenProxy의 새 프라이머리 자동 발견 | 기능 검증 이전에 `use_patroni`·`[general.etcd]` 설정 자체가 없다 |
-| 23 | watchdog 펜싱 | `/dev/watchdog` 권한이 없어 Patroni watchdog이 비활성이다 |
-| 24 | VIP failover | Single 구성에는 이중화된 OpenProxy와 VRRP VIP가 없다 |
+| # | 항목 | Single 사유 | 3노드 (#110·#122) |
+|---|---|---|---|
+| 7 | 리더 선출·승격·`timeline` 증가 | 승격 대상 replica가 없고 `patronictl history`도 `[]`다 | ✅ Primary 노드 전원 차단 3회 모두 동기 standby 승격, 쓰기 중단 30.7~40.7초, 유실 0 |
+| 8 | OpenProxy의 새 프라이머리 자동 발견 | 기능 검증 이전에 `use_patroni`·`[general.etcd]` 설정 자체가 없다 | ✅ `[general.etcd]`로 leader 키 watch(§4 실측 정정), switchover 쓰기 중단 10.3초 |
+| 23 | watchdog 펜싱 | `/dev/watchdog` 권한이 없어 Patroni watchdog이 비활성이다 | ⛔ **확인하지 않았다** |
+| 24 | VIP failover | Single 구성에는 이중화된 OpenProxy와 VRRP VIP가 없다 | ✅ VIP MASTER 노드 전원 차단, VIP만 옮긴 회차 쓰기 중단 8.2초 |
 
 사무국이 Single 구성을 지시했으므로(§0) 이 네 항목은 현재 구성에서 검증할 수 없다. 반면
 PostgreSQL 프로세스 장애 자동 복구와 etcd 장애 중 primary 유지는 #27에서 실측했다. `patroni.yml`의
 파라미터와 `finalize_single_to_ha.sh`는 HA 전환 경로가 제품에 남아 있다는 근거일 뿐, 사무국의
 Single 지시를 어길 근거는 아니다. 고가용성 요건의 결정 정정은 후속 step에서 ADR-020에 기록한다.
+
+2차 평가에서 HA 라이선스가 나와(§0) 7·8·24번을 공식 3노드에서 실측했다 — 수치는 §3 「3노드 실측」,
+결정은 ADR-020 2026-09-28 개정. 23번(watchdog)은 3노드에서도 확인하지 않아 ⛔로 남는다.
 
 > **11·12번 배경**: 관련 문서·태그 추천(ADR-018·019)이 문서 대표 벡터를 저장하지 않고 **질의 시점 `avg(embedding)`**으로 구한다. 저장 컬럼을 만들지 않아 동기화 대상이 늘지 않는 대신, 플래너가 `(SELECT avg(...) FROM ...)`을 상수로 접지 못하면 HNSW 인덱스 정렬을 활용하지 못하고 풀스캔이 된다. **기능 가부(11)는 ✅ 확인됐고, 성능(12)이 남았다.**
 >

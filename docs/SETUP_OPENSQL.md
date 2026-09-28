@@ -492,7 +492,7 @@ psql -U postgres -c "NOTIFY ch1, 'hello from another session';"
 |---|---|
 | ~~LISTEN 연결의 `idle_timeout` 실동작~~ | ✅ **측정 완료** — 유휴 세션은 70분간 끊기지 않았다. 다만 애초에 알림이 오지 않아 **폴링 주기 상향은 철회됐다** (`OPENSQL_RESEARCH.md` §12 6번) |
 | ~~`avg`가 HNSW 인덱스를 타는지~~ | ✅ **측정 완료** — `avg`는 인덱스를 막지 않는다 (`OPENSQL_RESEARCH.md` §12 12번) |
-| Failover | ⛔ Single 구성이라 원리적으로 불가 (ADR-020) |
+| Failover | Single 구성에서는 원리적으로 불가 → ✅ 3노드에서 실측 (§16, ADR-020 2026-09-28 개정) |
 
 ---
 
