@@ -410,6 +410,6 @@ echo "완료: DB 프로세스 장애로부터의 자동 복구를 확인했습�
 echo "      Patroni가 감지하고 스스로 재기동했습니다. 복구 과정에 사람의 개입은 없었고,"
 echo "      주입한 장애는 postmaster SIGKILL 1회입니다."
 echo
-echo "한계: 노드 사망은 복구되지 않습니다. 노드 2대 이상이 물리적 전제이며,"
-echo "      사무국 지시에 따른 Single 구성의 제약입니다."
-echo "      리더 선출·승격은 일어나지 않았습니다 (timeline 유지: TL $FINAL_TL)."
+echo "범위: 이 데모는 프로세스 장애만 다룹니다. 리더 선출·승격은 일어나지 않았습니다"
+echo "      (timeline 유지: TL $FINAL_TL). 노드 사망·승격은 3노드에서"
+echo "      scripts/ha_failover.py로 검증합니다 (SETUP_OPENSQL.md §16)."
