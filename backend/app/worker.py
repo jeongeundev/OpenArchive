@@ -77,6 +77,27 @@ class ClaimedJob:
     attempts: int
 
 
+def heartbeat_interval() -> float:
+    """heartbeat 한 주기(초) — lease의 1/3. 두 번 놓쳐도 DB 쪽 lease가 살아 있는 간격이다."""
+    return get_settings().job_lease_seconds / 3
+
+
+async def bound_lock_wait(conn: psycopg.AsyncConnection) -> None:
+    """이 트랜잭션의 락 대기를 heartbeat 한 주기(lease의 1/3)로 묶는다 (#128). 트랜잭션 첫 문장으로 부른다.
+
+    자기 잡에 쓰는 트랜잭션(lease 연장·반영·실패 기록·반납)은 남이 그 문서·잡을 잠깐 쥐고
+    있으면 기다려야 한다. 그러나 쥔 쪽이 죽은 OpenProxy 노드 너머의 고아 트랜잭션이면 Primary가
+    그것을 끊을 때까지(서버 keepalive 기본 2시간) 풀리지 않는다 — #122 S5a-2에서 lease 연장이
+    761초 넘게 멈췄다. 상한에 걸리면 `LockNotAvailable`로 끝나고 잡은 lease 만료 뒤 스윕이 회수한다.
+
+    한 주기인 이유: 연장 한 번의 대기가 다음 주기를 삼키지 않아야 lease(세 주기) 안에 다시
+    시도할 수 있다. `SET LOCAL`과 같지만 값을 인자로 넘기려고 `set_config(..., true)`를 쓴다 —
+    OpenProxy transaction 모드라 트랜잭션 밖 SET은 쓸 수 없다.
+    """
+    milliseconds = int(heartbeat_interval() * 1000)
+    await conn.execute("SELECT set_config('lock_timeout', %s, true)", (f"{milliseconds}ms",))
+
+
 async def claim_job(conn: psycopg.AsyncConnection) -> ClaimedJob | None:
     """pending 잡 하나를 processing으로 선점하고 **즉시 커밋**한다. 없으면 None.
 
@@ -89,6 +110,13 @@ async def claim_job(conn: psycopg.AsyncConnection) -> ClaimedJob | None:
 
     선점은 lease와 함께다 (ADR-050). 처리하는 동안 heartbeat가 연장하지 않으면 lease 뒤에
     스윕이 회수한다.
+
+    **문서 행이 잠긴 잡은 건너뛴다** (#128). 임베딩 잡은 아래에서 문서 행을 UPDATE하는데, 그 행을
+    고아 트랜잭션이 쥐고 있으면 기다리는 동안 워커가 서고, 상한을 걸어 실패시켜도 다음 주기에
+    id가 가장 작은 같은 잡을 또 집어 뒤의 잡이 영영 오지 않는다. 문서 행을 잡 행과 함께
+    `SKIP LOCKED`로 잠가 두면 아래 UPDATE도 기다릴 일이 없다. 수정 중인 문서의 잡을 잠깐 건너뛰는
+    것뿐이다 — 다음 선점이 가져간다. 관계 잡은 선점에서 문서 행을 고치지 않지만 종류를 가리지
+    않고 함께 건너뛴다 — 판정 트랜잭션이 어차피 그 문서 행을 먼저 잠그므로 집어 봐야 기다린다.
     """
     async with conn.transaction():
         cur = await conn.execute(
@@ -96,9 +124,12 @@ async def claim_job(conn: psycopg.AsyncConnection) -> ClaimedJob | None:
             UPDATE embedding_jobs j
                SET status = 'processing', attempts = attempts + 1, started_at = now(),
                    lease_expires_at = now() + make_interval(secs => %s)
-             WHERE j.id = (SELECT id FROM embedding_jobs
-                            WHERE status = 'pending' AND next_attempt_at <= now()
-                            ORDER BY id LIMIT 1 FOR UPDATE SKIP LOCKED)
+             WHERE j.id = (SELECT q.id FROM embedding_jobs q
+                             JOIN documents d ON d.id = q.document_id
+                            WHERE q.status = 'pending' AND q.next_attempt_at <= now()
+                            ORDER BY q.id LIMIT 1
+                              FOR UPDATE OF q SKIP LOCKED
+                              FOR NO KEY UPDATE OF d SKIP LOCKED)
             RETURNING j.id, j.document_id, j.kind, j.attempts
             """,
             (get_settings().job_lease_seconds,),
@@ -130,6 +161,7 @@ async def extend_lease(conn: psycopg.AsyncConnection, job: ClaimedJob) -> bool:
     잡을 제 것으로 여긴다. 0행이면 잡을 잃은 것이다.
     """
     async with conn.transaction():
+        await bound_lock_wait(conn)
         cur = await conn.execute(
             """
             UPDATE embedding_jobs
@@ -162,7 +194,7 @@ async def _keep_lease(
     deadline = loop.time() + lease
     while True:
         with contextlib.suppress(TimeoutError):
-            await asyncio.wait_for(finished.wait(), timeout=lease / 3)
+            await asyncio.wait_for(finished.wait(), timeout=heartbeat_interval())
         if finished.is_set():
             return
         try:
@@ -250,6 +282,7 @@ async def finalize_job(
     잡을 잃었으면(`lock_owned_job`) 아무것도 쓰지 않고 False다.
     """
     async with conn.transaction():
+        await bound_lock_wait(conn)
         # 커밋 직전 재확인 — 멀티 워커 정합성의 핵심이다. 잠금 없이 비교하면 비교와
         # 커밋 사이에 문서가 또 바뀔 수 있고, 낡은 결과가 최신 결과를 덮어쓴다.
         cur = await conn.execute(
@@ -316,6 +349,7 @@ async def finalize_edge_job(conn: psycopg.AsyncConnection, job: ClaimedJob) -> b
     안 된다. 청크가 멀쩡해 검색이 되는데 "임베딩 실패" 배지가 뜨면 화면이 거짓말을 한다.
     """
     async with conn.transaction():
+        await bound_lock_wait(conn)
         # fail_job·sweep_zombies와 같은 잠금 순서다. 판정과 결과 기록 사이에 청크가
         # 교체되면 방금 계산한 관계가 사라진 청크 번호를 가리킨다.
         cur = await conn.execute(
@@ -341,6 +375,7 @@ async def fail_job(conn: psycopg.AsyncConnection, job: ClaimedJob, error: Except
     """
     message = f"{type(error).__name__}: {error}"
     async with conn.transaction():
+        await bound_lock_wait(conn)
         # 문서 행을 먼저 잠근다. 잡 생성은 전부 documents 변경 트리거 안에서 일어나므로,
         # 이 잠금이 아래 "다른 pending 잡이 있는가" 판정과 pending 복귀 사이에 새 잡이
         # 끼어드는 것(uq_pending_job_per_doc 위반)을 막는다.
@@ -423,6 +458,7 @@ async def release_job(conn: psycopg.AsyncConnection, job: ClaimedJob) -> None:
     60초)까지 회수되지 않으므로, 배포마다 그만큼 파이프라인이 늦어진다.
     """
     async with conn.transaction():
+        await bound_lock_wait(conn)
         # fail_job·sweep_zombies와 같은 잠금 순서다 — 판정과 기록 사이에 새 pending
         # 잡이 커밋되면 pending 복귀가 uq_pending_job_per_doc 위반으로 터진다.
         cur = await conn.execute(
@@ -472,15 +508,32 @@ async def sweep_zombies(conn: psycopg.AsyncConnection) -> int:
         # 것을 막는다. 잠그지 않으면 READ COMMITTED의 statement 스냅샷 탓에 그 잡을 놓쳐
         # 좀비를 pending으로 되돌리고, uq_pending_job_per_doc 위반으로 스윕이 통째로 터진다.
         # 잡보다 문서를 먼저 잠그는 순서가 문서 수정 트랜잭션과의 교착도 함께 없앤다.
-        await conn.execute(
+        #
+        # 문서도 잡도 **잠긴 것은 건너뛴다** (#128). 고아 트랜잭션이 좀비 하나의 문서나 잡을 쥐고
+        # 있으면 기다리는 동안 스윕이 서고, 스윕은 루프 머리에 있어 그 주기의 drain도 돌지 않는다.
+        # 건너뛴 좀비는 막은 쪽이 풀린 뒤의 스윕이 회수한다. 판정은 잠근 좀비에 대해서만 한다.
+        cur = await conn.execute(
             """
-            SELECT 1 FROM documents
+            SELECT id FROM documents
              WHERE id IN (SELECT document_id FROM embedding_jobs
                            WHERE status = 'processing' AND lease_expires_at < now())
              ORDER BY id
-               FOR UPDATE
+               FOR UPDATE SKIP LOCKED
             """
         )
+        documents = [row[0] for row in await cur.fetchall()]
+        cur = await conn.execute(
+            """
+            SELECT id FROM embedding_jobs
+             WHERE status = 'processing' AND lease_expires_at < now()
+               AND document_id = ANY(%s)
+               FOR UPDATE SKIP LOCKED
+            """,
+            (documents,),
+        )
+        zombies = [row[0] for row in await cur.fetchall()]
+        if not zombies:
+            return 0
 
         # 대상 좀비를 한 번만 뽑고 각 잡의 처분을 CTE에서 정한다. 조건을 UPDATE마다
         # 반복하면 세 문장의 실행 순서에 정합성이 의존하게 되는데, 특히 **(문서, 종류)당
@@ -509,7 +562,7 @@ async def sweep_zombies(conn: psycopg.AsyncConnection) -> int:
                                   AND p.kind = j.kind
                                   AND p.status = 'pending') AS superseded
                   FROM embedding_jobs j
-                 WHERE j.status = 'processing' AND j.lease_expires_at < now()
+                 WHERE j.id = ANY(%(zombies)s)
             ), decided AS (
                 SELECT id, document_id, kind,
                        CASE WHEN superseded OR rn > 1     THEN 'done'
@@ -528,6 +581,7 @@ async def sweep_zombies(conn: psycopg.AsyncConnection) -> int:
          RETURNING d.document_id, d.kind, d.next_status
             """,
             {
+                "zombies": zombies,
                 "max_attempts": MAX_ATTEMPTS,
                 "exhausted_error": ZOMBIE_EXHAUSTED_ERROR,
             },
@@ -582,7 +636,9 @@ async def process_once(
     `edges`는 저장된 청크 벡터로 관계만 다시 판정한다.
 
     처리 실패도 True다 — fail_job이 재시도를 예약했고, drain의 반복 조건은 "이번에
-    할 일이 있었는가"이기 때문이다.
+    할 일이 있었는가"이기 때문이다. 예외: 실패 기록마저 락 상한(`bound_lock_wait`)에 걸리면
+    `LockNotAvailable`이 밖으로 나간다 — 반영을 막은 문서 행 락이 실패 기록도 막기 때문이다.
+    run_worker가 그 연결을 버리고 다음 주기로 넘어가며, 잡은 lease 만료 뒤 스윕이 회수한다.
 
     `stop`은 정상 종료 신호다. **임베딩을 시작하기 전에** 확인해 반납하므로, 배포로
     세운 워커가 잡을 processing으로 붙든 채 사라지지 않는다. 이미 임베딩에 들어간
@@ -638,8 +694,45 @@ async def process_once(
     finally:
         if heartbeat is not None:
             finished.set()
-            await heartbeat
+            await _wait_for_heartbeat(heartbeat, job)
     return True
+
+
+# 기다림을 접은 heartbeat. 참조를 쥐지 않으면 끝나기 전에 가비지 컬렉션될 수 있다.
+_detached_heartbeats: set[asyncio.Task] = set()
+
+
+async def _wait_for_heartbeat(heartbeat: asyncio.Task, job: ClaimedJob) -> None:
+    """종료 신호를 받은 heartbeat를 최대 한 lease 기다린다. 넘기면 떼어 두고 돌아간다 (#128).
+
+    정상이면 진행 중이던 연장 한 번만 기다리면 되고, 그 락 대기는 `bound_lock_wait`가 묶는다.
+    이 상한은 락이 아닌 이유(응답 없는 네트워크 등)로 멈춘 경우의 방어선이다 — 상한 없이
+    기다리면 heartbeat 하나에 워커 전체가 선다(#122 S5a-2). 한 lease인 이유: 그동안 한 번도
+    연장하지 못했다면 DB의 lease는 이미 지났고, 기다려서 얻을 것이 없다.
+
+    떼어 둘 때 취소하지 않고, 연결을 밖에서 닫지도 않는다. 취소는 풀 연결을 트랜잭션 중간에
+    되돌리고(#110 B-2), 쿼리가 도는 연결을 다른 태스크가 닫는 것은 안전하지 않으며, 서버에
+    보내는 쿼리 취소는 OpenProxy 너머에서 실패했다(S5a-2 측정기 로그). 떼어 둔 heartbeat는
+    종료 신호를 이미 받았으므로 진행 중인 호출이 끝나면 멈추고, 그 호출이 lock_timeout·
+    keepalive 오류로 끝나면 `app.db.connection`이 오류 난 연결을 풀에 돌려보내지 않고 버린다.
+    남의 잡을 늘리지도 못한다 — 연장은 `(id, attempts)`로 자기 선점만 고친다.
+
+    그때까지 떼어 둔 heartbeat는 풀 연결 하나를 쥔다. 락이면 lock_timeout(한 주기) 안에,
+    응답 없는 네트워크면 클라이언트 keepalive(`app.db`, 리눅스 약 60초) 안에 풀린다. 그 사이
+    떼어 둔 것이 쌓여 풀이 차면 다음 heartbeat는 연결을 못 얻어 실패하고, lease 안에 한 번도
+    연장하지 못하면 잡을 잃은 것으로 보고 결과를 버린다 — 워커가 서지는 않는다(ADR-050 트레이드오프 6).
+    """
+    done, _ = await asyncio.wait({heartbeat}, timeout=get_settings().job_lease_seconds)
+    if done:
+        heartbeat.result()
+        return
+    logger.warning(
+        "heartbeat가 lease(%s초) 넘게 끝나지 않는다 — 기다리지 않고 떼어 둔다 (job_id=%s)",
+        get_settings().job_lease_seconds,
+        job.job_id,
+    )
+    _detached_heartbeats.add(heartbeat)
+    heartbeat.add_done_callback(_detached_heartbeats.discard)
 
 
 async def drain(
