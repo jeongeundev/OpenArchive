@@ -1,6 +1,7 @@
 import io
 import re
 import zipfile
+import zlib
 from pathlib import Path
 
 import olefile
@@ -219,6 +220,32 @@ def test_extract_text_turns_hwpx_tab_into_tab_character() -> None:
 
     assert "가.\t유진이엔티(주)에 대한 청문에 관한 건" in text
 
+
+
+def hwp_without_text(path: Path) -> bytes:
+    """픽스처 HWP의 본문 섹션을 레코드 없는 빈 섹션으로 바꾼 사본을 `path`에 쓰고 돌려준다."""
+    path.write_bytes(fixture("committee_result.hwp"))
+    with olefile.OleFileIO(str(path), write_mode=True) as ole:
+        compressor = zlib.compressobj(wbits=-15)
+        empty = compressor.compress(b"") + compressor.flush()
+        # write_stream은 크기를 바꾸지 못한다 — deflate 끝 뒤의 0 채움은 해제 때 버려진다.
+        size = ole.get_size("BodyText/Section0")
+        ole.write_stream("BodyText/Section0", empty.ljust(size, b"\0"))
+    return path.read_bytes()
+
+
+def hwpx_without_text() -> bytes:
+    """픽스처 HWPX에서 글자 요소를 모두 비운 사본. 문단·표 구조는 남는다."""
+    section = re.sub(r"<hp:t\b[^>/]*>.*?</hp:t>", "<hp:t/>", fixture_section_xml(), flags=re.DOTALL)
+    return hwpx_with_sections([section])
+
+
+def test_extract_text_returns_empty_string_for_hangul_document_without_text(
+    tmp_path: Path,
+) -> None:
+    # 빈 결과는 여기서 오류로 만들지 않는다 — 문서 서비스의 EmptyExtractedText가 판정한다.
+    assert extract_text(hwp_without_text(tmp_path / "empty.hwp"), "hwp") == ""
+    assert extract_text(hwpx_without_text(), "hwpx") == ""
 
 def fixture_section_xml() -> str:
     with zipfile.ZipFile(io.BytesIO(fixture("committee_result.hwpx"))) as archive:

@@ -11,6 +11,7 @@ from conftest import login_as, run_embedding_worker
 from conftest import upload_document as upload
 from docx import Document
 from fastapi.testclient import TestClient
+from test_parsing import hwp_without_text, hwpx_without_text
 
 from app.config import get_settings
 
@@ -279,13 +280,31 @@ def test_upload_hangul_document_extracts_text_and_keeps_the_original(
     download = db_client.get(f"/api/documents/{created.json()['id']}/file")
     assert download.content == original
     assert download.headers["content-type"] == media_type
+@pytest.mark.parametrize("content_type", ["hwp", "hwpx"])
+def test_upload_rejects_hangul_document_without_text(
+    db_client: TestClient, migrated_db: str, tmp_path: Path, content_type: str
+):
+    content = (
+        hwp_without_text(tmp_path / "empty.hwp") if content_type == "hwp" else hwpx_without_text()
+    )
+
+    response = upload(db_client, filename=f"빈 공문.{content_type}", content=content)
+
+    assert response.status_code == 400
+    assert response.json() == {
+        "detail": "문서에서 텍스트를 추출하지 못했습니다. 스캔 이미지 PDF는 지원하지 않습니다."
+    }
+    with psycopg.connect(migrated_db) as conn:
+        assert conn.execute("SELECT count(*) FROM documents").fetchone() == (0,)
+
+
 
 
 def test_upload_rejects_unsupported_extension(db_client: TestClient):
     response = upload(db_client, filename="document.rtf")
 
     assert response.status_code == 400
-    assert "pdf, docx, txt, md" in response.json()["detail"]
+    assert "pdf, docx, txt, md, hwp, hwpx" in response.json()["detail"]
 
 
 def test_upload_rejects_non_utf8_text(db_client: TestClient):
@@ -1344,7 +1363,7 @@ def test_replace_rejects_unsupported_type_and_blank_text(
 
     unsupported = replace_file(db_client, document_id, filename="document.rtf")
     assert unsupported.status_code == 400
-    assert "pdf, docx, txt, md" in unsupported.json()["detail"]
+    assert "pdf, docx, txt, md, hwp, hwpx" in unsupported.json()["detail"]
 
     blank = replace_file(db_client, document_id, content=b" \t\r\n\f")
     assert blank.status_code == 400
