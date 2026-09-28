@@ -27,8 +27,9 @@ export function TextEditor({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const textLabel = document.filename === null ? "문서 텍스트" : "추출 텍스트";
+  // txt·md는 원본이 곧 텍스트다. 그 밖의 형식은 원본 파일에서 추출한 텍스트를 편집한다.
   const showsExtractionNotice =
-    document.content_type === "pdf" || document.content_type === "docx";
+    document.content_type !== "txt" && document.content_type !== "md";
 
   function changeEditing(nextEditing: boolean): void {
     if (nextEditing) {

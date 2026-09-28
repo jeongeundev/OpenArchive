@@ -1,5 +1,6 @@
 import io
 import re
+import zipfile
 from pathlib import Path
 
 import olefile
@@ -181,3 +182,44 @@ def test_extract_text_rejects_zip_that_is_not_hwpx() -> None:
 
     with pytest.raises(ValueError, match="HWPX 파일을 읽을 수 없습니다"):
         extract_text(buf.getvalue(), "hwpx")
+
+
+def hwpx_with_sections(sections: list[str]) -> bytes:
+    """픽스처 HWPX의 section0.xml을 복제·변형한 섹션들로 바꾼 사본. 픽스처 파일은 그대로 둔다."""
+    source = zipfile.ZipFile(io.BytesIO(fixture("committee_result.hwpx")))
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as target:
+        for item in source.infolist():
+            if item.filename != "Contents/section0.xml":
+                target.writestr(item, source.read(item))
+        for number, xml in enumerate(sections):
+            target.writestr(f"Contents/section{number}.xml", xml)
+    return buf.getvalue()
+
+
+def test_extract_text_reads_hwpx_sections_in_numeric_order() -> None:
+    original = fixture_section_xml()
+    sections = [
+        original.replace("2026년 제38차 위원회 결과", f"섹션 {number}") for number in range(11)
+    ]
+
+    text = extract_text(hwpx_with_sections(sections), "hwpx")
+
+    # 이름순이면 section10이 section2 앞에 온다.
+    positions = [text.index(f"섹션 {number}\n") for number in range(11)]
+    assert positions == sorted(positions)
+
+
+def test_extract_text_turns_hwpx_tab_into_tab_character() -> None:
+    section = fixture_section_xml().replace(
+        "<hp:t>가. 유진이엔티", "<hp:t>가.<hp:tab/>유진이엔티"
+    )
+
+    text = extract_text(hwpx_with_sections([section]), "hwpx")
+
+    assert "가.\t유진이엔티(주)에 대한 청문에 관한 건" in text
+
+
+def fixture_section_xml() -> str:
+    with zipfile.ZipFile(io.BytesIO(fixture("committee_result.hwpx"))) as archive:
+        return archive.read("Contents/section0.xml").decode("utf-8")

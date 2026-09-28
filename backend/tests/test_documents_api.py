@@ -1,6 +1,7 @@
 import hashlib
 import io
 import zipfile
+from pathlib import Path
 from urllib.parse import quote
 from uuid import uuid4
 
@@ -257,6 +258,27 @@ def test_upload_rejects_blank_text_without_saving(db_client: TestClient, migrate
     }
     with psycopg.connect(migrated_db) as conn:
         assert conn.execute("SELECT count(*) FROM documents").fetchone() == (0,)
+
+
+@pytest.mark.parametrize(
+    ("filename", "media_type"),
+    [("공문.hwp", "application/x-hwp"), ("공문.hwpx", "application/hwp+zip")],
+)
+def test_upload_hangul_document_extracts_text_and_keeps_the_original(
+    db_client: TestClient, filename: str, media_type: str
+):
+    fixture = Path(__file__).parent / "fixtures" / f"committee_result.{filename.rsplit('.', 1)[1]}"
+    original = fixture.read_bytes()
+
+    created = upload(db_client, filename=filename, content=original)
+
+    assert created.status_code == 201
+    assert created.json()["content_type"] == filename.rsplit(".", 1)[1]
+    detail = db_client.get(f"/api/documents/{created.json()['id']}").json()
+    assert "2026년 제38차 위원회 결과" in detail["content"]
+    download = db_client.get(f"/api/documents/{created.json()['id']}/file")
+    assert download.content == original
+    assert download.headers["content-type"] == media_type
 
 
 def test_upload_rejects_unsupported_extension(db_client: TestClient):

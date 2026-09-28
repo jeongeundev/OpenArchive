@@ -1,5 +1,5 @@
 export type EmbeddingStatus = "pending" | "processing" | "ready" | "error";
-export type ContentType = "pdf" | "docx" | "txt" | "md";
+export type ContentType = "pdf" | "docx" | "txt" | "md" | "hwp" | "hwpx";
 export type Visibility = "public" | "private";
 
 export type TokenScope = "read" | "read_write";
@@ -213,7 +213,7 @@ export interface ClustersResponse {
   connections: ClusterConnection[];
 }
 
-export const SUPPORTED_CONTENT_TYPES = ["pdf", "docx", "txt", "md"] as const;
+export const SUPPORTED_CONTENT_TYPES = ["pdf", "docx", "txt", "md", "hwp", "hwpx"] as const;
 
 // backend/app/services/search.py의 MAX_K와 같아야 하며, 초과하면 API가 422를 반환한다.
 export const MAX_K = 20;

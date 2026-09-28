@@ -33,7 +33,23 @@ describe("TextEditor", () => {
     vi.unstubAllGlobals();
   });
 
-  it("PDF와 DOCX에는 추출 텍스트 편집 안내를 상시 표시한다", () => {
+  it.each(["pdf", "docx", "hwp", "hwpx"] as const)(
+    "%s처럼 원본에서 추출한 텍스트에는 편집 안내를 상시 표시한다",
+    (contentType) => {
+      render(
+        <TextEditor
+          disabled={false}
+          document={{ ...document, content_type: contentType }}
+          onEditingChange={vi.fn()}
+          onSaved={vi.fn()}
+        />,
+      );
+
+      expect(screen.getByText(notice)).toBeInTheDocument();
+    },
+  );
+
+  it("TXT 원본에는 추출 텍스트 편집 안내를 표시하지 않는다", () => {
     const { rerender } = render(
       <TextEditor
         disabled={false}
