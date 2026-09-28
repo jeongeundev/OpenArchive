@@ -65,7 +65,7 @@ def test_detect_content_type(filename: str, expected: str) -> None:
     assert detect_content_type(filename) == expected
 
 
-@pytest.mark.parametrize("filename", ["README", "plan.rtf", "data.xlsx"])
+@pytest.mark.parametrize("filename", ["README", "plan.rtf", "data.csv"])
 def test_detect_content_type_rejects_unsupported_files(filename: str) -> None:
     with pytest.raises(UnsupportedFileType):
         detect_content_type(filename)
