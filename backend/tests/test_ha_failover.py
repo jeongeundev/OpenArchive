@@ -18,6 +18,7 @@ sys.path.insert(0, str(ROOT))
 
 from scripts.ha_failover import (
     Outcome,
+    Target,
     call_with_backoff,
     judge,
     ledger_rows,
@@ -25,6 +26,9 @@ from scripts.ha_failover import (
     node_digest,
     promotion,
     reconcile,
+    tally,
+    unavailable_spans,
+    uploader,
     write_outage,
 )
 
@@ -116,6 +120,31 @@ async def test_transport_error_as_last_attempt_is_reported_as_error():
     assert out.final_status is None
     assert "ReadTimeout" in out.error
     assert not out.ok
+
+
+async def test_upload_retries_reuse_the_same_idempotency_key():
+    """재시도마다 키가 새로 생기면 모호한 커밋이 중복 문서가 된다(ADR-047) — 장부 판정이 무의미해진다."""
+    import asyncio
+
+    stop = asyncio.Event()
+    keys: list[str] = []
+    replies = iter([503, 201])
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        keys.append(request.headers["Idempotency-Key"])
+        status = next(replies)
+        if status == 201:
+            stop.set()
+        return httpx.Response(status, headers={"Retry-After": "0"})
+
+    logged: list[dict] = []
+    target = Target(dsn="", api="http://api", nodes=[], prefix="ha-t-")
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        await uploader(lambda kind, **kw: logged.append(kw), stop, client, target)
+
+    assert len(keys) == 2
+    assert keys[0] == keys[1]
+    assert logged[0]["statuses"] == [503, 201]
 
 
 # --- 장부 대조 ----------------------------------------------------------------------
@@ -320,3 +349,78 @@ def test_write_outage_is_none_without_failures_after_injection():
 
 def test_write_outage_without_recovery_has_open_end():
     assert write_outage([p(10.0, True), p(15.0, False)], since=10.0) == (10.0, None)
+
+
+# --- 기록 → 판정 입력 -----------------------------------------------------------------
+# judge()가 맞아도 그 입력을 세는 쪽이 틀리면 유실·500이 통과로 적힌다.
+
+
+def ev(kind, t, **kw):
+    return {"kind": kind, "t": t} | kw
+
+
+def req(kind, t, statuses, lat=0.1):
+    final = statuses[-1]
+    return ev(kind, t, ok=final is not None and 200 <= final < 300, lat=lat, statuses=statuses)
+
+
+def status(t, **counters):
+    base = dict.fromkeys(("pending", "processing", "inconsistent", "stale_edges", "not_ready"), 0)
+    return ev("status", t, ok=True, error_jobs=0) | base | counters
+
+
+BEFORE = cluster(p1="leader", p2="sync_standby", p3="replica")
+AFTER = cluster(p1="replica", p2="leader", p3="sync_standby")
+
+RUN = [
+    ev("meta", 0.0, phase="begin", label="s2-1"),
+    ev("cluster", 0.5, **BEFORE),
+    req("upload", 1.0, [201]),
+    req("upload", 2.0, [503, 503, 201]),  # 백오프가 흡수 — 최종 실패 아님
+    req("upload", 3.0, [500]),  # 500은 즉시 최종
+    req("search", 1.5, [None, 200]),
+    req("search", 2.5, [503, 503]),  # 예산 소진 — 최종 실패
+    status(1.0, pending=3),
+    status(2.0, error_jobs=1),
+    status(9.0),
+    ev("cluster", 4.0, **AFTER),
+    ev("meta", 5.0, phase="load_stopped"),
+    ev("meta", 9.0, phase="end", converged=True),
+]
+
+
+def test_tally_counts_raw_500_and_final_failures_per_kind():
+    t = tally(RUN)
+
+    assert t["raw_500"] == {"upload": 1, "search": 0}
+    assert t["final_failures"] == {"upload": 1, "search": 1}
+
+
+def test_tally_reads_convergence_from_the_end_marker():
+    assert tally(RUN)["converged"] is True
+    assert tally([e for e in RUN if e.get("phase") != "end"])["converged"] is False
+
+
+def test_tally_keeps_an_error_job_seen_mid_run():
+    """error는 끝 상태다 — 한 번이라도 보였으면 마지막 스냅숏과 무관하게 위반이다."""
+    assert tally(RUN)["error_jobs"] == 1
+
+
+def test_tally_judges_promotion_from_first_to_last_cluster_state():
+    assert tally(RUN)["promotion"]["promoted_sync"] is True
+    assert tally([e for e in RUN if e["kind"] != "cluster"])["promotion"]["promoted_sync"] is None
+
+
+def test_unavailable_spans_merge_requests_that_saw_503():
+    """503은 판정에 넣지 않지만 수와 지속 시간은 따로 남긴다(#119) — 백오프가 흡수한 중단도 보인다."""
+    events = [
+        req("upload", 10.0, [201]),
+        req("upload", 14.0, [503, 201], lat=3.0),  # 11.0~14.0
+        req("search", 15.0, [503, 503, 200], lat=2.0),  # 13.0~15.0 — 겹쳐 합쳐진다
+        req("upload", 17.5, [503, 201], lat=1.0),  # 16.5~17.5 — 2초 안에 이어져 합쳐진다
+        req("search", 30.0, [503, 200], lat=1.0),  # 29.0~30.0 — 떨어져 있다
+        req("search", 31.0, [None, 200], lat=1.0),  # 전송 오류는 503이 아니다
+    ]
+
+    assert unavailable_spans(events) == [(11.0, 17.5, 3), (29.0, 30.0, 1)]
+    assert unavailable_spans([req("upload", 1.0, [201])]) == []
