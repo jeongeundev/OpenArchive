@@ -35,6 +35,7 @@ from app.worker import (
     CHANNEL,
     MAX_ATTEMPTS,
     ZOMBIE_EXHAUSTED_ERROR,
+    _detached_heartbeats,
     _listen_for_jobs,
     claim_job,
     drain,
@@ -2234,7 +2235,8 @@ async def test_a_heartbeat_stuck_past_its_lease_does_not_hold_up_the_worker(conn
         assert interrupted == []
     finally:
         never.set()
-        await asyncio.sleep(0.05)  # 떼어 둔 heartbeat가 끝나게 한다
+        # 떼어 둔 heartbeat가 끝날 때까지 기다린다 — 다음 테스트로 새지 않게.
+        await asyncio.gather(*_detached_heartbeats)
 
     assert (await document_state(conn, doc_id))[1] == "ready"
 

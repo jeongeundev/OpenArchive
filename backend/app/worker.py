@@ -77,6 +77,11 @@ class ClaimedJob:
     attempts: int
 
 
+def heartbeat_interval() -> float:
+    """heartbeat 한 주기(초) — lease의 1/3. 두 번 놓쳐도 DB 쪽 lease가 살아 있는 간격이다."""
+    return get_settings().job_lease_seconds / 3
+
+
 async def bound_lock_wait(conn: psycopg.AsyncConnection) -> None:
     """이 트랜잭션의 락 대기를 heartbeat 한 주기(lease의 1/3)로 묶는다 (#128). 트랜잭션 첫 문장으로 부른다.
 
@@ -89,7 +94,7 @@ async def bound_lock_wait(conn: psycopg.AsyncConnection) -> None:
     시도할 수 있다. `SET LOCAL`과 같지만 값을 인자로 넘기려고 `set_config(..., true)`를 쓴다 —
     OpenProxy transaction 모드라 트랜잭션 밖 SET은 쓸 수 없다.
     """
-    milliseconds = max(1, get_settings().job_lease_seconds * 1000 // 3)
+    milliseconds = int(heartbeat_interval() * 1000)
     await conn.execute("SELECT set_config('lock_timeout', %s, true)", (f"{milliseconds}ms",))
 
 
@@ -110,7 +115,8 @@ async def claim_job(conn: psycopg.AsyncConnection) -> ClaimedJob | None:
     고아 트랜잭션이 쥐고 있으면 기다리는 동안 워커가 서고, 상한을 걸어 실패시켜도 다음 주기에
     id가 가장 작은 같은 잡을 또 집어 뒤의 잡이 영영 오지 않는다. 문서 행을 잡 행과 함께
     `SKIP LOCKED`로 잠가 두면 아래 UPDATE도 기다릴 일이 없다. 수정 중인 문서의 잡을 잠깐 건너뛰는
-    것뿐이다 — 다음 선점이 가져간다.
+    것뿐이다 — 다음 선점이 가져간다. 관계 잡은 선점에서 문서 행을 고치지 않지만 종류를 가리지
+    않고 함께 건너뛴다 — 판정 트랜잭션이 어차피 그 문서 행을 먼저 잠그므로 집어 봐야 기다린다.
     """
     async with conn.transaction():
         cur = await conn.execute(
@@ -188,7 +194,7 @@ async def _keep_lease(
     deadline = loop.time() + lease
     while True:
         with contextlib.suppress(TimeoutError):
-            await asyncio.wait_for(finished.wait(), timeout=lease / 3)
+            await asyncio.wait_for(finished.wait(), timeout=heartbeat_interval())
         if finished.is_set():
             return
         try:
@@ -630,7 +636,9 @@ async def process_once(
     `edges`는 저장된 청크 벡터로 관계만 다시 판정한다.
 
     처리 실패도 True다 — fail_job이 재시도를 예약했고, drain의 반복 조건은 "이번에
-    할 일이 있었는가"이기 때문이다.
+    할 일이 있었는가"이기 때문이다. 예외: 실패 기록마저 락 상한(`bound_lock_wait`)에 걸리면
+    `LockNotAvailable`이 밖으로 나간다 — 반영을 막은 문서 행 락이 실패 기록도 막기 때문이다.
+    run_worker가 그 연결을 버리고 다음 주기로 넘어가며, 잡은 lease 만료 뒤 스윕이 회수한다.
 
     `stop`은 정상 종료 신호다. **임베딩을 시작하기 전에** 확인해 반납하므로, 배포로
     세운 워커가 잡을 processing으로 붙든 채 사라지지 않는다. 이미 임베딩에 들어간
@@ -708,6 +716,11 @@ async def _wait_for_heartbeat(heartbeat: asyncio.Task, job: ClaimedJob) -> None:
     종료 신호를 이미 받았으므로 진행 중인 호출이 끝나면 멈추고, 그 호출이 lock_timeout·
     keepalive 오류로 끝나면 `app.db.connection`이 오류 난 연결을 풀에 돌려보내지 않고 버린다.
     남의 잡을 늘리지도 못한다 — 연장은 `(id, attempts)`로 자기 선점만 고친다.
+
+    그때까지 떼어 둔 heartbeat는 풀 연결 하나를 쥔다. 락이면 lock_timeout(한 주기) 안에,
+    응답 없는 네트워크면 클라이언트 keepalive(`app.db`, 리눅스 약 60초) 안에 풀린다. 그 사이
+    떼어 둔 것이 쌓여 풀이 차면 다음 heartbeat는 연결을 못 얻어 실패하고, lease 안에 한 번도
+    연장하지 못하면 잡을 잃은 것으로 보고 결과를 버린다 — 워커가 서지는 않는다(ADR-050 트레이드오프 6).
     """
     done, _ = await asyncio.wait({heartbeat}, timeout=get_settings().job_lease_seconds)
     if done:
