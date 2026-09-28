@@ -458,7 +458,7 @@ async def test_the_worker_never_reads_outside_a_transaction(conn, migrated_db):
         assert await drain(relayed, FakeProvider()) == 2
 
     # 중계기가 실제로 워커의 SQL을 봤는지 — 아니면 빈 목록이 무조건 통과한다.
-    assert any("FOR UPDATE SKIP LOCKED" in sql for sql in wire.sql)
+    assert any("SKIP LOCKED" in sql for sql in wire.sql)
     assert wire.selects_outside_transaction() == []
 
 
@@ -741,7 +741,7 @@ async def test_sweep_completes_a_zombie_whose_document_moved_on(conn, other_conn
     assert [j[0] for j in await job_rows(conn, doc_id)] == ["done", "pending"]
 
 
-async def test_sweep_waits_for_an_uncommitted_edit_before_deciding(conn, other_conn):
+async def test_sweep_does_not_decide_under_an_uncommitted_edit(conn, other_conn):
     """좀비 판정도 실패 처리와 똑같이 **문서 행을 잠근 뒤** 한다
     (ARCHITECTURE "워커 처리 루프" 4·5번 공통 예외).
 
@@ -751,6 +751,9 @@ async def test_sweep_waits_for_an_uncommitted_edit_before_deciding(conn, other_c
     UniqueViolation으로 터지고, run_worker의 except가 그것을 삼켜 그 주기의 drain이
     통째로 스킵된다. test_sweep_completes_a_zombie_whose_document_moved_on은 수정이
     이미 커밋된 뒤라 이 경합을 재현하지 못한다.
+
+    잠글 수 없는 문서의 좀비는 기다리지 않고 건너뛴다(#128) — 수정이 커밋된 뒤의 스윕이
+    새 잡을 보고 done으로 마감한다.
     """
     doc_id = await insert_document(conn)
     zombie = await claim_job(conn)
@@ -766,6 +769,9 @@ async def test_sweep_waits_for_an_uncommitted_edit_before_deciding(conn, other_c
         await asyncio.sleep(0.2)  # 스윕이 문서 잠금까지 도달할 시간을 준다
 
     assert await asyncio.wait_for(sweep, timeout=5) == 0  # 되돌린 것이 없다
+    assert [j[0] for j in await job_rows(conn, doc_id)] == ["processing", "pending"]
+
+    assert await sweep_zombies(conn) == 0
     assert [j[0] for j in await job_rows(conn, doc_id)] == ["done", "pending"]
 
 

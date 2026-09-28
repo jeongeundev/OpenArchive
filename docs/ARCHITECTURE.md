@@ -371,9 +371,12 @@ CREATE TRIGGER trg_build_document_edges                          -- (008) 정의
 UPDATE embedding_jobs j
    SET status='processing', attempts=attempts+1, started_at=now(),
        lease_expires_at = now() + make_interval(secs => :job_lease_seconds)  -- 기본 60초
- WHERE j.id = (SELECT id FROM embedding_jobs
-                WHERE status='pending' AND next_attempt_at <= now()
-                ORDER BY id LIMIT 1 FOR UPDATE SKIP LOCKED)
+ WHERE j.id = (SELECT q.id FROM embedding_jobs q
+                  JOIN documents d ON d.id = q.document_id
+                WHERE q.status='pending' AND q.next_attempt_at <= now()
+                ORDER BY q.id LIMIT 1
+                  FOR UPDATE OF q SKIP LOCKED
+                  FOR NO KEY UPDATE OF d SKIP LOCKED)   -- 문서 행이 잠긴 잡은 건너뛴다 (#128)
 RETURNING j.id, j.document_id, j.kind;
 
 -- 임베딩 잡일 때만: 같은 트랜잭션에서 문서 상태도 processing으로 (UI 표시용)
@@ -383,6 +386,8 @@ UPDATE documents SET embedding_status='processing'
 ```
 
    **종류를 가리지 않고 `id` 순으로 집는다.** 관계 잡에 우선순위를 주면 그 판정이 뒤에 오는 문서의 임베딩보다 먼저 돌아, 아직 청크가 없는 이웃을 못 보고 관계를 놓친다.
+
+   **문서 행이 잠긴 잡도 건너뛴다** (#128). 임베딩 잡의 claim은 문서 행을 UPDATE하는데, 그 행을 죽은 OpenProxy 노드 너머의 고아 트랜잭션이 쥐고 있으면 기다리는 동안 워커가 서고, 상한을 걸어 실패시켜도 다음 주기에 같은 잡을 또 집어 뒤의 잡이 영영 오지 않는다. 문서 행을 잡 행과 함께 `SKIP LOCKED`로 잠가 두면 아래 UPDATE도 기다리지 않는다.
 
 2. (`kind='embed'`) 문서의 최신 `content`와 **`content_hash`를 함께 읽기** → 청킹 → 임베딩
    *DB 밖 연산은 이 단계뿐이며, 시간이 오래 걸린다.*
@@ -425,6 +430,11 @@ COMMIT;
    `sweep_zombies()`는 워커 신원으로 거르지 않는 **전역 스윕**이라 다른 워커가 남긴 좀비도 회수한다. 스윕은 워커 **루프 머리**에 있어 첫 반복이 곧 기동 시 1회 스윕이고, **drain 중에도 잡과 잡 사이에서 lease 주기로** 돈다. 머리에서만 돌면 drain이 끝날 때까지 회수가 밀린다(#110 B의 S2-4는 약 13분).
 
    **잡을 잃은 워커는 결과를 쓰지 않는다.** 연장이 0행이거나 lease 동안 한 번도 성공하지 못하면 잃은 것으로 보고, 임베딩 뒤·반영 전에 포기한다 — 청크를 쓰지도, 잡을 마감하거나 실패로 기록하지도 않는다. 잡은 이제 되찾아 간 쪽의 것이다. 연결 오류 한 번으로는 포기하지 않는다(lease가 주기의 세 배다). 처리 중인 태스크를 취소하지 않는 것은 트랜잭션 중간에 끊긴 연결이 풀을 오염시키기 때문이다(#110 B-2) — heartbeat도 같은 이유로 취소하지 않고 종료 신호로 멈춘다. 다만 워커가 잃었다고 알아채는 것은 늦을 수 있다(연장 주기 사이, 풀 대여 대기, 확인과 반영 사이). 그래서 이 포기는 헛일을 줄이는 최적화이고, **남의 잡에 쓰지 않는 보장은 DB가 쓰는 순간 한다** — 결과 반영·관계 판정·실패 기록 트랜잭션은 문서 행을 잠근 뒤 잡을 `(id, attempts)`와 `processing`으로 다시 잠가 확인하고(`lock_owned_job`), 아니면 아무것도 쓰지 않는다. 문서 → 잡 잠금 순서가 스윕과 같아, 확인한 뒤 커밋까지 스윕이 끼어들지 못한다.
+
+   **어떤 락도 워커를 끝없이 세우지 못한다** (#128, #122 S5a-2). 죽은 OpenProxy 노드를 거치던 트랜잭션은 Primary가 끊을 때까지(서버 keepalive 기본 2시간) 문서·잡 행 락을 쥔 채 남는다. S5a-2에서 lease 연장이 그 락을 761초 넘게 기다렸고, 워커는 heartbeat 종료를 상한 없이 기다려 13분 넘게 처리 0이었다. 서버 설정(ADR-051)이 근본 해결이고, 앱은 그 설정이 없는 DB에서도 버티도록 셋을 둔다.
+   - **일감을 고르는 쿼리는 기다리지 않는다.** claim(1번)과 스윕은 잠긴 문서·잡을 `SKIP LOCKED`로 건너뛴다. 스윕이 서거나 실패하면 루프 머리의 drain도 돌지 않기 때문이다. 건너뛴 좀비는 막은 쪽이 풀린 뒤의 스윕이 회수한다.
+   - **자기 잡에 쓰는 트랜잭션은 한 heartbeat 주기(lease의 1/3)까지만 기다린다.** lease 연장·결과 반영·관계 판정·실패 기록·반납이 첫 문장으로 `set_config('lock_timeout', …, true)`를 건다(OpenProxy transaction 모드라 트랜잭션 밖 SET은 못 쓴다). 상한에 걸리면 `LockNotAvailable`로 끝나고, 잡은 lease 만료 뒤 스윕이 회수한다.
+   - **heartbeat는 최대 한 lease만 기다린다.** 넘기면 취소하지 않고 떼어 둔다 — 취소는 풀을 오염시키고(#110 B-2), 쿼리가 도는 연결을 밖에서 닫는 것은 안전하지 않으며, OpenProxy 너머의 쿼리 취소는 실패했다. 떼어 둔 heartbeat는 진행 중인 호출이 끝나면 멈추고, 오류로 끝난 연결은 `app.db.connection`이 버린다.
 
    **회수에도 4번과 같은 재시도 예산이 걸린다.** lease가 만료된 잡의 `attempts`가 이미 3회를 소진했으면 `pending`으로 되돌리지 않고 job `error` + `documents.embedding_status='error'`로 격리한다(`last_error`는 `WorkerCrashLoop: …`). 여기서도 문서 상태를 건드리는 것은 임베딩 잡뿐이며, 회수·격리 판정은 종류를 가리지 않고 `(document_id, kind)` 단위로 이뤄진다. 이것이 없으면 상한이 4번(예외로 잡히는 실패)에만 걸린다 — `claim_job`은 `attempts`를 보지 않으므로, 워커 프로세스를 죽이는 잡은 회수 → 재선점 → 재크래시를 무한 반복하고 그때마다 워커가 함께 죽는다. `attempts`를 초기화하지 않는 것은 이 판정의 전제이지 그 자체로 상한을 만들지는 않는다.
 
