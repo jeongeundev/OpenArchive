@@ -92,9 +92,11 @@ def extract_text(data: bytes, content_type: str) -> str:
             pages = PdfReader(io.BytesIO(data)).pages
             return "\n\n".join(page.extract_text() or "" for page in pages)
 
-        if content_type in ("hwp", "hwpx"):
-            paragraphs = _hwp_paragraphs(data) if content_type == "hwp" else _hwpx_paragraphs(data)
-            return "\n\n".join(paragraph for paragraph in paragraphs if paragraph.strip())
+        if content_type == "hwp":
+            return _join_paragraphs(_hwp_paragraphs(data))
+
+        if content_type == "hwpx":
+            return _join_paragraphs(_hwpx_paragraphs(data))
 
         document = Document(io.BytesIO(data))
         return "\n\n".join(paragraph.text for paragraph in document.paragraphs)
@@ -102,6 +104,10 @@ def extract_text(data: bytes, content_type: str) -> str:
         raise
     except Exception as error:
         raise ValueError(f"{content_type.upper()} 파일을 읽을 수 없습니다.") from error
+
+
+def _join_paragraphs(paragraphs: Iterator[str]) -> str:
+    return "\n\n".join(paragraph for paragraph in paragraphs if paragraph.strip())
 
 
 # HWP·HWPX 문단은 본문 순서대로 낸다 — 표 셀·머리말 안의 문단도 그것을 담은 문단 바로 뒤에
