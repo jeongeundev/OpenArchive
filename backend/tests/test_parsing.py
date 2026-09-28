@@ -1,5 +1,8 @@
 import io
+import re
+from pathlib import Path
 
+import olefile
 import pytest
 from docx import Document
 
@@ -47,13 +50,15 @@ def minimal_pdf(text: str) -> bytes:
         ("manual.DOCX", "docx"),
         ("notes.txt", "txt"),
         ("README.md", "md"),
+        ("공문.HWP", "hwp"),
+        ("보고.hwpx", "hwpx"),
     ],
 )
 def test_detect_content_type(filename: str, expected: str) -> None:
     assert detect_content_type(filename) == expected
 
 
-@pytest.mark.parametrize("filename", ["README", "plan.hwp", "data.xlsx"])
+@pytest.mark.parametrize("filename", ["README", "plan.rtf", "data.xlsx"])
 def test_detect_content_type_rejects_unsupported_files(filename: str) -> None:
     with pytest.raises(UnsupportedFileType):
         detect_content_type(filename)
@@ -91,7 +96,7 @@ def test_extract_text_returns_empty_string_for_pdf_without_text() -> None:
     assert extract_text(minimal_pdf(""), "pdf") == ""
 
 
-@pytest.mark.parametrize("content_type", ["pdf", "docx"])
+@pytest.mark.parametrize("content_type", ["pdf", "docx", "hwp", "hwpx"])
 @pytest.mark.parametrize("data", [b"", b"not a document"])
 def test_extract_text_normalizes_invalid_binary_document_errors(
     data: bytes, content_type: str
@@ -102,7 +107,7 @@ def test_extract_text_normalizes_invalid_binary_document_errors(
 
 def test_extract_text_rejects_unsupported_content_type() -> None:
     with pytest.raises(UnsupportedFileType):
-        extract_text(b"data", "hwp")
+        extract_text(b"data", "rtf")
 
 
 def test_media_type_is_fixed_by_extension_with_octet_stream_fallback():
@@ -110,5 +115,69 @@ def test_media_type_is_fixed_by_extension_with_octet_stream_fallback():
 
     assert media_type_for("a.PDF") == "application/pdf"
     assert media_type_for("a.md") == "text/markdown; charset=utf-8"
+    assert media_type_for("a.hwp") == "application/x-hwp"
+    assert media_type_for("a.HWPX") == "application/hwp+zip"
     assert media_type_for("a.html") == "application/octet-stream"
     assert media_type_for("noext") == "application/octet-stream"
+
+
+FIXTURES = Path(__file__).parent / "fixtures"
+
+
+def fixture(name: str) -> bytes:
+    """공공누리 제1유형 공개 보도자료. 출처는 `fixtures/SOURCE.md`."""
+    return (FIXTURES / name).read_bytes()
+
+
+@pytest.mark.parametrize("content_type", ["hwp", "hwpx"])
+def test_extract_text_reads_hangul_paragraphs_and_table_cells_in_order(
+    content_type: str,
+) -> None:
+    text = extract_text(fixture(f"committee_result.{content_type}"), content_type)
+    paragraphs = [paragraph.strip() for paragraph in text.split("\n\n")]
+
+    # 문단마다 빈 줄로 나뉘어야 청킹(#103)이 문단 경계를 쓴다.
+    assert "2026년 제38차 위원회 결과" in paragraphs
+    assert "가. 유진이엔티(주)에 대한 청문에 관한 건" in paragraphs
+    # 표 셀 안의 문단도 추출한다 — 보도자료는 머리말·담당자를 표에 둔다.
+    assert "가. 방송지원정책과" in paragraphs
+    # 본문 순서를 지킨다.
+    title = paragraphs.index("2026년 제38차 위원회 결과")
+    agenda = paragraphs.index("가. 유진이엔티(주)에 대한 청문에 관한 건")
+    decision = next(i for i, p in enumerate(paragraphs) if p.startswith("o 방미통위는"))
+    assert title < agenda < decision
+    # 빈 문단은 남기지 않는다.
+    assert "" not in paragraphs
+
+
+@pytest.mark.parametrize("name", ["committee_result", "tax_administration"])
+def test_hwp_and_hwpx_of_the_same_document_extract_the_same_text(name: str) -> None:
+    hwp = extract_text(fixture(f"{name}.hwp"), "hwp")
+
+    assert hwp == extract_text(fixture(f"{name}.hwpx"), "hwpx")
+    # HWP 문단 텍스트의 제어 문자(표·그림 자리 등)가 본문에 새지 않는다.
+    assert not re.search(r"[\x00-\x08\x0b-\x1f]", hwp)
+
+
+@pytest.mark.parametrize(
+    ("flag", "message"),
+    [(0x02, "암호가 걸린 HWP 문서"), (0x04, "배포용 HWP 문서")],
+)
+def test_extract_text_rejects_encrypted_hwp(tmp_path: Path, flag: int, message: str) -> None:
+    path = tmp_path / "encrypted.hwp"
+    path.write_bytes(fixture("committee_result.hwp"))
+    with olefile.OleFileIO(str(path), write_mode=True) as ole:
+        header = bytearray(ole.openstream("FileHeader").read())
+        header[36] |= flag  # 속성 플래그: bit 1 암호, bit 2 배포용
+        ole.write_stream("FileHeader", bytes(header))
+
+    with pytest.raises(ValueError, match=message):
+        extract_text(path.read_bytes(), "hwp")
+
+
+def test_extract_text_rejects_zip_that_is_not_hwpx() -> None:
+    buf = io.BytesIO()
+    Document().save(buf)  # 섹션 XML이 없는 다른 ZIP 문서
+
+    with pytest.raises(ValueError, match="HWPX 파일을 읽을 수 없습니다"):
+        extract_text(buf.getvalue(), "hwpx")

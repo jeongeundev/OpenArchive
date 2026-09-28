@@ -260,7 +260,7 @@ def test_upload_rejects_blank_text_without_saving(db_client: TestClient, migrate
 
 
 def test_upload_rejects_unsupported_extension(db_client: TestClient):
-    response = upload(db_client, filename="document.hwp")
+    response = upload(db_client, filename="document.rtf")
 
     assert response.status_code == 400
     assert "pdf, docx, txt, md" in response.json()["detail"]
@@ -1320,7 +1320,7 @@ def test_replace_rejects_unsupported_type_and_blank_text(
 ):
     document_id = upload(db_client).json()["id"]
 
-    unsupported = replace_file(db_client, document_id, filename="document.hwp")
+    unsupported = replace_file(db_client, document_id, filename="document.rtf")
     assert unsupported.status_code == 400
     assert "pdf, docx, txt, md" in unsupported.json()["detail"]
 
