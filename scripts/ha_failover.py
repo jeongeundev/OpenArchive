@@ -6,18 +6,24 @@
 - 장부 대조: 커밋 응답(2xx)을 받은 업로드가 전부 DB에 있고 내용 sha256이 같은가(유실 0),
   실패 응답인데 DB에 남은 행·같은 제목의 중복 행이 없는가(멱등키, ADR-047)
 - 사용자 가시 실패: 웹 UI·MCP와 같은 백오프(1초 시작·상한 8초·전체 지터·60초)를 거친 뒤의
-  최종 실패 수. 원시 응답의 500(코드 결함 신호, ADR-048)은 따로 세며 0이어야 한다
+  최종 실패 수. 원시 응답의 500(코드 결함 신호, ADR-048)은 따로 세며 0이어야 한다.
+  웹 UI와 달리 요청마다 15초 타임아웃을 두고 타임아웃도 다시 보낸다 — 매달린 요청 하나가
+  측정을 멈추지 않게 하려는 것이다. 503을 받은 요청의 수·구간은 판정 밖에서 따로 남긴다
 - 정합성 카운터(대기·처리 중 잡, 청크 버전 불일치, 관계 미반영, 미준비 문서) 0 수렴
 - 노드 대조: 노드마다 5432로 직접 붙어 이 회차 문서의 수·내용 다이제스트(md5)가 같은가
-- 승격 대상: 리더가 바뀌었다면 새 리더가 주입 전 동기 standby였는가(ADR-049)
+- 승격 대상: 리더가 바뀌었다면 새 리더가 주입 전 동기 standby였는가(ADR-049). 첫 상태와
+  마지막 상태만 비교하므로 한 회차에 리더가 두 번 바뀌면 중간 승격은 판정하지 못한다
 
 쓰기 중단 시간(RTO)은 100ms마다 VIP에 새 연결로 WAL을 남기는 트랜잭션을 커밋하는 probe로 잰다.
 `txid_current()`만으로는 커밋이 WAL을 쓰지 않아 동기 복제 대기를 타지 않는다 — 동기 standby가 죽어
 커밋이 멈춘 구간을 놓친다(S5a). probe의 실패는 관측값이며 판정에 넣지 않는다.
 
+노드 대조는 5432에 직접 붙는다. VIP 단일 엔드포인트 규칙(ADR-006)은 애플리케이션의 규칙이고,
+이 도구의 목적이 VIP 뒤의 노드끼리 같은지 보는 것이다. 부하·probe·상태 조회는 VIP로 붙는다.
+
 사용 (저장소 루트에서, API·워커가 --api와 같은 DB로 떠 있어야 한다):
   DATABASE_URL=postgresql://…@<VIP>:6432/opensql \\
-  backend/.venv/bin/python scripts/ha_failover.py run --label s2-1 --nodes 192.168.64.201,192.168.64.202,192.168.64.203 \\
+  backend/.venv/bin/python scripts/ha_failover.py run s2-1 --nodes 192.168.64.201,192.168.64.202,192.168.64.203 \\
       --inject 'utmctl stop node1; sleep 90; utmctl start node1' --inject-at 40 --load 240
   backend/.venv/bin/python scripts/ha_failover.py report s2-1 --nodes …   # 기록으로 다시 판정
 
@@ -45,6 +51,7 @@ from pathlib import Path
 import httpx
 import psycopg
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
+from psycopg.rows import dict_row
 
 BACKEND = Path(__file__).resolve().parents[1] / "backend"
 if str(BACKEND) not in sys.path:
@@ -84,6 +91,10 @@ QUERIES = [
     "연차 휴가 신청 절차",
 ]
 COUNTERS = ("pending", "processing", "inconsistent", "stale_edges", "not_ready")
+# 지금 WAL 파일 이름의 앞 8자리 = timeline. 승격마다 1씩 오른다.
+TIMELINE_SQL = (
+    "('x' || substr(pg_walfile_name(pg_current_wal_lsn()), 1, 8))::bit(32)::int"
+)
 
 
 # --- 백오프 ---------------------------------------------------------------------------
@@ -252,6 +263,47 @@ def write_outage(
     return start, end
 
 
+def tally(events: list[dict]) -> dict:
+    """기록에서 DB 없이 셀 수 있는 판정 입력. 장부 대조·노드 대조는 summarize가 붙인다."""
+    by = lambda kind: [e for e in events if e["kind"] == kind]
+    clusters = by("cluster")
+    return {
+        "raw_500": {
+            k: sum(s == 500 for e in by(k) for s in e["statuses"])
+            for k in ("upload", "search")
+        },
+        "final_failures": {
+            k: sum(not e["ok"] for e in by(k)) for k in ("upload", "search")
+        },
+        "converged": next(
+            (e["converged"] for e in by("meta") if e.get("phase") == "end"), False
+        ),
+        # error는 끝 상태다 — 한 번이라도 보였으면 위반이다
+        "error_jobs": max(
+            (e["error_jobs"] for e in by("status") if e["ok"]), default=0
+        ),
+        "promotion": promotion(clusters[0], clusters[-1])
+        if clusters
+        else {"promoted_sync": None},
+    }
+
+
+def unavailable_spans(
+    requests: list[dict], *, gap: float = 2.0
+) -> list[tuple[float, float, int]]:
+    """503을 한 번이라도 받은 요청의 구간(시작 = 끝 시각 - 지연)을 합친다. (시작, 끝, 요청 수)."""
+    spans: list[tuple[float, float, int]] = []
+    for start, end in sorted(
+        (e["t"] - e["lat"], e["t"]) for e in requests if 503 in e["statuses"]
+    ):
+        if spans and start <= spans[-1][1] + gap:
+            s, e, n = spans[-1]
+            spans[-1] = (s, max(e, end), n + 1)
+        else:
+            spans.append((start, end, 1))
+    return spans
+
+
 # --- DB 대조 쿼리 ----------------------------------------------------------------------
 
 
@@ -282,21 +334,25 @@ def node_digest(conn: psycopg.Connection, prefix: str) -> str:
     ).fetchone()[0]
 
 
-STATUS_SQL = """
-SELECT host(inet_server_addr()),
-       ('x' || substr(pg_walfile_name(pg_current_wal_lsn()), 1, 8))::bit(32)::int,
-       (SELECT count(*) FROM embedding_jobs WHERE kind = 'embed' AND status = 'pending'),
-       (SELECT count(*) FROM embedding_jobs WHERE kind = 'embed' AND status = 'processing'),
+STATUS_SQL = f"""
+SELECT host(inet_server_addr()) AS server,
+       {TIMELINE_SQL} AS tl,
+       (SELECT count(*) FROM embedding_jobs WHERE kind = 'embed' AND status = 'pending') AS pending,
+       (SELECT count(*) FROM embedding_jobs WHERE kind = 'embed' AND status = 'processing')
+         AS processing,
        (SELECT count(*) FROM embedding_jobs j JOIN documents d ON d.id = j.document_id
-         WHERE j.status = 'error' AND d.title LIKE %(like)s),
+         WHERE j.status = 'error' AND d.title LIKE %(like)s) AS error_jobs,
        (SELECT count(DISTINCT c.document_id) FROM document_chunks c
-          JOIN documents d ON d.id = c.document_id WHERE c.version <> d.version),
+          JOIN documents d ON d.id = c.document_id WHERE c.version <> d.version) AS inconsistent,
        (SELECT count(DISTINCT document_id) FROM embedding_jobs WHERE kind = 'edges' AND status <> 'done'
-                                                                   AND status <> 'error'),
-       (SELECT count(*) FROM documents WHERE title LIKE %(like)s AND embedding_status <> 'ready'),
-       (SELECT max(pg_wal_lsn_diff(pg_current_wal_lsn(), replay_lsn))::bigint FROM pg_stat_replication),
+                                                                   AND status <> 'error')
+         AS stale_edges,
+       (SELECT count(*) FROM documents WHERE title LIKE %(like)s AND embedding_status <> 'ready')
+         AS not_ready,
+       (SELECT max(pg_wal_lsn_diff(pg_current_wal_lsn(), replay_lsn))::bigint FROM pg_stat_replication)
+         AS lag,
        (SELECT string_agg(host(client_addr) || '=' || sync_state, ',' ORDER BY client_addr)
-          FROM pg_stat_replication)
+          FROM pg_stat_replication) AS replicas
 """
 
 
@@ -339,7 +395,7 @@ async def probe(log: Log, stop: asyncio.Event, target: Target) -> None:
                     row = await (
                         await conn.execute(
                             "SELECT host(inet_server_addr()), pg_logical_emit_message(true, 'ha-probe', ''),"
-                            " ('x' || substr(pg_walfile_name(pg_current_wal_lsn()), 1, 8))::bit(32)::int"
+                            f" {TIMELINE_SQL}"
                         )
                     ).fetchone()
             log("probe", ok=True, lat=time.time() - t, server=row[0], tl=row[2])
@@ -434,11 +490,11 @@ async def blob_writer(log: Log, stop: asyncio.Event, target: Target) -> None:
             await asyncio.sleep(0.5)
 
 
-async def status_once(target: Target) -> tuple:
+async def status_once(target: Target) -> dict:
     # 트랜잭션 안(autocommit 아님)이라 OpenProxy가 Primary로 보낸다 — 방금 쓴 것을 본다.
     async with asyncio.timeout(5):
         async with await psycopg.AsyncConnection.connect(
-            target.dsn, **target.conn_kwargs()
+            target.dsn, row_factory=dict_row, **target.conn_kwargs()
         ) as conn:
             return await (
                 await conn.execute(STATUS_SQL, {"like": _like_prefix(target.prefix)})
@@ -449,21 +505,7 @@ async def status_loop(log: Log, stop: asyncio.Event, target: Target) -> None:
     while not stop.is_set():
         t = time.time()
         try:
-            r = await status_once(target)
-            log(
-                "status",
-                ok=True,
-                server=r[0],
-                tl=r[1],
-                pending=r[2],
-                processing=r[3],
-                error_jobs=r[4],
-                inconsistent=r[5],
-                stale_edges=r[6],
-                not_ready=r[7],
-                lag=r[8],
-                replicas=r[9],
-            )
+            log("status", ok=True, **await status_once(target))
         except Exception as error:  # noqa: BLE001
             log("status", ok=False, error=_describe(error))
         await asyncio.sleep(max(0, 1.0 - (time.time() - t)))
@@ -567,8 +609,7 @@ def digests(target: Target, wait: float) -> dict[str, str | None]:
         time.sleep(3)
 
 
-async def run(a: argparse.Namespace, target: Target) -> Path:
-    path = Path(a.out) / f"{a.label}.jsonl"
+async def run(a: argparse.Namespace, target: Target, path: Path) -> None:
     if path.exists():
         sys.exit(f"{path}가 이미 있다 — 다른 --label을 쓴다")
     log = Log(path)
@@ -616,8 +657,8 @@ async def run(a: argparse.Namespace, target: Target) -> Path:
         deadline, streak = time.time() + a.settle, 0
         while time.time() < deadline and streak < 5:
             try:
-                r = await status_once(target)
-                zero = all(v == 0 for v in (r[2], r[3], r[5], r[6], r[7]))
+                counters = await status_once(target)
+                zero = all(counters[k] == 0 for k in COUNTERS)
                 members = (await cluster_state(client, target.nodes) or {}).get(
                     "members", []
                 )
@@ -630,11 +671,7 @@ async def run(a: argparse.Namespace, target: Target) -> Path:
             await asyncio.sleep(1)
         stop_watch.set()
         await asyncio.gather(*tasks)
-        if a.blob:
-            with psycopg.connect(target.dsn, **target.conn_kwargs()) as conn:
-                conn.execute("DROP TABLE IF EXISTS _ha_blob")
         log("meta", phase="end", converged=streak >= 5)
-    return path
 
 
 def _pct(sorted_lat: list[float], q: float) -> float:
@@ -668,6 +705,13 @@ def summarize(path: Path, target: Target) -> tuple[dict, list[str]]:
             retried = sum(1 for e in es if len(e["statuses"]) > 1)
             line += f" · 원시 응답 {dict(raw)} · 재시도한 요청 {retried}"
         lines.append(line)
+        if kind in ("upload", "search") and (spans := unavailable_spans(es)):
+            lines.append(
+                f"   503 구간 {sum(end - s for s, end, _ in spans):.1f}s: "
+                + ", ".join(
+                    f"+{s - t0:.1f}~+{end - t0:.1f}s({n})" for s, end, n in spans
+                )
+            )
         segs: list[list] = []
         for e in fails:
             if segs and e["t"] - segs[-1][1] <= 2.0:
@@ -717,13 +761,10 @@ def summarize(path: Path, target: Target) -> tuple[dict, list[str]]:
             for m in e["members"]
         )
         lines.append(f"   cluster +{e['t'] - t0:.1f}s {roles}")
-    promo = (
-        promotion(clusters[0], clusters[-1]) if clusters else {"promoted_sync": None}
-    )
+    counted = tally(ev)
 
     st = [e for e in by("status") if e["ok"]]
     load_end = next(e["t"] for e in meta if e.get("phase") == "load_stopped")
-    converged = next((e["converged"] for e in meta if e.get("phase") == "end"), False)
     if st:
         peak = {k: max(e[k] for e in st) for k in (*COUNTERS, "error_jobs")}
         zero_at = None
@@ -750,23 +791,8 @@ def summarize(path: Path, target: Target) -> tuple[dict, list[str]]:
         f"중복 {len(rec['duplicates'])} · 장부에 없는 행 {len(rec['unknown'])}"
     )
     lines.append(f"-- 노드: {nodes}")
-    lines.append(f"-- 승격: {promo}")
-
-    summary = {
-        "reconcile": rec,
-        "raw_500": {
-            k: sum(s == 500 for e in by(k) for s in e["statuses"])
-            for k in ("upload", "search")
-        },
-        "final_failures": {
-            k: sum(not e["ok"] for e in by(k)) for k in ("upload", "search")
-        },
-        "converged": converged,
-        "error_jobs": st[-1]["error_jobs"] if st else 0,
-        "nodes": nodes,
-        "promotion": promo,
-    }
-    return summary, lines
+    lines.append(f"-- 승격: {counted['promotion']}")
+    return counted | {"reconcile": rec, "nodes": nodes}, lines
 
 
 def main() -> int:
@@ -809,13 +835,18 @@ def main() -> int:
     if a.cmd == "run":
         if not a.password:
             sys.exit("--password 또는 HA_PASSWORD가 필요하다")
-        path = asyncio.run(run(a, target))
+        try:
+            asyncio.run(run(a, target, path))
+        finally:
+            if a.blob:  # 중간에 끊겨도 부하용 테이블을 운영 DB에 남기지 않는다
+                with psycopg.connect(dsn, **target.conn_kwargs()) as conn:
+                    conn.execute("DROP TABLE IF EXISTS _ha_blob")
     summary, lines = summarize(path, target)
     problems = judge(summary)
     print("\n".join(lines))
     print("== 판정: " + ("통과" if not problems else "위반"))
-    for p in problems:
-        print(f"   ✗ {p}")
+    for problem in problems:
+        print(f"   ✗ {problem}")
     return 1 if problems else 0
 
 

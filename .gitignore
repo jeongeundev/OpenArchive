@@ -46,3 +46,6 @@ phases/**/step*-output.json
 # docs/에는 사용자·기여자용 제품 문서만 둔다. 조사·메모(notes/)와 대회 자료(notes/contest/:
 # 과제 정리·평가 기준·결과보고서)는 저장소 밖.
 notes/
+
+# --- HA 측정기 기록(scripts/ha_failover.py) ---
+ha-runs/
