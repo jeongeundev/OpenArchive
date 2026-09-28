@@ -16,6 +16,9 @@ dependencies = [
     # 문서 파싱 — 업로드 phase에서 services/parsing.py가 사용한다.
     "pypdf",
     "python-docx",
+    # HWP 5.0(OLE 복합 문서) 읽기. BSD. pyhwp는 AGPL-3.0이라 쓰지 않는다 — 레코드 순회는
+    # services/parsing.py가 직접 한다.
+    "olefile",
     "python-multipart",
     # Louvain 군집(services/clusters.py). 순수 Python·BSD. torch가 끌고 오던 것을 기본
     # 의존성으로 승격 — [local] 없이도 덩어리가 계산되어야 한다.

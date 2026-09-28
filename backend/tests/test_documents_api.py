@@ -1,6 +1,7 @@
 import hashlib
 import io
 import zipfile
+from pathlib import Path
 from urllib.parse import quote
 from uuid import uuid4
 
@@ -10,6 +11,7 @@ from conftest import login_as, run_embedding_worker
 from conftest import upload_document as upload
 from docx import Document
 from fastapi.testclient import TestClient
+from test_parsing import hwp_without_text, hwpx_without_text
 
 from app.config import get_settings
 
@@ -259,11 +261,50 @@ def test_upload_rejects_blank_text_without_saving(db_client: TestClient, migrate
         assert conn.execute("SELECT count(*) FROM documents").fetchone() == (0,)
 
 
-def test_upload_rejects_unsupported_extension(db_client: TestClient):
-    response = upload(db_client, filename="document.hwp")
+@pytest.mark.parametrize(
+    ("filename", "media_type"),
+    [("공문.hwp", "application/x-hwp"), ("공문.hwpx", "application/hwp+zip")],
+)
+def test_upload_hangul_document_extracts_text_and_keeps_the_original(
+    db_client: TestClient, filename: str, media_type: str
+):
+    fixture = Path(__file__).parent / "fixtures" / f"committee_result.{filename.rsplit('.', 1)[1]}"
+    original = fixture.read_bytes()
+
+    created = upload(db_client, filename=filename, content=original)
+
+    assert created.status_code == 201
+    assert created.json()["content_type"] == filename.rsplit(".", 1)[1]
+    detail = db_client.get(f"/api/documents/{created.json()['id']}").json()
+    assert "2026년 제38차 위원회 결과" in detail["content"]
+    download = db_client.get(f"/api/documents/{created.json()['id']}/file")
+    assert download.content == original
+    assert download.headers["content-type"] == media_type
+@pytest.mark.parametrize("content_type", ["hwp", "hwpx"])
+def test_upload_rejects_hangul_document_without_text(
+    db_client: TestClient, migrated_db: str, tmp_path: Path, content_type: str
+):
+    content = (
+        hwp_without_text(tmp_path / "empty.hwp") if content_type == "hwp" else hwpx_without_text()
+    )
+
+    response = upload(db_client, filename=f"빈 공문.{content_type}", content=content)
 
     assert response.status_code == 400
-    assert "pdf, docx, txt, md" in response.json()["detail"]
+    assert response.json() == {
+        "detail": "문서에서 텍스트를 추출하지 못했습니다. 스캔 이미지 PDF는 지원하지 않습니다."
+    }
+    with psycopg.connect(migrated_db) as conn:
+        assert conn.execute("SELECT count(*) FROM documents").fetchone() == (0,)
+
+
+
+
+def test_upload_rejects_unsupported_extension(db_client: TestClient):
+    response = upload(db_client, filename="document.rtf")
+
+    assert response.status_code == 400
+    assert "pdf, docx, txt, md, hwp, hwpx" in response.json()["detail"]
 
 
 def test_upload_rejects_non_utf8_text(db_client: TestClient):
@@ -1320,9 +1361,9 @@ def test_replace_rejects_unsupported_type_and_blank_text(
 ):
     document_id = upload(db_client).json()["id"]
 
-    unsupported = replace_file(db_client, document_id, filename="document.hwp")
+    unsupported = replace_file(db_client, document_id, filename="document.rtf")
     assert unsupported.status_code == 400
-    assert "pdf, docx, txt, md" in unsupported.json()["detail"]
+    assert "pdf, docx, txt, md, hwp, hwpx" in unsupported.json()["detail"]
 
     blank = replace_file(db_client, document_id, content=b" \t\r\n\f")
     assert blank.status_code == 400
