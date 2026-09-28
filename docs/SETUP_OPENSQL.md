@@ -727,7 +727,8 @@ aws ec2 revoke-security-group-ingress --region ap-northeast-2 \
              └──────────── etcd에서 leader 감시 ────────┘
                                   │  쓰기·BEGIN → primary / 트랜잭션 밖 SELECT → replica
    node1 (.201)                node2 (.202)                node3 (.203)
-   PostgreSQL Leader    ──►    Replica (async)     ──►     Replica (async)
+   PostgreSQL Leader    ──►    Replica             ──►     Replica
+                               (둘 중 1대가 sync_standby, 나머지 async — 교정 5)
    Patroni · etcd              Patroni · etcd              Patroni · etcd
 ```
 
@@ -801,6 +802,22 @@ python3 opensql_remote_installer.py --mode 3node
    ExecStartPre=/bin/sh -c "for i in $(seq 30); do /home/opensql/bin/etcdctl --endpoints=http://127.0.0.1:2379 --dial-timeout=1s endpoint health >/dev/null 2>&1 && exit 0; sleep 1; done; exit 0"
    ```
    - 로그: OpenProxy는 journald와 `/home/opensql/logs/<날짜>.openproxy.log`, Patroni는 `/home/opensql/logs/patroni.log`
+5. **동기 복제 1대 (ADR-049)** — 설치기 기본은 비동기다. Patroni DCS 설정에 걸면 재시작 없이 반영된다
+
+   ```bash
+   sudo -u opensql /home/opensql/bin/patronictl -c /home/opensql/etc/patroni/patroni.yml edit-config \
+     -s synchronous_mode=true -s synchronous_mode_strict=false -s synchronous_node_count=1 --force
+   ```
+   - 확인: `curl -s http://<노드>:8008/cluster`에서 한 replica의 role이 `sync_standby`, Primary의 `pg_stat_replication.sync_state`가 `sync` 1개·`async` 1개
+   - ⚠️ 동기 모드에서는 **switchover 후보가 `sync_standby`여야 한다.** 다른 replica를 고르면 `412, candidate name does not match with sync_standby`로 거부된다. 특정 노드로 리더를 옮기려면 그 노드가 `sync_standby`가 될 때까지 "현재 sync_standby로 switchover"를 반복한다
+6. **서버 keepalive와 idle 트랜잭션 상한 (ADR-051)** — 기본값(keepalive 7200초, 상한 없음)이면 **죽은 OpenProxy 노드를 거치던 트랜잭션이 Primary에 약 2시간 락을 쥔 채 남는다**(#122 S5a-2 — 워커 13분 넘게 정지). 앱 쪽 keepalive(ADR-048)와 같은 값으로 맞춘다
+
+   ```bash
+   sudo -u opensql /home/opensql/bin/patronictl -c /home/opensql/etc/patroni/patroni.yml edit-config \
+     -p tcp_keepalives_idle=30 -p tcp_keepalives_interval=10 -p tcp_keepalives_count=3 \
+     -p tcp_user_timeout=60000 -p idle_in_transaction_session_timeout=60s --force
+   ```
+   - 재시작 없이 세 노드에 반영되고, 이미 열린 OpenProxy 풀 연결에도 적용된다(`ss -tno`의 keepalive 타이머가 30초 이하로 바뀐다)
 
 ### 검증 (2026-09-26 실측)
 
@@ -818,7 +835,39 @@ VIP·node2·node3 직접 모두 같은 결과다.
 | node3 재부팅 | etcd·Patroni·OpenProxy 자동 기동(NRestarts 0), replica 재합류, OpenProxy가 etcd 설정 로드 |
 
 - ⚠️ `/home/opensql/bin/patroni`는 **PyInstaller 실행 파일이라 프로세스가 둘**이다(부트로더 → 실제 Patroni). systemd의 MainPID는 부트로더다. 부트로더에 `kill -9`를 보내면 실제 Patroni가 고아로 남아 8008을 쥔 채 클러스터를 계속 관리하고, 새 Patroni는 8초마다 죽는 루프에 빠진다(`KillMode=process`라 systemd가 고아를 정리하지 않는다). 장애 주입은 **자식(`pgrep -P <MainPID> -x patroni`)에** 한다. 고아는 SIGTERM으로 정리한다
-- 아직 확인하지 않은 것: Leader(node1)·VIP MASTER(node2) 장애 시 승격·전환 시간(RTO)과 유실(RPO) — #110 B
+
+### 장애 주입 측정 (#122, 2026-09-28)
+
+`scripts/ha_failover.py`가 부하(업로드 약 2건/초·검색·100ms 쓰기 probe)를 건 채 장애 명령을 실행하고, 수렴을 기다려 판정한다. 판정 항목은 장부 대조(커밋 응답을 받은 업로드의 존재·sha256, 실패 응답인데 DB에 남은 행, 중복), 백오프 뒤 사용자 가시 실패, 원시 500, 정합성 카운터 0 수렴, 3노드 5432 직결 다이제스트 일치, 승격 대상이 동기 standby였는지다. 위반이 하나라도 있으면 종료 코드 1이다.
+
+```bash
+# API·워커를 VIP에 붙여 띄운 뒤 (계정은 미리 만든다)
+DATABASE_URL=postgresql://…@192.168.64.200:6432/opensql HA_PASSWORD=… \
+  backend/.venv/bin/python scripts/ha_failover.py run s2-1 --out <결과 폴더> \
+    --nodes 192.168.64.201,192.168.64.202,192.168.64.203 --load 240 --inject-at 40 \
+    --inject 'utmctl stop node1; sleep 90; utmctl start node1'
+# 기록(JSONL)으로 다시 판정
+… scripts/ha_failover.py report s2-1 --out <결과 폴더> --nodes …
+```
+
+- ⚠️ **측정 전에 QEMU 프로세스 우선순위를 확인한다.** `ps -axo pri,command | grep QEMULauncher`가 `4`(macOS 백그라운드)면 그 VM은 5~6배 느리다. 9/27 측정 중 다시 켠 node1이 이 상태로 하루 동안 돌며 워커 처리량 저하·etcd 지연 경고·무부하 자동 failover의 원인이 됐다. `taskpolicy -B`로는 풀리지 않았고, 리더를 옮긴 뒤 VM을 정상 종료하고 다시 켜서(`31`) 풀었다. 어떤 경로로 백그라운드 우선순위가 붙었는지는 확정하지 못했다
+- 동기 모드에서 리더를 되돌리는 법은 「설치 후 교정」 5를 본다. 전원을 끊은 VM이 다시 VIP를 되찾기까지는 부팅 시간(1~4분)이 걸리므로, 되돌린 뒤 VIP가 node2에 있는지 확인하고 다음 회차를 시작한다
+
+| 시나리오 (동기 1대, 표시 없으면 교정 6 적용 후) | 쓰기 중단 | 승격 | 사용자 가시 실패 | 원시 500 | 유실 | 수렴(부하 종료 뒤) |
+|---|---|---|---|---|---|---|
+| 무장애 300초 | 0 | — | 0 | 0 | 0 | 1.6s |
+| S2 리더 전원 차단 ×3 (교정 6 전) | 30.7~40.7s | 동기 standby로 3/3 | 0 | 0 | 0 | 4.0s 이내 |
+| S5a 동기 standby 전원 차단 (교정 6 후 1회, 전 2회는 아래) | 24.5s(커밋 대기) | — | 0 | 0 | 0 | 3.0s |
+| S5b replica 2대 Patroni 정지 (교정 6 전) | 0(비동기 강등) | — | 0 | 0 | 0 | 5.5s |
+| S3 VIP MASTER 전원 차단 ×2 | 8.2~31.1s | — | 0 | 0 | 0 | 4.5s 이내 |
+| S1 Primary postmaster `kill -9` | 11.4s | 없음 | 0 | 0 | 0 | 3.4s |
+| S4a/b etcd 팔로워·리더 정지 | 0 | — | 0 | 0 | 0 | 4.4s 이내 |
+| switchover ×3 | 10.3s(3회 모두) | 동기 standby로 3/3 | 0 | 0 | 0 | 3.3~29.4s |
+
+- 교정 6 전의 S5a 2회는 커밋 대기가 38~39초였고, 그중 1회(동기 standby = VIP MASTER)는 죽은 OpenProxy 노드의 트랜잭션이 Primary에 락을 쥔 채 남아 **워커가 13분 넘게 멈춰 판정 위반**이었다 — 교정 6의 근거(ADR-051). 적용 후 같은 복합 조건이 두 번(S5a·S3 31.1초 회차) 재현됐고 모두 통과했다
+- S3의 31.1초 회차는 node2가 VIP MASTER이면서 동기 standby였다(커밋 대기가 겹침). VIP만 옮긴 회차는 8.2초
+- 백오프가 흡수한 503은 판정 밖에서 따로 남긴다(`report` 출력의 「503 구간」). 503을 받은 요청은 switchover 검색 3회(각 1건, 13.0~18.2초 동안 재시도)와 S1 업로드 1건(11.5초)뿐이고 모두 백오프 안에서 성공했다
+- 전 회차에서 3노드 다이제스트가 일치했고 error 잡은 0이었다. 원시 기록과 회차별 상세는 #110 코멘트
 
 ---
 
