@@ -2085,3 +2085,199 @@ async def test_finishing_a_job_does_not_cut_a_heartbeat_in_flight(conn, migrated
 
     assert interrupted == []
     assert (await document_state(conn, doc_id))[1] == "ready"
+
+
+# --- 락 대기 상한 (#128, #122 S5a-2) --------------------------------------------------
+#
+# 죽은 OpenProxy 노드를 거치던 트랜잭션이 Primary에 문서·잡 행 락을 쥔 채 남았다. Primary는 상대가
+# 죽은 것을 모르므로(서버 keepalive 기본 2시간) 락은 풀리지 않고, 새 연결로 들어온 lease 연장이
+# 그 락을 기다리며 761초 넘게 멈췄다 — 워커는 heartbeat 종료를 상한 없이 기다려 통째로 섰다.
+# 서버 설정(ADR-051)이 근본 해결이지만, 그 설정이 없는 DB에서도 락 하나가 워커 전체를 세우면
+# 안 된다. 고아 트랜잭션은 다른 연결이 행을 잠근 채 커밋하지 않는 것으로 재현한다.
+
+LOCK_DOCUMENT = "SELECT 1 FROM documents WHERE id = %s FOR UPDATE"
+LOCK_JOB = "SELECT 1 FROM embedding_jobs WHERE id = %s FOR UPDATE"
+
+
+@contextlib.asynccontextmanager
+async def orphan_holding(migrated_db: str, sql: str, key):
+    """행 락을 쥔 채 멈춘 트랜잭션 — S5a-2의 고아 세션. 블록을 나가면 롤백해 락을 푼다."""
+    async with await psycopg.AsyncConnection.connect(migrated_db) as orphan:
+        await orphan.execute(sql, (key,))  # autocommit이 아니라 트랜잭션이 열린 채 남는다
+        yield orphan
+        await orphan.rollback()
+
+
+async def test_extend_lease_gives_up_on_a_locked_job_instead_of_waiting(
+    conn, other_conn, migrated_db, monkeypatch
+):
+    """lease 연장은 락을 한 heartbeat 주기 넘게 기다리지 않는다 — S5a-2에서 멈춘 자리다."""
+    monkeypatch.setenv("JOB_LEASE_SECONDS", "1")
+    await insert_document(conn)
+    job = await claim_job(conn)
+
+    async with orphan_holding(migrated_db, LOCK_JOB, job.job_id):
+        with pytest.raises(psycopg.errors.LockNotAvailable):
+            await asyncio.wait_for(extend_lease(other_conn, job), timeout=5)
+
+
+def _chunks_and_vectors():
+    chunks = chunk_text(DOC_V1)
+    return chunks, FakeProvider().embed(chunks)
+
+
+# 자기 잡에 쓰는 트랜잭션 전부 — 문서 행과 잡 행 어느 쪽이 잠겨도 상한 안에 포기해야 한다.
+JOB_WRITES = {
+    "finalize": lambda c, j: finalize_job(c, j, "sha256:v1", *_chunks_and_vectors()),
+    "finalize_edge": lambda c, j: finalize_edge_job(c, j),
+    "fail": lambda c, j: fail_job(c, j, RuntimeError("실패 기록")),
+    "release": lambda c, j: release_job(c, j),
+}
+
+
+@pytest.mark.parametrize("lock", ["document", "job"])
+@pytest.mark.parametrize("write", sorted(JOB_WRITES))
+async def test_job_writes_give_up_on_a_locked_row_instead_of_waiting(
+    conn, other_conn, migrated_db, monkeypatch, write, lock
+):
+    """결과 반영·관계 판정·실패 기록·반납은 락을 상한 넘게 기다리지 않고 아무것도 쓰지 않는다.
+
+    끝없이 기다리면 그 잡을 처리하던 워커가 멈추고, 같은 워커의 다음 잡도 영영 오지 않는다.
+    포기한 잡은 lease가 지나면 스윕이 회수한다.
+    """
+    monkeypatch.setenv("JOB_LEASE_SECONDS", "1")
+    doc_id = await insert_document(conn)
+    job = await claim_job(conn)
+    key = doc_id if lock == "document" else job.job_id
+
+    async with orphan_holding(migrated_db, LOCK_DOCUMENT if lock == "document" else LOCK_JOB, key):
+        with pytest.raises(psycopg.errors.LockNotAvailable):
+            await asyncio.wait_for(JOB_WRITES[write](other_conn, job), timeout=5)
+
+    assert await job_status(conn, job.job_id) == ("processing", 1, None)
+    assert await chunk_rows(conn, doc_id) == []
+
+
+async def test_claim_skips_a_job_whose_document_is_locked(conn, migrated_db):
+    """잠긴 문서의 잡은 건너뛰고 다음 잡을 집는다 — 기다리지도, 실패하지도 않는다.
+
+    claim은 임베딩 잡이면 문서 행을 UPDATE한다. 그 행을 고아 트랜잭션이 쥐고 있으면 기다리거나
+    (워커 정지) 상한에 걸려 실패하는데, 실패해도 다음 주기에 id가 가장 작은 같은 잡을 또 집으므로
+    뒤의 잡은 영영 처리되지 않는다.
+    """
+    locked = await insert_document(conn, content_hash="sha256:locked")
+    free = await insert_document(conn, content_hash="sha256:free")
+
+    async with orphan_holding(migrated_db, LOCK_DOCUMENT, locked):
+        job = await asyncio.wait_for(claim_job(conn), timeout=5)
+
+    assert job.document_id == free
+    assert [j[0] for j in await job_rows(conn, locked)] == ["pending"]
+
+
+@pytest.mark.parametrize("lock", ["document", "job"])
+async def test_sweep_recovers_other_zombies_while_one_is_locked(conn, migrated_db, lock):
+    """잠긴 좀비 하나 때문에 나머지 회수가 멈추지 않는다. 막은 쪽이 풀리면 다음 스윕이 회수한다.
+
+    스윕은 워커 루프 머리에서 돈다 — 스윕이 멈추거나 실패하면 그 주기의 drain도 돌지 않는다.
+    """
+    stuck_doc = await insert_document(conn, content_hash="sha256:stuck")
+    stuck = await claim_job(conn)
+    other_doc = await insert_document(conn, content_hash="sha256:other")
+    other = await claim_job(conn)
+    await conn.execute(
+        "UPDATE embedding_jobs SET lease_expires_at = now() - interval '1 second'"
+        " WHERE id = ANY(%s)",
+        ([stuck.job_id, other.job_id],),
+    )
+    key = stuck_doc if lock == "document" else stuck.job_id
+
+    async with orphan_holding(migrated_db, LOCK_DOCUMENT if lock == "document" else LOCK_JOB, key):
+        assert await asyncio.wait_for(sweep_zombies(conn), timeout=5) == 1
+        assert [j[0] for j in await job_rows(conn, other_doc)] == ["pending"]
+        assert [j[0] for j in await job_rows(conn, stuck_doc)] == ["processing"]
+
+    assert await sweep_zombies(conn) == 1
+    assert [j[0] for j in await job_rows(conn, stuck_doc)] == ["pending"]
+
+
+async def test_a_heartbeat_stuck_past_its_lease_does_not_hold_up_the_worker(conn, monkeypatch):
+    """heartbeat가 락이 아닌 이유로 멈춰도(응답 없는 네트워크 등) 워커는 그것을 끝없이 기다리지
+    않는다. 기다림을 접을 때도 취소하지 않는다 — 취소는 풀 연결을 트랜잭션 중간에 되돌린다(#110 B-2).
+    """
+    monkeypatch.setenv("JOB_LEASE_SECONDS", "1")
+    doc_id = await insert_document(conn)
+    provider = blocking_provider()
+    never = asyncio.Event()
+    interrupted: list[BaseException] = []
+
+    async def hanging_extend(connection, job):
+        provider.release.set()  # 연장이 멈춘 사이에 임베딩이 끝난다
+        try:
+            await never.wait()
+        except BaseException as exc:
+            interrupted.append(exc)
+            raise
+        return True
+
+    monkeypatch.setattr("app.worker.extend_lease", hanging_extend)
+    try:
+        assert await asyncio.wait_for(
+            process_once(conn, provider, lease_conn=lease_conn_from(None)), timeout=5
+        ) is True
+        assert interrupted == []
+    finally:
+        never.set()
+        await asyncio.sleep(0.05)  # 떼어 둔 heartbeat가 끝나게 한다
+
+    assert (await document_state(conn, doc_id))[1] == "ready"
+
+
+async def test_a_job_locked_by_an_orphaned_transaction_does_not_stop_the_worker(
+    migrated_db, conn, other_conn, monkeypatch
+):
+    """#122 S5a-2 재현 — 처리 중인 잡의 문서·잡 행을 고아 트랜잭션이 쥐어도 워커는 다음 잡을
+    처리하고, 락이 풀리면 막혔던 잡도 처리한다.
+
+    S5a-2의 고아는 관계 판정 트랜잭션이었다(문서 → 잡 순으로 잠근 채 멈춤). 수정 전에는 반영이
+    문서 락을, heartbeat가 잡 락을 끝없이 기다려 워커가 13분 넘게 처리 0이었다.
+    """
+    monkeypatch.setenv("JOB_LEASE_SECONDS", "1")
+    monkeypatch.setattr("app.worker.POLL_INTERVAL_SECONDS", 0.1)
+    provider = BlockingProvider()
+    monkeypatch.setattr("app.worker.get_provider", lambda: provider)
+    monkeypatch.setenv("DATABASE_URL", migrated_db)
+    get_settings.cache_clear()
+    await close_pool()
+
+    stuck_doc = await insert_document(conn, content_hash="sha256:stuck")
+
+    async def ready(doc_id) -> bool:
+        return (await document_state(other_conn, doc_id))[1] == "ready"
+
+    worker = asyncio.create_task(run_worker())
+    try:
+        await wait_until(
+            lambda: _embedding_started(provider), message="워커가 임베딩에 진입하지 않았다"
+        )
+        cur = await other_conn.execute(
+            "SELECT id FROM embedding_jobs WHERE document_id = %s AND status = 'processing'",
+            (stuck_doc,),
+        )
+        (stuck_job,) = await cur.fetchone()
+
+        async with orphan_holding(migrated_db, LOCK_DOCUMENT, stuck_doc) as orphan:
+            await orphan.execute(LOCK_JOB, (stuck_job,))
+            next_doc = await insert_document(conn, content=DOC_V2, content_hash="sha256:next")
+            provider.release.set()
+            await wait_until(
+                lambda: ready(next_doc),
+                message="고아 트랜잭션이 쥔 락 하나에 워커 전체가 멈췄다",
+            )
+            assert (await document_state(other_conn, stuck_doc))[1] != "ready"
+
+        await wait_until(lambda: ready(stuck_doc), message="락이 풀린 뒤에도 막혔던 잡을 처리하지 않았다")
+    finally:
+        provider.release.set()
+        await cancel_until_done(worker)
+        await close_pool()
