@@ -7,6 +7,9 @@ from pathlib import Path
 import olefile
 import pytest
 from docx import Document
+from openpyxl import Workbook
+from pptx import Presentation
+from pptx.util import Inches
 
 from app.services.parsing import (
     TextDecodeError,
@@ -54,6 +57,8 @@ def minimal_pdf(text: str) -> bytes:
         ("README.md", "md"),
         ("공문.HWP", "hwp"),
         ("보고.hwpx", "hwpx"),
+        ("예산.XLSX", "xlsx"),
+        ("발표.pptx", "pptx"),
     ],
 )
 def test_detect_content_type(filename: str, expected: str) -> None:
@@ -98,7 +103,7 @@ def test_extract_text_returns_empty_string_for_pdf_without_text() -> None:
     assert extract_text(minimal_pdf(""), "pdf") == ""
 
 
-@pytest.mark.parametrize("content_type", ["pdf", "docx", "hwp", "hwpx"])
+@pytest.mark.parametrize("content_type", ["pdf", "docx", "hwp", "hwpx", "xlsx", "pptx"])
 @pytest.mark.parametrize("data", [b"", b"not a document"])
 def test_extract_text_normalizes_invalid_binary_document_errors(
     data: bytes, content_type: str
@@ -119,6 +124,12 @@ def test_media_type_is_fixed_by_extension_with_octet_stream_fallback():
     assert media_type_for("a.md") == "text/markdown; charset=utf-8"
     assert media_type_for("a.hwp") == "application/x-hwp"
     assert media_type_for("a.HWPX") == "application/hwp+zip"
+    assert media_type_for("a.xlsx") == (
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+    assert media_type_for("a.pptx") == (
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+    )
     assert media_type_for("a.html") == "application/octet-stream"
     assert media_type_for("noext") == "application/octet-stream"
 
@@ -127,7 +138,7 @@ FIXTURES = Path(__file__).parent / "fixtures"
 
 
 def fixture(name: str) -> bytes:
-    """공공누리 제1유형 공개 보도자료. 출처는 `fixtures/SOURCE.md`."""
+    """출처와 이용 조건은 `fixtures/SOURCE.md`."""
     return (FIXTURES / name).read_bytes()
 
 
@@ -250,3 +261,87 @@ def test_extract_text_returns_empty_string_for_hangul_document_without_text(
 def fixture_section_xml() -> str:
     with zipfile.ZipFile(io.BytesIO(fixture("committee_result.hwpx"))) as archive:
         return archive.read("Contents/section0.xml").decode("utf-8")
+
+
+def test_extract_text_reads_xlsx_sheets_with_cached_formula_values() -> None:
+    # Numbers가 내보낸 파일이다. 수식 셀(합계)은 저장할 때 계산된 값이 캐시돼 있고,
+    # Numbers가 덧붙인 「내보내기 요약」 시트도 파일 안의 시트이므로 함께 읽는다.
+    text = extract_text(fixture("office_budget.xlsx"), "xlsx")
+
+    blocks = text.split("\n\n")
+    assert [block.splitlines()[0] for block in blocks] == ["내보내기 요약", "예산", "일정"]
+    assert blocks[1] == "예산\n표 1\n항목\t금액\n인건비\t1200\n운영비\t300\n합계\t1500"
+    assert "=SUM" not in text
+
+
+def test_extract_text_keeps_xlsx_columns_and_skips_empty_rows_and_sheets() -> None:
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "명단"
+    sheet["B1"] = "이름"
+    sheet["D1"] = "부서"
+    sheet["B3"] = "김하나"
+    workbook.create_sheet("빈 시트")
+    buf = io.BytesIO()
+    workbook.save(buf)
+
+    # 앞·가운데 빈 칸은 탭으로 남겨 열 위치를 지키고, 줄 끝 빈 칸과 빈 행은 버린다.
+    # 값이 하나도 없는 시트는 시트명도 내지 않는다.
+    assert extract_text(buf.getvalue(), "xlsx") == "명단\n\t이름\t\t부서\n\t김하나"
+
+
+def test_extract_text_leaves_uncached_xlsx_formula_cells_empty() -> None:
+    # openpyxl처럼 계산 엔진 없이 쓴 파일에는 수식의 값이 캐시되지 않는다. 값을 계산하지도,
+    # 수식 문자열을 본문에 넣지도 않고 빈 칸으로 둔다.
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "예산"
+    sheet.append(["인건비", 1200])
+    sheet.append(["운영비", 300])
+    sheet.append(["합계", "=SUM(B1:B2)"])
+    buf = io.BytesIO()
+    workbook.save(buf)
+
+    assert extract_text(buf.getvalue(), "xlsx") == "예산\n인건비\t1200\n운영비\t300\n합계"
+
+
+def test_extract_text_reads_pptx_slides_with_presenter_notes() -> None:
+    # Keynote가 내보낸 파일이다. 빈 자리표시자는 건너뛰고, 텍스트 상자 안 줄바꿈은
+    # 줄바꿈으로, 슬라이드 사이는 빈 줄로 남는다.
+    text = extract_text(fixture("office_briefing.pptx"), "pptx")
+
+    assert text == (
+        "2차 평가 준비\nHA 실증\n첫 슬라이드 발표자 노트"
+        "\n\n"
+        "형식 확장\n한글 문서\n오피스 문서\n둘째 슬라이드 노트"
+    )
+
+
+def test_extract_text_reads_pptx_group_and_table_shapes() -> None:
+    presentation = Presentation()
+    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+    group = slide.shapes.add_group_shape()
+    group.shapes.add_textbox(Inches(1), Inches(1), Inches(2), Inches(1)).text = "묶인 상자"
+    table = slide.shapes.add_table(2, 2, Inches(1), Inches(3), Inches(4), Inches(1)).table
+    table.cell(0, 0).text = "단계"
+    table.cell(0, 1).text = "기한"
+    table.cell(1, 0).text = "착수"
+    buf = io.BytesIO()
+    presentation.save(buf)
+
+    # 표는 xlsx와 같이 행마다 한 줄, 셀은 탭으로 구분한다.
+    assert extract_text(buf.getvalue(), "pptx") == "묶인 상자\n단계\t기한\n착수"
+
+
+def test_extract_text_returns_empty_string_for_office_documents_without_text() -> None:
+    workbook = Workbook()
+    xlsx = io.BytesIO()
+    workbook.save(xlsx)
+    presentation = Presentation()
+    presentation.slides.add_slide(presentation.slide_layouts[0])
+    pptx = io.BytesIO()
+    presentation.save(pptx)
+
+    # 빈 결과는 여기서 오류로 만들지 않는다 — 문서 서비스의 EmptyExtractedText가 판정한다.
+    assert extract_text(xlsx.getvalue(), "xlsx") == ""
+    assert extract_text(pptx.getvalue(), "pptx") == ""

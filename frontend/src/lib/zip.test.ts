@@ -17,6 +17,8 @@ describe("expandZip", () => {
     zip.file("GUIDE.MD", "markdown");
     zip.file("공문.hwp", "hwp");
     zip.file("보고.HWPX", "hwpx");
+    zip.file("예산.xlsx", "xlsx");
+    zip.file("발표.PPTX", "pptx");
     zip.file("image.png", "png");
     zip.file("nested.zip", "zip");
     zip.file("README", "no extension");
@@ -30,6 +32,8 @@ describe("expandZip", () => {
       "GUIDE.MD",
       "공문.hwp",
       "보고.HWPX",
+      "예산.xlsx",
+      "발표.PPTX",
     ]);
     expect(result.skipped).toEqual(["image.png", "nested.zip", "README"]);
     expect(result.files.every((file) => file instanceof File)).toBe(true);
