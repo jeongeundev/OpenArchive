@@ -20,6 +20,8 @@ from app.services.documents import (
     apply_extracted_text,
     create_document,
     create_text_document,
+    find_same_original,
+    find_same_text,
     get_document_version,
     list_documents,
     replace_original_file,
@@ -846,3 +848,51 @@ async def test_embedding_status_filter_keeps_its_column_meaning(documents_conn):
         documents_conn, embedding_status="pending", extraction_status="done"
     )
     assert [d["id"] for d in will_embed] == [ids["done"]]
+
+
+# ── import 재실행이 두 벌을 만들지 않게 — 같은 소유자·같은 내용을 찾는다 (#95-b) ────
+
+
+async def test_find_same_original_matches_any_file_version_of_the_owner(documents_conn):
+    """원본을 교체해도 옛 판을 다시 가져오면 이미 있는 것으로 본다 — 판은 지워지지 않는다(ADR-046)."""
+    document = await create_document(
+        documents_conn, filename="guide.txt", data=b"first", owner_id="alice"
+    )
+    await replace_original_file(
+        documents_conn,
+        document["id"],
+        user_id="alice",
+        filename="guide.txt",
+        data=b"second",
+        client_version=1,
+    )
+
+    found = [
+        await find_same_original(documents_conn, owner_id="alice", data=data)
+        for data in (b"first", b"second", b"other")
+    ]
+    assert found == [document["id"], document["id"], None]
+
+
+async def test_find_same_original_ignores_other_owners(documents_conn):
+    """남의 공개 문서와 바이트가 같아도 내 문서는 따로 만들어야 한다 — 소유가 다르다."""
+    await create_document(documents_conn, filename="guide.txt", data=b"shared", owner_id="bob")
+
+    assert await find_same_original(documents_conn, owner_id="alice", data=b"shared") is None
+
+
+async def test_find_same_text_matches_only_text_documents_of_the_owner(documents_conn):
+    """원본 없는 문서끼리만 본다. 같은 텍스트가 추출된 파일 문서는 원본 기준으로 따로 판정한다."""
+    text_doc = await create_text_document(
+        documents_conn, title="메모", content="같은 본문", owner_id="alice"
+    )
+    await create_document(
+        documents_conn, filename="file.md", data="파일 본문".encode(), owner_id="alice"
+    )
+    await create_text_document(documents_conn, title="남", content="남의 본문", owner_id="bob")
+
+    found = [
+        await find_same_text(documents_conn, owner_id="alice", content=content)
+        for content in ("같은 본문", "파일 본문", "남의 본문")
+    ]
+    assert found == [text_doc["id"], None, None]
