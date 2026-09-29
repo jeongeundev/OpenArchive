@@ -49,6 +49,32 @@ describe("관계 지도 화면", () => {
       screen.getByText("아직 관계가 계산되지 않았거나 이어진 문서가 없는 문서입니다."),
     ).toBeInTheDocument();
   });
+
+  it("크기가 비슷한 덩어리도 가장 작은 것과 가장 큰 것의 차이가 보이게 그린다", async () => {
+    // #89 ② 실측 모양 — 최대값 기준 정규화로는 굵기가 5.7·5.8·6.0, 원이 거의 같았다.
+    const cluster = (name: string, size: number) => ({ name, size, documents: [] });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(
+      JSON.stringify({
+        clusters: [cluster("조사", 24), cluster("adr", 21), cluster("문서관리", 20)],
+        connections: [
+          { source: "조사", target: "adr", count: 88 },
+          { source: "adr", target: "문서관리", count: 91 },
+          { source: "조사", target: "문서관리", count: 94 },
+        ],
+      }),
+      { status: 200, headers: { "Content-Type": "application/json" } },
+    )));
+
+    render(<ClustersPage />);
+
+    const radius = async (name: string) =>
+      Number((await screen.findByRole("button", { name: `${name} 덩어리` })).querySelector("circle")!.getAttribute("r"));
+    expect(await radius("문서관리")).toBe(22);
+    expect(await radius("조사")).toBe(44);
+    const widths = Array.from(document.querySelectorAll("line")).map((line) => Number(line.getAttribute("stroke-width")));
+    expect(Math.min(...widths)).toBe(1);
+    expect(Math.max(...widths)).toBe(6);
+  });
 });
 
 // 응답하지 않는 서버 — 화면을 떠날 때 요청이 취소되는지만 본다.
