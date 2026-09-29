@@ -29,6 +29,8 @@ models/
 # --- 대회 문서 ---
 # 운영규정 PDF는 한국오픈소스협회에 저작권이 있어 저장소에 포함하지 않는다
 *.pdf
+# 테스트 픽스처는 예외 — 출처·이용 조건은 fixtures/SOURCE.md
+!backend/tests/fixtures/*.pdf
 
 # --- OS / 에디터 ---
 .DS_Store
