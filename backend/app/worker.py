@@ -1,8 +1,10 @@
 """임베딩 워커 — DB가 만들어 둔 잡을 집어가는 무상태 실행기 (ARCHITECTURE "워커 처리 루프").
 
-잡은 두 종류다 (`embedding_jobs.kind`). `embed`는 청킹·임베딩·청크 교체이고, `edges`는
-이미 저장된 청크 벡터로 관계를 다시 판정한다 — 같은 큐를 쓰되 **각자의 트랜잭션**에서
-돌아, 관계 판정이 실패해도 청크와 `ready`가 남는다 (ADR-029 결정 3 개정).
+잡은 세 종류다 (`embedding_jobs.kind`). `embed`는 청킹·임베딩·청크 교체이고, `edges`는
+이미 저장된 청크 벡터로 관계를 다시 판정하며, `extract`는 최신 원본 판을 OCR해 문서 텍스트를
+채운다 — 같은 큐를 쓰되 **각자의 트랜잭션**에서 돌아, 관계 판정이 실패해도 청크와 `ready`가
+남는다 (ADR-029 결정 3 개정). 추출 결과를 쓰면 기존 트리거가 텍스트 버전과 임베딩 잡을
+이어서 만든다 (ADR-052 결정 3).
 
 잡 생성·코얼레싱·삭제 정합성은 전부 DB 계층(트리거·파셜 유니크 인덱스·CASCADE)이
 보장하므로, 워커의 책임은 둘뿐이다.
@@ -44,6 +46,8 @@ from app.config import get_settings
 from app.db import close_pool, connection, get_pool, keepalive_kwargs
 from app.embeddings import EmbeddingProvider, get_provider, warm_up
 from app.services.chunking import chunk_text
+from app.services.documents import apply_extracted_text
+from app.services.parsing import detect_content_type, ocr_text
 from app.vectors import to_pgvector_literal
 
 logger = logging.getLogger(__name__)
@@ -65,6 +69,7 @@ LeaseConnection = Callable[[], AbstractAsyncContextManager[psycopg.AsyncConnecti
 # embedding_jobs.kind (016). 큐·claim·재시도·좀비 회수는 공유하고 처리 본체만 갈린다.
 EMBED_JOB_KIND = "embed"
 EDGE_JOB_KIND = "edges"
+EXTRACT_JOB_KIND = "extract"
 
 
 @dataclass(frozen=True)
@@ -367,6 +372,65 @@ async def finalize_edge_job(conn: psycopg.AsyncConnection, job: ClaimedJob) -> b
     return True
 
 
+async def load_original_file(
+    conn: psycopg.AsyncConnection, document_id: UUID
+) -> tuple[str, bytes] | None:
+    """최신 원본 판의 (파일명, 바이트)를 읽는다. 문서가 삭제됐으면 None.
+
+    `load_document`와 같은 이유로 트랜잭션 안에서 읽는다 — 트랜잭션 밖 SELECT는 HA에서
+    replica로 가서 방금 올린 원본을 아직 모를 수 있다.
+    """
+    async with conn.transaction():
+        cur = await conn.execute(
+            "SELECT filename, data FROM document_files WHERE document_id = %s"
+            " ORDER BY file_version DESC LIMIT 1",
+            (document_id,),
+        )
+        row = await cur.fetchone()
+    return (row[0], bytes(row[1])) if row is not None else None
+
+
+async def finalize_extract_job(conn: psycopg.AsyncConnection, job: ClaimedJob, text: str) -> bool:
+    """OCR 결과를 **자기 트랜잭션**에서 반영한다. 반영을 시도했으면 True, 문서가 없거나
+    잡을 잃었으면 False (ADR-052 결정 3·8).
+
+    반영 결과가 `failed`(빈 결과·크기 초과)여도 잡은 done이다. 같은 원본이면 같은 결과라
+    재시도는 예산만 쓰고 늦게 같은 결론에 닿는다 — 문서의 `extraction_status='failed'`가
+    그 사실을 남긴다. `skipped`(더 이상 추출 중이 아닌 문서)도 쓸 것이 없으므로 마감이다.
+    """
+    async with conn.transaction():
+        await bound_lock_wait(conn)
+        # fail_job·sweep_zombies와 같은 잠금 순서 — 문서 행 먼저, 그다음 잡.
+        cur = await conn.execute(
+            "SELECT 1 FROM documents WHERE id = %s FOR UPDATE", (job.document_id,)
+        )
+        if await cur.fetchone() is None:
+            return False  # 문서 삭제 — 잡도 CASCADE로 이미 사라졌다
+        if not await lock_owned_job(conn, job):
+            logger.warning("잃은 추출 잡의 결과를 버린다 — job_id=%s", job.job_id)
+            return False
+        outcome = await apply_extracted_text(conn, job.document_id, text)
+        if outcome == "failed":
+            logger.warning(
+                "텍스트를 인식하지 못했다 — document_id=%s (재시도하지 않는다)", job.document_id
+            )
+        await mark_job_done(conn, job.job_id)
+    return True
+
+
+async def _mark_extraction_failed(conn: psycopg.AsyncConnection, document_ids: list[UUID]) -> None:
+    """예산을 소진한 추출 잡의 문서를 `failed`로 둔다 — `embedding_status`는 건드리지 않는다.
+
+    인식 실패와 임베딩 실패는 사용자가 할 일이 다르다(원본 교체 vs 재임베딩, ADR-052 결정 4).
+    추출 중인 문서만 바꾼다 — 그사이 다른 경로가 완료로 만든 문서를 되돌리지 않는다.
+    """
+    await conn.execute(
+        "UPDATE documents SET extraction_status = 'failed', updated_at = now()"
+        " WHERE id = ANY(%s) AND extraction_status = 'pending'",
+        (document_ids,),
+    )
+
+
 async def fail_job(conn: psycopg.AsyncConnection, job: ClaimedJob, error: Exception) -> None:
     """실패한 잡을 지수 백오프로 재시도 대기시키거나, 소진되면 error로 마감한다.
 
@@ -433,6 +497,8 @@ async def fail_job(conn: psycopg.AsyncConnection, job: ClaimedJob, error: Except
                     "UPDATE documents SET embedding_status = 'error' WHERE id = %s",
                     (job.document_id,),
                 )
+            elif job.kind == EXTRACT_JOB_KIND:
+                await _mark_extraction_failed(conn, [job.document_id])
             return
 
         # attempts는 claim 시점에 이미 올라 있다: 1번째 실패 → 2초, 2번째 → 4초.
@@ -603,6 +669,13 @@ async def sweep_zombies(conn: psycopg.AsyncConnection) -> int:
                 "UPDATE documents SET embedding_status = 'error' WHERE id = ANY(%s)",
                 (exhausted,),
             )
+        extraction_exhausted = [
+            doc_id
+            for doc_id, kind, status in decided
+            if status == "error" and kind == EXTRACT_JOB_KIND
+        ]
+        if extraction_exhausted:
+            await _mark_extraction_failed(conn, extraction_exhausted)
 
         return sum(1 for _, _, status in decided if status == "pending")
 
@@ -633,7 +706,8 @@ async def process_once(
     """잡 하나를 처리한다. 집어간 잡이 있었으면 True, 없으면 False.
 
     처리 본체는 잡의 종류로 갈린다 — `embed`는 본문을 읽어 청킹·임베딩·청크 교체까지,
-    `edges`는 저장된 청크 벡터로 관계만 다시 판정한다.
+    `edges`는 저장된 청크 벡터로 관계만 다시 판정하고, `extract`는 최신 원본 판을 OCR해
+    문서 텍스트를 채운다.
 
     처리 실패도 True다 — fail_job이 재시도를 예약했고, drain의 반복 조건은 "이번에
     할 일이 있었는가"이기 때문이다. 예외: 실패 기록마저 락 상한(`bound_lock_wait`)에 걸리면
@@ -669,6 +743,20 @@ async def process_once(
         if job.kind == EDGE_JOB_KIND:
             # 저장된 청크 벡터만으로 계산한다 — 본문을 읽지도, 모델을 부르지도 않는다.
             await finalize_edge_job(conn, job)
+            return True
+        if job.kind == EXTRACT_JOB_KIND:
+            original = await load_original_file(conn, job.document_id)
+            if original is None:
+                # 문서 삭제 — embed 잡의 같은 경로와 같은 이유로 마감을 시도해 둔다.
+                await mark_job_done(conn, job.job_id)
+                return True
+            filename, data = original
+            # OCR은 쪽당 수 초의 CPU 작업이다 — 루프를 막으면 heartbeat가 lease를 연장하지 못한다.
+            text = await asyncio.to_thread(ocr_text, data, detect_content_type(filename))
+            if lost.is_set():
+                logger.warning("lease를 잃어 추출 결과를 버린다 — job_id=%s", job.job_id)
+                return True
+            await finalize_extract_job(conn, job, text)
             return True
         document = await load_document(conn, job.document_id)
         if document is None:
