@@ -5,6 +5,7 @@ from uuid import uuid4
 
 import psycopg
 import pytest
+from conftest import seed_extraction_states
 from test_parsing import minimal_pdf
 
 from app.services.documents import (
@@ -20,6 +21,7 @@ from app.services.documents import (
     create_document,
     create_text_document,
     get_document_version,
+    list_documents,
     replace_original_file,
     restore_version,
     update_extracted_text,
@@ -820,3 +822,27 @@ async def test_extraction_for_a_done_or_missing_document_is_skipped(documents_co
     assert await document_state(documents_conn, failed["id"]) == (1, "", "failed")
 
     assert await apply_extracted_text(documents_conn, uuid4(), "없음") == "skipped"
+
+
+# ── 목록 필터 — status는 embedding_status 컬럼 그대로, 추출 상태는 따로 (#139) ────
+
+
+async def test_list_filters_by_extraction_status(documents_conn):
+    ids = await seed_extraction_states(documents_conn)
+
+    for status, document_id in ids.items():
+        listed = await list_documents(documents_conn, extraction_status=status)
+        assert [d["id"] for d in listed] == [document_id]
+
+
+async def test_embedding_status_filter_keeps_its_column_meaning(documents_conn):
+    """인식 실패 문서도 embedding_status='pending'이다 — 오지 않을 임베딩을 거르려면 두 필터를 함께 쓴다."""
+    ids = await seed_extraction_states(documents_conn)
+
+    waiting = await list_documents(documents_conn, embedding_status="pending")
+    assert {d["id"] for d in waiting} == set(ids.values())
+
+    will_embed = await list_documents(
+        documents_conn, embedding_status="pending", extraction_status="done"
+    )
+    assert [d["id"] for d in will_embed] == [ids["done"]]

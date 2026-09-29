@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import io
 import zipfile
@@ -7,7 +8,7 @@ from uuid import uuid4
 
 import psycopg
 import pytest
-from conftest import login_as, run_embedding_worker
+from conftest import login_as, run_embedding_worker, seed_extraction_states
 from conftest import upload_document as upload
 from docx import Document
 from fastapi.testclient import TestClient
@@ -1996,3 +1997,30 @@ def test_replacing_a_failed_scan_with_text_writes_v1(
     assert text_version_count(migrated_db, document_id) == 1
     assert [row[3] for row in file_rows(migrated_db, document_id)] == [None, 1]
     assert pending_embed_jobs(migrated_db, document_id) == 1
+
+
+# ── 목록 필터 — 추출 상태 (#139) ─────────────────────────────────────────────
+
+
+def test_list_filters_by_extraction_status(db_client: TestClient, migrated_db: str):
+    async def seed():
+        async with await psycopg.AsyncConnection.connect(migrated_db, autocommit=True) as conn:
+            return await seed_extraction_states(conn)
+
+    ids = asyncio.run(seed())
+    login_as(db_client, "alice")
+
+    failed = db_client.get("/api/documents", params={"extraction_status": "failed"})
+    assert failed.status_code == 200
+    assert [d["id"] for d in failed.json()] == [str(ids["failed"])]
+    both = db_client.get(
+        "/api/documents", params={"status": "pending", "extraction_status": "done"}
+    )
+    assert [d["id"] for d in both.json()] == [str(ids["done"])]
+
+
+def test_list_rejects_an_unknown_extraction_status(db_client: TestClient):
+    login_as(db_client, "alice")
+    response = db_client.get("/api/documents", params={"extraction_status": "ocr"})
+
+    assert response.status_code == 422
