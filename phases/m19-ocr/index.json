@@ -18,7 +18,10 @@
       "type": "feat",
       "scope": "api",
       "desc": "이미지(png·jpg·jpeg)를 지원 형식에 넣고 tesseract OCR 함수와 OCR 대상 판정을 파서에 둔다",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-09-29T13:42:17+0900",
+      "summary": "parsing.py에 IMAGE_CONTENT_TYPES·OCR_LANGUAGE(kor+eng)·OCR_CONFIG(--psm 4)·needs_ocr()·ocr_text()(Pillow EXIF 보정, pypdfium2 300dpi 쪽별 OCR을 \\n\\n로 연결, 파일 오류는 ValueError·엔진/언어 부재는 그대로 전파)를 추가하고 png·jpg·jpeg를 지원 형식·MEDIA_TYPES에 넣었다. extract_text는 이미지에 빈 문자열을 반환하며 OCR하지 않는다. 의존성 pytesseract·pypdfium2 추가, backend 928 passed.",
+      "completed_at": "2026-09-29T13:55:54+0900"
     },
     {
       "step": 2,
