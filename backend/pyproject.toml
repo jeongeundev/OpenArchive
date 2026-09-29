@@ -18,6 +18,9 @@ dependencies = [
     # 로컬 OCR(ADR-052). 시스템 tesseract·한국어 모델이 별도로 필요하다.
     "pytesseract",  # Apache-2.0
     "pypdfium2",  # BSD-3/Apache-2.0 — PDF 래스터화, poppler 불필요
+    # 이미지 디코드·EXIF 회전(services/parsing.py). MIT-CMU. pytesseract·python-pptx가 끌고
+    # 오던 것을 직접 import하므로 명시한다 — 그쪽이 의존을 끊으면 파서 import가 깨진다.
+    "pillow",
     "python-docx",
     # HWP 5.0(OLE 복합 문서) 읽기. BSD. pyhwp는 AGPL-3.0이라 쓰지 않는다 — 레코드 순회는
     # services/parsing.py가 직접 한다.
