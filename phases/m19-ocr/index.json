@@ -51,7 +51,10 @@
       "type": "feat",
       "scope": "api",
       "desc": "추출 중 편집·복원·재추출·교체를 409로 막고 OCR 대상 재추출·교체는 추출 잡으로 넘긴다",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-09-29T14:37:05+0900",
+      "summary": "documents.py에 ExtractionInProgress·NoTextToEdit(둘 다 main.py에서 409, current_version 없음)와 _lock_for_text_change(권한 뒤·버전 비교 앞, 문서 행 FOR UPDATE)를 두어 편집·복원·재추출·원본 교체가 추출 중 문서를 막고, 빈 본문 failed는 편집·복원만 막는다. _write_text는 extraction_status='done'을 같은 UPDATE에서 쓰고 텍스트가 없던 문서의 첫 텍스트는 v1을 유지한다. 재추출·교체는 needs_ocr 대상이면 텍스트를 쓰지 않고 extraction_status='pending'(교체는 filename·content_type과 한 UPDATE, 새 판 text_version은 현재 버전 또는 빈 본문이면 NULL)으로 넘겨 트리거가 extract 잡을 만든다. /admin/status에 extraction_pending·extraction_failed, ReextractSummary.awaiting_ocr와 CLI '텍스트 인식 대기 N건' 출력, reextract_all은 추출 중 문서를 실패로 센다. backend 979 passed.",
+      "completed_at": "2026-09-29T14:49:53+0900"
     },
     {
       "step": 5,
