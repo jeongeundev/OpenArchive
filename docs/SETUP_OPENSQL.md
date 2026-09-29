@@ -442,6 +442,63 @@ PGPASSWORD=pg_password psql -h <VM_IP> -p 6432 -U postgres -d opensql \
 
 `opensql | 0`이 나오면 반영된 것이다. **`DATABASE_URL`은 바뀌지 않는다** — 풀 이름은 그대로다.
 
+### 이미 쓰고 있는 OpenSQL에 설치할 때 — 새 DB와 새 풀
+
+위 교정은 설치 직후의 빈 클러스터 이야기다. 이미 업무 데이터가 있는 OpenSQL이라면 **새 데이터베이스를
+기본 경로로 삼는다** — `init`은 `documents`·`users` 같은 이름의 테이블이 이미 있으면 아무것도 바꾸지 않고
+멈추기 때문이다(ADR-039). 앱 계정도 슈퍼유저가 아닌 별도 롤을 쓴다(2026-08-25 실측 경로).
+
+**① DBA — 롤·DB·`vector` 확장.** `vector`는 신뢰 확장(trusted)이 아니라 슈퍼유저만 만들 수 있으므로
+DBA가 **그 데이터베이스 안에서** 미리 만든다. **`pg_trgm`은 미리 만들지 않는다** — 마이그레이션(005)이
+직접 만들고, 이미 있으면 `init`이 적용 전에 거부한다. 앱 롤이 DB 소유자라 `pg_trgm`(trusted)은 스스로 만든다.
+
+```bash
+psql -U postgres -c "CREATE ROLE openarchive LOGIN PASSWORD '<비밀번호>';"
+psql -U postgres -c "CREATE DATABASE openarchive OWNER openarchive;"
+psql -U postgres -d openarchive -c "CREATE EXTENSION vector;"
+```
+
+> 번들 `credcheck`가 롤 이름을 포함한 비밀번호를 거부한다(`password should not contain username`).
+
+**② OpenProxy — 풀 추가.** 기존 풀 블록을 복사해 이름·계정·DB만 바꾼다. `servers`는 기존 풀과 같게 둔다.
+
+```toml
+[pools.openarchive]
+pool_mode = "session"
+default_role = "primary"
+query_parser_enabled = false
+
+[pools.openarchive.users.0]
+username = "openarchive"
+password = "<비밀번호>"
+pool_size = 20
+
+[pools.openarchive.shards.0]
+servers = [
+    ["<DB 호스트>", 5432, "primary"],     # 기존 풀의 servers 줄을 그대로 옮긴다
+]
+database = "openarchive"
+```
+
+풀 추가도 위 교정과 같은 이유로 `reload`가 아니라 **restart**를 쓴다(`bash $OPENSQL_HOME/scripts/restart_openproxy.sh`).
+DSN의 데이터베이스 자리에는 풀 이름을 적는다 — `postgresql://openarchive:<비밀번호>@<OpenProxy 호스트>:6432/openarchive`.
+HA 구성(etcd 공유 설정)이면 파일이 아니라 `openproxy edit` 또는 etcd 키로 바꾼다(§16).
+
+**③ `pool_size`는 앱이 여는 연결 수보다 커야 한다.** `session` 모드에서는 클라이언트 연결 하나가 백엔드
+하나를 끝까지 쥔다. 앱이 기동만으로 여는 연결은 다음과 같다(2026-09-29 로컬 실측, `pg_stat_activity`).
+
+| 프로세스 | 연결 | 내역 |
+|---|---|---|
+| API | 4 | `psycopg_pool` 기본 크기 |
+| 워커 | 5 | 풀 4 + LISTEN 전용 1 |
+| MCP 서버 | 4 | 풀 기본 크기 — Claude 창 하나마다 한 프로세스 |
+| 합계 | **13** | 여기에 `psql` 같은 관리 접속이 더해진다 |
+
+설치기 기본값 `pool_size = 10`에서는 셋을 함께 띄우는 것만으로 모자라고, 넘친 클라이언트는
+`couldn't get a connection after 30.00 sec`로 실패한다(2026-08-25 VM에서 10/10 소진 재현). 위 블록의
+20은 MCP 창 하나와 관리 접속 몇 개를 더한 값이다. 백엔드 합계는 `max_connections`(100) 안에 들어가야 한다.
+§16의 HA 구성처럼 `transaction` 모드면 트랜잭션 사이에 백엔드를 나눠 쓰므로 이 산식이 그대로 적용되지 않는다.
+
 ---
 
 ## 11. 설치 후 검증
@@ -460,7 +517,7 @@ psql -U postgres -c "CREATE INDEX ON _t USING hnsw (v vector_cosine_ops);"  # AD
 psql -U postgres -c "SELECT avg(v) FROM (SELECT '[1,2,3]'::vector AS v) s;" # ADR-018
 psql -U postgres -c "DROP TABLE _t;"
 
-psql -U postgres -c "CREATE EXTENSION IF NOT EXISTS pg_trgm;"               # ADR-016
+psql -U postgres -c "CREATE EXTENSION IF NOT EXISTS pg_trgm;"               # ADR-016 — 관리용 postgres DB에서의 확인. 앱 DB에는 미리 만들지 않는다(§10)
 ```
 
 ### LISTEN/NOTIFY (터미널 2개 필요)

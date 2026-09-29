@@ -330,6 +330,35 @@ def test_init_stops_when_the_user_declines_to_apply(clean_db: str, monkeypatch, 
         assert conn.execute("SELECT to_regclass('public.schema_migrations')").fetchone() == (None,)
 
 
+def _no_stdin(_prompt: str) -> str:
+    raise EOFError
+
+
+def test_init_without_dsn_and_stdin_asks_for_the_dsn_option(
+    clean_db: str, monkeypatch, capsys, tmp_path
+):
+    """#79 ① — `--yes`는 예/아니오만 건너뛴다. 비대화형에서 DSN 입력을 만나면 traceback 대신 안내."""
+    monkeypatch.setattr("builtins.input", _no_stdin)
+
+    exit_code = main(["init", "--yes", "--env-file", str(tmp_path / ".env")])
+
+    assert exit_code == 1
+    assert "--dsn" in capsys.readouterr().out
+    assert not (tmp_path / ".env").exists()
+
+
+def test_init_treats_a_closed_stdin_at_the_apply_prompt_as_declined(
+    clean_db: str, monkeypatch, tmp_path
+):
+    monkeypatch.setattr("builtins.input", _no_stdin)
+
+    exit_code = main(["init", "--dsn", clean_db, "--env-file", str(tmp_path / ".env")])
+
+    assert exit_code == 1
+    with psycopg.connect(clean_db) as conn:
+        assert conn.execute("SELECT to_regclass('public.schema_migrations')").fetchone() == (None,)
+
+
 def test_write_dsn_leaves_no_stale_database_url_behind(clean_db: str, tmp_path):
     """dotenv는 뒤에 오는 줄을 채택한다 — 첫 줄만 갈면 옛 값이 이긴다."""
     env_file = tmp_path / ".env"

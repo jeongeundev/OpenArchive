@@ -15,8 +15,12 @@ interface Position {
   y: number;
 }
 
-function nodeRadius(size: number, largest: number): number {
-  return 22 + 22 * Math.sqrt(size / largest);
+// 최소~최대 범위 안의 위치(0~1). 최대값만 기준으로 삼으면 값이 균질할 때 대비가 사라진다(#89 ②).
+// 값이 모두 같으면 1 — 차이가 없다는 것 자체가 정보다.
+function spread(value: number, values: number[]): number {
+  const smallest = Math.min(...values);
+  const largest = Math.max(...values);
+  return largest === smallest ? 1 : (value - smallest) / (largest - smallest);
 }
 
 export default function ClustersPage(): React.ReactElement {
@@ -49,8 +53,8 @@ export default function ClustersPage(): React.ReactElement {
     return result;
   }, [data]);
 
-  const largest = Math.max(1, ...(data?.clusters.map((cluster) => cluster.size) ?? []));
-  const strongest = Math.max(1, ...(data?.connections.map((connection) => connection.count) ?? []));
+  const sizes = data?.clusters.map((cluster) => cluster.size) ?? [];
+  const counts = data?.connections.map((connection) => connection.count) ?? [];
 
   return (
     <div className="space-y-8">
@@ -58,7 +62,7 @@ export default function ClustersPage(): React.ReactElement {
         <p className="text-sm text-neutral-500">현재 열람 범위 기준</p>
         <h1 className="mt-2 text-4xl font-semibold text-white">관계 지도</h1>
         <p className="mt-3 text-sm text-neutral-400">
-          관계 그래프에서 서로 많이 이어진 문서끼리 묶었습니다. 원의 크기는 문서 수, 선의 굵기는 덩어리 사이 관계 수입니다. 덩어리 이름은 그 덩어리에 집중된 태그이고, 그런 태그가 없으면 연결이 가장 많은 문서의 제목입니다. 묶음은 관계로 계산한 추천이며 사실처럼 단정하지 않습니다.
+          관계 그래프에서 서로 많이 이어진 문서끼리 묶었습니다. 원의 크기는 문서 수, 선의 굵기는 덩어리 사이 관계 수이며, 가장 작은 값과 가장 큰 값 사이의 상대 크기로 그립니다. 덩어리 이름은 그 덩어리에 집중된 태그이고, 그런 태그가 없으면 연결이 가장 많은 문서의 제목입니다. 묶음은 관계로 계산한 추천이며 사실처럼 단정하지 않습니다.
         </p>
       </header>
 
@@ -76,7 +80,7 @@ export default function ClustersPage(): React.ReactElement {
                 <line
                   key={`${connection.source}:${connection.target}`}
                   stroke="#404040"
-                  strokeWidth={1 + (5 * connection.count) / strongest}
+                  strokeWidth={1 + 5 * spread(connection.count, counts)}
                   x1={source.x}
                   x2={target.x}
                   y1={source.y}
@@ -86,7 +90,7 @@ export default function ClustersPage(): React.ReactElement {
             })}
             {data.clusters.map((cluster) => {
               const position = positions.get(cluster.name)!;
-              const radius = nodeRadius(cluster.size, largest);
+              const radius = 22 + 22 * Math.sqrt(spread(cluster.size, sizes));
               return (
                 <g
                   aria-label={`${cluster.name} 덩어리`}

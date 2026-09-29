@@ -47,6 +47,14 @@ EMBEDDING_PROVIDER=local python -m app.worker              # 워커 — 문서�
 모델은 API·워커가 **기동할 때** 내려받아 캐시하므로 최초 1회는 기동이 오래 걸리고, 대신 첫
 검색·첫 업로드가 로딩을 기다리지 않습니다 (ADR-003 보강).
 
+**최초 1회는 인터넷이 필요합니다** — BGE-M3 가중치 약 2GB를 Hugging Face에서 받아 `~/.cache/huggingface`에
+둡니다. 그 뒤로는 외부 접속 없이 구동됩니다. 캐시가 있어도 기동 시 Hugging Face에 메타데이터를 확인하러
+가므로, 폐쇄망에서는 `HF_HUB_OFFLINE=1`을 함께 줍니다(캐시가 있으면 `dim=1024`로 정상 로드 — 실측).
+
+```bash
+HF_HUB_OFFLINE=1 EMBEDDING_PROVIDER=local openarchive serve
+```
+
 ## OCR 엔진 (tesseract)
 
 이미지(PNG·JPG·JPEG)와 텍스트 레이어가 없는 스캔 PDF는 워커가 tesseract로 텍스트를 인식합니다
@@ -82,7 +90,7 @@ brew install tesseract tesseract-lang                    # macOS
 
 ```bash
 openarchive init                                                         # 대화형 — DSN 한 줄만 입력
-openarchive init --dsn "postgresql://app@<vip>:6432/<pool_name>" --yes   # 비대화형
+openarchive init --dsn "postgresql://app@<vip>:6432/<pool_name>" --yes   # 비대화형 — --dsn 필수
 ```
 
 DSN을 확인한 뒤 `backend/.env`의 `DATABASE_URL` 줄만 갈아 끼웁니다. 다른 설정은 보존됩니다.

@@ -71,7 +71,8 @@ describe("문서 진단 화면", () => {
     render(<DiagnosticsPage />);
 
     expect(await screen.findByText("PRD")).toBeInTheDocument();
-    expect(screen.getByText("닿은 대목 100%")).toBeInTheDocument();
+    // 임계(0.95)를 넘는 값이 실측상 전부 1.00이라 비율은 정보를 담지 않는다 — 표시하지 않는다(#79 ③).
+    expect(screen.queryByText(/닿은 대목/)).not.toBeInTheDocument();
     expect(screen.getByText(/여러 대목에서 만남/)).toBeInTheDocument();
     expect(screen.queryByText(/겹침 100%/)).not.toBeInTheDocument();
     expect(screen.queryByText(/내용이 겹치는 문서/)).not.toBeInTheDocument();
