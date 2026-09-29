@@ -717,6 +717,7 @@ database = "postgres"
 > 2. **`ADR-010`의 근거 교체가 옳았음이 확인된다.** `query_parser_enabled = false`이고 `servers`에 primary 하나뿐이라 Replica 라우팅이 일어날 수 없다. 명시적 트랜잭션을 유지하는 이유는 이제 "Replica 라우팅 방지"가 아니라 **`SET LOCAL` 보장 + HA 전환 대비**다.
 >
 > **주의**: `pool_size = 10`이고 `max_connections = 100`이다. 애플리케이션 풀(API + 워커)을 이 안에서 산정해야 한다.
+> **→ 2026-09-29 보강 (#84)**: 이 산식에 MCP 서버가 빠져 있었다. 기동만으로 API 4 + 워커 5(풀 4 + LISTEN 1) + MCP 4 = **13**이라 `session` 모드 `pool_size = 10`은 모자란다(8/25 VM에서 10/10 소진 재현). 권장값과 풀 추가 절차는 `SETUP_OPENSQL.md` §10 「이미 쓰고 있는 OpenSQL에 설치할 때」.
 
 > ⚠️ **접속 시 `-d`에 pool 이름을 넣는다.** DB 이름(`postgres`)이 아니라 pool 이름(`opensql`)이다 — OpenProxy 규약(§4).
 > ```bash

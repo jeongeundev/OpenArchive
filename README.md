@@ -85,7 +85,9 @@ EMBEDDING_PROVIDER=local openarchive serve
 > ⚠️ 풀 이름과 계정은 OpenProxy 설정(`openproxy.toml`)에서 확인합니다. 설치기는 `opensql`
 > 데이터베이스를 만들어 놓고 정작 풀은 관리용 `postgres`를 바라보게 설정하니, DSN을 주기 전에
 > 풀이 어느 DB를 가리키는지 확인하세요 — 파일 위치와 교정 절차는
-> [OpenSQL 환경 구축 §10](docs/SETUP_OPENSQL.md#10-설치-확인)에 있습니다.
+> [OpenSQL 환경 구축 §10](docs/SETUP_OPENSQL.md#10-설치-확인)에 있습니다. 업무 데이터가 이미 있는
+> OpenSQL이라면 새 DB·새 풀로 설치합니다 — DBA가 미리 만들 확장(`vector`만, `pg_trgm`은 만들지 않음)과
+> 풀 크기(설치기 기본 `pool_size = 10`은 모자람)가 같은 절에 있습니다.
 
 ### 각 단계가 하는 일
 
@@ -95,11 +97,13 @@ EMBEDDING_PROVIDER=local openarchive serve
 - **`openarchive init`** — **연결 확인 → 확장·권한 점검 → 스키마 적용 → 준비 상태 보고**를 한 번에
   합니다. 확인이 적용보다 먼저라 `vector` 확장이 없거나 권한이 모자라면 스키마를 건드리기 전에 무엇이
   왜 필요한지 알려주고 멈추고, 기존 테이블이 있으면 아무것도 바꾸지 않습니다
-  ([ADR-039](docs/ADR.md)). `--yes`를 붙이면 묻지 않고 진행합니다. 확인한 DSN은 `backend/.env`에 기록됩니다.
+  ([ADR-039](docs/ADR.md)). `--yes`를 붙이면 묻지 않고 진행합니다 — 건너뛰는 것은 예/아니오 확인뿐이라
+  스크립트처럼 입력이 없는 곳에서는 `--dsn`을 함께 줍니다. 확인한 DSN은 `backend/.env`에 기록됩니다.
 - **`create_admin.py`** — 자체 가입이 없으므로 최초 관리자 계정을 한 번 만듭니다.
 - **`openarchive serve`** — API + 임베딩 워커 + 웹 화면을 한 명령으로 띄웁니다. 웹 화면은 백엔드에
-  동봉된 정적 빌드라 Node.js가 필요 없습니다. **최초 1회는 모델 다운로드(약 2GB)로 기동이 오래
-  걸립니다.**
+  동봉된 정적 빌드라 Node.js가 필요 없습니다. **최초 1회는 Hugging Face에서 BGE-M3 모델(약 2GB)을
+  내려받으므로 인터넷이 필요하고 기동이 오래 걸립니다.** 한 번 받은 뒤에는 `HF_HUB_OFFLINE=1`로 인터넷 없이
+  구동됩니다 ([운영 가이드](docs/OPERATIONS.md#임베딩-프로바이더)).
 
 ### 로컬 개발·평가용 대체 환경
 
