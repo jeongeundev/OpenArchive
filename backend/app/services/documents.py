@@ -110,6 +110,21 @@ class NoTextToEdit(Exception):
         )
 
 
+class ExtractionFailed(Exception):
+    """텍스트 인식에 실패한 문서를 재임베딩하려는 경우 (ADR-052 결정 8).
+
+    재임베딩은 `content_hash` 자기 대입으로 003 트리거를 발화시키는데, 그 트리거는
+    `extraction_status='done'`일 때만 발화한다(022). 막지 않으면 요청은 성공하고 잡은 생기지
+    않는다. 완료로 바꿔 통과시키지 않는 것은 인식 실패 표시가 사라지기 때문이다.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(
+            "텍스트 인식에 실패한 문서는 재임베딩할 수 없습니다."
+            " 원본 파일을 교체하거나 다시 추출하세요."
+        )
+
+
 class VersionConflict(Exception):
     """낙관적 동시성 충돌 (ADR-017). 클라이언트가 새로고침할 수 있도록 현재 버전을 함께 전달한다."""
 
@@ -1027,9 +1042,13 @@ async def request_reembedding(
     """재임베딩을 요청한다.
 
     앱에서 embedding_jobs에 INSERT하지 않는다 (CLAUDE.md CRITICAL). 자기 대입 UPDATE로
-    트리거를 발화시켜 잡 생성과 코얼레싱을 DB에 맡긴다.
+    트리거를 발화시켜 잡 생성과 코얼레싱을 DB에 맡긴다. 그 트리거는 추출이 끝난 문서에서만
+    발화하므로(022) 추출 중·인식 실패 문서는 409로 막는다 — 막지 않으면 조용한 무동작이다.
     """
     await _load_for_write(conn, document_id, user_id)
+    locked = await _lock_for_text_change(conn, document_id, needs_text=False)
+    if locked["extraction_status"] == "failed":
+        raise ExtractionFailed
     cur = conn.cursor(row_factory=dict_row)
     await cur.execute(
         f"""

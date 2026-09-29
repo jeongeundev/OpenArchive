@@ -1760,6 +1760,26 @@ def text_state(dsn: str, document_id: str) -> tuple:
         ).fetchone()
 
 
+@pytest.mark.parametrize("status", ["pending", "failed"])
+def test_reembed_on_unfinished_extraction_is_409_not_a_silent_no_op(
+    db_client: TestClient, migrated_db: str, status: str
+):
+    # 재임베딩은 content_hash 자기 대입으로 003 트리거를 발화시키는데, 022 이후 그 트리거는
+    # extraction_status='done'일 때만 발화한다. 막지 않으면 200을 주고 잡을 만들지 않는다.
+    document_id = upload(db_client).json()["id"]
+    set_extraction_status(migrated_db, document_id, status)
+    before = (text_state(migrated_db, document_id), jobs_of(migrated_db, document_id))
+
+    response = db_client.post(f"/api/documents/{document_id}/reembed")
+
+    assert response.status_code == 409
+    if status == "pending":
+        assert response.json() == {"detail": IN_PROGRESS_DETAIL}
+    else:
+        assert "다시 추출" in response.json()["detail"]
+    assert (text_state(migrated_db, document_id), jobs_of(migrated_db, document_id)) == before
+
+
 def test_pending_document_rejects_edit_restore_reextract_and_replace(
     db_client: TestClient, migrated_db: str
 ):
