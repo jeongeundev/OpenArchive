@@ -414,6 +414,28 @@ def test_ocr_text_rejects_corrupt_image(content_type: str) -> None:
         ocr_text(b"not an image", content_type)
 
 
+@pytest.mark.parametrize("content_type", ["png", "jpg", "jpeg"])
+def test_extract_text_rejects_an_unreadable_image(content_type: str) -> None:
+    """이미지는 요청 안에서 OCR하지 않지만 읽을 수 있는지는 확인한다 — 다른 형식처럼 업로드에서 거부한다.
+
+    워커까지 가면 같은 파일을 몇 번 다시 읽어도 결과가 같은데 재시도 예산을 다 쓴 뒤에야 실패한다.
+    """
+    with pytest.raises(ValueError, match=f"{content_type.upper()} 파일을 읽을 수 없습니다"):
+        extract_text(b"not an image", content_type)
+
+
+def test_extract_text_rejects_a_truncated_image() -> None:
+    """머리만 멀쩡하고 뒤가 잘린 파일은 열기만 해서는 통과한다 — 끝까지 디코드해 본다."""
+    data = fixture("scan_tax_page1.jpg")
+
+    with pytest.raises(ValueError, match="JPG 파일을 읽을 수 없습니다"):
+        extract_text(data[: len(data) // 2], "jpg")
+
+
+def test_extract_text_accepts_a_readable_image_without_ocr() -> None:
+    assert extract_text(fixture("scan_tax_page1.jpg"), "jpg") == ""
+
+
 def test_ocr_respects_exif_orientation() -> None:
     buf = io.BytesIO()
     with (

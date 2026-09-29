@@ -19,10 +19,12 @@ from app.services.documents import (
     create_document,
     create_text_document,
     get_document_version,
+    replace_original_file,
     restore_version,
     update_extracted_text,
 )
 from app.services.parsing import UnsupportedFileType
+from test_parsing import minimal_pdf
 
 
 @pytest.fixture
@@ -645,6 +647,21 @@ async def test_upload_with_text_stays_done_with_an_embed_job(documents_conn):
     assert await job_kinds(documents_conn, document["id"]) == ["embed"]
 
 
+async def test_pdf_with_a_text_layer_stays_done_without_an_extract_job(documents_conn):
+    """텍스트 레이어가 있는 PDF는 OCR 대상이 아니다 — 지금처럼 요청 안에서 끝난다 (ADR-052 결정 2)."""
+    document = await create_document(
+        documents_conn,
+        filename="report.pdf",
+        data=minimal_pdf("text layer"),
+        owner_id="alice",
+    )
+
+    assert document["extraction_status"] == "done"
+    assert await text_versions(documents_conn, document["id"]) == [(1, "text layer")]
+    assert await file_text_versions(documents_conn, document["id"]) == [1]
+    assert await job_kinds(documents_conn, document["id"]) == ["embed"]
+
+
 async def test_same_key_replays_the_pending_scan_document(documents_conn):
     request = {
         "filename": "scan.jpg",
@@ -702,6 +719,45 @@ async def test_first_extraction_writes_v1_and_fills_the_original_text_version(
     assert await text_versions(documents_conn, document["id"]) == [(1, "인식된 텍스트")]
     assert await file_text_versions(documents_conn, document["id"]) == [1]
     assert await job_kinds(documents_conn, document["id"]) == ["extract", "embed"]
+
+
+async def failed_scan_replaced_with(conn: psycopg.AsyncConnection, *replacements: str) -> dict:
+    """인식에 실패한 스캔 문서의 원본을 차례로 교체한다. 픽스처 이름마다 새 판이 쌓인다."""
+    document = await pending_scan(conn)
+    await apply_extracted_text(conn, document["id"], " ")
+    for name in replacements:
+        version = (await document_state(conn, document["id"]))[0]
+        await replace_original_file(
+            conn,
+            document["id"],
+            user_id="alice",
+            filename=name,
+            data=(FIXTURES / name).read_bytes() if name.startswith("scan_") else b"typed text",
+            client_version=version,
+        )
+    return document
+
+
+async def test_extraction_fills_only_the_file_version_it_read(documents_conn):
+    """인식에 실패했던 판은 텍스트를 낸 적이 없다 — 나중 판의 텍스트 버전을 가리키지 않는다."""
+    document = await failed_scan_replaced_with(documents_conn, "scan_tax_pages.pdf")
+    assert await file_text_versions(documents_conn, document["id"]) == [None, None]
+
+    await apply_extracted_text(documents_conn, document["id"], "인식된 텍스트")
+
+    assert await file_text_versions(documents_conn, document["id"]) == [None, 1]
+
+
+async def test_reextraction_leaves_an_earlier_failed_file_version_empty(documents_conn):
+    """텍스트 원본으로 교체된 뒤 다시 스캔으로 교체해도, 처음 실패한 판은 비어 있어야 한다."""
+    document = await failed_scan_replaced_with(
+        documents_conn, "typed.txt", "scan_tax_pages.pdf"
+    )
+    assert await file_text_versions(documents_conn, document["id"]) == [None, 1, 1]
+
+    await apply_extracted_text(documents_conn, document["id"], "새로 인식된 텍스트")
+
+    assert await file_text_versions(documents_conn, document["id"]) == [None, 1, 1]
 
 
 async def test_changed_reextraction_appends_a_new_text_version(documents_conn):

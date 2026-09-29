@@ -1722,6 +1722,16 @@ def test_upload_scan_returns_a_pending_extraction_document(
         ).fetchall() == [("extract", "pending")]
 
 
+def test_upload_rejects_an_unreadable_image_without_saving(
+    db_client: TestClient, migrated_db: str
+):
+    response = upload(db_client, filename="scan.png", content=b"not an image")
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "PNG 파일을 읽을 수 없습니다."
+    assert count_documents(migrated_db) == 0
+
+
 def test_upload_with_text_reports_done_extraction(db_client: TestClient):
     created = upload(db_client)
 
