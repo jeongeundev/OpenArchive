@@ -213,7 +213,7 @@ CREATE TABLE document_edges (
 CREATE TABLE document_links (
   src_document_id uuid NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
   src_chunk_index int,
-  target_title    text NOT NULL    -- ★ 저장 시 제목으로 정규화(015, ADR-030 개정),
+  target_title    text NOT NULL    -- ★ 저장 시 제목으로 정규화(015 · 표 셀 \| 023, ADR-030),
                                     --   해석은 조회 시점에 조회자의 열람 범위에서
 );
 
