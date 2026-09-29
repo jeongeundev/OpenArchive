@@ -7,12 +7,16 @@ SQL 픽스처는 tmp_path에 직접 쓴다. 실제 `001_extensions.sql`·`002_ta
 다음 step의 범위이며, 러너는 그것들과 무관하게 검증 가능해야 한다.
 """
 
+import subprocess
+import sys
+import zipfile
 from pathlib import Path
 
 import psycopg
 import pytest
 from psycopg.conninfo import conninfo_to_dict
 
+import app
 from app.config import get_settings
 from app.migrations import MIGRATIONS_DIR, run_migrations
 
@@ -27,11 +31,32 @@ def ordered_migrations(tmp_path: Path) -> Path:
     return d
 
 
-def test_default_migrations_dir_points_at_backend_migrations():
-    """기본값이 backend/migrations를 가리켜야 API 기동이 스키마를 찾는다."""
-    assert MIGRATIONS_DIR.name == "migrations"
-    assert MIGRATIONS_DIR.parent.name == "backend"
-    assert MIGRATIONS_DIR.is_dir()
+def test_default_migrations_dir_is_inside_the_app_package():
+    """마이그레이션은 `app` 패키지 안에 있어야 설치본(site-packages)에서도 찾는다.
+
+    패키지 밖(`backend/migrations/`)에 두면 편집 설치에서만 보이고, `pip install`로 깐
+    설치본에서는 `init`과 API startup이 스키마를 찾지 못해 죽는다 (#90-1).
+    """
+    assert MIGRATIONS_DIR == Path(app.__file__).resolve().parent / "migrations"
+    assert sorted(MIGRATIONS_DIR.glob("*.sql"))
+
+
+def test_the_built_wheel_carries_every_migration(tmp_path: Path):
+    """위치만으로는 부족하다 — package-data에 없으면 wheel에서 빠진다."""
+    backend = Path(app.__file__).resolve().parents[1]
+    subprocess.run(
+        [
+            sys.executable, "-m", "pip", "wheel", str(backend), "--no-deps",
+            "--no-build-isolation", "--quiet", "--wheel-dir", str(tmp_path),
+        ],
+        check=True,
+    )
+    (wheel,) = tmp_path.glob("*.whl")
+
+    with zipfile.ZipFile(wheel) as archive:
+        packed = {name for name in archive.namelist() if name.startswith("app/migrations/")}
+
+    assert packed >= {f"app/migrations/{path.name}" for path in MIGRATIONS_DIR.glob("*.sql")}
 
 
 def test_clean_db_targets_the_dedicated_test_database(clean_db: str):

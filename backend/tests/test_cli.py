@@ -15,7 +15,6 @@ from psycopg.conninfo import conninfo_to_dict, make_conninfo
 from test_triggers import insert_document, mark_document_ready, unit_vector
 
 from app.cli import OWNED_TABLES, main, probe_capabilities
-from app.config import ENV_FILE
 from app.migrations import migration_files
 from app.services.auth import hash_password, verify_password
 from app.services.documents import create_document
@@ -35,6 +34,22 @@ def applied_migrations(dsn: str) -> list[str]:
             "SELECT filename FROM schema_migrations ORDER BY filename"
         ).fetchall()
     return [row[0] for row in rows]
+
+
+@pytest.fixture(autouse=True)
+def _no_terminal(monkeypatch):
+    """비밀번호 프롬프트는 기본적으로 입력이 닫힌 것으로 둔다.
+
+    getpass는 stdin이 아니라 /dev/tty를 먼저 연다 — 막아 두지 않으면 터미널에서 돌린
+    테스트가 비밀번호를 기다리며 멈추고, 개발자 셸의 ADMIN_PASSWORD가 결과를 바꾼다.
+    """
+    monkeypatch.delenv("ADMIN_PASSWORD", raising=False)
+    monkeypatch.setattr("app.cli.getpass.getpass", _no_stdin)
+
+
+def accounts(dsn: str) -> list[tuple[str, bool]]:
+    with psycopg.connect(dsn) as conn:
+        return conn.execute("SELECT username, is_admin FROM users ORDER BY username").fetchall()
 
 
 def test_owned_tables_match_the_migration_files():
@@ -377,20 +392,17 @@ def test_write_dsn_leaves_no_stale_database_url_behind(clean_db: str, tmp_path):
     assert "EMBEDDING_PROVIDER=local" in written
 
 
-def test_init_next_steps_can_be_pasted_from_any_directory(clean_db: str, capsys, tmp_path):
-    """다음 단계는 실행 위치를 묻지 않는다 — 스크립트를 절대경로로 적고, 그 파일이 실재한다.
+def test_init_next_steps_point_at_installed_commands_only(clean_db: str, capsys, tmp_path):
+    """다음 단계는 설치된 명령만 가리킨다 — 저장소 안 스크립트는 pip 설치본에 없다.
 
-    init은 실행 위치를 가리지 않는다 — venv의 실행 파일이고 --env-file 기본값도 절대경로다.
-    기준 디렉토리를 문장으로 밝히는 것만으로는 부족했다: README 빠른 시작은 backend/에서
-    돌리는데 안내가 "저장소 루트"를 전제하면, 그 자리에서 친 사용자가 파일을 찾지 못한다.
+    관리자를 만들지 못했으면 그 자리를 `openarchive create-user`로 안내한다.
     """
     main(["init", "--dsn", clean_db, "--yes", "--env-file", str(tmp_path / ".env")])
 
     steps = capsys.readouterr().out.split("다음 단계")[1]
 
-    admin_script = ENV_FILE.parent.parent / "scripts" / "create_admin.py"
-    assert admin_script.exists()
-    assert str(admin_script) in steps
+    assert "openarchive create-user admin --admin" in steps
+    assert "scripts/" not in steps
     # 기동은 `openarchive serve` 하나다 (ADR-041 — 웹 화면은 동봉 빌드). uvicorn·워커·npm을
     # 따로 띄우라는 옛 안내가 남아 있으면 README와 화면이 서로 다른 말을 한다.
     assert "openarchive serve" in steps
@@ -398,11 +410,160 @@ def test_init_next_steps_can_be_pasted_from_any_directory(clean_db: str, capsys,
     assert "npm" not in steps
 
 
-def _insert_user(dsn: str, username: str, password: str) -> str:
+def test_init_creates_the_first_admin_from_the_environment(
+    clean_db: str, monkeypatch, capsys, tmp_path
+):
+    """#95 A4 — 자체 가입이 없으므로(ADR-028) 설치가 첫 관리자까지 만든다."""
+    monkeypatch.setenv("ADMIN_PASSWORD", "bootstrap-secret")
+
+    exit_code = main(["init", "--dsn", clean_db, "--yes", "--env-file", str(tmp_path / ".env")])
+
+    assert exit_code == 0
+    assert accounts(clean_db) == [("admin", True)]
+    with psycopg.connect(clean_db) as conn:
+        stored = conn.execute("SELECT password_hash FROM users").fetchone()[0]
+    assert verify_password("bootstrap-secret", stored)
+    out = capsys.readouterr().out
+    assert "bootstrap-secret" not in out
+    # 만들었으면 다음 단계에 계정 생성이 다시 나오지 않는다.
+    assert "create-user" not in out.split("다음 단계")[1]
+
+
+def test_init_names_the_first_admin_with_an_option(clean_db: str, monkeypatch, tmp_path):
+    monkeypatch.setenv("ADMIN_PASSWORD", "bootstrap-secret")
+
+    main(
+        [
+            "init", "--dsn", clean_db, "--yes", "--admin-username", "root",
+            "--env-file", str(tmp_path / ".env"),
+        ]
+    )
+
+    assert accounts(clean_db) == [("root", True)]
+
+
+def test_init_asks_for_the_admin_password_when_it_is_not_in_the_environment(
+    clean_db: str, monkeypatch, tmp_path
+):
+    monkeypatch.setattr("app.cli.getpass.getpass", lambda _prompt: "typed-secret")
+
+    exit_code = main(["init", "--dsn", clean_db, "--yes", "--env-file", str(tmp_path / ".env")])
+
+    assert exit_code == 0
+    assert accounts(clean_db) == [("admin", True)]
+
+
+@pytest.mark.parametrize("answer", ["", None], ids=["empty", "closed-stdin"])
+def test_init_without_a_password_finishes_without_an_admin(
+    clean_db: str, monkeypatch, capsys, tmp_path, answer
+):
+    """비밀번호가 없으면 계정을 만들지 않는다 — 빈 비밀번호 계정은 누구나 들어온다.
+
+    스키마는 이미 적용됐으므로 설치 자체는 성공으로 끝내고, 계정 생성을 다음 단계로 넘긴다.
+    """
+    if answer is not None:
+        monkeypatch.setattr("app.cli.getpass.getpass", lambda _prompt: answer)
+
+    exit_code = main(["init", "--dsn", clean_db, "--yes", "--env-file", str(tmp_path / ".env")])
+
+    assert exit_code == 0
+    assert accounts(clean_db) == []
+    assert "openarchive create-user admin --admin" in capsys.readouterr().out
+
+
+def test_init_leaves_an_existing_admin_alone(migrated_db: str, monkeypatch, capsys, tmp_path):
+    """두 번째 init은 관리자를 또 만들지 않고, 비밀번호도 묻지 않는다."""
+    _insert_user(migrated_db, "boss", "original", is_admin=True)
+    monkeypatch.setenv("ADMIN_PASSWORD", "another-secret")
+
+    exit_code = main(["init", "--dsn", migrated_db, "--yes", "--env-file", str(tmp_path / ".env")])
+
+    assert exit_code == 0
+    assert accounts(migrated_db) == [("boss", True)]
+    assert "create-user" not in capsys.readouterr().out.split("다음 단계")[1]
+
+
+def test_init_reports_an_admin_name_taken_by_a_regular_account(
+    migrated_db: str, monkeypatch, capsys, tmp_path
+):
+    """관리자가 없는데 그 이름을 일반 계정이 쓰고 있으면 덮어쓰지 않는다."""
+    _insert_user(migrated_db, "admin", "original")
+    monkeypatch.setenv("ADMIN_PASSWORD", "another-secret")
+
+    exit_code = main(["init", "--dsn", migrated_db, "--yes", "--env-file", str(tmp_path / ".env")])
+
+    assert exit_code == 1
+    assert accounts(migrated_db) == [("admin", False)]
+    assert "--admin-username" in capsys.readouterr().out
+
+
+def test_create_user_makes_a_regular_account_from_the_environment(
+    migrated_db: str, monkeypatch
+):
+    """`scripts/create_admin.py`를 대신한다 — 설치본에는 저장소 스크립트가 없다."""
+    monkeypatch.setenv("ADMIN_PASSWORD", "environment-secret")
+
+    exit_code = main(["create-user", "alice", "--dsn", migrated_db])
+
+    assert exit_code == 0
+    assert accounts(migrated_db) == [("alice", False)]
+    with psycopg.connect(migrated_db) as conn:
+        stored = conn.execute("SELECT password_hash FROM users").fetchone()[0]
+    assert verify_password("environment-secret", stored)
+
+
+def test_create_user_grants_admin_with_the_flag(migrated_db: str, monkeypatch):
+    monkeypatch.setattr("app.cli.getpass.getpass", lambda _prompt: "typed-secret")
+
+    exit_code = main(["create-user", "root", "--admin", "--dsn", migrated_db])
+
+    assert exit_code == 0
+    assert accounts(migrated_db) == [("root", True)]
+
+
+def test_create_user_refuses_to_overwrite_an_existing_username(
+    migrated_db: str, monkeypatch, capsys
+):
+    _insert_user(migrated_db, "alice", "first-secret")
+    monkeypatch.setenv("ADMIN_PASSWORD", "replacement-secret")
+
+    exit_code = main(["create-user", "alice", "--dsn", migrated_db])
+
+    assert exit_code == 1
+    assert "이미 존재" in capsys.readouterr().out
+    with psycopg.connect(migrated_db) as conn:
+        stored = conn.execute("SELECT password_hash FROM users").fetchone()[0]
+    assert verify_password("first-secret", stored)
+
+
+@pytest.mark.parametrize("answer", ["", None], ids=["empty", "closed-stdin"])
+def test_create_user_refuses_an_empty_password(migrated_db: str, monkeypatch, answer):
+    if answer is not None:
+        monkeypatch.setattr("app.cli.getpass.getpass", lambda _prompt: answer)
+
+    exit_code = main(["create-user", "alice", "--dsn", migrated_db])
+
+    assert exit_code != 0
+    assert accounts(migrated_db) == []
+
+
+def test_create_user_reports_a_connection_failure_without_traceback(monkeypatch, capsys):
+    monkeypatch.setenv("ADMIN_PASSWORD", "environment-secret")
+
+    exit_code = main(
+        ["create-user", "alice", "--dsn", "postgresql://nobody@127.0.0.1:1/none"]
+    )
+
+    assert exit_code == 1
+    assert "연결하지 못했습니다" in capsys.readouterr().out
+
+
+def _insert_user(dsn: str, username: str, password: str, *, is_admin: bool = False) -> str:
     with psycopg.connect(dsn) as conn:
         return conn.execute(
-            "INSERT INTO users (username, password_hash) VALUES (%s, %s) RETURNING id",
-            (username, hash_password(password)),
+            "INSERT INTO users (username, password_hash, is_admin) VALUES (%s, %s, %s)"
+            " RETURNING id",
+            (username, hash_password(password), is_admin),
         ).fetchone()[0]
 
 
