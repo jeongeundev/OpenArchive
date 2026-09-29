@@ -333,6 +333,19 @@ def test_extract_text_reads_pptx_group_and_table_shapes() -> None:
     assert extract_text(buf.getvalue(), "pptx") == "묶인 상자\n단계\t기한\n착수"
 
 
+def test_extract_text_skips_empty_pptx_slides_between_slides() -> None:
+    presentation = Presentation()
+    for text in ["첫 슬라이드", "", "셋째 슬라이드"]:
+        slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+        if text:
+            slide.shapes.add_textbox(Inches(1), Inches(1), Inches(2), Inches(1)).text = text
+    buf = io.BytesIO()
+    presentation.save(buf)
+
+    # 빈 슬라이드는 빈 줄을 겹쳐 남기지 않는다 — 슬라이드 경계는 빈 줄 하나다.
+    assert extract_text(buf.getvalue(), "pptx") == "첫 슬라이드\n\n셋째 슬라이드"
+
+
 def test_extract_text_returns_empty_string_for_office_documents_without_text() -> None:
     workbook = Workbook()
     xlsx = io.BytesIO()
