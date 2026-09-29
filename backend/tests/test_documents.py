@@ -1,8 +1,11 @@
 import asyncio
 import hashlib
+from pathlib import Path
+from uuid import uuid4
 
 import psycopg
 import pytest
+from test_parsing import minimal_pdf
 
 from app.services.documents import (
     MAX_EXTRACTED_TEXT_LENGTH,
@@ -13,9 +16,11 @@ from app.services.documents import (
     IdempotencyKeyReused,
     InvalidVisibility,
     VersionConflict,
+    apply_extracted_text,
     create_document,
     create_text_document,
     get_document_version,
+    replace_original_file,
     restore_version,
     update_extracted_text,
 )
@@ -567,3 +572,251 @@ async def test_create_without_a_key_records_nothing(documents_conn):
 
     assert await document_count(documents_conn) == 2
     assert await count_rows(documents_conn, "idempotency_keys") == 0
+
+
+FIXTURES = Path(__file__).parent / "fixtures"
+
+
+async def job_kinds(conn: psycopg.AsyncConnection, document_id) -> list[str]:
+    rows = await (
+        await conn.execute(
+            "SELECT kind FROM embedding_jobs WHERE document_id = %s ORDER BY id",
+            (document_id,),
+        )
+    ).fetchall()
+    return [row[0] for row in rows]
+
+
+async def document_state(conn: psycopg.AsyncConnection, document_id) -> tuple:
+    return await (
+        await conn.execute(
+            "SELECT version, content, extraction_status FROM documents WHERE id = %s",
+            (document_id,),
+        )
+    ).fetchone()
+
+
+async def text_versions(conn: psycopg.AsyncConnection, document_id) -> list[tuple]:
+    return await (
+        await conn.execute(
+            "SELECT version, content FROM document_versions WHERE document_id = %s"
+            " ORDER BY version",
+            (document_id,),
+        )
+    ).fetchall()
+
+
+async def file_text_versions(conn: psycopg.AsyncConnection, document_id) -> list:
+    rows = await (
+        await conn.execute(
+            "SELECT text_version FROM document_files WHERE document_id = %s"
+            " ORDER BY file_version",
+            (document_id,),
+        )
+    ).fetchall()
+    return [row[0] for row in rows]
+
+
+@pytest.mark.parametrize("fixture_name", ["scan_tax_page1.jpg", "scan_tax_pages.pdf"])
+async def test_ocr_target_upload_becomes_a_pending_document_with_an_extract_job(
+    documents_conn, fixture_name
+):
+    """스캔 문서는 요청 안에서 OCR하지 않고 「추출 중」 문서로 먼저 생긴다 (ADR-052 결정 3·5)."""
+    document = await create_document(
+        documents_conn,
+        filename=fixture_name,
+        data=(FIXTURES / fixture_name).read_bytes(),
+        owner_id="alice",
+    )
+
+    assert document["extraction_status"] == "pending"
+    assert await document_state(documents_conn, document["id"]) == (1, "", "pending")
+    assert await text_versions(documents_conn, document["id"]) == []
+    assert await file_text_versions(documents_conn, document["id"]) == [None]
+    assert await job_kinds(documents_conn, document["id"]) == ["extract"]
+
+
+async def test_upload_with_text_stays_done_with_an_embed_job(documents_conn):
+    document = await create_document(
+        documents_conn, filename="guide.md", data="본문".encode(), owner_id="alice"
+    )
+
+    assert document["extraction_status"] == "done"
+    assert await text_versions(documents_conn, document["id"]) == [(1, "본문")]
+    assert await file_text_versions(documents_conn, document["id"]) == [1]
+    assert await job_kinds(documents_conn, document["id"]) == ["embed"]
+
+
+async def test_pdf_with_a_text_layer_stays_done_without_an_extract_job(documents_conn):
+    """텍스트 레이어가 있는 PDF는 OCR 대상이 아니다 — 지금처럼 요청 안에서 끝난다 (ADR-052 결정 2)."""
+    document = await create_document(
+        documents_conn,
+        filename="report.pdf",
+        data=minimal_pdf("text layer"),
+        owner_id="alice",
+    )
+
+    assert document["extraction_status"] == "done"
+    assert await text_versions(documents_conn, document["id"]) == [(1, "text layer")]
+    assert await file_text_versions(documents_conn, document["id"]) == [1]
+    assert await job_kinds(documents_conn, document["id"]) == ["embed"]
+
+
+async def test_same_key_replays_the_pending_scan_document(documents_conn):
+    request = {
+        "filename": "scan.jpg",
+        "data": (FIXTURES / "scan_tax_page1.jpg").read_bytes(),
+        "owner_id": "alice",
+        "idempotency_key": "scan-1",
+    }
+
+    first = await create_document(documents_conn, **request)
+    second = await create_document(documents_conn, **request)
+
+    assert second["id"] == first["id"]
+    assert second["extraction_status"] == "pending"
+    assert await document_count(documents_conn) == 1
+    assert await job_kinds(documents_conn, first["id"]) == ["extract"]
+
+
+async def pending_scan(conn: psycopg.AsyncConnection) -> dict:
+    return await create_document(
+        conn,
+        filename="scan.jpg",
+        data=(FIXTURES / "scan_tax_page1.jpg").read_bytes(),
+        owner_id="alice",
+    )
+
+
+async def reextracting(conn: psycopg.AsyncConnection, content: str) -> dict:
+    """이전 텍스트를 가진 채 추출 중으로 바뀐 문서. 재추출 경로는 step 4라 SQL로 만든다."""
+    document = await create_document(
+        conn, filename="scan.md", data=content.encode(), owner_id="alice"
+    )
+    # 첫 임베딩이 끝난 상태로 둔다 — 대기 중이면 새 임베딩 잡이 코얼레싱에 합쳐져 보이지 않는다.
+    await conn.execute(
+        "UPDATE embedding_jobs SET status = 'done' WHERE document_id = %s", (document["id"],)
+    )
+    await conn.execute(
+        "UPDATE documents SET extraction_status = 'pending' WHERE id = %s", (document["id"],)
+    )
+    return document
+
+
+async def test_first_extraction_writes_v1_and_fills_the_original_text_version(
+    documents_conn,
+):
+    document = await pending_scan(documents_conn)
+
+    outcome = await apply_extracted_text(documents_conn, document["id"], "인식된 텍스트")
+
+    assert outcome == "applied"
+    assert await document_state(documents_conn, document["id"]) == (
+        1,
+        "인식된 텍스트",
+        "done",
+    )
+    assert await text_versions(documents_conn, document["id"]) == [(1, "인식된 텍스트")]
+    assert await file_text_versions(documents_conn, document["id"]) == [1]
+    assert await job_kinds(documents_conn, document["id"]) == ["extract", "embed"]
+
+
+async def failed_scan_replaced_with(conn: psycopg.AsyncConnection, *replacements: str) -> dict:
+    """인식에 실패한 스캔 문서의 원본을 차례로 교체한다. 픽스처 이름마다 새 판이 쌓인다."""
+    document = await pending_scan(conn)
+    await apply_extracted_text(conn, document["id"], " ")
+    for name in replacements:
+        version = (await document_state(conn, document["id"]))[0]
+        await replace_original_file(
+            conn,
+            document["id"],
+            user_id="alice",
+            filename=name,
+            data=(FIXTURES / name).read_bytes() if name.startswith("scan_") else b"typed text",
+            client_version=version,
+        )
+    return document
+
+
+async def test_extraction_fills_only_the_file_version_it_read(documents_conn):
+    """인식에 실패했던 판은 텍스트를 낸 적이 없다 — 나중 판의 텍스트 버전을 가리키지 않는다."""
+    document = await failed_scan_replaced_with(documents_conn, "scan_tax_pages.pdf")
+    assert await file_text_versions(documents_conn, document["id"]) == [None, None]
+
+    await apply_extracted_text(documents_conn, document["id"], "인식된 텍스트")
+
+    assert await file_text_versions(documents_conn, document["id"]) == [None, 1]
+
+
+async def test_reextraction_leaves_an_earlier_failed_file_version_empty(documents_conn):
+    """텍스트 원본으로 교체된 뒤 다시 스캔으로 교체해도, 처음 실패한 판은 비어 있어야 한다."""
+    document = await failed_scan_replaced_with(
+        documents_conn, "typed.txt", "scan_tax_pages.pdf"
+    )
+    assert await file_text_versions(documents_conn, document["id"]) == [None, 1, 1]
+
+    await apply_extracted_text(documents_conn, document["id"], "새로 인식된 텍스트")
+
+    assert await file_text_versions(documents_conn, document["id"]) == [None, 1, 1]
+
+
+async def test_changed_reextraction_appends_a_new_text_version(documents_conn):
+    document = await reextracting(documents_conn, "이전 텍스트")
+
+    outcome = await apply_extracted_text(documents_conn, document["id"], "새 텍스트")
+
+    assert outcome == "applied"
+    assert await document_state(documents_conn, document["id"]) == (2, "새 텍스트", "done")
+    assert await text_versions(documents_conn, document["id"]) == [
+        (1, "이전 텍스트"),
+        (2, "새 텍스트"),
+    ]
+    assert await job_kinds(documents_conn, document["id"]) == ["embed", "extract", "embed"]
+
+
+async def test_unchanged_reextraction_only_marks_done(documents_conn):
+    document = await reextracting(documents_conn, "같은 텍스트")
+
+    outcome = await apply_extracted_text(documents_conn, document["id"], "같은 텍스트")
+
+    assert outcome == "unchanged"
+    assert await document_state(documents_conn, document["id"]) == (1, "같은 텍스트", "done")
+    assert await text_versions(documents_conn, document["id"]) == [(1, "같은 텍스트")]
+    assert await job_kinds(documents_conn, document["id"]) == ["embed", "extract"]
+
+
+@pytest.mark.parametrize("content", [" \t\r\n\f", "가" * (MAX_EXTRACTED_TEXT_LENGTH + 1)])
+@pytest.mark.parametrize("previous", ["", "이전 텍스트"])
+async def test_blank_or_oversized_result_marks_failed_and_keeps_the_text(
+    documents_conn, content, previous
+):
+    document = (
+        await pending_scan(documents_conn)
+        if not previous
+        else await reextracting(documents_conn, previous)
+    )
+    jobs_before = await job_kinds(documents_conn, document["id"])
+    versions_before = await text_versions(documents_conn, document["id"])
+
+    outcome = await apply_extracted_text(documents_conn, document["id"], content)
+
+    assert outcome == "failed"
+    assert await document_state(documents_conn, document["id"]) == (1, previous, "failed")
+    assert await text_versions(documents_conn, document["id"]) == versions_before
+    assert await job_kinds(documents_conn, document["id"]) == jobs_before
+
+
+async def test_extraction_for_a_done_or_missing_document_is_skipped(documents_conn):
+    document = await create_document(
+        documents_conn, filename="guide.md", data="본문".encode(), owner_id="alice"
+    )
+
+    assert await apply_extracted_text(documents_conn, document["id"], "덮어쓰기") == "skipped"
+    assert await document_state(documents_conn, document["id"]) == (1, "본문", "done")
+
+    failed = await pending_scan(documents_conn)
+    await apply_extracted_text(documents_conn, failed["id"], " ")
+    assert await apply_extracted_text(documents_conn, failed["id"], "늦은 결과") == "skipped"
+    assert await document_state(documents_conn, failed["id"]) == (1, "", "failed")
+
+    assert await apply_extracted_text(documents_conn, uuid4(), "없음") == "skipped"

@@ -182,6 +182,25 @@ describe("VersionHistory", () => {
     // 열람은 막지 않는다 — 볼 수 있는 문서의 과거 본문은 볼 수 있다.
     expect(screen.getAllByRole("button", { name: "본문 보기" })).toHaveLength(3);
   });
+
+  it("막힌 이유가 있으면 되돌리기를 비활성으로 두고 이유를 보인다", () => {
+    render(
+      <VersionHistory
+        documentId="document-1"
+        versions={versions}
+        currentVersion={3}
+        disabled={false}
+        restoreBlockedReason="원본에서 텍스트를 인식하는 중입니다."
+        onRestored={vi.fn()}
+      />,
+    );
+
+    for (const button of screen.getAllByRole("button", { name: "되돌리기" })) {
+      expect(button).toBeDisabled();
+    }
+    expect(screen.getByText("원본에서 텍스트를 인식하는 중입니다.")).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "본문 보기" })).toHaveLength(3);
+  });
 });
 
 describe("VersionHistory 취소", () => {

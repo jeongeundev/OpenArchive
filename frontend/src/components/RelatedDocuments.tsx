@@ -3,10 +3,14 @@ import Link from "next/link";
 import { relationLabel } from "@/lib/relations";
 import type { RelatedResponse } from "@/lib/types";
 
+// textMissing: 텍스트 인식에 실패해 임베딩할 텍스트가 없는 문서다 (ADR-052). 색인 전 안내가
+// 오지 않을 완료를 약속하지 않게 한다.
 export function RelatedDocuments({
   response,
+  textMissing = false,
 }: {
   response: RelatedResponse;
+  textMissing?: boolean;
 }): React.ReactElement {
   const groups = Array.from(
     response.items.reduce((byKind, item) => {
@@ -24,7 +28,11 @@ export function RelatedDocuments({
     <section className="space-y-4">
       <h2 className="text-sm font-medium text-neutral-400">관련 문서</h2>
       {response.reason === "not_indexed" ? (
-        <p className="text-sm text-neutral-500">임베딩이 완료되면 표시됩니다.</p>
+        <p className="text-sm text-neutral-500">
+          {textMissing
+            ? "텍스트를 인식하지 못해 표시할 수 없습니다."
+            : "임베딩이 완료되면 표시됩니다."}
+        </p>
       ) : (
         <>
           {response.identical.length > 0 ? (

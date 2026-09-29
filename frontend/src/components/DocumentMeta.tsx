@@ -1,5 +1,5 @@
 import type { DocumentDetail } from "@/lib/types";
-import { StatusBadge } from "./StatusBadge";
+import { DocumentStatusBadge } from "./StatusBadge";
 
 function formatDate(value: string): string {
   return new Intl.DateTimeFormat("ko-KR", {
@@ -25,7 +25,7 @@ export function DocumentMeta({
     <section className="rounded-lg border border-neutral-800 bg-[#141414] p-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <h1 className="text-4xl font-semibold text-white">{document.title}</h1>
-        <StatusBadge status={document.embedding_status} />
+        <DocumentStatusBadge document={document} />
       </div>
 
       <dl className="mt-6 grid gap-4 text-sm sm:grid-cols-2">

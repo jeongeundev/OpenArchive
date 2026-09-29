@@ -1,7 +1,7 @@
 import Link from "next/link";
 
 import type { DocumentSummary } from "@/lib/types";
-import { StatusBadge } from "./StatusBadge";
+import { DocumentStatusBadge } from "./StatusBadge";
 
 const DATE_FORMATTER = new Intl.DateTimeFormat("ko-KR", {
   year: "numeric",
@@ -57,7 +57,7 @@ export function DocumentTable({
                   {document.visibility === "public" ? "공개" : "비공개"}
                 </td>
                 <td className="px-4 py-3">
-                  <StatusBadge status={document.embedding_status} />
+                  <DocumentStatusBadge document={document} />
                 </td>
                 <td className="whitespace-nowrap px-4 py-3 text-neutral-400">
                   {DATE_FORMATTER.format(new Date(document.updated_at))}

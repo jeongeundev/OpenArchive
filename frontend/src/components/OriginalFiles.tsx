@@ -9,7 +9,11 @@ import {
   replaceOriginalFile,
 } from "@/lib/api";
 import { MAX_UPLOAD_BYTES, UPLOAD_TOO_LARGE } from "@/lib/limits";
-import { SUPPORTED_CONTENT_TYPES, type DocumentDetail } from "@/lib/types";
+import {
+  EXTRACTING_NOTICE,
+  SUPPORTED_CONTENT_TYPES,
+  type DocumentDetail,
+} from "@/lib/types";
 
 // 업로드 상한과 같은 십진 단위로 적는다 — "50MB"가 화면마다 다른 크기를 뜻하지 않게.
 function formatSize(bytes: number): string {
@@ -52,7 +56,8 @@ export function OriginalFiles({
   const files = [...document.files].sort((a, b) => b.file_version - a.file_version);
   const latest = files[0]?.file_version;
   const hasOriginal = files.length > 0;
-  const actionsDisabled = disabled || busy;
+  const extracting = document.extraction_status === "pending";
+  const actionsDisabled = disabled || busy || extracting;
 
   async function replace(file: File): Promise<void> {
     setError(null);
@@ -91,7 +96,8 @@ export function OriginalFiles({
     setBusy(true);
     try {
       const result = await reextractDocument(document.id, document.version);
-      if (result.changed) {
+      // 원본이 이미지·스캔 PDF면 서버가 텍스트를 쓰지 않고 인식 대기로 넘긴다 — 같다는 뜻이 아니다.
+      if (result.changed || result.extraction_status === "pending") {
         onChanged();
       } else {
         setNotice("추출 결과가 현재 텍스트와 같아 새 버전을 만들지 않았습니다.");
@@ -126,7 +132,9 @@ export function OriginalFiles({
                 <time className="text-xs text-neutral-500" dateTime={file.uploaded_at}>
                   {formatDate(file.uploaded_at)}
                 </time>
-                <span className="text-xs text-neutral-500">텍스트 v{file.text_version}</span>
+                <span className="text-xs text-neutral-500">
+                  {file.text_version === null ? "텍스트 인식 전" : `텍스트 v${file.text_version}`}
+                </span>
               </div>
               {/* 브라우저가 직접 받게 둔다 — fetch로 받으면 파일 전체가 탭 메모리에 올라간다. */}
               <a
@@ -180,6 +188,8 @@ export function OriginalFiles({
           type="file"
         />
       </div>
+
+      {extracting ? <p className="text-sm text-neutral-400">{EXTRACTING_NOTICE}</p> : null}
 
       {error !== null ? (
         <p className="text-sm text-[#f87171]" role="status">

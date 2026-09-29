@@ -1,13 +1,14 @@
 """업로드 파일 바이트에서 추출 텍스트를 만드는 순수 함수.
 
-DB·네트워크·파일시스템을 건드리지 않고 메모리 안에서만 처리한다. 반환된 추출
+DB·네트워크를 건드리지 않는다. 일반 추출·래스터화는 메모리에서 처리하고,
+OCR은 로컬 tesseract를 호출한다(pytesseract가 임시 파일을 관리한다). 반환된 추출
 텍스트는 호출부가 저장한다. 이 모듈은 저장하지 않는다 — 원본 보관은
 `services/documents.py`가 `document_files`에 한다.
 
 빈 추출 결과의 거부는 이 모듈 밖에서 한다 — 판정은 `services/documents.py`가
 `EmptyExtractedText`로 하고, 400 응답 매핑은 `app/main.py`의 예외 핸들러가 한다.
-이 모듈은 스캔 이미지 PDF처럼 텍스트가 없는 파일도 예외로 바꾸지 않고 빈 문자열을
-그대로 반환한다.
+extract_text는 이미지와 텍스트 없는 PDF에 빈 문자열을 반환하며 OCR하지 않는다.
+호출부가 needs_ocr로 판정해 워커 추출로 넘긴다(ADR-052). ocr_text는 그때만 호출한다.
 """
 
 import io
@@ -20,8 +21,11 @@ from pathlib import PurePath
 from xml.etree import ElementTree
 
 import olefile
+import pypdfium2
+import pytesseract
 from docx import Document
 from openpyxl import load_workbook
+from PIL import Image, ImageOps
 from pptx import Presentation
 from pptx.enum.shapes import MSO_SHAPE_TYPE
 from pptx.shapes.base import BaseShape
@@ -29,13 +33,22 @@ from pptx.text.text import TextFrame
 from pypdf import PdfReader
 
 SUPPORTED_CONTENT_TYPES: tuple[str, ...] = (
-    "pdf", "docx", "txt", "md", "hwp", "hwpx", "xlsx", "pptx"
+    "pdf", "docx", "txt", "md", "hwp", "hwpx", "xlsx", "pptx", "png", "jpg", "jpeg"
 )
+
+IMAGE_CONTENT_TYPES: tuple[str, ...] = ("png", "jpg", "jpeg")
+OCR_LANGUAGE = "kor+eng"
+# 기본 psm 3은 깨끗한 300dpi 원본의 문단 블록을 누락했다(#135):
+# 1,095자 중 879자, CER 0.35 → psm 4에서 0.07.
+OCR_CONFIG = "--psm 4"
 
 # 원본을 내려줄 때의 미디어 타입. 업로더가 보낸 Content-Type이나 저장된 값을 믿지 않고
 # 이 고정 매핑만 쓴다 — 조작된 값이 그대로 나가면 브라우저가 다르게 해석한다.
 # 형식이 늘면 여기에 한 줄씩 더한다.
 MEDIA_TYPES: dict[str, str] = {
+    "png": "image/png",
+    "jpg": "image/jpeg",
+    "jpeg": "image/jpeg",
     "pdf": "application/pdf",
     "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     "txt": "text/plain; charset=utf-8",
@@ -97,6 +110,13 @@ def extract_text(data: bytes, content_type: str) -> str:
             raise TextDecodeError("텍스트 파일은 UTF-8 인코딩이어야 합니다.") from error
 
     try:
+        if content_type in IMAGE_CONTENT_TYPES:
+            # OCR은 워커가 한다(ADR-052). 여기서는 끝까지 디코드되는지만 본다 — 못 읽는 파일은
+            # 워커가 몇 번을 다시 읽어도 같으므로 다른 형식처럼 업로드에서 거부한다.
+            with Image.open(io.BytesIO(data)) as image:
+                image.load()
+            return ""
+
         if content_type == "pdf":
             pages = PdfReader(io.BytesIO(data)).pages
             return "\n\n".join(page.extract_text() or "" for page in pages)
@@ -117,6 +137,55 @@ def extract_text(data: bytes, content_type: str) -> str:
         return "\n\n".join(paragraph.text for paragraph in document.paragraphs)
     except EncryptedDocument:
         raise
+    except Exception as error:
+        raise ValueError(f"{content_type.upper()} 파일을 읽을 수 없습니다.") from error
+
+
+def needs_ocr(content_type: str, extracted_text: str) -> bool:
+    """이미지는 항상, PDF는 텍스트 레이어가 비었을 때만 OCR한다."""
+    return content_type in IMAGE_CONTENT_TYPES or (
+        content_type == "pdf" and not extracted_text.strip()
+    )
+
+
+def ocr_text(data: bytes, content_type: str) -> str:
+    """로컬 OCR로 텍스트를 읽는다. 파일 오류는 ValueError, 설치 오류는 그대로 전파한다."""
+    if content_type not in (*IMAGE_CONTENT_TYPES, "pdf"):
+        raise UnsupportedFileType(f"지원하지 않는 OCR 파일 형식입니다: {content_type}")
+
+    try:
+        if content_type in IMAGE_CONTENT_TYPES:
+            with (
+                Image.open(io.BytesIO(data)) as source,
+                ImageOps.exif_transpose(source) as image,
+            ):
+                return pytesseract.image_to_string(image, lang=OCR_LANGUAGE, config=OCR_CONFIG)
+
+        texts = []
+        with pypdfium2.PdfDocument(data) as document:
+            for index in range(len(document)):
+                page = document[index]
+                try:
+                    bitmap = page.render(scale=300 / 72)
+                    try:
+                        with bitmap.to_pil() as image:
+                            texts.append(pytesseract.image_to_string(
+                                image, lang=OCR_LANGUAGE, config=OCR_CONFIG
+                            ))
+                    finally:
+                        bitmap.close()
+                finally:
+                    page.close()
+        return "\n\n".join(texts)
+    except pytesseract.TesseractNotFoundError:
+        raise
+    except pytesseract.TesseractError as error:
+        if any(message in str(error) for message in (
+            "Error opening data file", "Failed loading language",
+            "Could not initialize tesseract", "couldn't load any languages",
+        )):
+            raise
+        raise ValueError(f"{content_type.upper()} 파일을 읽을 수 없습니다.") from error
     except Exception as error:
         raise ValueError(f"{content_type.upper()} 파일을 읽을 수 없습니다.") from error
 

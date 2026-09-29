@@ -588,6 +588,11 @@ def run_reextract(*, dsn: str | None, document_id: UUID | None) -> int:
     )
     for failed_id, reason in summary.failed:
         print(f"  실패 {failed_id}: {reason}")
+    if summary.awaiting_ocr:
+        print(
+            f"텍스트 인식 대기 {summary.awaiting_ocr}건 — 원본이 이미지나 스캔이라"
+            " 워커가 텍스트를 인식한 뒤 반영합니다."
+        )
     if summary.changed:
         print("바뀐 문서는 새 텍스트 버전이 되었고 워커가 다시 임베딩합니다.")
     return 1 if summary.failed else 0

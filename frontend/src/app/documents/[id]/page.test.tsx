@@ -23,6 +23,7 @@ const detail: DocumentDetail = {
   visibility: "public",
   tags: ["OpenSQL"],
   embedding_status: "ready",
+  extraction_status: "done",
   created_at: "2026-08-05T10:00:00Z",
   updated_at: "2026-08-05T11:00:00Z",
   versions: [],
@@ -218,5 +219,55 @@ describe("문서 상세 화면 취소", () => {
     );
     for (const [, init] of fetchMock.mock.calls) expect(init?.signal?.aborted).toBe(true);
     vi.unstubAllGlobals();
+  });
+});
+
+describe("텍스트 인식에 실패한 문서", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("관련 문서·태그 추천이 오지 않을 임베딩 완료를 약속하지 않는다", async () => {
+    const failed: DocumentDetail = {
+      ...detail,
+      filename: "blank.png",
+      content_type: "png",
+      content: "",
+      version: 1,
+      embedding_status: "pending",
+      extraction_status: "failed",
+      chunk_count: 0,
+      chunk_version: null,
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string) => {
+        if (url === "/api/auth/me") {
+          return Promise.resolve(
+            jsonResponse({ authenticated: true, username: "alice", is_admin: false }),
+          );
+        }
+        if (url.endsWith("/links") || url.endsWith("/backlinks")) {
+          return Promise.resolve(jsonResponse([]));
+        }
+        if (url.endsWith("/related")) {
+          return Promise.resolve(
+            jsonResponse({ items: [], identical: [], based_on_version: null, reason: "not_indexed" }),
+          );
+        }
+        if (url.endsWith("/tag-suggestions")) {
+          return Promise.resolve(
+            jsonResponse({ items: [], based_on_version: null, reason: "not_indexed" }),
+          );
+        }
+        return Promise.resolve(jsonResponse(failed));
+      }),
+    );
+    await renderPage();
+
+    expect(
+      await screen.findAllByText("텍스트를 인식하지 못해 표시할 수 없습니다."),
+    ).toHaveLength(2);
+    expect(screen.queryByText("임베딩이 완료되면 표시됩니다.")).not.toBeInTheDocument();
   });
 });

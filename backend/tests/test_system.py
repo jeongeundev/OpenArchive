@@ -1,4 +1,5 @@
 import hashlib
+from pathlib import Path
 
 import psycopg
 import pytest
@@ -14,6 +15,8 @@ from app.services.system import (
     reextract_one,
 )
 from app.worker import process_once
+
+FIXTURES = Path(__file__).parent / "fixtures"
 
 
 @pytest.fixture
@@ -402,3 +405,65 @@ async def test_reextract_one_rejects_a_document_without_original(system_conn):
 
     with pytest.raises(OriginalFileMissing):
         await reextract_one(system_conn, document_id)
+
+
+# ── 추출 상태 (ADR-052) ───────────────────────────────────────────────────
+
+
+async def test_status_counts_documents_waiting_for_and_failing_extraction(
+    system_conn, migrated_db
+):
+    scan = (FIXTURES / "scan_tax_page1.jpg").read_bytes()
+    waiting = await create_document(system_conn, filename="a.jpg", data=scan, owner_id="alice")
+    failed = await create_document(system_conn, filename="b.jpg", data=scan, owner_id="alice")
+    await upload_original(system_conn, "텍스트 문서")
+    with psycopg.connect(migrated_db) as conn:
+        conn.execute(
+            "UPDATE documents SET extraction_status = 'failed' WHERE id = %s", (failed["id"],)
+        )
+
+    result = await status_of(system_conn)
+
+    assert (result.extraction_pending, result.extraction_failed) == (1, 1)
+    assert waiting["extraction_status"] == "pending"
+
+
+def point_original_at_scan(dsn: str, document_id) -> None:
+    with psycopg.connect(dsn) as conn:
+        conn.execute(
+            "UPDATE document_files SET filename = 'scan.jpg', data = %s WHERE document_id = %s",
+            ((FIXTURES / "scan_tax_page1.jpg").read_bytes(), document_id),
+        )
+
+
+async def test_reextract_one_hands_an_ocr_target_to_the_worker(system_conn, migrated_db):
+    document_id = await upload_original(system_conn, "original")
+    point_original_at_scan(migrated_db, document_id)
+
+    summary = await reextract_one(system_conn, document_id)
+
+    assert (summary.changed, summary.unchanged, summary.awaiting_ocr, summary.failed) == (
+        0,
+        0,
+        1,
+        [],
+    )
+    assert text_of(migrated_db, document_id) == (1, "original")
+
+
+async def test_reextract_all_counts_ocr_targets_and_skips_documents_in_extraction(
+    system_conn, migrated_db
+):
+    ocr_target = await upload_original(system_conn, "original")
+    point_original_at_scan(migrated_db, ocr_target)
+    in_progress = await create_document(
+        system_conn,
+        filename="scan.jpg",
+        data=(FIXTURES / "scan_tax_page1.jpg").read_bytes(),
+        owner_id="alice",
+    )
+
+    summary = await reextract_all(system_conn)
+
+    assert (summary.changed, summary.unchanged, summary.awaiting_ocr) == (0, 0, 1)
+    assert [document_id for document_id, _ in summary.failed] == [in_progress["id"]]

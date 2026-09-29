@@ -646,6 +646,15 @@ sudo dnf install -y python3.12 python3.12-devel
 sudo dnf module install -y nodejs:22/common
 ```
 
+이미지·스캔 PDF의 텍스트 인식(ADR-052)을 쓰려면 워커 호스트에 tesseract와 한국어 모델도 둔다. AppStream 패키지다. `deploy_app_host.sh`는 이것을 설치하지 않는다.
+
+```bash
+sudo dnf install -y tesseract tesseract-langpack-kor     # tesseract 4.1.1
+tesseract --list-langs                                   # kor 가 있어야 한다
+```
+
+> Rocky 9 패키지(tesseract 4.1.1 + langpack-kor 4.1.0)는 `rockylinux:9` 컨테이너 실측에서 CER 0.031~0.050·쪽당 3.4~5.5초였다(#135 코멘트, arm64 컨테이너라 x86 호스트 시간과는 다를 수 있다). 맥 tesseract 5.5 실측(CER 0.068~0.093)보다 낮다.
+
 > `python3.12`는 `el9_8` 빌드로 잡히지만 **glibc를 건드리지 않는다**(sqlite-libs만 올라간다). 애초에 이 AMI의 glibc가 이미 `2.34-275.el9_8`이고 OpenSQL은 그 위에서 돈다 — §5의 9.7 고정은 VM에서 ISO로 설치할 때의 이야기다.
 
 ### 소스 전송 (맥에서)

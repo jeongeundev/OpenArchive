@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import type { SystemStatus } from "@/lib/types";
 import { StatusPanel } from "./StatusPanel";
@@ -8,7 +8,7 @@ const status: SystemStatus = {
   jobs: { pending: 1, processing: 2, recovery_pending: 1, error: 3 },
   job_lease_seconds: 60,
   last_job_finished_at: "2026-08-11T01:23:45Z",
-  inconsistent_documents: 0, stale_edge_documents: 0, embedding_provider: "BAAI/bge-m3",
+  inconsistent_documents: 0, stale_edge_documents: 0, extraction_pending: 0, extraction_failed: 0, embedding_provider: "BAAI/bge-m3",
 };
 
 describe("StatusPanel", () => {
@@ -76,5 +76,14 @@ describe("StatusPanel", () => {
     expect(screen.getByText("워커가 60초 동안 처리 중임을 알리지 않은 잡은 회수됩니다.")).toBeInTheDocument();
     expect(screen.getByText(/최근 잡 완료 시각/)).toBeInTheDocument();
     expect(screen.queryByText(/워커 정상/)).not.toBeInTheDocument();
+  });
+
+  it("텍스트 인식 대기·실패 문서 수를 보여준다", () => {
+    render(<StatusPanel status={{ ...status, extraction_pending: 2, extraction_failed: 1 }} error={null} />);
+
+    const card = screen.getByText("텍스트 인식").closest("div");
+    expect(card).not.toBeNull();
+    expect(within(card as HTMLElement).getByTestId("extraction-pending")).toHaveTextContent("2");
+    expect(within(card as HTMLElement).getByTestId("extraction-failed")).toHaveTextContent("1");
   });
 });

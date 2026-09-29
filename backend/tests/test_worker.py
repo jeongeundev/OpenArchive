@@ -17,20 +17,26 @@ UPDATE해 상황을 만든다. heartbeat처럼 시간이 흘러야만 드러나�
 import asyncio
 import contextlib
 import dataclasses
+import io
 import logging
 import os
 import signal
 import threading
 import time
+import unicodedata
+from difflib import SequenceMatcher
+from pathlib import Path
 from typing import Self
 
 import psycopg
 import pytest
+from PIL import Image
 
 from app.config import get_settings
 from app.db import close_pool
 from app.embeddings import FakeProvider
 from app.services.chunking import chunk_text
+from app.services.documents import create_document
 from app.worker import (
     CHANNEL,
     MAX_ATTEMPTS,
@@ -42,6 +48,7 @@ from app.worker import (
     extend_lease,
     fail_job,
     finalize_edge_job,
+    finalize_extract_job,
     finalize_job,
     load_document,
     process_once,
@@ -2289,3 +2296,223 @@ async def test_a_job_locked_by_an_orphaned_transaction_does_not_stop_the_worker(
         provider.release.set()
         await cancel_until_done(worker)
         await close_pool()
+
+
+# ---------------------------------------------------------------------------
+# 추출 잡 (ADR-052) — 스캔 원본을 워커가 OCR해 문서 텍스트를 채운다
+# ---------------------------------------------------------------------------
+
+FIXTURES = Path(__file__).parent / "fixtures"
+
+
+def _normalize_ocr(text: str) -> str:
+    return "".join(unicodedata.normalize("NFKC", text).split())
+
+
+def _ocr_ratio(text: str, reference: str) -> float:
+    expected = _normalize_ocr((FIXTURES / reference).read_text())
+    return SequenceMatcher(None, expected, _normalize_ocr(text), autojunk=False).ratio()
+
+
+async def upload_scan(conn, filename: str = "scan_tax_page1.jpg", data: bytes | None = None):
+    """업로드 API와 같은 서비스 경로 — 「추출 중」 문서와 추출 잡은 서비스·트리거가 만든다."""
+    document = await create_document(
+        conn,
+        filename=filename,
+        data=data if data is not None else (FIXTURES / filename).read_bytes(),
+        owner_id="alice",
+    )
+    return document["id"]
+
+
+async def extraction_state(conn, doc_id) -> tuple:
+    cur = await conn.execute(
+        "SELECT extraction_status, content, embedding_status FROM documents WHERE id = %s",
+        (doc_id,),
+    )
+    return await cur.fetchone()
+
+
+async def text_version_numbers(conn, doc_id) -> list[int]:
+    cur = await conn.execute(
+        "SELECT version FROM document_versions WHERE document_id = %s ORDER BY version", (doc_id,)
+    )
+    return [row[0] for row in await cur.fetchall()]
+
+
+def blank_png() -> bytes:
+    buf = io.BytesIO()
+    Image.new("RGB", (400, 200), "white").save(buf, format="PNG")
+    return buf.getvalue()
+
+
+class BlockingOcr:
+    """OCR에서 멈춰 서는 대역 — 추출 잡을 처리 **도중**에 붙잡아 둔다.
+
+    OCR 함수만 바꾼다. DB는 실제 컨테이너 그대로다.
+    """
+
+    def __init__(self, text: str = "인식된 텍스트") -> None:
+        self.text = text
+        self.entered = threading.Event()
+        self.release = threading.Event()
+
+    def __call__(self, data: bytes, content_type: str) -> str:
+        self.entered.set()
+        self.release.wait(timeout=10)
+        return self.text
+
+
+@pytest.mark.parametrize(
+    ("fixture_name", "reference"),
+    [("scan_tax_page1.jpg", "scan_tax_page1.txt"), ("scan_tax_pages.pdf", "scan_tax_pages.txt")],
+)
+async def test_worker_ocrs_a_scan_and_the_pipeline_continues_to_ready(
+    conn, fixture_name, reference
+):
+    """업로드부터 검색 가능한 상태까지 — 추출 잡이 v1을 쓰면 트리거가 임베딩 잡을 잇는다."""
+    doc_id = await upload_scan(conn, fixture_name)
+
+    assert await process_once(conn, FakeProvider()) is True
+
+    assert await job_rows(conn, doc_id, kind="extract") == [("done", 1, None)]
+    status, content, _ = await extraction_state(conn, doc_id)
+    assert status == "done"
+    assert _ocr_ratio(content, reference) >= 0.85
+    assert await text_version_numbers(conn, doc_id) == [1]
+    cur = await conn.execute(
+        "SELECT text_version FROM document_files WHERE document_id = %s", (doc_id,)
+    )
+    assert [row[0] for row in await cur.fetchall()] == [1]
+    assert [j[0] for j in await job_rows(conn, doc_id)] == ["pending"]
+
+    assert await process_once(conn, FakeProvider()) is True
+
+    assert (await document_state(conn, doc_id))[1] == "ready"
+    assert await chunk_rows(conn, doc_id) != []
+
+
+async def test_a_blank_image_fails_extraction_without_retrying(conn):
+    """빈 결과는 결정적이다 — 재시도하지 않고 문서를 failed로, 잡은 done으로 끝낸다 (결정 8)."""
+    doc_id = await upload_scan(conn, "blank.png", blank_png())
+
+    assert await process_once(conn, FakeProvider()) is True
+
+    assert await job_rows(conn, doc_id, kind="extract") == [("done", 1, None)]
+    assert (await extraction_state(conn, doc_id))[0] == "failed"
+    assert await text_version_numbers(conn, doc_id) == []
+    assert await job_rows(conn, doc_id) == []
+
+
+async def test_an_ocr_exception_retries_then_fails_the_extraction(conn, monkeypatch):
+    """엔진 예외는 백오프로 재시도하고, 예산을 다 쓰면 문서를 failed로 둔다 — 임베딩 배지는 그대로."""
+
+    def broken_ocr(data: bytes, content_type: str) -> str:
+        raise RuntimeError("tesseract 비정상 종료를 재현한다")
+
+    monkeypatch.setattr("app.worker.ocr_text", broken_ocr)
+    doc_id = await upload_scan(conn)
+    embedding_before = (await extraction_state(conn, doc_id))[2]
+
+    assert await process_once(conn, FakeProvider()) is True
+    status, attempts, last_error = (await job_rows(conn, doc_id, kind="extract"))[0]
+    assert (status, attempts) == ("pending", 1)
+    assert "tesseract" in last_error
+    assert (await extraction_state(conn, doc_id))[0] == "pending"
+
+    for _ in range(MAX_ATTEMPTS - 1):
+        await conn.execute(
+            "UPDATE embedding_jobs SET next_attempt_at = now() WHERE document_id = %s", (doc_id,)
+        )
+        assert await process_once(conn, FakeProvider()) is True
+
+    extract_jobs = await job_rows(conn, doc_id, kind="extract")
+    assert [j[:2] for j in extract_jobs] == [("error", MAX_ATTEMPTS)]
+    status, content, embedding_status = await extraction_state(conn, doc_id)
+    assert (status, content) == ("failed", "")
+    assert embedding_status == embedding_before
+
+
+async def test_sweep_fails_the_extraction_of_an_exhausted_extract_zombie(conn):
+    doc_id = await upload_scan(conn)
+    job = await claim_job(conn)
+    assert job.kind == "extract"
+    await conn.execute(
+        "UPDATE embedding_jobs SET attempts = %s, lease_expires_at = now() - interval '1 second'"
+        " WHERE id = %s",
+        (MAX_ATTEMPTS, job.job_id),
+    )
+
+    assert await sweep_zombies(conn) == 0
+
+    assert [j[0] for j in await job_rows(conn, doc_id, kind="extract")] == ["error"]
+    assert (await extraction_state(conn, doc_id))[0] == "failed"
+    assert (await extraction_state(conn, doc_id))[2] != "error"
+
+
+async def test_a_lost_extract_job_does_not_apply_its_result(conn, other_conn):
+    """소유권이 바뀐 잡에는 쓰지 않는다 — 판정은 쓰는 순간 DB가 한다 (ADR-050 결정 2)."""
+    doc_id = await upload_scan(conn)
+    job = await claim_job(conn)
+    # 스윕이 되돌린 뒤 다른 워커가 다시 집은 상태 — 같은 id, 다른 attempts
+    await other_conn.execute(
+        "UPDATE embedding_jobs SET attempts = attempts + 1 WHERE id = %s", (job.job_id,)
+    )
+
+    assert await finalize_extract_job(conn, job, "인식된 텍스트") is False
+
+    assert await extraction_state(conn, doc_id) == ("pending", "", "pending")
+    assert await text_version_numbers(conn, doc_id) == []
+
+
+async def test_a_worker_that_lost_its_lease_drops_the_ocr_result(
+    conn, other_conn, migrated_db, monkeypatch
+):
+    monkeypatch.setenv("JOB_LEASE_SECONDS", "1")
+    ocr = BlockingOcr()
+    monkeypatch.setattr("app.worker.ocr_text", ocr)
+    doc_id = await upload_scan(conn)
+
+    async with await psycopg.AsyncConnection.connect(migrated_db, autocommit=True) as hb:
+        task = asyncio.create_task(
+            process_once(conn, FakeProvider(), lease_conn=lease_conn_from(hb))
+        )
+        try:
+            await wait_until(
+                lambda: asyncio.sleep(0, result=ocr.entered.is_set()),
+                message="OCR에 진입하지 않았다",
+            )
+            await other_conn.execute(
+                "UPDATE embedding_jobs SET status = 'pending'"
+                " WHERE document_id = %s AND kind = 'extract'",
+                (doc_id,),
+            )
+            await asyncio.sleep(1.0)
+        finally:
+            ocr.release.set()
+            assert await asyncio.wait_for(task, timeout=15) is True
+
+    assert (await extraction_state(conn, doc_id))[:2] == ("pending", "")
+    assert [j[0] for j in await job_rows(conn, doc_id, kind="extract")] == ["pending"]
+
+
+async def test_a_document_deleted_during_ocr_is_not_a_failure(conn, other_conn, monkeypatch):
+    ocr = BlockingOcr()
+    monkeypatch.setattr("app.worker.ocr_text", ocr)
+    doc_id = await upload_scan(conn)
+
+    task = asyncio.create_task(process_once(conn, FakeProvider()))
+    try:
+        await wait_until(
+            lambda: asyncio.sleep(0, result=ocr.entered.is_set()),
+            message="OCR에 진입하지 않았다",
+        )
+        await other_conn.execute("DELETE FROM documents WHERE id = %s", (doc_id,))
+    finally:
+        ocr.release.set()
+        assert await asyncio.wait_for(task, timeout=15) is True
+
+    cur = await conn.execute(
+        "SELECT count(*) FROM embedding_jobs WHERE document_id = %s", (doc_id,)
+    )
+    assert (await cur.fetchone())[0] == 0

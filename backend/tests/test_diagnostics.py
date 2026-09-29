@@ -196,3 +196,29 @@ def test_diagnostics_limits_duplicate_pair_lists_but_keeps_the_full_count(
 
     assert identical["count"] == 15
     assert len(identical["items"]) == 10
+
+
+def _set_extraction_status(dsn: str, document_id: str, status: str) -> None:
+    with psycopg.connect(dsn) as conn:
+        conn.execute(
+            "UPDATE documents SET content = '', content_hash = %s, extraction_status = %s"
+            " WHERE id = %s",
+            ("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", status, document_id),
+        )
+
+
+@pytest.mark.parametrize("status", ["pending", "failed"])
+def test_documents_without_extracted_text_are_not_orphans_or_identical(
+    db_client: TestClient, migrated_db: str, status: str
+):
+    """추출이 끝나지 않은 문서는 빈 텍스트끼리 같은 해시라 동일 문서로 잡히면 안 된다."""
+    first = _insert_document(migrated_db, title="스캔 1", content="임시", tags=["t"])
+    second = _insert_document(migrated_db, title="스캔 2", content="임시 2", tags=["t"])
+    _set_extraction_status(migrated_db, first, status)
+    _set_extraction_status(migrated_db, second, status)
+
+    body = db_client.get("/api/diagnostics").json()
+
+    orphan_ids = {item["document_id"] for item in body["orphans"]["items"]}
+    assert {first, second}.isdisjoint(orphan_ids)
+    assert body["duplicates"]["identical"] == {"count": 0, "items": []}

@@ -3,7 +3,7 @@
 import { useState } from "react";
 
 import { ApiError, editDocument } from "@/lib/api";
-import type { DocumentDetail, ResolvedLink } from "@/lib/types";
+import { EXTRACTING_NOTICE, type DocumentDetail, type ResolvedLink } from "@/lib/types";
 import { WikilinkContent } from "./WikilinkContent";
 
 export function TextEditor({
@@ -30,6 +30,11 @@ export function TextEditor({
   // txt·md는 원본이 곧 텍스트다. 그 밖의 형식은 원본 파일에서 추출한 텍스트를 편집한다.
   const showsExtractionNotice =
     document.content_type !== "txt" && document.content_type !== "md";
+  // 추출 중에는 서버가 편집을 막는다. 인식에 실패해 텍스트가 비어 있으면 편집할 대상이 없다 (ADR-052 결정 7·8).
+  const extracting = document.extraction_status === "pending";
+  const recognitionFailedEmpty =
+    document.extraction_status === "failed" && document.content.trim() === "";
+  const editable = !disabled && !extracting && !recognitionFailedEmpty;
 
   function changeEditing(nextEditing: boolean): void {
     if (nextEditing) {
@@ -74,10 +79,10 @@ export function TextEditor({
     <section className="space-y-4">
       <div className="flex items-center justify-between gap-4">
         <h2 className="text-sm font-medium text-neutral-400">{textLabel}</h2>
-        {!editing && !disabled ? (
+        {!editing && editable ? (
           <button
             className="text-sm text-neutral-500 hover:text-neutral-300 disabled:cursor-not-allowed disabled:text-neutral-600"
-            disabled={disabled}
+            disabled={!editable}
             onClick={() => changeEditing(true)}
             type="button"
           >
@@ -85,7 +90,17 @@ export function TextEditor({
           </button>
         ) : null}
       </div>
-      {showsExtractionNotice ? (
+      {extracting ? (
+        <p className="text-sm text-neutral-400" role="status">
+          {EXTRACTING_NOTICE}
+        </p>
+      ) : null}
+      {document.extraction_status === "failed" && !recognitionFailedEmpty ? (
+        <p className="text-sm text-neutral-500">
+          마지막 텍스트 인식에 실패해 이전 추출 텍스트를 표시합니다.
+        </p>
+      ) : null}
+      {showsExtractionNotice && !extracting && !recognitionFailedEmpty ? (
         <p className="text-sm text-neutral-500">
           원본 파일이 아니라 업로드 시 추출된 텍스트를 편집합니다. 저장하면 새 텍스트 버전이
           만들어집니다.
@@ -122,6 +137,10 @@ export function TextEditor({
             </button>
           </div>
         </form>
+      ) : recognitionFailedEmpty ? (
+        <p className="rounded-lg border border-neutral-800 bg-[#141414] p-6 text-sm text-neutral-400">
+          원본에서 텍스트를 인식하지 못했습니다. 원본을 교체하거나 다시 추출해 보세요.
+        </p>
       ) : (
         <div className="whitespace-pre-wrap rounded-lg border border-neutral-800 bg-[#141414] p-6 text-sm leading-relaxed text-neutral-300">
           <WikilinkContent content={document.content} links={links} />

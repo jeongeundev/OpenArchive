@@ -54,6 +54,8 @@ def test_status_reports_operational_fields(db_client: TestClient):
         "last_job_finished_at",
         "inconsistent_documents",
         "stale_edge_documents",
+        "extraction_pending",
+        "extraction_failed",
         "embedding_provider",
     }
     assert "reconnect_events" not in body
@@ -67,6 +69,7 @@ def test_status_reports_operational_fields(db_client: TestClient):
     assert body["last_job_finished_at"] is None
     assert body["inconsistent_documents"] == 0
     assert body["stale_edge_documents"] == 0
+    assert (body["extraction_pending"], body["extraction_failed"]) == (0, 0)
     assert body["embedding_provider"] == "fake"
     # 접속 노드는 환경마다 다르다. TCP면 주소가, 유닉스 소켓이면 NULL이 온다.
     # 값 자체가 아니라 페일오버 데모가 읽을 수 있는 형태인지를 본다.

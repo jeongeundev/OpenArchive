@@ -7,6 +7,7 @@ Mock으로는 확인할 수 없다 (CLAUDE.md 개발 프로세스).
 
 import asyncio
 import hashlib
+from pathlib import Path
 
 import psycopg
 import pytest
@@ -594,3 +595,18 @@ def test_reextract_reports_a_connection_failure_without_traceback(capsys):
     output = capsys.readouterr()
     assert "연결하지 못했습니다" in output.out
     assert "Traceback" not in output.out + output.err
+
+
+def test_reextract_reports_documents_handed_to_ocr(migrated_db, capsys):
+    document_id = upload_original(migrated_db, "original")
+    scan = (Path(__file__).parent / "fixtures" / "scan_tax_page1.jpg").read_bytes()
+    with psycopg.connect(migrated_db) as conn:
+        conn.execute(
+            "UPDATE document_files SET filename = 'scan.jpg', data = %s WHERE document_id = %s",
+            (scan, document_id),
+        )
+
+    assert main(["reextract", document_id, "--dsn", migrated_db]) == 0
+    output = capsys.readouterr().out
+    assert "바뀜 0건 · 같음 0건 · 실패 0건" in output
+    assert "텍스트 인식 대기 1건" in output

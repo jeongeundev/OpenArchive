@@ -1082,3 +1082,129 @@ def test_rebuild_produces_the_same_rows_on_repeated_calls(conn: psycopg.Connecti
     conn.execute("SELECT rebuild_document_edges(%s)", (second_id,))
 
     assert set(conn.execute(query, (second_id,)).fetchall()) == before
+
+
+# --- 추출 잡 (022, ADR-052) ----------------------------------------------------------
+
+
+def insert_extracting_document(
+    conn: psycopg.Connection,
+    content: str = "",
+    content_hash: str = "sha256:extracting",
+    status: str = "pending",
+):
+    """OCR 대상 업로드가 하는 일 — 빈 텍스트의 「추출 중」 문서 행을 넣는다."""
+    row = conn.execute(
+        """
+        INSERT INTO documents
+          (title, content_type, content, content_hash, owner_id, extraction_status)
+        VALUES ('스캔 문서', 'pdf', %s, %s, 'alice', %s)
+        RETURNING id
+        """,
+        (content, content_hash, status),
+    ).fetchone()
+    return row[0]
+
+
+def jobs_by_kind(conn: psycopg.Connection, doc_id) -> list[tuple[str, str]]:
+    return conn.execute(
+        "SELECT kind, status FROM embedding_jobs WHERE document_id = %s ORDER BY id",
+        (doc_id,),
+    ).fetchall()
+
+
+def test_an_extracting_insert_enqueues_an_extract_job_instead_of_v1_and_embedding(
+    conn: psycopg.Connection, listener: psycopg.Connection
+):
+    """빈 v1과 헛 임베딩 잡을 만들지 않고, 추출 잡 하나를 남기고 워커를 깨운다."""
+    doc_id = insert_extracting_document(conn)
+
+    assert history(conn, doc_id) == []
+    assert jobs_by_kind(conn, doc_id) == [("extract", "pending")]
+    received = list(listener.notifies(timeout=5, stop_after=1))
+    assert [(n.channel, n.payload) for n in received] == [(CHANNEL, str(doc_id))]
+
+
+def test_a_done_insert_is_unchanged(conn: psycopg.Connection):
+    """추출이 필요 없는 문서는 지금처럼 v1과 임베딩 잡을 만든다 — 추출 잡은 없다."""
+    doc_id = insert_extracting_document(
+        conn, content="텍스트 레이어", content_hash="sha256:text", status="done"
+    )
+
+    assert history(conn, doc_id) == [(1, "텍스트 레이어", "sha256:text")]
+    assert jobs_by_kind(conn, doc_id) == [("embed", "pending")]
+
+
+def test_completing_extraction_records_v1_and_enqueues_embedding(conn: psycopg.Connection):
+    """워커가 첫 텍스트를 쓰는 한 문장이 v1과 임베딩 잡을 만든다 (버전은 1 그대로)."""
+    doc_id = insert_extracting_document(conn)
+    conn.execute("UPDATE embedding_jobs SET status = 'done' WHERE document_id = %s", (doc_id,))
+
+    conn.execute(
+        """
+        UPDATE documents
+           SET content = '인식한 텍스트', content_hash = 'sha256:ocr',
+               extraction_status = 'done'
+         WHERE id = %s
+        """,
+        (doc_id,),
+    )
+
+    assert history(conn, doc_id) == [(1, "인식한 텍스트", "sha256:ocr")]
+    assert jobs_by_kind(conn, doc_id) == [("extract", "done"), ("embed", "pending")]
+
+
+def test_requesting_reextraction_keeps_the_text_and_enqueues_only_an_extract_job(
+    conn: psycopg.Connection,
+):
+    """재추출·원본 교체가 OCR 대상이면 이전 텍스트를 그대로 둔 채 추출 잡만 만든다."""
+    doc_id = insert_document(conn, "이전 텍스트", "sha256:old")
+    conn.execute("UPDATE embedding_jobs SET status = 'done' WHERE document_id = %s", (doc_id,))
+
+    conn.execute(
+        "UPDATE documents SET extraction_status = 'pending' WHERE id = %s", (doc_id,)
+    )
+
+    assert history(conn, doc_id) == [(1, "이전 텍스트", "sha256:old")]
+    assert jobs_by_kind(conn, doc_id) == [("embed", "done"), ("extract", "pending")]
+    (content,) = conn.execute(
+        "SELECT content FROM documents WHERE id = %s", (doc_id,)
+    ).fetchone()
+    assert content == "이전 텍스트"
+
+
+def test_extract_jobs_coalesce_and_coexist_with_an_embedding_job(conn: psycopg.Connection):
+    doc_id = insert_document(conn)  # pending 임베딩 잡
+
+    conn.execute(
+        "UPDATE documents SET extraction_status = 'pending' WHERE id = %s", (doc_id,)
+    )
+    conn.execute(
+        "UPDATE documents SET extraction_status = 'pending' WHERE id = %s", (doc_id,)
+    )
+
+    assert jobs_by_kind(conn, doc_id) == [("embed", "pending"), ("extract", "pending")]
+
+
+def test_marking_extraction_failed_creates_no_job(conn: psycopg.Connection):
+    doc_id = insert_extracting_document(conn)
+    conn.execute("UPDATE embedding_jobs SET status = 'done' WHERE document_id = %s", (doc_id,))
+
+    conn.execute(
+        "UPDATE documents SET extraction_status = 'failed' WHERE id = %s", (doc_id,)
+    )
+
+    assert jobs_by_kind(conn, doc_id) == [("extract", "done")]
+    assert history(conn, doc_id) == []
+
+
+def test_content_trigger_definition_skips_documents_still_extracting(conn: psycopg.Connection):
+    (definition,) = conn.execute(
+        """
+        SELECT pg_get_triggerdef(t.oid)
+        FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid
+        WHERE c.relname = 'documents' AND t.tgname = 'trg_documents_content_changed'
+        """
+    ).fetchone()
+
+    assert "extraction_status = 'done'" in definition

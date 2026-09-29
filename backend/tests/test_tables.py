@@ -213,8 +213,8 @@ def test_a_finished_job_frees_the_slot_for_a_new_pending_job(conn: psycopg.Conne
     assert [s[0] for s in statuses] == ["done", "pending"]
 
 
-def test_a_job_kind_outside_the_two_known_values_is_rejected(conn: psycopg.Connection):
-    """잡 종류는 `embed`·`edges` 둘뿐이다 (016).
+def test_a_job_kind_outside_the_known_values_is_rejected(conn: psycopg.Connection):
+    """잡 종류는 `embed`·`edges`·`extract` 셋뿐이다 (016, 021).
 
     워커는 `kind`로 처리 본체를 가른다. 제약이 없으면 오타 하나가 어느 분기에도
     걸리지 않는 잡을 만들고, 그 잡은 claim은 되지만 아무 일도 하지 않은 채 영원히
@@ -893,3 +893,118 @@ async def test_the_lease_migration_keeps_the_old_deadline_for_jobs_in_flight(
             (doc_id,),
         ).fetchone()
     assert deadline_matches is True
+
+
+# --- 추출 상태와 조건부 빈 본문 제약 (021, ADR-052) ---------------------------------
+
+
+def insert_extracting_document(
+    conn: psycopg.Connection,
+    status: str = "pending",
+    content: str = "",
+    content_hash: str = "sha256:extracting",
+) -> str:
+    """OCR 대상 업로드처럼 추출 상태를 지정해 한 건 넣는다."""
+    row = conn.execute(
+        """
+        INSERT INTO documents
+          (title, content_type, content, content_hash, owner_id, extraction_status)
+        VALUES ('스캔 문서', 'pdf', %s, %s, 'alice', %s)
+        RETURNING id
+        """,
+        (content, content_hash, status),
+    ).fetchone()
+    return row[0]
+
+
+def test_extraction_status_defaults_to_done(conn: psycopg.Connection):
+    """기존 경로(텍스트가 있는 업로드·텍스트 공급)는 추출이 끝난 문서로 들어간다."""
+    doc_id = insert_document(conn)
+
+    (status,) = conn.execute(
+        "SELECT extraction_status FROM documents WHERE id = %s", (doc_id,)
+    ).fetchone()
+    assert status == "done"
+
+
+def test_an_unknown_extraction_status_is_rejected(conn: psycopg.Connection):
+    with pytest.raises(psycopg.errors.CheckViolation) as exc:
+        insert_extracting_document(conn, status="running", content="본문")
+
+    assert "documents_extraction_status_valid" in str(exc.value)
+
+
+@pytest.mark.parametrize("blank", ["", "   ", "\t\n  \n", "\f\r\n"])
+def test_a_done_document_still_rejects_blank_content(conn: psycopg.Connection, blank: str):
+    """추출이 끝났다고 표시된 문서의 빈 텍스트는 여전히 DB가 막는다 (ADR-052 결정 5)."""
+    with pytest.raises(psycopg.errors.CheckViolation) as exc:
+        insert_extracting_document(conn, status="done", content=blank)
+
+    assert "documents_content_not_blank" in str(exc.value)
+
+
+@pytest.mark.parametrize("status", ["pending", "failed"])
+def test_a_document_still_extracting_or_failed_may_have_blank_content(
+    conn: psycopg.Connection, status: str
+):
+    """「추출 중」 문서 행은 빈 텍스트로 먼저 생긴다. 인식에 실패한 새 문서도 빈 채로 남는다."""
+    doc_id = insert_extracting_document(conn, status=status)
+
+    (content,) = conn.execute(
+        "SELECT content FROM documents WHERE id = %s", (doc_id,)
+    ).fetchone()
+    assert content == ""
+
+
+def test_marking_a_blank_document_done_without_content_is_rejected(conn: psycopg.Connection):
+    """추출 완료 표시와 본문 채우기는 한 문장에서 함께 일어나야 한다."""
+    doc_id = insert_extracting_document(conn)
+
+    with pytest.raises(psycopg.errors.CheckViolation) as exc:
+        conn.execute(
+            "UPDATE documents SET extraction_status = 'done' WHERE id = %s", (doc_id,)
+        )
+
+    assert "documents_content_not_blank" in str(exc.value)
+
+
+def test_an_original_file_may_wait_for_its_text_version(conn: psycopg.Connection):
+    """text_version NULL = 이 판의 텍스트가 아직 추출되지 않았다. 값이 있으면 FK가 여전히 건다."""
+    doc_id = insert_extracting_document(conn)
+    conn.execute(
+        """
+        INSERT INTO document_files
+          (document_id, file_version, filename, data, text_version, uploaded_by)
+        VALUES (%s, 1, 'scan.pdf', %b, NULL, 'alice')
+        """,
+        (doc_id, ORIGINAL_BYTES),
+    )
+
+    (text_version,) = conn.execute(
+        "SELECT text_version FROM document_files WHERE document_id = %s", (doc_id,)
+    ).fetchone()
+    assert text_version is None
+
+    # 추출 중 문서에는 텍스트 버전이 아직 없다 — 없는 버전을 가리킬 수는 없다.
+    with pytest.raises(psycopg.errors.ForeignKeyViolation):
+        insert_file(conn, doc_id, file_version=2, text_version=1)
+
+
+def test_extract_is_a_known_job_kind_and_coalesces_per_document(conn: psycopg.Connection):
+    doc_id = insert_document(conn)  # pending 임베딩 잡 1건
+    conn.execute(
+        "INSERT INTO embedding_jobs (document_id, kind) VALUES (%s, 'extract')", (doc_id,)
+    )
+
+    kinds = conn.execute(
+        "SELECT kind FROM embedding_jobs WHERE document_id = %s AND status = 'pending' ORDER BY id",
+        (doc_id,),
+    ).fetchall()
+    assert [k[0] for k in kinds] == ["embed", "extract"]
+
+    with pytest.raises(psycopg.errors.UniqueViolation) as exc:
+        conn.execute(
+            "INSERT INTO embedding_jobs (document_id, kind) VALUES (%s, 'extract')", (doc_id,)
+        )
+
+    assert "uq_pending_job_per_doc_kind" in str(exc.value)

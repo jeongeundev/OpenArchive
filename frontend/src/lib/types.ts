@@ -1,6 +1,8 @@
 export type EmbeddingStatus = "pending" | "processing" | "ready" | "error";
 export type ContentType =
-  "pdf" | "docx" | "txt" | "md" | "hwp" | "hwpx" | "xlsx" | "pptx";
+  "pdf" | "docx" | "txt" | "md" | "hwp" | "hwpx" | "xlsx" | "pptx" | "png" | "jpg" | "jpeg";
+/** 워커가 원본에서 텍스트를 인식(OCR)하는 상태. 인식 대상이 아닌 문서는 처음부터 `done`이다 (ADR-052). */
+export type ExtractionStatus = "pending" | "failed" | "done";
 export type Visibility = "public" | "private";
 
 export type TokenScope = "read" | "read_write";
@@ -27,6 +29,7 @@ export interface DocumentSummary {
   visibility: Visibility;
   tags: string[];
   embedding_status: EmbeddingStatus;
+  extraction_status: ExtractionStatus;
   created_at: string;
   updated_at: string;
 }
@@ -46,7 +49,8 @@ export interface OriginalFile {
   filename: string;
   size: number;
   sha256: string;
-  text_version: number;
+  /** 이 판의 텍스트가 아직 인식되지 않았으면 null이다. */
+  text_version: number | null;
   uploaded_by: string;
   uploaded_at: string;
 }
@@ -139,6 +143,8 @@ export interface SystemStatus {
   last_job_finished_at: string | null;
   inconsistent_documents: number;
   stale_edge_documents: number;
+  extraction_pending: number;
+  extraction_failed: number;
   embedding_provider: string;
 }
 
@@ -223,7 +229,14 @@ export const SUPPORTED_CONTENT_TYPES = [
   "hwpx",
   "xlsx",
   "pptx",
+  "png",
+  "jpg",
+  "jpeg",
 ] as const;
+
+// 추출 중에는 서버가 텍스트를 바꾸는 요청을 409로 막는다 (ADR-052 결정 7). 화면은 미리 막고 이유를 말한다.
+export const EXTRACTING_NOTICE =
+  "원본에서 텍스트를 인식하는 중이라 텍스트 편집·되돌리기·다시 추출·원본 교체를 할 수 없습니다.";
 
 // backend/app/services/search.py의 MAX_K와 같아야 하며, 초과하면 API가 422를 반환한다.
 export const MAX_K = 20;

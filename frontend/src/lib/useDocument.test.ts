@@ -16,6 +16,7 @@ const document: DocumentDetail = {
   visibility: "public",
   tags: ["OpenSQL"],
   embedding_status: "pending",
+  extraction_status: "done",
   created_at: "2026-08-05T10:00:00Z",
   updated_at: "2026-08-05T11:00:00Z",
   versions: [{ version: 1, created_at: "2026-08-05T10:00:00Z" }],
@@ -117,6 +118,38 @@ describe("useDocument", () => {
     await flushRequest();
 
     expect(result.current.error).toBe("문서를 찾을 수 없습니다.");
+  });
+
+  it("텍스트 인식 중인 문서는 임베딩 상태와 무관하게 다시 조회한다", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({ ...document, embedding_status: "ready", extraction_status: "pending" }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderHook(() => useDocument(document.id));
+    await flushRequest();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_000);
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("텍스트 인식에 실패한 문서는 다시 조회하지 않는다", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({ ...document, embedding_status: "ready", extraction_status: "failed" }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderHook(() => useDocument(document.id));
+    await flushRequest();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(4_000);
+    });
+
+    expect(fetchMock).toHaveBeenCalledOnce();
   });
 });
 

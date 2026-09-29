@@ -46,6 +46,18 @@ describe("RelatedDocuments", () => {
     expect(screen.queryByRole("list")).not.toBeInTheDocument();
   });
 
+  it("텍스트를 인식하지 못한 문서에는 오지 않을 완료를 약속하지 않는다", () => {
+    render(
+      <RelatedDocuments
+        response={{ items: [], identical: [], based_on_version: null, reason: "not_indexed" }}
+        textMissing
+      />,
+    );
+
+    expect(screen.getByText("텍스트를 인식하지 못해 표시할 수 없습니다.")).toBeInTheDocument();
+    expect(screen.queryByText("임베딩이 완료되면 표시됩니다.")).not.toBeInTheDocument();
+  });
+
   it("동일한 텍스트 문서를 별도 링크로 표시한다", () => {
     render(
       <RelatedDocuments

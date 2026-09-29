@@ -18,15 +18,19 @@ ITEM_LIMIT = 10
 # content_hash가 일치하는 identical뿐이며 별도로 반환한다.
 DUPLICATE_OVERLAP_RATIO = 0.95
 
+# 고아·동일 텍스트는 추출이 끝난(extraction_status = 'done') 문서만 후보로 삼는다. 추출 중·
+# 인식 실패 문서는 텍스트가 없거나 확정되지 않아 관계가 없는 것이 당연하고, 빈 텍스트끼리는
+# content_hash가 같아 동일 문서로 잘못 잡힌다 (ADR-052).
 ORPHANS_SQL = f"""
 WITH visible_documents AS (
-  SELECT d.id, d.title
+  SELECT d.id, d.title, d.extraction_status
   FROM documents d
   WHERE {VISIBLE_TO_USER}
 ), ranked AS (
   SELECT target.id, target.title, count(*) OVER () AS total
   FROM visible_documents target
-  WHERE NOT EXISTS (
+  WHERE target.extraction_status = 'done'
+    AND NOT EXISTS (
     SELECT 1
     FROM document_edges e
     JOIN visible_documents neighbor
@@ -72,7 +76,7 @@ SELECT id, title, target_title, total FROM ranked LIMIT %(limit)s
 
 DUPLICATES_SQL = f"""
 WITH visible_documents AS (
-  SELECT d.id, d.title, d.content_hash
+  SELECT d.id, d.title, d.content_hash, d.extraction_status
   FROM documents d
   WHERE {VISIBLE_TO_USER}
 ), identical AS (
@@ -82,6 +86,7 @@ WITH visible_documents AS (
          NULL::real AS score
   FROM visible_documents a
   JOIN visible_documents b ON b.content_hash = a.content_hash AND a.id < b.id
+  WHERE a.extraction_status = 'done' AND b.extraction_status = 'done'
 ), overlap_pairs AS (
   SELECT 'overlaps'::text AS match_type,
          a.id AS first_id, a.title AS first_title,

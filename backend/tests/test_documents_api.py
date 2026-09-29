@@ -255,7 +255,7 @@ def test_upload_rejects_blank_text_without_saving(db_client: TestClient, migrate
 
     assert response.status_code == 400
     assert response.json() == {
-        "detail": "문서에서 텍스트를 추출하지 못했습니다. 스캔 이미지 PDF는 지원하지 않습니다."
+        "detail": "문서에서 텍스트를 추출하지 못했습니다."
     }
     with psycopg.connect(migrated_db) as conn:
         assert conn.execute("SELECT count(*) FROM documents").fetchone() == (0,)
@@ -325,7 +325,7 @@ def test_upload_rejects_hangul_document_without_text(
 
     assert response.status_code == 400
     assert response.json() == {
-        "detail": "문서에서 텍스트를 추출하지 못했습니다. 스캔 이미지 PDF는 지원하지 않습니다."
+        "detail": "문서에서 텍스트를 추출하지 못했습니다."
     }
     with psycopg.connect(migrated_db) as conn:
         assert conn.execute("SELECT count(*) FROM documents").fetchone() == (0,)
@@ -337,7 +337,7 @@ def test_upload_rejects_unsupported_extension(db_client: TestClient):
     response = upload(db_client, filename="document.rtf")
 
     assert response.status_code == 400
-    assert "pdf, docx, txt, md, hwp, hwpx, xlsx, pptx" in response.json()["detail"]
+    assert "pdf, docx, txt, md, hwp, hwpx, xlsx, pptx, png, jpg, jpeg" in response.json()["detail"]
 
 
 def test_upload_rejects_non_utf8_text(db_client: TestClient):
@@ -1396,12 +1396,12 @@ def test_replace_rejects_unsupported_type_and_blank_text(
 
     unsupported = replace_file(db_client, document_id, filename="document.rtf")
     assert unsupported.status_code == 400
-    assert "pdf, docx, txt, md, hwp, hwpx, xlsx, pptx" in unsupported.json()["detail"]
+    assert "pdf, docx, txt, md, hwp, hwpx, xlsx, pptx, png, jpg, jpeg" in unsupported.json()["detail"]
 
     blank = replace_file(db_client, document_id, content=b" \t\r\n\f")
     assert blank.status_code == 400
     assert blank.json() == {
-        "detail": "문서에서 텍스트를 추출하지 못했습니다. 스캔 이미지 PDF는 지원하지 않습니다."
+        "detail": "문서에서 텍스트를 추출하지 못했습니다."
     }
 
     non_utf8 = replace_file(db_client, document_id, content="한글".encode("cp949"))
@@ -1617,7 +1617,7 @@ def test_reextract_rejects_unparseable_and_blank_originals(
     blank = reextract(db_client, document_id, current_version=2)
     assert blank.status_code == 400
     assert blank.json() == {
-        "detail": "문서에서 텍스트를 추출하지 못했습니다. 스캔 이미지 PDF는 지원하지 않습니다."
+        "detail": "문서에서 텍스트를 추출하지 못했습니다."
     }
 
     document = db_client.get(f"/api/documents/{document_id}").json()
@@ -1694,3 +1694,305 @@ def test_an_idempotency_key_outside_1_to_255_characters_is_rejected(
 
     assert response.status_code == 422
     assert count_documents(migrated_db) == 0
+
+
+@pytest.mark.parametrize("fixture_name", ["scan_tax_page1.jpg", "scan_tax_pages.pdf"])
+def test_upload_scan_returns_a_pending_extraction_document(
+    db_client: TestClient, migrated_db: str, fixture_name: str
+):
+    original = (Path(__file__).parent / "fixtures" / fixture_name).read_bytes()
+
+    created = upload(db_client, filename=fixture_name, content=original)
+
+    assert created.status_code == 201
+    assert created.json()["extraction_status"] == "pending"
+    document_id = created.json()["id"]
+    detail = db_client.get(f"/api/documents/{document_id}").json()
+    assert (detail["extraction_status"], detail["content"], detail["versions"]) == (
+        "pending",
+        "",
+        [],
+    )
+    assert [f["text_version"] for f in detail["files"]] == [None]
+    listed = {d["id"]: d for d in db_client.get("/api/documents").json()}
+    assert listed[document_id]["extraction_status"] == "pending"
+    with psycopg.connect(migrated_db) as conn:
+        assert conn.execute(
+            "SELECT kind, status FROM embedding_jobs WHERE document_id = %s", (document_id,)
+        ).fetchall() == [("extract", "pending")]
+
+
+def test_upload_rejects_an_unreadable_image_without_saving(
+    db_client: TestClient, migrated_db: str
+):
+    response = upload(db_client, filename="scan.png", content=b"not an image")
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "PNG 파일을 읽을 수 없습니다."
+    assert count_documents(migrated_db) == 0
+
+
+def test_upload_with_text_reports_done_extraction(db_client: TestClient):
+    created = upload(db_client)
+
+    assert created.json()["extraction_status"] == "done"
+    detail = db_client.get(f"/api/documents/{created.json()['id']}").json()
+    assert detail["extraction_status"] == "done"
+
+
+# ── 추출 상태 가드 — 추출 중에는 텍스트를 바꾸지 않는다 (ADR-052 결정 6·7) ───────
+
+SCAN_JPG = (Path(__file__).parent / "fixtures" / "scan_tax_page1.jpg").read_bytes()
+IN_PROGRESS_DETAIL = "텍스트를 인식하는 중에는 이 작업을 할 수 없습니다. 인식이 끝난 뒤 다시 시도하세요."
+
+
+def set_extraction_status(dsn: str, document_id: str, status: str) -> None:
+    with psycopg.connect(dsn) as conn:
+        conn.execute(
+            "UPDATE documents SET extraction_status = %s WHERE id = %s", (status, document_id)
+        )
+
+
+def jobs_of(dsn: str, document_id: str) -> list[tuple]:
+    with psycopg.connect(dsn) as conn:
+        return conn.execute(
+            "SELECT kind, status FROM embedding_jobs WHERE document_id = %s ORDER BY id",
+            (document_id,),
+        ).fetchall()
+
+
+def text_state(dsn: str, document_id: str) -> tuple:
+    with psycopg.connect(dsn) as conn:
+        return conn.execute(
+            "SELECT version, content, extraction_status, filename, content_type"
+            " FROM documents WHERE id = %s",
+            (document_id,),
+        ).fetchone()
+
+
+@pytest.mark.parametrize("status", ["pending", "failed"])
+def test_reembed_on_unfinished_extraction_is_409_not_a_silent_no_op(
+    db_client: TestClient, migrated_db: str, status: str
+):
+    # 재임베딩은 content_hash 자기 대입으로 003 트리거를 발화시키는데, 022 이후 그 트리거는
+    # extraction_status='done'일 때만 발화한다. 막지 않으면 200을 주고 잡을 만들지 않는다.
+    document_id = upload(db_client).json()["id"]
+    set_extraction_status(migrated_db, document_id, status)
+    before = (text_state(migrated_db, document_id), jobs_of(migrated_db, document_id))
+
+    response = db_client.post(f"/api/documents/{document_id}/reembed")
+
+    assert response.status_code == 409
+    if status == "pending":
+        assert response.json() == {"detail": IN_PROGRESS_DETAIL}
+    else:
+        assert "다시 추출" in response.json()["detail"]
+    assert (text_state(migrated_db, document_id), jobs_of(migrated_db, document_id)) == before
+
+
+def test_pending_document_rejects_edit_restore_reextract_and_replace(
+    db_client: TestClient, migrated_db: str
+):
+    document_id = upload(db_client).json()["id"]
+    assert edit(db_client, document_id, content="edited", version=1).status_code == 200
+    set_extraction_status(migrated_db, document_id, "pending")
+    before = (text_state(migrated_db, document_id), file_rows(migrated_db, document_id))
+
+    responses = [
+        edit(db_client, document_id, content="again", version=2),
+        db_client.post(
+            f"/api/documents/{document_id}/versions/1/restore", json={"current_version": 2}
+        ),
+        reextract(db_client, document_id, current_version=2),
+        replace_file(db_client, document_id, content=b"new text", current_version=2),
+    ]
+
+    for response in responses:
+        assert response.status_code == 409
+        assert response.json() == {"detail": IN_PROGRESS_DETAIL}
+    assert (text_state(migrated_db, document_id), file_rows(migrated_db, document_id)) == before
+    assert text_version_count(migrated_db, document_id) == 2
+
+
+def test_pending_document_still_allows_tags_and_delete(
+    db_client: TestClient, migrated_db: str
+):
+    document_id = upload(db_client, filename="scan.jpg", content=SCAN_JPG).json()["id"]
+
+    assert replace_tags(db_client, document_id, ["스캔"]).status_code == 200
+    assert db_client.delete(f"/api/documents/{document_id}").status_code == 204
+    assert count_documents(migrated_db) == 0
+
+
+def test_stale_version_does_not_hide_the_extraction_guard(
+    db_client: TestClient, migrated_db: str
+):
+    """추출 중이면 버전이 틀려도 409 사유는 「인식 중」이다 — 새로고침해도 풀리지 않는다."""
+    document_id = upload(db_client, filename="scan.jpg", content=SCAN_JPG).json()["id"]
+
+    response = reextract(db_client, document_id, current_version=99)
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": IN_PROGRESS_DETAIL}
+
+
+def test_extraction_guard_comes_after_the_ownership_check(
+    db_client: TestClient, migrated_db: str
+):
+    document_id = upload(db_client, filename="scan.jpg", content=SCAN_JPG).json()["id"]
+
+    assert edit(db_client, document_id, content="x", version=1, user_id="bob").status_code == 403
+
+
+def test_failed_document_without_text_rejects_edit_and_restore(
+    db_client: TestClient, migrated_db: str
+):
+    document_id = upload(db_client, filename="scan.jpg", content=SCAN_JPG).json()["id"]
+    set_extraction_status(migrated_db, document_id, "failed")
+
+    edited = edit(db_client, document_id, content="손으로 쓴 텍스트", version=1)
+    restored = db_client.post(
+        f"/api/documents/{document_id}/versions/1/restore", json={"current_version": 1}
+    )
+
+    for response in (edited, restored):
+        assert response.status_code == 409
+        assert "원본 파일" in response.json()["detail"]
+        assert "다시 추출" in response.json()["detail"]
+    assert text_state(migrated_db, document_id)[:3] == (1, "", "failed")
+
+
+def test_editing_a_failed_document_with_text_marks_extraction_done(
+    db_client: TestClient, migrated_db: str
+):
+    document_id = upload(db_client).json()["id"]
+    finish_jobs(migrated_db, document_id)
+    set_extraction_status(migrated_db, document_id, "failed")
+
+    response = edit(db_client, document_id, content="고친 텍스트", version=1)
+
+    assert response.status_code == 200
+    assert response.json()["extraction_status"] == "done"
+    assert text_state(migrated_db, document_id)[:3] == (2, "고친 텍스트", "done")
+    assert text_version_count(migrated_db, document_id) == 2
+    assert pending_embed_jobs(migrated_db, document_id) == 1
+
+
+def swap_original_to_scan(dsn: str, document_id: str) -> None:
+    with psycopg.connect(dsn) as conn:
+        conn.execute(
+            "UPDATE document_files SET filename = 'scan.jpg', data = %s WHERE document_id = %s",
+            (SCAN_JPG, document_id),
+        )
+
+
+def test_reextracting_an_ocr_target_hands_over_to_an_extract_job(
+    db_client: TestClient, migrated_db: str
+):
+    document_id = upload(db_client).json()["id"]
+    finish_jobs(migrated_db, document_id)
+    swap_original_to_scan(migrated_db, document_id)
+
+    stale = reextract(db_client, document_id, current_version=2)
+    assert stale.status_code == 409
+    assert stale.json()["current_version"] == 1
+
+    response = reextract(db_client, document_id, current_version=1)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert (body["changed"], body["extraction_status"], body["version"]) == (
+        False,
+        "pending",
+        1,
+    )
+    assert text_state(migrated_db, document_id)[:3] == (1, "OpenSQL guide", "pending")
+    assert text_version_count(migrated_db, document_id) == 1
+    assert jobs_of(migrated_db, document_id) == [("embed", "done"), ("extract", "pending")]
+
+
+def test_reextracting_a_failed_scan_retries_recognition(
+    db_client: TestClient, migrated_db: str
+):
+    document_id = upload(db_client, filename="scan.jpg", content=SCAN_JPG).json()["id"]
+    finish_jobs(migrated_db, document_id)
+    set_extraction_status(migrated_db, document_id, "failed")
+
+    response = reextract(db_client, document_id, current_version=1)
+
+    assert response.status_code == 200
+    assert response.json()["extraction_status"] == "pending"
+    assert text_state(migrated_db, document_id)[:3] == (1, "", "pending")
+    assert jobs_of(migrated_db, document_id) == [("extract", "done"), ("extract", "pending")]
+
+
+def test_replacing_with_an_ocr_target_stacks_a_file_and_waits_for_extraction(
+    db_client: TestClient, migrated_db: str
+):
+    document_id = upload(db_client).json()["id"]
+    finish_jobs(migrated_db, document_id)
+
+    response = replace_file(db_client, document_id, filename="scan.jpg", content=SCAN_JPG)
+
+    assert response.status_code == 200
+    assert response.json()["extraction_status"] == "pending"
+    assert text_state(migrated_db, document_id) == (
+        1,
+        "OpenSQL guide",
+        "pending",
+        "scan.jpg",
+        "jpg",
+    )
+    rows = file_rows(migrated_db, document_id)
+    assert [(row[0], row[1], row[3]) for row in rows] == [
+        (1, "guide.txt", 1),
+        (2, "scan.jpg", 1),
+    ]
+    assert text_version_count(migrated_db, document_id) == 1
+    assert jobs_of(migrated_db, document_id) == [("embed", "done"), ("extract", "pending")]
+
+
+def test_replacing_a_failed_scan_with_another_scan_leaves_text_version_empty(
+    db_client: TestClient, migrated_db: str
+):
+    document_id = upload(db_client, filename="scan.jpg", content=SCAN_JPG).json()["id"]
+    finish_jobs(migrated_db, document_id)
+    set_extraction_status(migrated_db, document_id, "failed")
+    other_scan = (Path(__file__).parent / "fixtures" / "scan_tax_pages.pdf").read_bytes()
+
+    response = replace_file(db_client, document_id, filename="scan.pdf", content=other_scan)
+
+    assert response.status_code == 200
+    assert response.json()["extraction_status"] == "pending"
+    assert [row[3] for row in file_rows(migrated_db, document_id)] == [None, None]
+
+
+def test_replacing_a_failed_document_with_text_marks_extraction_done(
+    db_client: TestClient, migrated_db: str
+):
+    document_id = upload(db_client).json()["id"]
+    finish_jobs(migrated_db, document_id)
+    set_extraction_status(migrated_db, document_id, "failed")
+
+    response = replace_file(db_client, document_id, content=b"replaced text")
+
+    assert response.status_code == 200
+    assert response.json()["extraction_status"] == "done"
+    assert text_state(migrated_db, document_id)[:3] == (2, "replaced text", "done")
+
+
+def test_replacing_a_failed_scan_with_text_writes_v1(
+    db_client: TestClient, migrated_db: str
+):
+    """텍스트가 한 번도 없던 문서의 첫 텍스트는 v1이다 — 워커의 첫 추출과 같다."""
+    document_id = upload(db_client, filename="scan.jpg", content=SCAN_JPG).json()["id"]
+    finish_jobs(migrated_db, document_id)
+    set_extraction_status(migrated_db, document_id, "failed")
+
+    response = replace_file(db_client, document_id, filename="typed.txt", content=b"typed text")
+
+    assert response.status_code == 200
+    assert text_state(migrated_db, document_id)[:3] == (1, "typed text", "done")
+    assert text_version_count(migrated_db, document_id) == 1
+    assert [row[3] for row in file_rows(migrated_db, document_id)] == [None, 1]
+    assert pending_embed_jobs(migrated_db, document_id) == 1

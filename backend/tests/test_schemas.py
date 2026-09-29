@@ -66,6 +66,8 @@ def test_system_status_accepts_service_dataclasses():
         last_job_finished_at=None,
         inconsistent_documents=4,
         stale_edge_documents=2,
+        extraction_pending=5,
+        extraction_failed=6,
         embedding_provider="fake",
     )
 
@@ -75,4 +77,5 @@ def test_system_status_accepts_service_dataclasses():
     assert response.jobs.recovery_pending == 1
     assert response.inconsistent_documents == 4
     assert response.stale_edge_documents == 2
+    assert (response.extraction_pending, response.extraction_failed) == (5, 6)
     assert response.embedding_provider == "fake"

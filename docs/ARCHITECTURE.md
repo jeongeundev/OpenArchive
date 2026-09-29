@@ -101,7 +101,7 @@ CREATE TABLE documents (
   id               uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   title            text NOT NULL,
   filename         text,                   -- 원본 파일명. 원본이 있으면 최신 판(document_files)의 파일명과 같게 유지된다 (ADR-046)
-  content_type     text NOT NULL,          -- pdf | docx | txt | md
+  content_type     text NOT NULL,          -- pdf | docx | txt | md | hwp | hwpx | xlsx | pptx | png | jpg | jpeg
   content          text NOT NULL,          -- 문서 텍스트 (현재 버전). 편집·버전 관리·임베딩의 대상
   content_hash     text NOT NULL,          -- sha256, 트리거의 변경 감지 기준
   version          int  NOT NULL DEFAULT 1,
@@ -109,14 +109,18 @@ CREATE TABLE documents (
   visibility       text NOT NULL DEFAULT 'public',  -- public | private
   tags             text[] NOT NULL DEFAULT '{}',
   embedding_status text NOT NULL DEFAULT 'pending', -- pending|processing|ready|error
+  extraction_status text NOT NULL DEFAULT 'done',   -- pending|failed|done (021, ADR-052). OCR 추출 상태
   created_at       timestamptz NOT NULL DEFAULT now(),
   updated_at       timestamptz NOT NULL DEFAULT now(),
 
-  -- 텍스트를 추출하지 못한 문서(스캔 이미지 PDF 등)가 저장되는 것을 DB에서 차단한다.
+  -- 추출이 끝났다고 표시된(done) 문서가 빈 본문인 상태를 DB에서 차단한다 (002 → 021에서 조건부로).
   -- 빈 본문은 임베딩할 것이 없어 검색에 영원히 잡히지 않는 유령 행이 된다.
+  -- 추출 중(pending)·인식 실패(failed) 문서는 빈 본문으로 존재할 수 있다 — 스캔 문서는
+  -- 빈 텍스트로 먼저 생기고 워커가 OCR 결과를 채운다 (ADR-052 결정 5).
   -- 제거 문자를 명시한다: btrim의 1인자 형태는 공백만 제거해 탭·개행만 남은 본문이
-  -- 그대로 통과하는데, 스캔 이미지 PDF의 추출 결과가 정확히 그 형태다 (M1에서 실측).
-  CONSTRAINT documents_content_not_blank CHECK (length(btrim(content, E' \t\r\n\f')) > 0)
+  -- 그대로 통과하는데, 텍스트 레이어 없는 PDF의 추출 결과가 정확히 그 형태다 (M1에서 실측).
+  CONSTRAINT documents_content_not_blank
+    CHECK (extraction_status <> 'done' OR length(btrim(content, E' \t\r\n\f')) > 0)
 );
 
 -- document_versions: 문서 텍스트의 버전 이력 (append-only)
@@ -139,7 +143,9 @@ CREATE TABLE document_files (
   data         bytea NOT NULL CHECK (octet_length(data) > 0),
   size         bigint GENERATED ALWAYS AS (octet_length(data)) STORED,        -- DB가 계산한다
   sha256       text   GENERATED ALWAYS AS (encode(sha256(data), 'hex')) STORED,
-  text_version int  NOT NULL,      -- 등록(업로드·교체) 시점의 텍스트 버전. 재추출 버전과는 연결되지 않는다
+  text_version int,                -- 등록(업로드·교체) 시점의 텍스트 버전. 재추출 버전과는 연결되지 않는다.
+                                   -- NULL = 이 판의 텍스트가 아직 추출되지 않았다(추출 중 문서, 021).
+                                   -- 워커가 첫 텍스트(v1)를 쓰는 트랜잭션에서 채운다
   uploaded_by  text NOT NULL,
   uploaded_at  timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (document_id, file_version),
@@ -173,6 +179,7 @@ CREATE TABLE document_chunks (
 CREATE TABLE embedding_jobs (
   id              bigserial PRIMARY KEY,
   document_id     uuid NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+  kind            text NOT NULL DEFAULT 'embed',   -- embed|edges|extract (016·021, ADR-029·052)
   status          text NOT NULL DEFAULT 'pending', -- pending|processing|done|error
   attempts        int  NOT NULL DEFAULT 0,
   next_attempt_at timestamptz NOT NULL DEFAULT now(),
@@ -186,9 +193,9 @@ CREATE TABLE embedding_jobs (
     CHECK (status <> 'processing' OR lease_expires_at IS NOT NULL)
 );
 
--- 핵심: 문서당 pending 잡은 1개만 — DB 계층 코얼레싱
-CREATE UNIQUE INDEX uq_pending_job_per_doc
-  ON embedding_jobs(document_id) WHERE status = 'pending';
+-- 핵심: 문서·종류당 pending 잡은 1개만 — DB 계층 코얼레싱 (016에서 종류를 키에 넣었다)
+CREATE UNIQUE INDEX uq_pending_job_per_doc_kind
+  ON embedding_jobs(document_id, kind) WHERE status = 'pending';
 
 -- document_edges: 저장 시점에 만드는 관계 그래프 (006, ADR-029)
 -- ★ 저장은 단방향(src = 계산 주체, 재계산은 자기 src 행만 교체), 조회는 src ∪ dst로 대칭 (014, ADR-029 개정)
@@ -302,7 +309,8 @@ END; $$ LANGUAGE plpgsql;
 CREATE TRIGGER trg_documents_content_changed
   AFTER INSERT OR UPDATE OF content_hash ON documents
   FOR EACH ROW
-  WHEN (pg_trigger_depth() = 0)          -- 트리거 내부 UPDATE로 인한 재귀 방지
+  WHEN (pg_trigger_depth() = 0           -- 트리거 내부 UPDATE로 인한 재귀 방지
+        AND NEW.extraction_status = 'done') -- 추출 중 문서는 발화하지 않는다 (022, ADR-052)
   EXECUTE FUNCTION on_document_content_changed();
 ```
 
@@ -311,6 +319,28 @@ CREATE TRIGGER trg_documents_content_changed
 - **INSERT 시**: `version=1` 행이 이력에 기록된다. 문서 생성 직후부터 v1 조회가 가능하다.
 - **PUT 시**: API는 `documents`의 `version`(+1), `content`, `content_hash`만 UPDATE한다. 이력 기록은 트리거가 **같은 트랜잭션에서** 수행하므로, 본문만 바뀌고 이력이 누락되는 상태가 구조적으로 불가능하다.
 - `ON CONFLICT (document_id, version) DO NOTHING`은 재실행 안전장치다. 같은 버전 번호로 트리거가 두 번 발화해도 이력이 중복되지 않는다.
+- **추출 중 문서(`extraction_status <> 'done'`)에서는 발화하지 않는다.** 스캔 문서는 빈 텍스트로 INSERT되는데, 여기서 발화하면 빈 v1이 이력에 남고 청크가 나올 수 없는 임베딩 잡이 돈다. v1은 워커가 첫 텍스트를 쓰는 UPDATE가 기록한다 (아래 「추출 잡」).
+
+### 추출 잡 — 스캔 문서는 텍스트 없이 먼저 생긴다
+
+이미지(`png`·`jpg`·`jpeg`)와 텍스트 레이어가 비어 있는 PDF는 tesseract로 OCR한다(`kor+eng`, `--psm 4`, PDF는 300dpi로 래스터화 — `services/parsing.py`). 쪽당 수 초라 업로드 요청 안에서 끝낼 수 없으므로 **추출도 워커 잡이 한다** (ADR-052). 텍스트 레이어가 있는 PDF와 나머지 형식은 지금처럼 요청 안에서 동기로 추출한다.
+
+```sql
+-- 추출 중으로 들어오거나(새 스캔 문서) 추출 중으로 바뀌면(OCR 대상의 재추출·원본 교체) 추출 잡을 남긴다 (022)
+CREATE TRIGGER trg_documents_extraction_requested
+  AFTER INSERT OR UPDATE OF extraction_status ON documents
+  FOR EACH ROW
+  WHEN (pg_trigger_depth() = 0 AND NEW.extraction_status = 'pending')
+  EXECUTE FUNCTION on_document_extraction_requested();   -- INSERT INTO embedding_jobs (document_id, kind) VALUES (NEW.id, 'extract') + NOTIFY
+```
+
+1. **업로드**: OCR 대상이면 문서를 빈 문서 텍스트 + `extraction_status = 'pending'`으로 INSERT하고, 원본 1판을 `text_version = NULL`로 같은 트랜잭션에 저장한다. 트리거가 추출 잡을 만든다 — 앱은 `embedding_jobs`에 INSERT하지 않는다. 문서는 즉시 목록·상세에 보이지만 청크가 없어 검색·관계·군집에는 없다.
+2. **워커**: 추출 잡을 집어 트랜잭션 안에서 최신 원본 판을 읽고, 트랜잭션 **밖**(`asyncio.to_thread`)에서 OCR한 뒤, 문서 행을 잠그고 잡 소유(`lock_owned_job`)를 확인한 트랜잭션에서 `apply_extracted_text`로 반영한다. 본문·`content_hash`·`extraction_status = 'done'`을 **한 UPDATE**로 쓰므로 위 003 트리거가 그 자리에서 텍스트 버전·임베딩 잡을 잇는다 — 나눠 쓰면 트리거가 `done`을 보지 못해 조용히 끊긴다. 첫 추출이면 v1이 되고 원본 판의 `text_version`을 채우며, 재추출이면 버전이 하나 오른다. 결과가 이전 텍스트와 같으면 `done`만 표시하고 새 버전을 만들지 않는다.
+3. **인식 실패**: OCR 결과가 비었거나 500KB를 넘으면 **재시도하지 않고** `extraction_status = 'failed'`로 끝낸다 — 결정적이라 다시 해도 같다. 예외(tesseract 비정상 종료 등)는 다른 잡처럼 백오프 재시도하고, 예산을 소진하면(`fail_job`·좀비 스윕 모두) `failed`로 표시한다. `embedding_status`는 건드리지 않는다 — 인식 실패와 임베딩 실패는 사용자가 할 일이 다르다(원본 교체 vs 재임베딩). 새 문서는 빈 텍스트로, 재추출이던 문서는 이전 텍스트로 남는다.
+4. **재추출·원본 교체**: 대상이 OCR 대상이면 텍스트를 쓰지 않고 `extraction_status = 'pending'`으로만 바꾼다(교체는 파일명·유형과 한 UPDATE). 추출이 끝날 때까지 이전 텍스트·청크로 검색된다 — 재임베딩과 같은 원칙이다.
+5. **추출 중 잠금**: 추출 중인 문서의 편집·되돌리기·재추출·원본 교체는 409다. 워커 결과가 사람이 고친 텍스트를 덮지 않게 한다. 인식 실패로 텍스트가 빈 문서는 편집·되돌리기만 409이고, 원본 교체·재추출로 다시 시도할 수 있다. 태그·제목·공개범위·삭제는 막지 않는다.
+
+**한계**: 텍스트가 **일부 쪽에만** 있는 PDF는 OCR하지 않는다 — 텍스트 레이어가 비어 있을 때만 OCR 대상이라 스캔된 쪽이 빠진다 (ADR-052 트레이드오프 1). OCR 정확도는 한국어 보도자료 래스터화 실측에서 CER 0.068(깨끗한 판)·0.093(열화판), 쪽당 약 3.3초(맥 M2 Pro · tesseract 5.5)이며, 그 오류는 문서 텍스트에 그대로 남아 편집으로 고친다. Rocky 9 패키지(tesseract 4.1.1 + langpack-kor 4.1.0)는 `rockylinux:9` 컨테이너 실측에서 CER 0.031~0.050·쪽당 3.4~5.5초였다(#135 코멘트, arm64 컨테이너라 x86 호스트 시간과는 다를 수 있다).
 
 ### 관계 생성 — 트리거가 잡을 만들고 워커가 판정한다
 
@@ -364,7 +394,7 @@ CREATE TRIGGER trg_build_document_edges                          -- (008) 정의
 
 이후 5초 주기 폴링이 **주 경로**. `LISTEN embedding_jobs` 수신은 폴링을 앞당기는 **최적화**이며, 동작하지 않아도 파이프라인은 정상 작동한다 (ADR-009).
 
-**잡은 두 종류다** (`embedding_jobs.kind`). `embed`는 아래 2·3번의 청킹·임베딩·청크 교체이고, `edges`는 이미 저장된 청크 벡터로 관계만 다시 판정한다. **큐·claim·백오프·좀비 회수·재시도 예산은 공유하고 처리 본체만 갈린다.** 관계 잡에 우선순위를 주지 않는 이유는 아래 1번에 있다.
+**잡은 세 종류다** (`embedding_jobs.kind`). `embed`는 아래 2·3번의 청킹·임베딩·청크 교체이고, `edges`는 이미 저장된 청크 벡터로 관계만 다시 판정하며, `extract`는 최신 원본 판을 OCR해 문서 텍스트를 채운다(위 「추출 잡」). **큐·claim·백오프·좀비 회수·재시도 예산은 공유하고 처리 본체만 갈린다.** 관계 잡에 우선순위를 주지 않는 이유는 아래 1번에 있다.
 
 1. 폴링 틱 또는 NOTIFY 수신 시 — 잡을 claim하고 **즉시 커밋**:
 ```sql
@@ -380,7 +410,7 @@ UPDATE embedding_jobs j
 RETURNING j.id, j.document_id, j.kind;
 
 -- 임베딩 잡일 때만: 같은 트랜잭션에서 문서 상태도 processing으로 (UI 표시용)
--- 관계 잡은 documents를 한 컬럼도 건드리지 않는다 — 임베딩은 이미 끝났고 ready가 맞다
+-- 관계 잡·추출 잡은 여기서 documents를 건드리지 않는다 — 관계 잡은 임베딩이 이미 끝났고 ready가 맞다
 UPDATE documents SET embedding_status='processing'
  WHERE id = %(document_id)s AND embedding_status <> 'processing';
 ```
@@ -423,7 +453,9 @@ COMMIT;
 
    **관계 잡(`kind='edges'`)은 2·3번을 타지 않는다.** 본문을 읽지도, 임베딩 모델을 부르지도 않는다. 자기 트랜잭션에서 `documents`를 `FOR UPDATE`로 잠그고 — 판정 도중 청크가 교체되면 방금 계산한 관계가 사라진 청크 번호를 가리킨다 — `SELECT rebuild_document_edges(...)` 한 줄을 부르고 잡을 `done`으로 마감한다. 워커는 판정 규칙을 복제하지 않는다: 판정은 DB 함수 하나이고 `openarchive rebuild-edges`의 전량 재계산이 같은 함수를 부른다. 판정을 건너뛰는 경우는 **문서가 이미 삭제됐을 때 하나뿐이다**(위 「관계 생성」 절).
 
-4. 실패 시: `attempts` 기반 지수 백오프로 `next_attempt_at` 갱신 후 `pending` 복귀. `attempts`는 claim 시점에 이미 올라 있으므로 **3회를 소진하면**(3회째 실패) job `error` + `documents.embedding_status='error'`. **문서를 `error`로 떨어뜨리는 것은 임베딩 잡뿐이다** — 관계 잡이 소진되면 잡만 `error`로 남는다.
+   **추출 잡(`kind='extract'`)도 2·3번을 타지 않는다.** 최신 원본 판을 OCR해 문서 텍스트를 쓰는 데서 끝나고, 그 UPDATE가 발화시킨 새 `embed` 잡이 2·3번을 탄다(위 「추출 잡」 절). 인식 결과가 비었거나 너무 커도 잡은 `done`으로 마감하고 문서만 `failed`로 표시한다.
+
+4. 실패 시: `attempts` 기반 지수 백오프로 `next_attempt_at` 갱신 후 `pending` 복귀. `attempts`는 claim 시점에 이미 올라 있으므로 **3회를 소진하면**(3회째 실패) job `error` + `documents.embedding_status='error'`. **문서를 `error`로 떨어뜨리는 것은 임베딩 잡뿐이다** — 관계 잡이 소진되면 잡만 `error`로 남고, 추출 잡이 소진되면 `embedding_status`가 아니라 `extraction_status='failed'`가 된다.
 
 5. 좀비 회수: **lease가 만료된** `processing` 잡을 `pending`으로 리셋한다 (ADR-050). `claim_job`이 `lease_expires_at = now() + JOB_LEASE_SECONDS`(기본 60초)를 찍고, 워커는 처리하는 동안 **처리 연결과 다른 연결**로 lease의 1/3(20초)마다 연장한다. 연장은 `WHERE id = … AND status = 'processing' AND attempts = …`라 이미 회수된 잡을 되살리지도, 회수 뒤 다른 워커가 다시 집은 잡의 lease를 대신 늘리지도 못한다 — 선점마다 `attempts`가 오르고 스윕은 그것을 건드리지 않으므로 `(id, attempts)`가 한 번의 선점을 가리킨다. 워커가 죽든, 워커는 살아 있는데 연결이 끊기든 연장이 멈추므로 lease 뒤에 회수된다 — 판정 기준이 "얼마나 오래 걸렸나"가 아니라 "소유자가 아직 살아 있나"라서, 정상적으로 오래 걸리는 잡은 회수되지 않는다. `processing`인데 lease가 없는 행은 스윕이 영원히 회수하지 못하므로 제약(`embedding_jobs_processing_has_lease`, 020)이 막는다.
 
@@ -436,7 +468,7 @@ COMMIT;
    - **자기 잡에 쓰는 트랜잭션은 한 heartbeat 주기(lease의 1/3)까지만 기다린다.** lease 연장·결과 반영·관계 판정·실패 기록·반납이 첫 문장으로 `set_config('lock_timeout', …, true)`를 건다(OpenProxy transaction 모드라 트랜잭션 밖 SET은 못 쓴다). 상한에 걸리면 `LockNotAvailable`로 끝나고, 잡은 lease 만료 뒤 스윕이 회수한다. 반영이 상한에 걸리면 이어지는 실패 기록도 같은 문서 행 락에 걸리므로, 예외가 루프까지 올라가 그 주기의 drain을 접고 연결을 버린 뒤 다음 주기로 넘어간다.
    - **heartbeat는 최대 한 lease만 기다린다.** 넘기면 취소하지 않고 떼어 둔다 — 취소는 풀을 오염시키고(#110 B-2), 쿼리가 도는 연결을 밖에서 닫는 것은 안전하지 않으며, OpenProxy 너머의 쿼리 취소는 실패했다. 떼어 둔 heartbeat는 진행 중인 호출이 끝나면 멈추고, 오류로 끝난 연결은 `app.db.connection`이 버린다. 그때까지 풀 연결 하나를 쥐며(락이면 한 주기, 응답 없는 네트워크면 클라이언트 keepalive 약 60초), 쌓여서 풀이 차면 다음 heartbeat가 연장하지 못해 그 잡의 결과를 버린다(ADR-050 트레이드오프 6).
 
-   **회수에도 4번과 같은 재시도 예산이 걸린다.** lease가 만료된 잡의 `attempts`가 이미 3회를 소진했으면 `pending`으로 되돌리지 않고 job `error` + `documents.embedding_status='error'`로 격리한다(`last_error`는 `WorkerCrashLoop: …`). 여기서도 문서 상태를 건드리는 것은 임베딩 잡뿐이며, 회수·격리 판정은 종류를 가리지 않고 `(document_id, kind)` 단위로 이뤄진다. 이것이 없으면 상한이 4번(예외로 잡히는 실패)에만 걸린다 — `claim_job`은 `attempts`를 보지 않으므로, 워커 프로세스를 죽이는 잡은 회수 → 재선점 → 재크래시를 무한 반복하고 그때마다 워커가 함께 죽는다. `attempts`를 초기화하지 않는 것은 이 판정의 전제이지 그 자체로 상한을 만들지는 않는다.
+   **회수에도 4번과 같은 재시도 예산이 걸린다.** lease가 만료된 잡의 `attempts`가 이미 3회를 소진했으면 `pending`으로 되돌리지 않고 job `error` + `documents.embedding_status='error'`로 격리한다(`last_error`는 `WorkerCrashLoop: …`). 여기서도 `embedding_status`를 건드리는 것은 임베딩 잡뿐이며(추출 잡은 `extraction_status='failed'`), 회수·격리 판정은 종류를 가리지 않고 `(document_id, kind)` 단위로 이뤄진다. 이것이 없으면 상한이 4번(예외로 잡히는 실패)에만 걸린다 — `claim_job`은 `attempts`를 보지 않으므로, 워커 프로세스를 죽이는 잡은 회수 → 재선점 → 재크래시를 무한 반복하고 그때마다 워커가 함께 죽는다. `attempts`를 초기화하지 않는 것은 이 판정의 전제이지 그 자체로 상한을 만들지는 않는다.
 
    격리해도 청크는 지우지 않는다. 검색은 이전 버전으로 계속되고 정합성 카운터는 어긋난 채 남는다 — 격리했다고 어긋남을 숨기면 계약이 거짓말이 된다. 재개 수단은 문서 재수정이며, 본문을 바꾸지 않고 다시 태우려면 `UPDATE documents SET content_hash = content_hash`를 쓴다(003_triggers.sql).
 
@@ -601,13 +633,13 @@ OpenSQL `patroni.yml`의 PostgreSQL 파라미터는 `max_connections: 100`이다
 
 | 엔드포인트 | 내용 |
 |---|---|
-| `POST /api/documents` | multipart 업로드. pypdf/python-docx/plain 파싱 → INSERT. 여기서 트리거가 파이프라인을 자동 기동 — 임베딩 관련 코드 없음. **텍스트 추출 결과가 비면 400** (아래). **원본 파일은 같은 트랜잭션에서 `document_files`에 1판으로 저장한다** — 원본 저장이 실패하면 문서·텍스트 버전·잡도 남지 않는다. 상한 `MAX_UPLOAD_MB`(기본 50) 초과는 413. 선택 헤더 `Idempotency-Key`(아래) |
+| `POST /api/documents` | multipart 업로드. 형식별 파서로 추출 → INSERT. 여기서 트리거가 파이프라인을 자동 기동 — 임베딩 관련 코드 없음. **이미지와 텍스트 레이어가 빈 PDF는 추출하지 않고 `extraction_status='pending'`으로 INSERT해 OCR을 워커 잡에 넘긴다** (「추출 잡」). 그 밖의 형식에서 **텍스트 추출 결과가 비면 400** (아래). **원본 파일은 같은 트랜잭션에서 `document_files`에 1판으로 저장한다** — 원본 저장이 실패하면 문서·텍스트 버전·잡도 남지 않는다. 상한 `MAX_UPLOAD_MB`(기본 50) 초과는 413. 선택 헤더 `Idempotency-Key`(아래) |
 | `POST /api/documents/text` | JSON 텍스트 공급(`txt`·`md`). `filename`은 NULL이며, 파생 데이터는 업로드 경로와 동일하게 DB 트리거가 만든다. 빈 문서 텍스트와 500,000자 초과는 400. 선택 헤더 `Idempotency-Key`(아래) |
 | `GET /api/documents` | 목록 + `status`/`tag` 필터, embedding_status 포함 |
 | `GET /api/documents/{id}` | 상세 + 텍스트 버전 목록 + 청크 수 + 청크 기준 버전 + `files`(원본 판 목록 — 메타데이터만, 바이트는 싣지 않는다) |
 | `GET /api/documents/{id}/file` · `GET /api/documents/{id}/files/{n}` | **원본 내려받기** — 최신 판 · 특정 판. 항상 `Content-Disposition: attachment` + `X-Content-Type-Options: nosniff`, 미디어 타입은 확장자 고정 매핑. 볼 수 없는 문서·원본 없음·없는 판은 404 (ADR-046) |
-| `PUT /api/documents/{id}/file` | **원본 교체.** multipart `file` + `current_version`. 새 판을 쌓고(이전 판 보존), 추출 텍스트가 달라졌을 때만 새 텍스트 버전(트리거가 이력·잡 생성). 최신 판과 같은 바이트면 아무것도 바꾸지 않는다. 버전 불일치 409 · 추출 실패 400 · 상한 초과 413 |
-| `POST /api/documents/{id}/reextract` | **재추출.** `{current_version}`. 최신 판에서 다시 추출해 결과가 다르면 새 텍스트 버전, 같으면 무변경(`changed: false`). 새 판은 만들지 않는다. 원본 없는 문서는 409 |
+| `PUT /api/documents/{id}/file` | **원본 교체.** multipart `file` + `current_version`. 새 판을 쌓고(이전 판 보존), 추출 텍스트가 달라졌을 때만 새 텍스트 버전(트리거가 이력·잡 생성). 새 원본이 OCR 대상이면 텍스트를 쓰지 않고 추출 잡으로 넘긴다. 최신 판과 같은 바이트면 아무것도 바꾸지 않는다. 버전 불일치·추출 중 409 · 추출 실패 400 · 상한 초과 413 |
+| `POST /api/documents/{id}/reextract` | **재추출.** `{current_version}`. 최신 판에서 다시 추출해 결과가 다르면 새 텍스트 버전, 같으면 무변경(`changed: false`). 새 판은 만들지 않는다. 최신 판이 OCR 대상이면 추출 잡으로 넘기고 `changed: false`와 `extraction_status: "pending"`으로 응답한다. 원본 없는 문서·추출 중 문서는 409 |
 | `PUT /api/documents/{id}` | 편집된 문서 텍스트(`{content, version}` JSON) → `version`+1, `content`, `content_hash` UPDATE. **버전 이력 기록과 재임베딩 잡 생성은 트리거가 수행.** 요청의 `version`이 현재 버전과 다르면 **409** (아래) |
 | `PUT /api/documents/{id}/tags` | `{tags: string[]}`로 태그 전체 교체. 트리거는 `UPDATE OF content_hash`에만 걸려 있으므로 **재임베딩을 유발하지 않는다** |
 | `DELETE /api/documents/{id}` | CASCADE로 벡터까지 원자 삭제 |
@@ -623,7 +655,7 @@ OpenSQL `patroni.yml`의 PostgreSQL 파라미터는 `max_connections: 100`이다
 | `GET /api/diagnostics` | **진단.** 고아 문서·깨진 링크·중복 후보 등을 **열람 범위 기준**으로 집계 (ADR-027) |
 | `GET /api/clusters` | **관계 지도.** 관계 그래프의 Louvain 군집. 조회 시점 계산, 열람 범위 기준. 이름은 (군집 안 빈도 − 밖 빈도)가 양수인 태그 중 최대, 없으면 중심 문서 제목 (ADR-042 개정) |
 | `GET /api/admin/users` 등 | 관리자 전용 |
-| `GET /api/system/status` | **로그인 필요 · 운영/데모 전용**: `inet_server_addr()`(현재 접속 노드), pending/processing/error **임베딩** 잡 수(`kind='embed'`), 임베딩 프로바이더명, **정합성 검증 쿼리 결과**(`c.version <> d.version` 건수), **관계 미반영 문서 수**(`kind='edges'` 잡이 `done`이 아닌 문서). `/admin/status`가 소비하며 사용자 화면은 호출하지 않는다. SQL과 결과 모델은 `services/system.py`에 있고 라우터는 인증과 응답 변환만 맡는다 |
+| `GET /api/system/status` | **로그인 필요 · 운영/데모 전용**: `inet_server_addr()`(현재 접속 노드), pending/processing/error **임베딩** 잡 수(`kind='embed'`), 임베딩 프로바이더명, **정합성 검증 쿼리 결과**(`c.version <> d.version` 건수), **관계 미반영 문서 수**(`kind='edges'` 잡이 `done`이 아닌 문서), **텍스트 인식 대기·실패 문서 수**(`extraction_status`가 `pending`·`failed`). `/admin/status`가 소비하며 사용자 화면은 호출하지 않는다. SQL과 결과 모델은 `services/system.py`에 있고 라우터는 인증과 응답 변환만 맡는다 |
 
 > **구현 현황 (M11-c 기준)**: 위 표 전체가 구현되어 있다. 파일 업로드와 JSON 텍스트 공급은 같은 INSERT 헬퍼와 DB 트리거 파생 계약을 공유한다. 프로그램은 사람이 발급한 `read_write` 위임 API 토큰으로 세션 쿠키 없이 텍스트를 공급할 수 있다 (ADR-034·035).
 >
@@ -653,15 +685,15 @@ DB가 잠시 응답할 수 없으면(연결 끊김·페일오버·switchover 중
 
 ### 빈 파싱 결과 처리 (`POST /api/documents`)
 
-파싱 결과가 공백 제거 후 빈 문자열이면 **400을 반환하고 저장하지 않는다.**
+OCR 대상(이미지, 텍스트 레이어가 빈 PDF)이 아닌 형식에서 파싱 결과가 공백 제거 후 빈 문자열이면 **400을 반환하고 저장하지 않는다.** 텍스트 레이어가 빈 PDF는 여기서 거부하지 않고 OCR로 넘긴다 (「추출 잡」, ADR-052).
 
 ```
 400 Bad Request
-{ "detail": "문서에서 텍스트를 추출하지 못했습니다. 스캔 이미지 PDF는 지원하지 않습니다." }
+{ "detail": "문서에서 텍스트를 추출하지 못했습니다." }
 ```
 
 저장 후 `error` 상태로 두는 대안을 택하지 않은 이유: 빈 문서는 임베딩할 것이 없어 **영원히 검색에 잡히지 않는 유령 행**이 되고, 사용자는 목록에서 실패 배지만 볼 뿐 원인을 모른다. 업로드 시점에 즉시 알리는 편이 낫다.
-DB 계층에도 `CHECK (length(btrim(content, E' \t\r\n\f')) > 0)`를 두어 이중으로 막는다 (스키마 절 참조). 여기서 "공백 제거"는 **공백·탭·CR·LF·폼피드**를 뜻한다 — `btrim`의 1인자 형태는 공백만 제거하므로 개행뿐인 추출 결과를 걸러내지 못한다.
+DB 계층에도 `CHECK (extraction_status <> 'done' OR length(btrim(content, E' \t\r\n\f')) > 0)`를 두어 이중으로 막는다 (스키마 절 참조) — 추출이 끝났다고 표시된 문서가 빈 본문인 상태는 DB가 막고, 추출 중·인식 실패 문서만 빈 본문을 허용한다. OCR 결과가 빈 경우는 400이 아니라 문서의 `failed` 표시로 드러난다 — 업로드 요청은 이미 끝났기 때문이다. 여기서 "공백 제거"는 **공백·탭·CR·LF·폼피드**를 뜻한다 — `btrim`의 1인자 형태는 공백만 제거하므로 개행뿐인 추출 결과를 걸러내지 못한다.
 
 ### 임베딩 실패 복구 (`POST /api/documents/{id}/reembed`)
 

@@ -12,6 +12,8 @@ const status: SystemStatus = {
   last_job_finished_at: null,
   inconsistent_documents: 0,
   stale_edge_documents: 0,
+  extraction_pending: 0,
+  extraction_failed: 0,
   embedding_provider: "fake",
 };
 

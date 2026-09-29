@@ -116,7 +116,7 @@ describe("UploadDropzone", () => {
     await waitFor(() => expect(onUploaded).toHaveBeenCalledOnce());
     expect(screen.getByLabelText("제목 (선택)")).toHaveValue("");
     expect(
-      screen.getByText("업로드했습니다. 임베딩이 끝나면 상태가 완료로 바뀝니다."),
+      screen.getByText("업로드했습니다. 텍스트 인식(스캔 문서)과 임베딩이 끝나면 상태가 완료로 바뀝니다."),
     ).toBeInTheDocument();
   });
 
@@ -145,7 +145,7 @@ describe("UploadDropzone", () => {
     expect(firstBody.get("visibility")).toBe("public");
     expect(firstBody.get("title")).toBeNull();
     expect(secondBody.get("title")).toBeNull();
-    await screen.findByText("업로드했습니다. 임베딩이 끝나면 상태가 완료로 바뀝니다.");
+    await screen.findByText("업로드했습니다. 텍스트 인식(스캔 문서)과 임베딩이 끝나면 상태가 완료로 바뀝니다.");
   });
 
   it("앞 파일 업로드가 끝나기 전에는 다음 파일을 전송하지 않는다", async () => {
@@ -170,7 +170,7 @@ describe("UploadDropzone", () => {
     await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
     releaseFirst(jsonResponse());
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
-    await screen.findByText("업로드했습니다. 임베딩이 끝나면 상태가 완료로 바뀝니다.");
+    await screen.findByText("업로드했습니다. 텍스트 인식(스캔 문서)과 임베딩이 끝나면 상태가 완료로 바뀝니다.");
   });
 
   it("한 파일이 실패해도 나머지를 계속 업로드하고 실패 행에 이유를 표시한다", async () => {
@@ -267,7 +267,7 @@ describe("UploadDropzone", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "업로드" }));
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
-    await screen.findByText("업로드했습니다. 임베딩이 끝나면 상태가 완료로 바뀝니다.");
+    await screen.findByText("업로드했습니다. 텍스트 인식(스캔 문서)과 임베딩이 끝나면 상태가 완료로 바뀝니다.");
   });
 
   it("ZIP의 지원 문서를 basename 파일명으로 업로드한다", async () => {
@@ -296,13 +296,13 @@ describe("UploadDropzone", () => {
     vi.stubGlobal("fetch", fetchMock);
     const zip = new JSZip();
     zip.file("guide.txt", "guide");
-    zip.file("images/logo.png", "image");
+    zip.file("images/logo.gif", "image");
 
     render(<UploadDropzone onUploaded={vi.fn()} />);
     fireEvent.change(screen.getByLabelText("업로드할 파일"), {
       target: { files: [await archiveFile(zip)] },
     });
-    expect(await screen.findByText("images/logo.png — 건너뜀")).toBeInTheDocument();
+    expect(await screen.findByText("images/logo.gif — 건너뜀")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "업로드" }));
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
@@ -431,4 +431,11 @@ describe("UploadDropzone", () => {
     );
   });
 
+
+  it("이미지 파일을 선택할 수 있다", () => {
+    render(<UploadDropzone onUploaded={vi.fn()} />);
+
+    const accept = document.querySelector('input[type="file"]')?.getAttribute("accept") ?? "";
+    expect(accept.split(",")).toEqual(expect.arrayContaining([".png", ".jpg", ".jpeg", ".zip"]));
+  });
 });
