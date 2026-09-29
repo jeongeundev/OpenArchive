@@ -15,15 +15,22 @@ import re
 import struct
 import zipfile
 import zlib
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from pathlib import PurePath
 from xml.etree import ElementTree
 
 import olefile
 from docx import Document
+from openpyxl import load_workbook
+from pptx import Presentation
+from pptx.enum.shapes import MSO_SHAPE_TYPE
+from pptx.shapes.base import BaseShape
+from pptx.text.text import TextFrame
 from pypdf import PdfReader
 
-SUPPORTED_CONTENT_TYPES: tuple[str, ...] = ("pdf", "docx", "txt", "md", "hwp", "hwpx")
+SUPPORTED_CONTENT_TYPES: tuple[str, ...] = (
+    "pdf", "docx", "txt", "md", "hwp", "hwpx", "xlsx", "pptx"
+)
 
 # 원본을 내려줄 때의 미디어 타입. 업로더가 보낸 Content-Type이나 저장된 값을 믿지 않고
 # 이 고정 매핑만 쓴다 — 조작된 값이 그대로 나가면 브라우저가 다르게 해석한다.
@@ -35,6 +42,8 @@ MEDIA_TYPES: dict[str, str] = {
     "md": "text/markdown; charset=utf-8",
     "hwp": "application/x-hwp",
     "hwpx": "application/hwp+zip",
+    "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
 }
 FALLBACK_MEDIA_TYPE = "application/octet-stream"
 
@@ -69,8 +78,8 @@ def detect_content_type(filename: str) -> str:
 def extract_text(data: bytes, content_type: str) -> str:
     """파일 바이트에서 텍스트를 추출한다.
 
-    PDF 페이지와 DOCX·HWP·HWPX 문단은 빈 줄로 구분한다. 후속 청킹이 빈 줄을 문단
-    경계로 사용하므로 파일 안의 구조가 추출 텍스트에도 남는다.
+    PDF 페이지, DOCX·HWP·HWPX 문단, XLSX 시트, PPTX 슬라이드는 빈 줄로 구분한다. 후속
+    청킹이 빈 줄을 문단 경계로 사용하므로 파일 안의 구조가 추출 텍스트에도 남는다.
 
     Raises:
         UnsupportedFileType: `content_type`이 지원하는 유형이 아닐 때.
@@ -97,6 +106,12 @@ def extract_text(data: bytes, content_type: str) -> str:
 
         if content_type == "hwpx":
             return _join_paragraphs(_hwpx_paragraphs(data))
+
+        if content_type == "xlsx":
+            return _join_paragraphs(_xlsx_sheets(data))
+
+        if content_type == "pptx":
+            return _join_paragraphs(_pptx_slides(data))
 
         document = Document(io.BytesIO(data))
         return "\n\n".join(paragraph.text for paragraph in document.paragraphs)
@@ -212,3 +227,57 @@ def _hwpx_text(element: ElementTree.Element) -> str:
         parts.append(_HWPX_CONTROL_TEXT.get(child.tag.removeprefix(_HWPX_PARAGRAPH), ""))
         parts.append(child.tail or "")
     return "".join(parts)
+
+
+# XLSX 시트와 PPTX 슬라이드는 한 덩어리로 내고 덩어리 사이를 빈 줄로 둔다. 표는 두 형식 모두
+# 행마다 한 줄, 셀은 탭으로 구분한다.
+
+
+def _xlsx_sheets(data: bytes) -> Iterator[str]:
+    """시트마다 시트명을 첫 줄로, 값이 있는 행을 뒤 줄로 낸다. 값 없는 시트는 내지 않는다.
+
+    수식 셀은 파일에 캐시된 계산값을 쓴다(`data_only`). 계산 엔진 없이 쓴 파일처럼 값이
+    캐시되지 않았으면 빈 칸이 된다 — 수식을 계산하지도, 수식 문자열을 본문에 넣지도 않는다.
+    """
+    workbook = load_workbook(io.BytesIO(data), read_only=True, data_only=True)
+    try:
+        for sheet in workbook.worksheets:
+            rows = [
+                _tab_row("" if value is None else str(value) for value in row)
+                for row in sheet.iter_rows(values_only=True)
+            ]
+            rows = [row for row in rows if row.strip()]
+            if rows:
+                yield "\n".join([sheet.title, *rows])
+    finally:
+        workbook.close()
+
+
+def _pptx_slides(data: bytes) -> Iterator[str]:
+    """슬라이드마다 도형 텍스트를 순서대로, 그 뒤에 발표자 노트를 낸다."""
+    for slide in Presentation(io.BytesIO(data)).slides:
+        lines = list(_pptx_shape_texts(slide.shapes))
+        if slide.has_notes_slide and slide.notes_slide.notes_text_frame is not None:
+            lines.append(_pptx_frame_text(slide.notes_slide.notes_text_frame))
+        yield "\n".join(line for line in lines if line.strip())
+
+
+def _pptx_shape_texts(shapes: Iterable[BaseShape]) -> Iterator[str]:
+    for shape in shapes:
+        if shape.shape_type == MSO_SHAPE_TYPE.GROUP:
+            yield from _pptx_shape_texts(shape.shapes)
+        elif shape.has_text_frame:
+            yield _pptx_frame_text(shape.text_frame)
+        elif shape.has_table:
+            for row in shape.table.rows:
+                yield _tab_row(_pptx_frame_text(cell.text_frame) for cell in row.cells)
+
+
+def _pptx_frame_text(frame: TextFrame) -> str:
+    # python-pptx는 문단 안 줄바꿈(`a:br`)을 수직 탭으로 돌려준다.
+    return frame.text.replace("\v", "\n")
+
+
+def _tab_row(cells: Iterable[str]) -> str:
+    # 앞·가운데 빈 칸은 탭으로 남겨 열 위치를 지키고, 줄 끝 빈 칸은 버린다.
+    return "\t".join(cells).rstrip("\t")

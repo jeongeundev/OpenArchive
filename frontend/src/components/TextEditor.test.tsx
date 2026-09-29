@@ -33,7 +33,7 @@ describe("TextEditor", () => {
     vi.unstubAllGlobals();
   });
 
-  it.each(["pdf", "docx", "hwp", "hwpx"] as const)(
+  it.each(["pdf", "docx", "hwp", "hwpx", "xlsx", "pptx"] as const)(
     "%s처럼 원본에서 추출한 텍스트에는 편집 안내를 상시 표시한다",
     (contentType) => {
       render(

@@ -12,7 +12,7 @@ CREATE TABLE documents (
   id               uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   title            text NOT NULL,
   filename         text,                   -- 업로드된 원본 파일명 (출처 표시용). 파일 자체는 보관하지 않는다
-  content_type     text NOT NULL,          -- pdf | docx | txt | md | hwp | hwpx
+  content_type     text NOT NULL,          -- pdf | docx | txt | md | hwp | hwpx | xlsx | pptx
   content          text NOT NULL,          -- 추출 텍스트 (현재 버전). 편집·버전 관리·임베딩의 대상
   content_hash     text NOT NULL,          -- sha256, 트리거의 변경 감지 기준
   version          int  NOT NULL DEFAULT 1,

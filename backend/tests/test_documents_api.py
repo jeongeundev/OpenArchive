@@ -280,6 +280,39 @@ def test_upload_hangul_document_extracts_text_and_keeps_the_original(
     download = db_client.get(f"/api/documents/{created.json()['id']}/file")
     assert download.content == original
     assert download.headers["content-type"] == media_type
+
+
+@pytest.mark.parametrize(
+    ("fixture_name", "expected_text", "media_type"),
+    [
+        (
+            "office_budget.xlsx",
+            "합계\t1500",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        ),
+        (
+            "office_briefing.pptx",
+            "둘째 슬라이드 노트",
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        ),
+    ],
+)
+def test_upload_office_document_extracts_text_and_keeps_the_original(
+    db_client: TestClient, fixture_name: str, expected_text: str, media_type: str
+):
+    original = (Path(__file__).parent / "fixtures" / fixture_name).read_bytes()
+
+    created = upload(db_client, filename=fixture_name, content=original)
+
+    assert created.status_code == 201
+    assert created.json()["content_type"] == fixture_name.rsplit(".", 1)[1]
+    detail = db_client.get(f"/api/documents/{created.json()['id']}").json()
+    assert expected_text in detail["content"]
+    download = db_client.get(f"/api/documents/{created.json()['id']}/file")
+    assert download.content == original
+    assert download.headers["content-type"] == media_type
+
+
 @pytest.mark.parametrize("content_type", ["hwp", "hwpx"])
 def test_upload_rejects_hangul_document_without_text(
     db_client: TestClient, migrated_db: str, tmp_path: Path, content_type: str
@@ -304,7 +337,7 @@ def test_upload_rejects_unsupported_extension(db_client: TestClient):
     response = upload(db_client, filename="document.rtf")
 
     assert response.status_code == 400
-    assert "pdf, docx, txt, md, hwp, hwpx" in response.json()["detail"]
+    assert "pdf, docx, txt, md, hwp, hwpx, xlsx, pptx" in response.json()["detail"]
 
 
 def test_upload_rejects_non_utf8_text(db_client: TestClient):
@@ -1363,7 +1396,7 @@ def test_replace_rejects_unsupported_type_and_blank_text(
 
     unsupported = replace_file(db_client, document_id, filename="document.rtf")
     assert unsupported.status_code == 400
-    assert "pdf, docx, txt, md, hwp, hwpx" in unsupported.json()["detail"]
+    assert "pdf, docx, txt, md, hwp, hwpx, xlsx, pptx" in unsupported.json()["detail"]
 
     blank = replace_file(db_client, document_id, content=b" \t\r\n\f")
     assert blank.status_code == 400
