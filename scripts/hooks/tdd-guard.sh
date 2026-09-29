@@ -77,7 +77,10 @@ esac
 
 # Python 조립/선언 전용 파일은 테스트 불필요 — 허용
 # (main.py=앱 조립, config.py=설정 선언, db.py=풀 생성, base.py=Protocol, fake.py=테스트용 구현)
+# 단 마이그레이션 러너는 패키지 본체가 __init__.py다 — 면제하지 않고 아래에서 폴더명으로 매핑한다.
 case "$FILE_PATH" in
+  */app/migrations/__init__.py)
+    ;;
   */__init__.py|*/conftest.py|*/main.py|*/config.py|*/db.py|*/base.py|*/fake.py)
     exit 0
     ;;
@@ -88,6 +91,10 @@ case "$FILE_PATH" in
   *.py)
     DIR=$(dirname "$FILE_PATH")
     BASENAME=$(basename "$FILE_PATH" .py)
+    # 패키지 본체(__init__.py)는 폴더명이 모듈명이다. 예: app/migrations/__init__.py → migrations
+    if [ "$BASENAME" = "__init__" ]; then
+      BASENAME=$(basename "$DIR")
+    fi
     PROJECT_ROOT="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || echo ".")}"
 
     TEST_FOUND=false
