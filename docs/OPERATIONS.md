@@ -47,6 +47,31 @@ EMBEDDING_PROVIDER=local python -m app.worker              # 워커 — 문서�
 모델은 API·워커가 **기동할 때** 내려받아 캐시하므로 최초 1회는 기동이 오래 걸리고, 대신 첫
 검색·첫 업로드가 로딩을 기다리지 않습니다 (ADR-003 보강).
 
+## OCR 엔진 (tesseract)
+
+이미지(PNG·JPG·JPEG)와 텍스트 레이어가 없는 스캔 PDF는 워커가 tesseract로 텍스트를 인식합니다
+(`kor+eng`, ADR-052). tesseract는 pip 의존성이 아니라 **시스템 패키지**라 워커가 도는 호스트에 따로
+설치합니다.
+
+```bash
+sudo dnf install tesseract tesseract-langpack-kor        # Rocky Linux 9 (AppStream, tesseract 4.1.1)
+sudo apt install tesseract-ocr tesseract-ocr-kor         # Ubuntu
+brew install tesseract tesseract-lang                    # macOS
+```
+
+설치 확인은 `tesseract --list-langs` 출력에 `kor`가 있는지 봅니다.
+
+- **오프라인 설치가 가능합니다.** 한국어 모델은 패키지 안의 파일(`kor.traineddata`) 하나라 인식할 때
+  인터넷이 필요 없습니다. 패키지를 미리 받아 옮겨 설치하면 됩니다.
+- **엔진이 없어도 기동은 됩니다.** 이미지·스캔 PDF 업로드는 받아지고, 워커가 인식을 시도하다 실패해
+  재시도 예산을 쓴 뒤 그 문서만 「텍스트 인식 실패」가 됩니다. 다른 형식은 영향이 없습니다.
+- **대기와 실패는 `/admin/status`의 「텍스트 인식」 카드에서 봅니다** — 인식 대기 문서 수와 인식 실패
+  문서 수. 인식 결과가 비었거나 500KB를 넘은 문서는 재시도 없이 바로 실패로 표시됩니다. 실패 문서는
+  원본 교체나 `openarchive reextract`로 다시 돌립니다.
+- 인식은 쪽당 수 초(맥 M2 Pro · tesseract 5.5 실측 약 3.3초)이고, 워커는 잡을 하나씩 처리하므로 긴
+  스캔 문서를 인식하는 동안 다른 문서의 임베딩이 밀립니다. **Rocky 9의 tesseract 4.1.1에서의 정확도와
+  시간은 아직 재지 않았습니다.**
+
 ## 프로세스 구성
 
 ### `openarchive init`
@@ -135,6 +160,8 @@ openarchive reextract --all --dsn "postgresql://app@<vip>:6432/<pool_name>"
 - 원본이 없는 문서(원본 보관 이전에 올린 문서, 텍스트로 공급한 문서)는 `--all`의 대상이 아니며,
   단건으로 지정하면 안내 후 종료 코드 1로 끝납니다. 원본을 붙이려면 문서 상세에서 「원본 파일 올리기」를 씁니다.
 - 운영자 경로라 권한을 묻지 않습니다. 웹·REST의 `POST /api/documents/{id}/reextract`는 소유자만 쓸 수 있습니다.
+- 원본이 이미지나 스캔 PDF인 문서는 그 자리에서 추출하지 않고 워커의 텍스트 인식으로 넘기며, 마지막에
+  `텍스트 인식 대기 N건`으로 따로 출력합니다. 텍스트 인식 중인 문서는 건너뛰고 **실패**로 셉니다.
 
 ### 기동 순서
 

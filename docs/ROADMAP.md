@@ -24,7 +24,7 @@ DB 계층에 있고, 애플리케이션 코드에는 파이프라인을 조율�
 
 | 구분 | 현재 구현 | 상태 |
 |---|---|---|
-| **Ingestion** (수집) | `POST /api/documents`(파일 업로드)와 `POST /api/documents/text`(JSON 텍스트) → `services/documents.py`의 두 입력 어댑터 → 공통 INSERT 헬퍼 | 진입점 2개, 파일 8종 + 직접 텍스트 2종. Web UI의 다중 파일·ZIP 대량 투입도 단건 업로드와 같은 파생 계약을 사용 (ADR-033·035) |
+| **Ingestion** (수집) | `POST /api/documents`(파일 업로드)와 `POST /api/documents/text`(JSON 텍스트) → `services/documents.py`의 두 입력 어댑터 → 공통 INSERT 헬퍼 | 진입점 2개, 파일 11종(이미지·스캔 PDF는 워커가 OCR) + 직접 텍스트 2종. Web UI의 다중 파일·ZIP 대량 투입도 단건 업로드와 같은 파생 계약을 사용 (ADR-033·035) |
 | **Processing** (변환·임베딩) | DB 트리거(잡 생성·코얼레싱) + 워커(청킹·임베딩) + edge 트리거(관계 생성) | 견고 — 조율이 전부 DB 안에 있다 |
 | **Storage** (저장·정합성) | 테이블 10개(문서 7 + 인증 3), 제약·CASCADE·`vector(1024)` 타입, 정합성 관측 쿼리 | 코어 계약(ADR-015)의 자리 |
 | **Retrieval** (검색·관계) | 단일 SQL 검색(정형+벡터+그래프) · 저장 edge · 위키링크 · 진단·클러스터 | 전 경로가 같은 열람 술어를 공유 (ADR-027) |
@@ -43,7 +43,8 @@ DB 계층에 있고, 애플리케이션 코드에는 파이프라인을 조율�
 |---|---|---|
 | HWP/HWPX | ✅ 2차 (#133) | HWPX는 ZIP+XML, HWP 5.0은 OLE(`olefile`, BSD) 레코드 순회를 직접 구현(`pyhwp`는 AGPL-3.0). 표 셀·머리말 문단 포함, 암호·배포용 HWP는 거부. 같은 문서의 hwp·hwpx 추출 일치로 검증 |
 | XLSX/PPTX | ✅ 2차 (#134) | `openpyxl`·`python-pptx`(둘 다 MIT). XLSX는 시트명 + 탭 구분 행, 수식은 캐시된 계산값(캐시가 없으면 빈 칸). PPTX는 도형(그룹·표 포함) 텍스트 + 발표자 노트. 시트·슬라이드 사이는 빈 줄. Numbers·Keynote가 저장한 파일로 검증 |
-| 스캔 PDF OCR | 장기 | 현재는 "스캔 이미지 PDF 미지원"을 명시적으로 거부한다 |
+| 이미지·스캔 PDF OCR | ✅ 2차 (#135) | PNG/JPG/JPEG와 텍스트 레이어가 빈 PDF를 tesseract(`kor+eng`, `--psm 4`, PDF는 `pypdfium2`로 300dpi 래스터화)로 인식. 추출은 워커 잡(`kind='extract'`)이고 문서는 「텍스트 인식 중」으로 먼저 생긴다 (ADR-052). 한국어 보도자료 실측 CER 0.068·쪽당 약 3.3초(맥, tesseract 5.5) — Rocky 9(4.1.1)는 미측정 |
+| 쪽 단위 혼합 추출 | 2차 후보 | 텍스트 레이어가 일부 쪽에만 있는 PDF는 지금 OCR하지 않아 스캔된 쪽이 빠진다(ADR-052 트레이드오프 1). OCRmyPDF `--skip-text`처럼 텍스트 없는 쪽만 OCR한다 |
 | 이미지 캡션 | 장기 | 캡션 생성 모델도 open-weight 제약을 따른다 (ADR-003) |
 
 ### 수집 커넥터 (= `documents` INSERT 클라이언트)
