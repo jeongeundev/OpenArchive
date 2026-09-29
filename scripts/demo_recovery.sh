@@ -233,7 +233,7 @@ ensure_demo_session() {
   fi
   # 계정이 없는 설치에서는 운영 CLI로 만든다. 해시 로직을 여기에 복제하지 않는다.
   ADMIN_PASSWORD="$DEMO_PASSWORD" \
-    "$PYTHON" -m app.cli create-user "$DEMO_USER" --dsn "$DATABASE_URL" >/dev/null ||
+    "$PYTHON" -m app.cli create-user "$DEMO_USER" --dsn "$DATABASE_URL" ||
     fail "데모 계정 '$DEMO_USER'을 만들지 못했습니다 (이미 있는 계정이면 DEMO_PASSWORD를 함께 주입하세요)"
   try_login || fail "데모 계정 '$DEMO_USER'으로 로그인하지 못했습니다"
 }

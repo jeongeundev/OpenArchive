@@ -304,7 +304,7 @@ ERROR: "/home/opensql/lib/postgis-3.so" 라이브러리를 불러 올 수 없음
 
 1. `pgcrypto`와 `digest`가 충돌하므로 같은 스키마에 공존할 수 없다. 별도 스키마에서는 가능하다.
 2. `public.gen_random_uuid()`를 코어 함수와 중복 정의한다. 이 함수는
-   `backend/migrations/002_tables.sql:12`에서 문서 ID 기본값으로 사용한다.
+   `backend/app/migrations/002_tables.sql:12`에서 문서 ID 기본값으로 사용한다.
 3. 로컬 `pgvector/pgvector:pg17` 컨테이너와 PGDG에 모두 없다. #28의 Dockerfile 해법이 통하지 않는
    첫 확장이다.
 4. 국산 해시인 HAS-160·LSH는 없고 블록암호만 제공한다.
