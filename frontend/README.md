@@ -18,8 +18,8 @@ npm install
 npm run dev        # http://localhost:3000
 ```
 
-자체 가입이 없으므로 첫 로그인 전에 관리자 계정을 한 번 만들어야 합니다 — 루트 README의
-`scripts/create_admin.py` 단계입니다.
+자체 가입이 없으므로 첫 로그인 전에 관리자 계정이 있어야 합니다 — 루트 README의
+`openarchive init`이 만듭니다.
 
 | 환경변수 | 기본값 | 설명 |
 |---|---:|---|

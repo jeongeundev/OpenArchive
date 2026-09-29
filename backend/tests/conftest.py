@@ -117,7 +117,7 @@ def clean_db(test_dsn: str) -> str:
 
 @pytest.fixture
 async def migrated_db(clean_db: str) -> str:
-    """실제 backend/migrations/ 를 적용한 테스트 DB의 DSN.
+    """실제 app/migrations/ 를 적용한 테스트 DB의 DSN.
 
     테스트가 스키마를 자체 SQL로 만들면 검증 대상이 테스트 코드가 되어버린다.
     러너를 그대로 태워, 심사 산출물인 마이그레이션 파일 자체를 검증 대상으로 삼는다.

@@ -5,7 +5,7 @@
 `document_versions`·`embedding_jobs`에 직접 INSERT하지 않는다. 트리거가 만든 것만 센다.
 
 트리거·NOTIFY는 원리상 Mock으로 확인할 수 없으므로 실제 pgvector 컨테이너에
-`backend/migrations/`를 적용한 `migrated_db` 픽스처 위에서 돈다 (CLAUDE.md CRITICAL).
+`backend/app/migrations/`를 적용한 `migrated_db` 픽스처 위에서 돈다 (CLAUDE.md CRITICAL).
 
 > NOTIFY 테스트가 통과한다고 해서 파이프라인이 NOTIFY에 의존해도 된다는 뜻은 아니다.
 > 여기는 DB 직결이고, 실 환경은 OpenProxy를 경유해 동작이 보장되지 않는다. 워커는

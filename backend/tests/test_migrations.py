@@ -7,6 +7,7 @@ SQL 픽스처는 tmp_path에 직접 쓴다. 실제 `001_extensions.sql`·`002_ta
 다음 step의 범위이며, 러너는 그것들과 무관하게 검증 가능해야 한다.
 """
 
+import shutil
 import subprocess
 import sys
 import zipfile
@@ -42,11 +43,23 @@ def test_default_migrations_dir_is_inside_the_app_package():
 
 
 def test_the_built_wheel_carries_every_migration(tmp_path: Path):
-    """위치만으로는 부족하다 — package-data에 없으면 wheel에서 빠진다."""
+    """위치만으로는 부족하다 — package-data에 없으면 wheel에서 빠진다.
+
+    작업 트리를 그대로 빌드하면 편집 설치가 남긴 `*.egg-info`의 파일 목록이 새어 들어와,
+    package-data에서 SQL을 빼도 wheel에 실린다(실측). 깨끗한 사본에서 빌드한다.
+    """
     backend = Path(app.__file__).resolve().parents[1]
+    source = tmp_path / "source"
+    shutil.copytree(
+        backend,
+        source,
+        ignore=shutil.ignore_patterns(
+            ".venv", "*.egg-info", "build", "__pycache__", "tests", ".env"
+        ),
+    )
     subprocess.run(
         [
-            sys.executable, "-m", "pip", "wheel", str(backend), "--no-deps",
+            sys.executable, "-m", "pip", "wheel", str(source), "--no-deps",
             "--no-build-isolation", "--quiet", "--wheel-dir", str(tmp_path),
         ],
         check=True,

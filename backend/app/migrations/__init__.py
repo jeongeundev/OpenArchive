@@ -15,7 +15,10 @@ from pathlib import Path
 
 import psycopg
 
-MIGRATIONS_DIR = Path(__file__).resolve().parent.parent / "migrations"
+# SQL 파일은 이 패키지 안에 함께 둔다. 패키지 밖(`backend/migrations/`)에 두면 편집 설치에서만
+# 보이고, `pip install`로 깐 설치본(site-packages)에서는 init과 API startup이 스키마를 찾지
+# 못한다 (#90-1). wheel에 싣는 것은 pyproject의 package-data가 한다.
+MIGRATIONS_DIR = Path(__file__).resolve().parent
 
 # 이력 조회는 이 모듈이 정본이다. 적용 여부를 판정하는 곳이 둘로 갈리면 러너와 그것을
 # 부르는 쪽(`openarchive init`)이 서로 다른 목록을 보게 된다.

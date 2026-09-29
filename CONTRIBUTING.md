@@ -35,7 +35,7 @@ python -m app.worker               # backend/ — 워커
 > **기동 순서 주의**: 스키마를 준비하는 것은 `openarchive init`과 API 서버뿐입니다 (ADR-012·039).
 > 워커나 MCP 서버를 먼저 띄우면 스키마가 없어 실패합니다.
 
-> **환경변수 파일**: 애플리케이션 설정은 `backend/.env`입니다. 저장소 루트의 `.env`는
+> **환경변수 파일**: 애플리케이션 설정은 `~/.openarchive/.env`입니다(`OPENARCHIVE_HOME`으로 변경). 저장소 루트의 `.env`는
 > `docker compose`가 읽는 별개 파일이라 앱 설정을 거기 두면 반영되지 않습니다
 > ([운영 가이드 「환경변수 파일」](docs/OPERATIONS.md#환경변수-파일)).
 

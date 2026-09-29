@@ -20,7 +20,7 @@ Closes #
   - [ ] 애플리케이션에서 `embedding_jobs`에 직접 INSERT하지 않음
   - [ ] 검색 쿼리를 plain `BEGIN`으로 감쌈 (`BEGIN READ ONLY` 아님)
   - [ ] DB 접속이 단일 엔드포인트 (멀티호스트 DSN 없음)
-  - [ ] 스키마 변경이 `backend/migrations/`의 번호 붙은 SQL로만 이뤄짐
+  - [ ] 스키마 변경이 `backend/app/migrations/`의 번호 붙은 SQL로만 이뤄짐
 - [ ] 관련 문서를 갱신했다 (해당 시)
 
 ## 리뷰 메모
