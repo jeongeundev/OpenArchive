@@ -110,7 +110,7 @@ class NoTextToEdit(Exception):
         )
 
 
-class ExtractionFailed(Exception):
+class RecognitionFailed(Exception):
     """텍스트 인식에 실패한 문서를 재임베딩하려는 경우 (ADR-052 결정 8).
 
     재임베딩은 `content_hash` 자기 대입으로 003 트리거를 발화시키는데, 그 트리거는
@@ -1053,7 +1053,7 @@ async def request_reembedding(
     await _load_for_write(conn, document_id, user_id)
     locked = await _lock_for_text_change(conn, document_id, needs_text=False)
     if locked["extraction_status"] == "failed":
-        raise ExtractionFailed
+        raise RecognitionFailed
     cur = conn.cursor(row_factory=dict_row)
     await cur.execute(
         f"""

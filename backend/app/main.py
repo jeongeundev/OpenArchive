@@ -89,7 +89,7 @@ async def _idempotency_key_reused(request: Request, error: Exception) -> JSONRes
 
 @app.exception_handler(documents_service.ExtractionInProgress)
 @app.exception_handler(documents_service.NoTextToEdit)
-@app.exception_handler(documents_service.ExtractionFailed)
+@app.exception_handler(documents_service.RecognitionFailed)
 async def _extraction_blocks_text_change(request: Request, error: Exception) -> JSONResponse:
     # 새로고침으로 풀리지 않으므로 current_version을 싣지 않는다 — 버전 충돌과 구분된다.
     return JSONResponse(status_code=409, content={"detail": str(error)})
