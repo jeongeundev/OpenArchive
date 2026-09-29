@@ -62,7 +62,10 @@
       "type": "feat",
       "scope": "worker",
       "desc": "워커가 추출 잡을 처리한다 — 최신 원본 판 OCR, 빈 결과는 재시도 없이 인식 실패",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-09-29T14:49:54+0900",
+      "summary": "worker.py에 EXTRACT_JOB_KIND='extract' 분기를 추가했다: load_original_file(트랜잭션 안에서 최신 원본 판 읽기) → asyncio.to_thread(ocr_text) → lost면 버림 → finalize_extract_job(bound_lock_wait·문서 FOR UPDATE·lock_owned_job 확인 뒤 apply_extracted_text, 결과가 failed·skipped여도 잡 done). fail_job·sweep_zombies의 예산 소진이 extract 잡이면 _mark_extraction_failed로 extraction_status='failed'(pending인 문서만, embedding_status 불변). claim_job의 processing 전환은 embed 전용 그대로. 테스트 8건(jpg·pdf 관통→ready, 빈 PNG 무재시도 failed, OCR 예외 백오프→소진 failed, 스윕 소진 failed, 소유권 바뀐 잡 미반영, lease 잃은 워커 결과 버림, OCR 중 삭제). 변형 (a) to_thread 제거·(b) 빈 결과 fail_job·(c) 소유 확인 생략 모두 각 1개 테스트가 잡았다. backend 987 passed.",
+      "completed_at": "2026-09-29T15:00:56+0900"
     },
     {
       "step": 6,
