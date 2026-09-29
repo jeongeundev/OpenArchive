@@ -1,13 +1,16 @@
 import io
 import re
+import unicodedata
 import zipfile
 import zlib
+from difflib import SequenceMatcher
 from pathlib import Path
 
 import olefile
 import pytest
 from docx import Document
 from openpyxl import Workbook
+from PIL import Image
 from pptx import Presentation
 from pptx.util import Inches
 
@@ -16,6 +19,9 @@ from app.services.parsing import (
     UnsupportedFileType,
     detect_content_type,
     extract_text,
+    media_type_for,
+    needs_ocr,
+    ocr_text,
 )
 
 
@@ -358,3 +364,114 @@ def test_extract_text_returns_empty_string_for_office_documents_without_text() -
     # 빈 결과는 여기서 오류로 만들지 않는다 — 문서 서비스의 EmptyExtractedText가 판정한다.
     assert extract_text(xlsx.getvalue(), "xlsx") == ""
     assert extract_text(pptx.getvalue(), "pptx") == ""
+
+
+def normalize_ocr(text: str) -> str:
+    return "".join(unicodedata.normalize("NFKC", text).split())
+
+
+def assert_ocr_matches(text: str, reference: str) -> str:
+    normalized = normalize_ocr(text)
+    expected = normalize_ocr(fixture(reference).decode())
+    assert SequenceMatcher(None, expected, normalized, autojunk=False).ratio() >= 0.85
+    assert "국세행정개혁위원회" in normalized
+    return normalized
+
+
+def test_ocr_reads_a_scanned_image() -> None:
+    assert_ocr_matches(ocr_text(fixture("scan_tax_page1.jpg"), "jpg"), "scan_tax_page1.txt")
+
+
+def test_ocr_reads_every_page_of_a_scanned_pdf() -> None:
+    text = ocr_text(fixture("scan_tax_pages.pdf"), "pdf")
+    normalized = assert_ocr_matches(text, "scan_tax_pages.txt")
+    assert normalized.index("국세행정개혁위원회") < normalized.index("소상공인")
+    assert "\n\n" in text
+
+
+def test_extract_text_does_not_ocr(monkeypatch) -> None:
+    def unexpected_ocr(*args, **kwargs):
+        pytest.fail("extract_text must not call OCR")
+
+    monkeypatch.setattr("app.services.parsing.ocr_text", unexpected_ocr)
+    assert extract_text(fixture("scan_tax_page1.jpg"), "jpg") == ""
+    assert extract_text(fixture("scan_tax_pages.pdf"), "pdf").strip() == ""
+
+
+@pytest.mark.parametrize("content_type", ["png", "jpg", "jpeg", "pdf",
+                                         "docx", "hwp", "hwpx", "txt", "md", "xlsx", "pptx"])
+@pytest.mark.parametrize("text", ["", " \t\n", "텍스트"])
+def test_needs_ocr(content_type: str, text: str) -> None:
+    expected = content_type in ("png", "jpg", "jpeg") or (
+        content_type == "pdf" and not text.strip()
+    )
+    assert needs_ocr(content_type, text) is expected
+
+
+@pytest.mark.parametrize("content_type", ["png", "jpg", "jpeg", "pdf"])
+def test_ocr_text_rejects_corrupt_image(content_type: str) -> None:
+    with pytest.raises(ValueError, match=f"{content_type.upper()} 파일을 읽을 수 없습니다"):
+        ocr_text(b"not an image", content_type)
+
+
+def test_ocr_respects_exif_orientation() -> None:
+    buf = io.BytesIO()
+    with (
+        Image.open(io.BytesIO(fixture("scan_tax_page1.jpg"))) as source,
+        source.transpose(Image.Transpose.ROTATE_90) as rotated,
+    ):
+        exif = rotated.getexif()
+        exif[274] = 6  # 저장된 반시계 회전을 시계 방향으로 바로 세운다.
+        rotated.save(buf, format="JPEG", exif=exif)
+    assert_ocr_matches(ocr_text(buf.getvalue(), "jpg"), "scan_tax_page1.txt")
+
+
+@pytest.mark.parametrize(
+    ("filename", "content_type", "media_type"),
+    [("scan.JPG", "jpg", "image/jpeg"), ("scan.jpeg", "jpeg", "image/jpeg"),
+     ("scan.png", "png", "image/png")],
+)
+def test_image_content_types(filename: str, content_type: str, media_type: str) -> None:
+    assert detect_content_type(filename) == content_type
+    assert media_type_for(filename) == media_type
+
+
+@pytest.mark.parametrize(
+    "message",
+    ["Error opening data file /missing/kor.traineddata Failed loading language 'kor'",
+     "Error opening data file /missing/eng.traineddata Failed loading language 'eng'"],
+)
+def test_ocr_preserves_language_loading_errors(monkeypatch, message: str) -> None:
+    import pytesseract
+
+    error = pytesseract.TesseractError(1, message)
+
+    def fail(*args, **kwargs):
+        raise error
+
+    monkeypatch.setattr(pytesseract, "image_to_string", fail)
+    with pytest.raises(pytesseract.TesseractError) as caught:
+        ocr_text(fixture("scan_tax_page1.jpg"), "jpg")
+    assert caught.value is error
+
+
+def test_ocr_preserves_missing_engine_error(monkeypatch) -> None:
+    import pytesseract
+
+    monkeypatch.setattr(pytesseract.pytesseract, "tesseract_cmd", "/missing/tesseract")
+    with pytest.raises(pytesseract.TesseractNotFoundError):
+        ocr_text(fixture("scan_tax_page1.jpg"), "jpg")
+
+
+def test_ocr_normalizes_engine_execution_error(monkeypatch) -> None:
+    import pytesseract
+
+    error = pytesseract.TesseractError(1, "Image processing failed")
+
+    def fail(*args, **kwargs):
+        raise error
+
+    monkeypatch.setattr(pytesseract, "image_to_string", fail)
+    with pytest.raises(ValueError, match="JPG 파일을 읽을 수 없습니다") as caught:
+        ocr_text(fixture("scan_tax_page1.jpg"), "jpg")
+    assert caught.value.__cause__ is error

@@ -337,7 +337,7 @@ def test_upload_rejects_unsupported_extension(db_client: TestClient):
     response = upload(db_client, filename="document.rtf")
 
     assert response.status_code == 400
-    assert "pdf, docx, txt, md, hwp, hwpx, xlsx, pptx" in response.json()["detail"]
+    assert "pdf, docx, txt, md, hwp, hwpx, xlsx, pptx, png, jpg, jpeg" in response.json()["detail"]
 
 
 def test_upload_rejects_non_utf8_text(db_client: TestClient):
@@ -1396,7 +1396,7 @@ def test_replace_rejects_unsupported_type_and_blank_text(
 
     unsupported = replace_file(db_client, document_id, filename="document.rtf")
     assert unsupported.status_code == 400
-    assert "pdf, docx, txt, md, hwp, hwpx, xlsx, pptx" in unsupported.json()["detail"]
+    assert "pdf, docx, txt, md, hwp, hwpx, xlsx, pptx, png, jpg, jpeg" in unsupported.json()["detail"]
 
     blank = replace_file(db_client, document_id, content=b" \t\r\n\f")
     assert blank.status_code == 400
