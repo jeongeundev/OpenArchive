@@ -87,7 +87,7 @@ EMBEDDING_PROVIDER=local openarchive serve
 > 풀이 어느 DB를 가리키는지 확인하세요 — 파일 위치와 교정 절차는
 > [OpenSQL 환경 구축 §10](docs/SETUP_OPENSQL.md#10-설치-확인)에 있습니다. 업무 데이터가 이미 있는
 > OpenSQL이라면 새 DB·새 풀로 설치합니다 — DBA가 미리 만들 확장(`vector`만, `pg_trgm`은 만들지 않음)과
-> 풀 크기(설치기 기본 `pool_size = 10`은 모자람)가 같은 절에 있습니다.
+> 풀 크기(설치기 기본 `pool_size = 10`은 모자람, 권장 20)가 같은 절에 있습니다.
 
 ### 각 단계가 하는 일
 
