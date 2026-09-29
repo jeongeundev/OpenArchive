@@ -16,7 +16,7 @@ import { useDocument } from "@/lib/useDocument";
 import { useRelated } from "@/lib/useRelated";
 import { ApiError, getDocumentBacklinks, getDocumentLinks, updateTags } from "@/lib/api";
 import { useAuth } from "@/components/AuthProvider";
-import type { Backlink, ResolvedLink } from "@/lib/types";
+import { EXTRACTING_NOTICE, type Backlink, type ResolvedLink } from "@/lib/types";
 
 export function DocumentDetailView(): React.ReactElement {
   // 정적 export에서는 빌드 시점의 껍데기 경로(FALLBACK_DOCUMENT_ID)가 params로 들어온다.
@@ -148,6 +148,9 @@ export function DocumentDetailView(): React.ReactElement {
         versions={document.versions}
         currentVersion={document.version}
         disabled={anonymous}
+        restoreBlockedReason={
+          document.extraction_status === "pending" ? EXTRACTING_NOTICE : null
+        }
         onRestored={refresh}
       />
 

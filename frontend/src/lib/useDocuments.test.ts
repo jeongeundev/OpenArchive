@@ -14,6 +14,7 @@ const document: DocumentSummary = {
   visibility: "public",
   tags: ["OpenSQL"],
   embedding_status: "ready",
+  extraction_status: "done",
   created_at: "2026-08-05T10:00:00Z",
   updated_at: "2026-08-05T11:00:00Z",
 };

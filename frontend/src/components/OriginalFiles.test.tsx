@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { DocumentDetail } from "@/lib/types";
+import { EXTRACTING_NOTICE, type DocumentDetail } from "@/lib/types";
 import { OriginalFiles } from "./OriginalFiles";
 
 const document: DocumentDetail = {
@@ -15,6 +15,7 @@ const document: DocumentDetail = {
   visibility: "public",
   tags: [],
   embedding_status: "ready",
+  extraction_status: "done",
   created_at: "2026-09-20T10:00:00Z",
   updated_at: "2026-09-23T11:00:00Z",
   versions: [],
@@ -240,5 +241,67 @@ describe("OriginalFiles", () => {
     expect(screen.getByRole("button", { name: "새 파일로 교체" })).toBeDisabled();
     expect(screen.getByLabelText("새 원본 파일")).toBeDisabled();
     expect(screen.getByRole("button", { name: "원본에서 다시 추출" })).toBeDisabled();
+  });
+
+  it("이미지 파일로도 교체할 수 있다", () => {
+    render(<OriginalFiles anonymous={false} disabled={false} document={document} onChanged={vi.fn()} />);
+
+    const accept = screen.getByLabelText("새 원본 파일").getAttribute("accept") ?? "";
+    expect(accept.split(",")).toEqual(expect.arrayContaining([".png", ".jpg", ".jpeg"]));
+  });
+
+  it("텍스트 인식 중에는 교체와 다시 추출을 막고 이유를 보인다", () => {
+    render(
+      <OriginalFiles
+        anonymous={false}
+        disabled={false}
+        document={{ ...document, extraction_status: "pending" }}
+        onChanged={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "새 파일로 교체" })).toBeDisabled();
+    expect(screen.getByLabelText("새 원본 파일")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "원본에서 다시 추출" })).toBeDisabled();
+    expect(screen.getByText(EXTRACTING_NOTICE)).toBeInTheDocument();
+  });
+
+  it("아직 인식되지 않은 판은 텍스트 버전 대신 인식 전으로 표시한다", () => {
+    render(
+      <OriginalFiles
+        anonymous={false}
+        disabled={false}
+        document={{
+          ...document,
+          extraction_status: "pending",
+          files: [{ ...document.files[0], text_version: null }],
+        }}
+        onChanged={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("텍스트 인식 전")).toBeInTheDocument();
+    expect(screen.queryByText(/텍스트 vnull/)).not.toBeInTheDocument();
+  });
+
+  it("다시 추출이 텍스트 인식으로 넘어가면 같다는 안내 없이 갱신한다", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(
+          jsonResponse({ ...document, extraction_status: "pending", changed: false }),
+        ),
+    );
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    const onChanged = vi.fn();
+
+    render(<OriginalFiles anonymous={false} disabled={false} document={document} onChanged={onChanged} />);
+    fireEvent.click(screen.getByRole("button", { name: "원본에서 다시 추출" }));
+
+    await waitFor(() => expect(onChanged).toHaveBeenCalledOnce());
+    expect(
+      screen.queryByText("추출 결과가 현재 텍스트와 같아 새 버전을 만들지 않았습니다."),
+    ).not.toBeInTheDocument();
   });
 });

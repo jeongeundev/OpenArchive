@@ -34,6 +34,11 @@ export function StatusPanel({ status, error }: { status: SystemStatus | null; er
             <p className="mt-3 text-xs text-neutral-500">워커가 {status.job_lease_seconds}초 동안 처리 중임을 알리지 않은 잡은 회수됩니다.</p>
             <p className="mt-1 text-xs text-neutral-500">최근 잡 완료 시각: {status.last_job_finished_at === null ? "기록 없음" : new Date(status.last_job_finished_at).toLocaleString("ko-KR")}</p>
           </div>
+          <div className="rounded-lg border border-neutral-800 bg-[#141414] p-6">
+            <p className="text-sm font-medium text-neutral-400">텍스트 인식</p>
+            <dl className="mt-2 flex gap-5 text-sm"><div><dt className="text-neutral-500">인식 대기</dt><dd data-testid="extraction-pending" className="text-white">{status.extraction_pending}</dd></div><div><dt className="text-[#ef4444]">인식 실패</dt><dd data-testid="extraction-failed" className="text-[#ef4444]">{status.extraction_failed}</dd></div></dl>
+            <p className="mt-3 text-xs text-neutral-500">이미지·스캔 PDF에서 워커가 텍스트를 인식하는 문서 수. 인식 실패는 원본 교체나 다시 추출로 다시 시도합니다.</p>
+          </div>
           <div className="rounded-lg border border-neutral-800 bg-[#141414] p-6"><p className="text-sm font-medium text-neutral-400">임베딩 프로바이더</p><p className="mt-2 text-sm text-white">{status.embedding_provider}</p></div>
         </div>
       )}

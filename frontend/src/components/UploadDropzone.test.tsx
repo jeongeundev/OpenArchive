@@ -296,13 +296,13 @@ describe("UploadDropzone", () => {
     vi.stubGlobal("fetch", fetchMock);
     const zip = new JSZip();
     zip.file("guide.txt", "guide");
-    zip.file("images/logo.png", "image");
+    zip.file("images/logo.gif", "image");
 
     render(<UploadDropzone onUploaded={vi.fn()} />);
     fireEvent.change(screen.getByLabelText("업로드할 파일"), {
       target: { files: [await archiveFile(zip)] },
     });
-    expect(await screen.findByText("images/logo.png — 건너뜀")).toBeInTheDocument();
+    expect(await screen.findByText("images/logo.gif — 건너뜀")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "업로드" }));
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
@@ -431,4 +431,11 @@ describe("UploadDropzone", () => {
     );
   });
 
+
+  it("이미지 파일을 선택할 수 있다", () => {
+    render(<UploadDropzone onUploaded={vi.fn()} />);
+
+    const accept = document.querySelector('input[type="file"]')?.getAttribute("accept") ?? "";
+    expect(accept.split(",")).toEqual(expect.arrayContaining([".png", ".jpg", ".jpeg", ".zip"]));
+  });
 });

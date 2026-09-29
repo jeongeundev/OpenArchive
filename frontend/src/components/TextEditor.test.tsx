@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { DocumentDetail } from "@/lib/types";
+import { EXTRACTING_NOTICE, type DocumentDetail } from "@/lib/types";
 import { TextEditor } from "./TextEditor";
 
 const document: DocumentDetail = {
@@ -15,6 +15,7 @@ const document: DocumentDetail = {
   visibility: "public",
   tags: [],
   embedding_status: "ready",
+  extraction_status: "done",
   created_at: "2026-08-05T10:00:00Z",
   updated_at: "2026-08-05T11:00:00Z",
   versions: [],
@@ -254,5 +255,51 @@ describe("TextEditor", () => {
 
     expect(screen.queryByRole("button", { name: "편집" })).not.toBeInTheDocument();
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("텍스트 인식 중에는 편집할 수 없고 이유를 보인다", () => {
+    render(
+      <TextEditor
+        disabled={false}
+        document={{ ...document, content_type: "png", content: "", extraction_status: "pending" }}
+        onEditingChange={vi.fn()}
+        onSaved={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByRole("button", { name: "편집" })).not.toBeInTheDocument();
+    expect(screen.getByText(EXTRACTING_NOTICE)).toBeInTheDocument();
+  });
+
+  it("인식에 실패해 텍스트가 없으면 편집기 대신 안내를 보인다", () => {
+    render(
+      <TextEditor
+        disabled={false}
+        document={{ ...document, content_type: "png", content: "", extraction_status: "failed" }}
+        onEditingChange={vi.fn()}
+        onSaved={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByRole("button", { name: "편집" })).not.toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "원본에서 텍스트를 인식하지 못했습니다. 원본을 교체하거나 다시 추출해 보세요.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("인식에 실패했어도 이전 텍스트가 있으면 편집할 수 있다", () => {
+    render(
+      <TextEditor
+        disabled={false}
+        document={{ ...document, extraction_status: "failed" }}
+        onEditingChange={vi.fn()}
+        onSaved={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "편집" })).toBeEnabled();
+    expect(screen.getByText("추출된 텍스트")).toBeInTheDocument();
   });
 });

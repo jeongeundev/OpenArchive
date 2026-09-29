@@ -15,6 +15,7 @@ const document: DocumentDetail = {
   visibility: "public",
   tags: ["OpenSQL", "운영"],
   embedding_status: "ready",
+  extraction_status: "done",
   created_at: "2026-08-05T10:00:00Z",
   updated_at: "2026-08-05T11:00:00Z",
   versions: [],
@@ -54,5 +55,19 @@ describe("DocumentMeta", () => {
 
     expect(screen.queryByText("OpenSQL")).not.toBeInTheDocument();
     expect(screen.queryByText("운영")).not.toBeInTheDocument();
+  });
+
+  it("텍스트 인식 중이면 임베딩 상태 대신 인식 중 배지를 보인다", () => {
+    render(<DocumentMeta document={{ ...document, extraction_status: "pending", embedding_status: "pending" }} />);
+
+    expect(screen.getByText("텍스트 인식 중")).toBeInTheDocument();
+    expect(screen.queryByText("대기 중")).not.toBeInTheDocument();
+  });
+
+  it("텍스트 인식에 실패하면 실패 배지를 보인다", () => {
+    render(<DocumentMeta document={{ ...document, extraction_status: "failed", embedding_status: "ready" }} />);
+
+    expect(screen.getByText("텍스트 인식 실패")).toBeInTheDocument();
+    expect(screen.queryByText("완료")).not.toBeInTheDocument();
   });
 });

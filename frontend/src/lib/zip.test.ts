@@ -19,7 +19,7 @@ describe("expandZip", () => {
     zip.file("보고.HWPX", "hwpx");
     zip.file("예산.xlsx", "xlsx");
     zip.file("발표.PPTX", "pptx");
-    zip.file("image.png", "png");
+    zip.file("image.gif", "gif");
     zip.file("nested.zip", "zip");
     zip.file("README", "no extension");
 
@@ -35,7 +35,7 @@ describe("expandZip", () => {
       "예산.xlsx",
       "발표.PPTX",
     ]);
-    expect(result.skipped).toEqual(["image.png", "nested.zip", "README"]);
+    expect(result.skipped).toEqual(["image.gif", "nested.zip", "README"]);
     expect(result.files.every((file) => file instanceof File)).toBe(true);
     await expect(result.files[3].text()).resolves.toBe("markdown");
   });
@@ -69,5 +69,17 @@ describe("expandZip", () => {
     const archive = new File([new Uint8Array([1, 2, 3, 4])], "broken.zip");
 
     await expect(expandZip(archive)).rejects.toThrow();
+  });
+
+  it("이미지(png·jpg·jpeg)도 지원 문서로 꺼낸다", async () => {
+    const zip = new JSZip();
+    zip.file("스캔.png", "png");
+    zip.file("영수증.JPG", "jpg");
+    zip.file("사진.jpeg", "jpeg");
+
+    const { files, skipped } = await expandZip(await archiveFile(zip));
+
+    expect(files.map((file) => file.name).sort()).toEqual(["사진.jpeg", "스캔.png", "영수증.JPG"]);
+    expect(skipped).toEqual([]);
   });
 });

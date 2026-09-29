@@ -64,16 +64,18 @@ export function useDocument(id: string): {
   }, [refresh]);
 
   useEffect(() => {
+    // 텍스트 인식 중에도 폴링한다 — 인식이 끝나면 새로고침 없이 추출 텍스트가 나타난다 (ADR-052).
     if (
       document?.embedding_status !== "pending" &&
-      document?.embedding_status !== "processing"
+      document?.embedding_status !== "processing" &&
+      document?.extraction_status !== "pending"
     ) {
       return;
     }
 
     const timer = window.setInterval(refresh, POLL_INTERVAL_MS);
     return () => window.clearInterval(timer);
-  }, [document?.embedding_status, refresh]);
+  }, [document?.embedding_status, document?.extraction_status, refresh]);
 
   return { document, loading, error, refresh };
 }

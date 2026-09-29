@@ -15,6 +15,7 @@ const documents: DocumentSummary[] = [
     visibility: "public",
     tags: ["OpenSQL", "운영"],
     embedding_status: "ready",
+    extraction_status: "done",
     created_at: "2026-08-05T10:00:00Z",
     updated_at: "2026-08-05T11:00:00Z",
   },
@@ -28,6 +29,7 @@ const documents: DocumentSummary[] = [
     visibility: "private",
     tags: [],
     embedding_status: "processing",
+    extraction_status: "done",
     created_at: "2026-08-05T09:00:00Z",
     updated_at: "2026-08-05T12:00:00Z",
   },
@@ -56,5 +58,20 @@ describe("DocumentTable", () => {
     render(<DocumentTable documents={[]} />);
 
     expect(screen.getByText("아직 문서가 없습니다.")).toHaveClass("text-neutral-500");
+  });
+
+  it("추출 상태 배지가 임베딩 상태 배지보다 우선한다", () => {
+    render(
+      <DocumentTable
+        documents={[
+          { ...documents[0], extraction_status: "pending", embedding_status: "pending" },
+          { ...documents[1], extraction_status: "failed", embedding_status: "pending" },
+        ]}
+      />,
+    );
+
+    expect(screen.getByText("텍스트 인식 중")).toBeInTheDocument();
+    expect(screen.getByText("텍스트 인식 실패")).toBeInTheDocument();
+    expect(screen.queryByText("대기 중")).not.toBeInTheDocument();
   });
 });

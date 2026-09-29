@@ -18,12 +18,15 @@ export function VersionHistory({
   versions,
   currentVersion,
   disabled,
+  restoreBlockedReason = null,
   onRestored,
 }: {
   documentId: string;
   versions: TextVersion[];
   currentVersion: number;
   disabled: boolean;
+  /** 되돌리기를 잠시 막아야 할 때의 이유. 버튼은 남기고 비활성으로 둔다. */
+  restoreBlockedReason?: string | null;
   onRestored: () => void;
 }): React.ReactElement {
   const sortedVersions = [...versions].sort((a, b) => b.version - a.version);
@@ -82,6 +85,9 @@ export function VersionHistory({
   return (
     <section className="space-y-4">
       <h2 className="text-sm font-medium text-neutral-400">텍스트 버전 이력</h2>
+      {!disabled && restoreBlockedReason !== null ? (
+        <p className="text-sm text-neutral-400">{restoreBlockedReason}</p>
+      ) : null}
       {error !== null ? (
         <p className="text-sm text-[#f87171]" role="status">
           {error}
@@ -113,7 +119,8 @@ export function VersionHistory({
                   {/* 현재 버전에는 되돌리기를 노출하지 않는다 — 이미 그 내용이다. */}
                   {!disabled && item.version !== currentVersion ? (
                     <button
-                      className="text-xs text-neutral-500 hover:text-neutral-300"
+                      className="text-xs text-neutral-500 hover:text-neutral-300 disabled:cursor-not-allowed disabled:text-neutral-600"
+                      disabled={restoreBlockedReason !== null}
                       onClick={() => setConfirming(item.version)}
                       type="button"
                     >
@@ -132,7 +139,7 @@ export function VersionHistory({
                 </pre>
               ) : null}
 
-              {confirming === item.version ? (
+              {confirming === item.version && restoreBlockedReason === null ? (
                 <div className="space-y-2 rounded border border-neutral-800 bg-[#0f0f0f] p-3">
                   {/* 되감기로 오해하지 않도록 새 버전이 생긴다는 것을 밝힌다 (ADR-037). */}
                   <p className="text-xs text-neutral-400">
