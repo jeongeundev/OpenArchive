@@ -73,7 +73,10 @@
       "type": "feat",
       "scope": "frontend",
       "desc": "텍스트 인식 중·실패 배지, 추출 중 편집 차단, 이미지 업로드 허용",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-09-29T15:00:56+0900",
+      "summary": "프론트: SUPPORTED_CONTENT_TYPES·ContentType에 png·jpg·jpeg(업로드·교체 accept·ZIP 판별), DocumentSummary.extraction_status·OriginalFile.text_version nullable·SystemStatus.extraction_pending/failed 타입, DocumentStatusBadge(목록·상세에서 「텍스트 인식 중」·「텍스트 인식 실패」가 임베딩 배지보다 우선), useDocument가 extraction_status=pending일 때도 폴링, 추출 중 편집·되돌리기·다시 추출·원본 교체 비활성+EXTRACTING_NOTICE(태그·삭제는 그대로), 빈 본문 인식 실패는 편집기 대신 「원본을 교체하거나 다시 추출해 보세요」 안내, 다시 추출이 인식 대기로 넘어가면 「같다」 안내 대신 갱신, 판 목록의 text_version null은 「텍스트 인식 전」, StatusPanel 「텍스트 인식」 카드. 이미지를 미지원 예시로 쓰던 테스트 2건은 gif로 교체. 정적 빌드 갱신, frontend 258·backend 987 passed, check.sh 통과.",
+      "completed_at": "2026-09-29T15:11:20+0900"
     },
     {
       "step": 7,
