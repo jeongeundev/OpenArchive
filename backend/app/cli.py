@@ -268,7 +268,12 @@ def _ask(prompt: str, default: str) -> str:
 
 
 def _confirm(prompt: str) -> bool:
-    return input(f"{prompt} [y/N]: ").strip().lower() in {"y", "yes"}
+    try:
+        return input(f"{prompt} [y/N]: ").strip().lower() in {"y", "yes"}
+    except EOFError:
+        # 입력이 닫힌 비대화형 실행은 기본값(N)으로 본다.
+        print()
+        return False
 
 
 def _inspect(conn: psycopg.Connection) -> list[str] | None:
@@ -439,7 +444,12 @@ def run_init(*, dsn: str | None, assume_yes: bool, env_file: Path) -> int:
     print()
     if dsn is None:
         print("DB 연결 정보를 입력하세요. OpenProxy 경유라면 데이터베이스 자리에 pool 이름을 적습니다.")
-        dsn = _ask("DATABASE_URL", get_settings().database_url)
+        try:
+            dsn = _ask("DATABASE_URL", get_settings().database_url)
+        except EOFError:
+            print()
+            print("DSN이 필요합니다 — --dsn으로 주거나 대화형으로 실행하십시오.")
+            return 1
         print()
 
     try:
