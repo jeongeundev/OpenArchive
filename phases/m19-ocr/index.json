@@ -40,7 +40,10 @@
       "type": "feat",
       "scope": "api",
       "desc": "OCR 대상 업로드를 「추출 중」 문서로 만들고 추출 결과를 반영하는 서비스 함수를 둔다",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-09-29T14:24:42+0900",
+      "summary": "create_document: needs_ocr 대상(이미지·텍스트 레이어 빈 PDF)은 빈 텍스트+extraction_status='pending'으로 INSERT하고 원본 판 text_version=NULL(트리거가 extract 잡 생성). apply_extracted_text(conn, document_id, content) -> 'applied'(새 텍스트 기록 — 첫 추출은 v1 유지·원본 판 text_version 채움, 재추출은 버전+1) | 'unchanged'(같은 텍스트, done만 표시) | 'failed'(빈 결과·500KB 초과, 텍스트 유지) | 'skipped'(pending 아님·없는 문서, 쓰지 않음). 문서 행 FOR UPDATE, 본문·content_hash·done을 한 UPDATE로 쓴다. SUMMARY_COLUMNS·DocumentSummary에 extraction_status, OriginalFile.text_version nullable, 진단 고아·identical은 done 문서만. 빈 추출 문구를 '문서에서 텍스트를 추출하지 못했습니다.'로 교체. backend 963 passed.",
+      "completed_at": "2026-09-29T14:37:05+0900"
     },
     {
       "step": 4,
