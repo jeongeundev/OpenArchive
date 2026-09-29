@@ -8,6 +8,7 @@ import hashlib
 import json
 from collections.abc import Awaitable, Callable
 from pathlib import PurePath
+from typing import Literal
 from uuid import UUID
 
 import psycopg
@@ -18,16 +19,23 @@ from app.services.parsing import (
     detect_content_type,
     extract_text,
     media_type_for,
+    needs_ocr,
 )
 from app.services.visibility import VISIBILITY_VALUES, VISIBLE_TO_USER
 
 # 목록·요약 응답이 쓰는 컬럼. 네 곳에서 같은 나열을 반복하지 않도록 한 곳에 둔다.
 SUMMARY_COLUMNS = """id, title, filename, content_type, version, owner_id, visibility, tags,
-                     embedding_status, created_at, updated_at"""
+                     embedding_status, extraction_status, created_at, updated_at"""
 
 # 시연 데이터 최대 추출 텍스트(약 90KB)의 5배보다 크고 DB CHECK와 같은 경계다.
 MAX_EXTRACTED_TEXT_LENGTH = 500_000
 TEXT_CONTENT_TYPES: tuple[str, ...] = ("txt", "md")
+EXTRACTION_FAILED_MESSAGE = "문서에서 텍스트를 추출하지 못했습니다."
+
+# 워커가 추출 결과를 반영한 결과 (ADR-052). applied = 새 텍스트를 썼다, unchanged = 이전 텍스트와
+# 같아 완료 표시만 했다, failed = 빈 결과·크기 초과라 인식 실패로 표시했다, skipped = 추출 중인
+# 문서가 아니라(이미 끝났거나 삭제됐다) 아무것도 쓰지 않았다.
+ExtractionOutcome = Literal["applied", "unchanged", "failed", "skipped"]
 
 SUBJECT_VISIBLE_SQL = f"""
 SELECT 1
@@ -157,9 +165,17 @@ async def create_document(
     임베딩 잡·텍스트 버전은 트리거가 만든다. 원본은 문서와 같은 트랜잭션에 들어가므로
     문서만 커밋되고 원본이 유실되는 상태가 생기지 않는다 — 호출부가 autocommit 연결을
     넘겨도 이 함수가 트랜잭션을 연다. 멱등키는 `_create_once`를 본다.
+
+    OCR 대상(이미지, 텍스트 레이어가 빈 PDF)은 요청 안에서 인식하지 않는다. 빈 문서 텍스트와
+    `extraction_status='pending'`으로 만들면 트리거가 추출 잡을 남기고, 워커가 OCR한 결과를
+    `apply_extracted_text`로 반영한다 (ADR-052 결정 3·5). 이때 원본 판은 가리킬 텍스트
+    버전이 아직 없어 `text_version`이 NULL이다.
     """
     content_type = detect_content_type(filename)
     content = extract_text(data, content_type)
+    extraction_status = "pending" if needs_ocr(content_type, content) else "done"
+    if extraction_status == "pending":
+        content = ""
 
     async def insert() -> dict:
         document = await _insert_document(
@@ -171,9 +187,8 @@ async def create_document(
             owner_id=owner_id,
             tags=tags,
             visibility=visibility,
-            empty_message=(
-                "문서에서 텍스트를 추출하지 못했습니다. 스캔 이미지 PDF는 지원하지 않습니다."
-            ),
+            empty_message=EXTRACTION_FAILED_MESSAGE,
+            extraction_status=extraction_status,
         )
         await _insert_original_file(
             conn,
@@ -181,7 +196,7 @@ async def create_document(
             file_version=1,
             filename=filename,
             data=data,
-            text_version=document["version"],
+            text_version=document["version"] if extraction_status == "done" else None,
             uploaded_by=owner_id,
         )
         return document
@@ -283,7 +298,7 @@ async def _insert_original_file(
     file_version: int,
     filename: str,
     data: bytes,
-    text_version: int,
+    text_version: int | None,
     uploaded_by: str,
 ) -> None:
     """원본 파일 한 판을 넣는다. 크기와 sha256은 DB가 data에서 계산한다.
@@ -359,13 +374,16 @@ async def _insert_document(
     tags: list[str] | None,
     visibility: str,
     empty_message: str,
+    extraction_status: str = "done",
 ) -> dict:
     """검증된 문서 텍스트를 저장한다. 파생 데이터는 DB 트리거가 만든다.
 
     빈 텍스트 문구만 인자로 받는다 — 업로드는 추출 실패고 직접 공급은 빈 입력이라
     상황 자체가 다르다. 크기 초과는 두 경로가 같은 상황이므로 `text_label`로 부른다.
+    추출 중(`pending`) 문서는 빈 텍스트로 들어가며 텍스트 검증을 건너뛴다 — 그 텍스트는
+    `apply_extracted_text`가 검증한다.
     """
-    if not content.strip():
+    if extraction_status == "done" and not content.strip():
         raise EmptyExtractedText(empty_message)
     if len(content) > MAX_EXTRACTED_TEXT_LENGTH:
         raise ExtractedTextTooLarge(
@@ -378,8 +396,9 @@ async def _insert_document(
     await cur.execute(
         f"""
         INSERT INTO documents
-            (title, filename, content_type, content, content_hash, owner_id, visibility, tags)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            (title, filename, content_type, content, content_hash, owner_id, visibility, tags,
+             extraction_status)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
         RETURNING {SUMMARY_COLUMNS}
         """,
         (
@@ -391,9 +410,84 @@ async def _insert_document(
             owner_id,
             visibility,
             normalize_tags(tags),
+            extraction_status,
         ),
     )
     return await cur.fetchone()
+
+
+async def apply_extracted_text(
+    conn: psycopg.AsyncConnection, document_id: UUID, content: str
+) -> ExtractionOutcome:
+    """워커가 OCR한 결과를 추출 중인 문서에 반영한다 (ADR-052 결정 5·6·8). 권한 검사는 하지 않는다.
+
+    문서 행을 `FOR UPDATE`로 잠근 뒤 판정한다. 워커는 자기 잡 소유 확인과 같은 트랜잭션
+    안에서 부른다 — 호출자가 트랜잭션을 열었으면 이 블록은 SAVEPOINT가 된다.
+
+    본문·`content_hash`·`extraction_status='done'`은 반드시 한 UPDATE에서 쓴다. 003 트리거는
+    `UPDATE OF content_hash`에서 `NEW.extraction_status = 'done'`일 때만 발화하므로(022),
+    나눠 쓰면 텍스트 버전·임베딩 잡이 조용히 생기지 않는다.
+
+    빈 결과·크기 초과는 예외 없이 `failed`로 표시만 한다 — 결정적이라 워커가 재시도해도
+    같은 결과이고, 문서 텍스트(새 문서면 빈 텍스트, 재추출이면 이전 텍스트)는 그대로 둔다.
+    """
+    async with conn.transaction():
+        row = await (
+            await conn.execute(
+                "SELECT content, content_hash, extraction_status FROM documents"
+                " WHERE id = %s FOR UPDATE",
+                (document_id,),
+            )
+        ).fetchone()
+        if row is None or row[2] != "pending":
+            return "skipped"
+        current_content, current_hash, _ = row
+
+        if not content.strip() or len(content) > MAX_EXTRACTED_TEXT_LENGTH:
+            await conn.execute(
+                "UPDATE documents SET extraction_status = 'failed', updated_at = now()"
+                " WHERE id = %s",
+                (document_id,),
+            )
+            return "failed"
+
+        content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
+        if content_hash == current_hash:
+            # content_hash를 SET 절에 언급만 해도 트리거가 발화해(003) 같은 내용의 텍스트
+            # 버전과 재임베딩이 생긴다. 완료 표시만 한다.
+            await conn.execute(
+                "UPDATE documents SET extraction_status = 'done', updated_at = now()"
+                " WHERE id = %s",
+                (document_id,),
+            )
+            return "unchanged"
+
+        # 첫 추출(빈 텍스트)은 v1이 첫 텍스트다 — 버전을 올리지 않는다. 재추출은 편집처럼 올린다.
+        first = not current_content.strip()
+        updated = await (
+            await conn.execute(
+                """
+                UPDATE documents
+                   SET version = version + %(bump)s, content = %(content)s,
+                       content_hash = %(hash)s, extraction_status = 'done', updated_at = now()
+                 WHERE id = %(id)s
+                RETURNING version
+                """,
+                {
+                    "id": document_id,
+                    "bump": 0 if first else 1,
+                    "content": content,
+                    "hash": content_hash,
+                },
+            )
+        ).fetchone()
+        # 추출을 기다리던 원본 판이 방금 기록된 텍스트 버전을 가리키게 한다.
+        await conn.execute(
+            "UPDATE document_files SET text_version = %s"
+            " WHERE document_id = %s AND text_version IS NULL",
+            (updated[0], document_id),
+        )
+    return "applied"
 
 
 async def list_documents(
@@ -606,9 +700,7 @@ async def replace_original_file(
     content_type = detect_content_type(filename)
     content = extract_text(data, content_type)
     if not content.strip():
-        raise EmptyExtractedText(
-            "문서에서 텍스트를 추출하지 못했습니다. 스캔 이미지 PDF는 지원하지 않습니다."
-        )
+        raise EmptyExtractedText(EXTRACTION_FAILED_MESSAGE)
     row = await (
         await conn.execute("SELECT content_hash FROM documents WHERE id = %s", (document_id,))
     ).fetchone()
@@ -706,9 +798,7 @@ async def reextract_text(
 
     content = extract_text(original[1], detect_content_type(original[0]))
     if not content.strip():
-        raise EmptyExtractedText(
-            "문서에서 텍스트를 추출하지 못했습니다. 스캔 이미지 PDF는 지원하지 않습니다."
-        )
+        raise EmptyExtractedText(EXTRACTION_FAILED_MESSAGE)
     if hashlib.sha256(content.encode("utf-8")).hexdigest() == content_hash:
         cur = conn.cursor(row_factory=dict_row)
         await cur.execute(

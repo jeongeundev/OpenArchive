@@ -18,6 +18,8 @@ class DocumentSummary(BaseModel):
     visibility: str
     tags: list[str]
     embedding_status: str
+    # pending = 텍스트 인식 중, failed = 인식 실패, done = 문서 텍스트 확정 (ADR-052)
+    extraction_status: Literal["pending", "failed", "done"]
     created_at: datetime
     updated_at: datetime
 
@@ -43,7 +45,8 @@ class OriginalFile(BaseModel):
     filename: str
     size: int
     sha256: str
-    text_version: int
+    # NULL = 이 판의 텍스트가 아직 추출되지 않았다 (ADR-052)
+    text_version: int | None
     uploaded_by: str
     uploaded_at: datetime
 

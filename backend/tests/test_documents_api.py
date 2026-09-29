@@ -255,7 +255,7 @@ def test_upload_rejects_blank_text_without_saving(db_client: TestClient, migrate
 
     assert response.status_code == 400
     assert response.json() == {
-        "detail": "문서에서 텍스트를 추출하지 못했습니다. 스캔 이미지 PDF는 지원하지 않습니다."
+        "detail": "문서에서 텍스트를 추출하지 못했습니다."
     }
     with psycopg.connect(migrated_db) as conn:
         assert conn.execute("SELECT count(*) FROM documents").fetchone() == (0,)
@@ -325,7 +325,7 @@ def test_upload_rejects_hangul_document_without_text(
 
     assert response.status_code == 400
     assert response.json() == {
-        "detail": "문서에서 텍스트를 추출하지 못했습니다. 스캔 이미지 PDF는 지원하지 않습니다."
+        "detail": "문서에서 텍스트를 추출하지 못했습니다."
     }
     with psycopg.connect(migrated_db) as conn:
         assert conn.execute("SELECT count(*) FROM documents").fetchone() == (0,)
@@ -1401,7 +1401,7 @@ def test_replace_rejects_unsupported_type_and_blank_text(
     blank = replace_file(db_client, document_id, content=b" \t\r\n\f")
     assert blank.status_code == 400
     assert blank.json() == {
-        "detail": "문서에서 텍스트를 추출하지 못했습니다. 스캔 이미지 PDF는 지원하지 않습니다."
+        "detail": "문서에서 텍스트를 추출하지 못했습니다."
     }
 
     non_utf8 = replace_file(db_client, document_id, content="한글".encode("cp949"))
@@ -1617,7 +1617,7 @@ def test_reextract_rejects_unparseable_and_blank_originals(
     blank = reextract(db_client, document_id, current_version=2)
     assert blank.status_code == 400
     assert blank.json() == {
-        "detail": "문서에서 텍스트를 추출하지 못했습니다. 스캔 이미지 PDF는 지원하지 않습니다."
+        "detail": "문서에서 텍스트를 추출하지 못했습니다."
     }
 
     document = db_client.get(f"/api/documents/{document_id}").json()
@@ -1694,3 +1694,37 @@ def test_an_idempotency_key_outside_1_to_255_characters_is_rejected(
 
     assert response.status_code == 422
     assert count_documents(migrated_db) == 0
+
+
+@pytest.mark.parametrize("fixture_name", ["scan_tax_page1.jpg", "scan_tax_pages.pdf"])
+def test_upload_scan_returns_a_pending_extraction_document(
+    db_client: TestClient, migrated_db: str, fixture_name: str
+):
+    original = (Path(__file__).parent / "fixtures" / fixture_name).read_bytes()
+
+    created = upload(db_client, filename=fixture_name, content=original)
+
+    assert created.status_code == 201
+    assert created.json()["extraction_status"] == "pending"
+    document_id = created.json()["id"]
+    detail = db_client.get(f"/api/documents/{document_id}").json()
+    assert (detail["extraction_status"], detail["content"], detail["versions"]) == (
+        "pending",
+        "",
+        [],
+    )
+    assert [f["text_version"] for f in detail["files"]] == [None]
+    listed = {d["id"]: d for d in db_client.get("/api/documents").json()}
+    assert listed[document_id]["extraction_status"] == "pending"
+    with psycopg.connect(migrated_db) as conn:
+        assert conn.execute(
+            "SELECT kind, status FROM embedding_jobs WHERE document_id = %s", (document_id,)
+        ).fetchall() == [("extract", "pending")]
+
+
+def test_upload_with_text_reports_done_extraction(db_client: TestClient):
+    created = upload(db_client)
+
+    assert created.json()["extraction_status"] == "done"
+    detail = db_client.get(f"/api/documents/{created.json()['id']}").json()
+    assert detail["extraction_status"] == "done"
