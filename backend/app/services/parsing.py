@@ -15,7 +15,7 @@ import re
 import struct
 import zipfile
 import zlib
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from pathlib import PurePath
 from xml.etree import ElementTree
 
@@ -24,6 +24,8 @@ from docx import Document
 from openpyxl import load_workbook
 from pptx import Presentation
 from pptx.enum.shapes import MSO_SHAPE_TYPE
+from pptx.shapes.base import BaseShape
+from pptx.text.text import TextFrame
 from pypdf import PdfReader
 
 SUPPORTED_CONTENT_TYPES: tuple[str, ...] = (
@@ -241,8 +243,7 @@ def _xlsx_sheets(data: bytes) -> Iterator[str]:
     try:
         for sheet in workbook.worksheets:
             rows = [
-                # 앞·가운데 빈 칸은 탭으로 남겨 열 위치를 지키고, 줄 끝 빈 칸은 버린다.
-                "\t".join("" if value is None else str(value) for value in row).rstrip("\t")
+                _tab_row("" if value is None else str(value) for value in row)
                 for row in sheet.iter_rows(values_only=True)
             ]
             rows = [row for row in rows if row.strip()]
@@ -261,17 +262,22 @@ def _pptx_slides(data: bytes) -> Iterator[str]:
         yield "\n".join(line for line in lines if line.strip())
 
 
-def _pptx_shape_texts(shapes) -> Iterator[str]:
+def _pptx_shape_texts(shapes: Iterable[BaseShape]) -> Iterator[str]:
     for shape in shapes:
         if shape.shape_type == MSO_SHAPE_TYPE.GROUP:
             yield from _pptx_shape_texts(shape.shapes)
         elif shape.has_text_frame:
             yield _pptx_frame_text(shape.text_frame)
-        elif getattr(shape, "has_table", False):
+        elif shape.has_table:
             for row in shape.table.rows:
-                yield "\t".join(_pptx_frame_text(cell.text_frame) for cell in row.cells).rstrip("\t")
+                yield _tab_row(_pptx_frame_text(cell.text_frame) for cell in row.cells)
 
 
-def _pptx_frame_text(frame) -> str:
+def _pptx_frame_text(frame: TextFrame) -> str:
     # python-pptx는 문단 안 줄바꿈(`a:br`)을 수직 탭으로 돌려준다.
     return frame.text.replace("\v", "\n")
+
+
+def _tab_row(cells: Iterable[str]) -> str:
+    # 앞·가운데 빈 칸은 탭으로 남겨 열 위치를 지키고, 줄 끝 빈 칸은 버린다.
+    return "\t".join(cells).rstrip("\t")
