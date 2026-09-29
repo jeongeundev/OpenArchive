@@ -4,7 +4,7 @@ import { Fragment } from "react";
 import type { ResolvedLink } from "@/lib/types";
 import { parseWikilink, WIKILINK_PATTERN } from "@/lib/wikilink";
 
-// `015_links_triggers.sql`의 `wikilink_targets`와 같은 것을 링크로 본다. 한쪽만
+// `023_links_triggers.sql`의 `wikilink_targets`와 같은 것을 링크로 본다. 한쪽만
 // 달라지면 API가 해석해 준 정상 링크를 화면이 깨진 링크로 그리거나 그 반대가 된다 —
 // 볼 수 있는 문서가 없는 문서처럼 보인다 (ADR-027).
 
