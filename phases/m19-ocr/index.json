@@ -84,7 +84,10 @@
       "type": "docs",
       "scope": "adr",
       "desc": "OCR·추출 잡을 ARCHITECTURE·PRD·UI_GUIDE·ROADMAP·OPERATIONS·README에 반영한다",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-09-29T15:11:21+0900",
+      "summary": "문서만 갱신: ARCHITECTURE(extraction_status·조건부 빈 본문 제약·text_version NULL·embedding_jobs.kind 3종과 uq_pending_job_per_doc_kind·003 트리거 WHEN·「추출 잡」 절 신설·워커 잡 세 종류·API 표와 빈 파싱 400 문구 '문서에서 텍스트를 추출하지 못했습니다.'), PRD(형식 11종·OCR 능력과 한계), UI_GUIDE(텍스트 인식 배지·추출 중 비활성·/admin/status 텍스트 인식 카드), ROADMAP(OCR 완료·쪽 단위 혼합 추출 후속 후보), OPERATIONS(OCR 엔진 설치·오프라인·대기/실패 확인·reextract 인식 대기 출력), SETUP_OPENSQL §15(Rocky tesseract 설치, 4.1.1 미측정), README(형식·시스템 패키지). ADR-052와 구현 어긋남은 발견하지 못함. check.sh 통과.",
+      "completed_at": "2026-09-29T15:18:13+0900"
     }
   ],
   "created_at": "2026-09-29T13:41:25+0900"
