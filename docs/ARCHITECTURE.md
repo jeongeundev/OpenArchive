@@ -635,7 +635,7 @@ OpenSQL `patroni.yml`의 PostgreSQL 파라미터는 `max_connections: 100`이다
 |---|---|
 | `POST /api/documents` | multipart 업로드. 형식별 파서로 추출 → INSERT. 여기서 트리거가 파이프라인을 자동 기동 — 임베딩 관련 코드 없음. **이미지와 텍스트 레이어가 빈 PDF는 추출하지 않고 `extraction_status='pending'`으로 INSERT해 OCR을 워커 잡에 넘긴다** (「추출 잡」). 그 밖의 형식에서 **텍스트 추출 결과가 비면 400** (아래). **원본 파일은 같은 트랜잭션에서 `document_files`에 1판으로 저장한다** — 원본 저장이 실패하면 문서·텍스트 버전·잡도 남지 않는다. 상한 `MAX_UPLOAD_MB`(기본 50) 초과는 413. 선택 헤더 `Idempotency-Key`(아래) |
 | `POST /api/documents/text` | JSON 텍스트 공급(`txt`·`md`). `filename`은 NULL이며, 파생 데이터는 업로드 경로와 동일하게 DB 트리거가 만든다. 빈 문서 텍스트와 500,000자 초과는 400. 선택 헤더 `Idempotency-Key`(아래) |
-| `GET /api/documents` | 목록 + `status`/`tag` 필터, embedding_status 포함 |
+| `GET /api/documents` | 목록 + `status`(임베딩 상태)/`extraction_status`/`tag` 필터, embedding_status·extraction_status 포함. 인식 실패 문서는 `status=pending`에 남으므로 곧 임베딩될 문서는 `extraction_status=done`을 함께 준다 (ADR-052 결정 4 보강) |
 | `GET /api/documents/{id}` | 상세 + 텍스트 버전 목록 + 청크 수 + 청크 기준 버전 + `files`(원본 판 목록 — 메타데이터만, 바이트는 싣지 않는다) |
 | `GET /api/documents/{id}/file` · `GET /api/documents/{id}/files/{n}` | **원본 내려받기** — 최신 판 · 특정 판. 항상 `Content-Disposition: attachment` + `X-Content-Type-Options: nosniff`, 미디어 타입은 확장자 고정 매핑. 볼 수 없는 문서·원본 없음·없는 판은 404 (ADR-046) |
 | `PUT /api/documents/{id}/file` | **원본 교체.** multipart `file` + `current_version`. 새 판을 쌓고(이전 판 보존), 추출 텍스트가 달라졌을 때만 새 텍스트 버전(트리거가 이력·잡 생성). 새 원본이 OCR 대상이면 텍스트를 쓰지 않고 추출 잡으로 넘긴다. 최신 판과 같은 바이트면 아무것도 바꾸지 않는다. 버전 불일치·추출 중 409 · 추출 실패 400 · 상한 초과 413 |
