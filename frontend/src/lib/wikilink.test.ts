@@ -67,6 +67,14 @@ describe("parseWikilink", () => {
     });
   });
 
+  it("표 셀의 이스케이프 \\|도 별칭 구분자다 — 023의 wikilink_targets와 같은 규칙 (#112)", () => {
+    expect(parseWikilink("", "표 뷰\\|표")).toEqual({ title: "표 뷰", label: "표" });
+    expect(parseWikilink("", "콘텐츠 게재#노트 게재\\|게재된 상태")).toEqual({
+      title: "콘텐츠 게재",
+      label: "게재된 상태",
+    });
+  });
+
   it("빈 별칭은 제목 쪽 표기로 돌아간다", () => {
     expect(parseWikilink("", "제목|")).toEqual({
       title: "제목",

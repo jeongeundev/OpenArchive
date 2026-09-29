@@ -12,6 +12,8 @@
 > 폴링을 주 경로로 삼는다 (ADR-009).
 """
 
+import asyncio
+
 import psycopg
 import pytest
 
@@ -292,6 +294,41 @@ def test_alias_is_cut_at_the_first_bar_and_only_spaces_are_trimmed(
     assert {title for title, _ in links_for(conn, doc_id)} == {"A", "\t탭 제목"}
 
 
+def test_escaped_bar_in_a_table_cell_separates_the_alias(conn: psycopg.Connection):
+    """#112 — Obsidian은 표 셀 안에서 `[[제목\\|별칭]]`으로 적는다. `\\|`를 `|`처럼 자르지 않으면
+    `표 뷰\\`가 저장되어 실재하는 「표 뷰」로 풀리지 않는다. `frontend/src/lib/wikilink.ts`와 쌍이다."""
+    doc_id = insert_document(
+        conn,
+        "| 기능 | 문서 |\n|---|---|\n| 보기 | [[표 뷰\\|표]] |\n| 처음 | [[개요\\|목차]] |\n"
+        "| 게재 | [[콘텐츠 게재#노트 게재\\|게재된 상태]] |",
+        "sha256:links-escaped-bar",
+    )
+
+    assert {title for title, _ in links_for(conn, doc_id)} == {"표 뷰", "개요", "콘텐츠 게재"}
+
+
+def test_escaped_bar_migration_rebuilds_links_stored_by_the_old_rule(
+    clean_db: str, tmp_path
+):
+    """023은 트리거가 다시 돌지 않는 기존 행을 전량 재생성한다 — 015와 같은 방식."""
+    from app.migrations import MIGRATIONS_DIR, migration_files, run_migrations
+
+    before = tmp_path / "before-023"
+    before.mkdir()
+    for path in migration_files():
+        if path.name < "023":
+            (before / path.name).write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
+    asyncio.run(run_migrations(clean_db, before))
+    with psycopg.connect(clean_db, autocommit=True) as c:
+        doc_id = insert_document(c, "[[표 뷰\\|표]] [[A]]", "sha256:links-before-023")
+        assert {title for title, _ in links_for(c, doc_id)} == {"표 뷰\\", "A"}
+
+    asyncio.run(run_migrations(clean_db, MIGRATIONS_DIR))
+
+    with psycopg.connect(clean_db, autocommit=True) as c:
+        assert {title for title, _ in links_for(c, doc_id)} == {"표 뷰", "A"}
+
+
 def test_wikilink_targets_function_is_the_single_source_of_the_rule(
     conn: psycopg.Connection,
 ):
@@ -304,7 +341,8 @@ def test_wikilink_targets_function_is_the_single_source_of_the_rule(
         "![[첨부.png]] ![[노트 임베드]] "
         "[[그림.JPG]] [[영상.mp4]] [[운영 가이드]] "
         "[[규정집.pdf]] [[자료.zip]] "
-        "[[#절만]] [[|별칭만]] [[폴더/]]"
+        "[[#절만]] [[|별칭만]] [[폴더/]] "
+        "[[표 뷰\\|표]]"
     )
     doc_id = insert_document(conn, content, "sha256:links-single-source")
 
