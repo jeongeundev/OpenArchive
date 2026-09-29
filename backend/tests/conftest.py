@@ -166,6 +166,20 @@ async def insert_test_document(
     return (await cur.fetchone())[0]
 
 
+async def seed_extraction_states(conn: psycopg.AsyncConnection) -> dict[str, UUID]:
+    """인식 완료·인식 중·인식 실패 문서 하나씩. 임베딩은 돌리지 않아 셋 다 embedding_status='pending'이다.
+
+    인식 실패 문서는 임베딩 잡이 생기지 않으므로 'pending'에 영구히 남는다(#139).
+    """
+    ids = {}
+    for status in ("done", "pending", "failed"):
+        ids[status] = await insert_test_document(conn, title=f"인식 {status}", content=f"본문 {status}")
+        await conn.execute(
+            "UPDATE documents SET extraction_status = %s WHERE id = %s", (status, ids[status])
+        )
+    return ids
+
+
 async def process_all_embedding_jobs(
     conn: psycopg.AsyncConnection, provider: EmbeddingProvider
 ) -> int:

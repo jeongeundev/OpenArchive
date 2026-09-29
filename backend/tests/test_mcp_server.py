@@ -3,7 +3,7 @@ from uuid import uuid4
 import httpx
 import psycopg
 import pytest
-from conftest import insert_test_document, process_all_embedding_jobs
+from conftest import insert_test_document, process_all_embedding_jobs, seed_extraction_states
 
 from app.config import get_settings
 from app.db import close_pool, get_pool
@@ -622,9 +622,27 @@ async def test_wrapped_read_tools_keep_their_argument_schema():
     }
     assert tools["search_documents"].inputSchema["required"] == ["query"]
     assert set(tools["get_document"].inputSchema["properties"]) == {"document_id"}
-    assert set(tools["list_documents"].inputSchema["properties"]) == {"tag", "status"}
+    assert set(tools["list_documents"].inputSchema["properties"]) == {
+        "tag", "status", "extraction_status"
+    }
+    assert tools["list_documents"].inputSchema["properties"]["extraction_status"]["anyOf"][0][
+        "enum"
+    ] == ["pending", "done", "failed"]
     assert "사내 문서 구절" in tools["search_documents"].description
     # 멱등키는 서버가 호출마다 만든다 — 에이전트가 고르는 인자가 아니다.
     assert set(tools["create_document"].inputSchema["properties"]) == {
         "title", "content", "content_type", "tags", "visibility"
     }
+
+
+async def test_list_documents_filters_by_extraction_status(mcp_database):
+    """#139 — 인식 실패 문서를 '임베딩 대기'와 구분해 고를 수 있어야 한다."""
+    from mcp_server.server import list_documents
+
+    async with await psycopg.AsyncConnection.connect(mcp_database, autocommit=True) as conn:
+        ids = await seed_extraction_states(conn)
+
+    failed = await list_documents(extraction_status="failed")
+    assert [item["document_id"] for item in failed["items"]] == [str(ids["failed"])]
+    will_embed = await list_documents(status="pending", extraction_status="done")
+    assert [item["document_id"] for item in will_embed["items"]] == [str(ids["done"])]

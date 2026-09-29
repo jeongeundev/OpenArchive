@@ -17,7 +17,7 @@ from mcp.server.fastmcp import FastMCP
 from app.config import get_settings
 from app.db import close_pool, connection, get_pool, is_unavailable
 from app.embeddings import get_provider
-from app.services.documents import create_text_document
+from app.services.documents import ExtractionStatus, create_text_document
 from app.services.documents import get_document as get_document_service
 from app.services.documents import list_documents as list_documents_service
 from app.services.related import find_related
@@ -178,10 +178,17 @@ async def get_document(document_id: str) -> dict:
 
 
 @with_backoff
-async def list_documents(tag: str | None = None, status: str | None = None) -> dict:
+async def list_documents(
+    tag: str | None = None,
+    status: str | None = None,
+    extraction_status: ExtractionStatus | None = None,
+) -> dict:
     """접근 가능한 문서의 메타데이터 요약 목록을 반환합니다.
 
     검색 전에 사용 가능한 문서를 태그나 임베딩 상태로 둘러볼 때 사용합니다.
+    status는 임베딩 상태입니다. 텍스트 인식에 실패한 문서(extraction_status="failed")는
+    임베딩되지 않은 채 status="pending"으로 남으므로, 곧 검색될 문서만 보려면
+    extraction_status="done"을 함께 지정합니다.
     """
     async with connection() as conn:
         documents = await list_documents_service(
@@ -189,6 +196,7 @@ async def list_documents(tag: str | None = None, status: str | None = None) -> d
             user_id=get_settings().mcp_user_id,
             tag=tag,
             embedding_status=status,
+            extraction_status=extraction_status,
         )
     return {"items": [_document_payload(document) for document in documents]}
 

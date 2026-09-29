@@ -121,10 +121,15 @@ async def list_documents(
     conn: Connection,
     user_id: Annotated[str, Depends(require_user_id)],
     status_filter: Annotated[str | None, Query(alias="status")] = None,
+    extraction_status: service.ExtractionStatus | None = None,
     tag: str | None = None,
 ) -> list[DocumentSummary]:
     documents = await service.list_documents(
-        conn, user_id=user_id, embedding_status=status_filter, tag=tag
+        conn,
+        user_id=user_id,
+        embedding_status=status_filter,
+        extraction_status=extraction_status,
+        tag=tag,
     )
     return [DocumentSummary.model_validate(document) for document in documents]
 

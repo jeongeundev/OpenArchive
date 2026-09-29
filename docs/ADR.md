@@ -3152,6 +3152,11 @@ OpenProxy 풀 연결에도 적용된다(실측).
 4. **추출 상태는 `documents.extraction_status`**(`pending`·`failed`·`done`, 기본 `done`)로 따로 둔다.
    `embedding_status`에 값을 끼우지 않는 이유: 관계 트리거(`ready` 전이)·오류 문서 화면·`/admin/status`가 그 값을
    읽고, 인식 실패와 임베딩 실패는 사용자가 할 일이 다르다(원본을 바꾸기 vs 재임베딩).
+   → **2026-09-29 보강(#139)**: 인식 실패 문서는 임베딩 잡이 생기지 않아 `embedding_status = 'pending'`에 영구히
+   남고, 목록 필터 `status=pending`(REST·MCP)에 "임베딩 대기"로 걸린다. `status`의 의미를 바꾸지 않고
+   **`extraction_status` 필터를 따로 둔다** — `status`를 `extraction_status = 'done'`으로 조용히 좁히면 같은 인자가
+   다른 집합을 돌려주는 계약 변경이 되고, 두 상태를 나눈 이 결정과도 어긋난다. 곧 임베딩될 문서만 보려면
+   `status=pending&extraction_status=done`이다. 값은 `pending`·`done`·`failed`만 받는다(그 밖은 REST 422).
 5. **새 스캔 문서는 「추출 중」 문서 행으로 먼저 생긴다.** 빈 문서 텍스트로 INSERT되고 `extraction_status =
    'pending'`이다. 이를 위해 세 불변식을 없애지 않고 **추출이 끝난 문서에 한정**한다:
    - `documents_content_not_blank` → `extraction_status <> 'done' OR (비어 있지 않음)`. 추출이 끝났다고 표시된

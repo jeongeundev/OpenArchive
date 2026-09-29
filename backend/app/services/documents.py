@@ -36,6 +36,7 @@ EXTRACTION_FAILED_MESSAGE = "문서에서 텍스트를 추출하지 못했습니
 # 같아 완료 표시만 했다, failed = 빈 결과·크기 초과라 인식 실패로 표시했다, skipped = 추출 중인
 # 문서가 아니라(이미 끝났거나 삭제됐다) 아무것도 쓰지 않았다.
 ExtractionOutcome = Literal["applied", "unchanged", "failed", "skipped"]
+ExtractionStatus = Literal["pending", "done", "failed"]
 
 SUBJECT_VISIBLE_SQL = f"""
 SELECT 1
@@ -581,9 +582,14 @@ async def list_documents(
     *,
     user_id: str | None = None,
     embedding_status: str | None = None,
+    extraction_status: ExtractionStatus | None = None,
     tag: str | None = None,
 ) -> list[dict]:
-    """권한 술어와 선택적 필터를 한 쿼리로 적용한다."""
+    """권한 술어와 선택적 필터를 한 쿼리로 적용한다.
+
+    `embedding_status`는 컬럼 그대로다 — 인식 실패 문서는 임베딩 잡이 생기지 않아 'pending'에
+    남는다. 곧 임베딩될 문서만 보려면 `extraction_status='done'`을 함께 준다 (#139, ADR-052).
+    """
     cur = conn.cursor(row_factory=dict_row)
     await cur.execute(
         f"""
@@ -591,10 +597,16 @@ async def list_documents(
         FROM documents d
         WHERE {VISIBLE_TO_USER}
           AND (%(status)s::text IS NULL OR embedding_status = %(status)s)
+          AND (%(extraction)s::text IS NULL OR extraction_status = %(extraction)s)
           AND (%(tag)s::text IS NULL OR %(tag)s = ANY(tags))
         ORDER BY created_at DESC, id
         """,
-        {"user": user_id, "status": embedding_status, "tag": tag},
+        {
+            "user": user_id,
+            "status": embedding_status,
+            "extraction": extraction_status,
+            "tag": tag,
+        },
     )
     return await cur.fetchall()
 
