@@ -10,6 +10,7 @@ from app.services.documents import (
     DocumentNotFound,
     EmptyExtractedText,
     ExtractedTextTooLarge,
+    ExtractionInProgress,
     VersionConflict,
     reextract_text,
 )
@@ -31,6 +32,12 @@ WITH job_counts AS (
   FROM document_chunks c
   JOIN documents d ON d.id = c.document_id
   WHERE c.version <> d.version
+), extraction AS (
+  -- 문서 수다. 인식 대기는 추출 잡이 아니라 문서 상태로 센다 — 잡은 재시도·스윕 중에도
+  -- 문서가 기다리는 상태는 하나다 (ADR-052 결정 4).
+  SELECT count(*) FILTER (WHERE extraction_status = 'pending') AS extraction_pending,
+         count(*) FILTER (WHERE extraction_status = 'failed') AS extraction_failed
+  FROM documents
 ), stale_edges AS (
   SELECT count(DISTINCT document_id) AS stale_edge_documents
   FROM embedding_jobs
@@ -41,8 +48,9 @@ SELECT host(inet_server_addr()) AS node_address,
        j.pending, j.processing, j.recovery_pending, j.error,
        j.last_job_finished_at,
        s.inconsistent_documents,
-       e.stale_edge_documents
-FROM job_counts j CROSS JOIN consistency s CROSS JOIN stale_edges e
+       e.stale_edge_documents,
+       x.extraction_pending, x.extraction_failed
+FROM job_counts j CROSS JOIN consistency s CROSS JOIN stale_edges e CROSS JOIN extraction x
 """
 
 
@@ -63,6 +71,8 @@ class SystemStatusResult:
     last_job_finished_at: datetime | None
     inconsistent_documents: int
     stale_edge_documents: int
+    extraction_pending: int
+    extraction_failed: int
     embedding_provider: str
 
 
@@ -91,6 +101,8 @@ async def get_system_status(
         last_job_finished_at=row["last_job_finished_at"],
         inconsistent_documents=row["inconsistent_documents"],
         stale_edge_documents=row["stale_edge_documents"],
+        extraction_pending=row["extraction_pending"],
+        extraction_failed=row["extraction_failed"],
         embedding_provider=embedding_provider,
     )
 
@@ -140,6 +152,8 @@ class ReextractSummary:
     changed: int
     unchanged: int
     failed: list[tuple[UUID, str]]
+    # 최신 원본이 OCR 대상이라 텍스트를 쓰지 않고 추출 잡으로 넘긴 문서 수 (ADR-052 결정 6)
+    awaiting_ocr: int = 0
 
 
 # 보관된 원본에서 텍스트를 얻지 못한 실패. 문서의 문제이지 명령의 문제가 아니다.
@@ -155,6 +169,7 @@ _PER_DOCUMENT_FAILURES = (
     *_EXTRACTION_FAILURES,
     VersionConflict,
     DocumentNotFound,  # 대상 조회 뒤 삭제됐다
+    ExtractionInProgress,  # 인식이 끝나지 않았다 — 그 결과를 덮지 않는다
 )
 
 
@@ -176,11 +191,15 @@ async def reextract_one(
             ).fetchone()
             if row is None:
                 raise DocumentNotFound
-            _, changed = await reextract_text(conn, document_id, expected_version=row[0])
-    except _EXTRACTION_FAILURES as error:
+            document, changed = await reextract_text(
+                conn, document_id, expected_version=row[0]
+            )
+    except (*_EXTRACTION_FAILURES, ExtractionInProgress) as error:
         return ReextractSummary(
             changed=0, unchanged=0, failed=[(document_id, str(error) or type(error).__name__)]
         )
+    if document["extraction_status"] == "pending":
+        return ReextractSummary(changed=0, unchanged=0, failed=[], awaiting_ocr=1)
     return ReextractSummary(changed=int(changed), unchanged=int(not changed), failed=[])
 
 
@@ -205,21 +224,25 @@ async def reextract_all(
         )
         documents = await cur.fetchall()
     total = len(documents)
-    changed = unchanged = 0
+    changed = unchanged = awaiting_ocr = 0
     failed: list[tuple[UUID, str]] = []
     for done, (document_id, version) in enumerate(documents, start=1):
         try:
             async with conn.transaction():
-                _, was_changed = await reextract_text(
+                document, was_changed = await reextract_text(
                     conn, document_id, expected_version=version
                 )
         except _PER_DOCUMENT_FAILURES as error:
             failed.append((document_id, str(error) or type(error).__name__))
         else:
-            if was_changed:
+            if document["extraction_status"] == "pending":
+                awaiting_ocr += 1
+            elif was_changed:
                 changed += 1
             else:
                 unchanged += 1
         if on_progress is not None:
             on_progress(done, total)
-    return ReextractSummary(changed=changed, unchanged=unchanged, failed=failed)
+    return ReextractSummary(
+        changed=changed, unchanged=unchanged, failed=failed, awaiting_ocr=awaiting_ocr
+    )

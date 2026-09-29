@@ -87,6 +87,29 @@ class _KeyTaken(Exception):
     """동시 요청이 같은 키를 먼저 커밋했다. 이 요청의 트랜잭션을 되돌리는 신호다."""
 
 
+class ExtractionInProgress(Exception):
+    """추출 잡이 끝나지 않은 문서의 텍스트를 바꾸려는 경우 (ADR-052 결정 7).
+
+    워커 결과가 사람이 고친 텍스트를 덮지 않게 한다. 새로고침으로 풀리지 않으므로
+    버전 충돌과 구분한다.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(
+            "텍스트를 인식하는 중에는 이 작업을 할 수 없습니다. 인식이 끝난 뒤 다시 시도하세요."
+        )
+
+
+class NoTextToEdit(Exception):
+    """텍스트 인식에 실패해 편집할 텍스트가 없는 문서다 (ADR-052 결정 8)."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "텍스트를 인식하지 못한 문서라 편집할 텍스트가 없습니다."
+            " 원본 파일을 교체하거나 다시 추출하세요."
+        )
+
+
 class VersionConflict(Exception):
     """낙관적 동시성 충돌 (ADR-017). 클라이언트가 새로고침할 수 있도록 현재 버전을 함께 전달한다."""
 
@@ -133,6 +156,49 @@ async def _load_for_write(
     if row[0] != user_id:
         raise DocumentAccessDenied
     return row[2], row[3]
+
+
+async def _lock_for_text_change(
+    conn: psycopg.AsyncConnection, document_id: UUID, *, needs_text: bool
+) -> dict:
+    """텍스트를 바꾸기 전에 문서 행을 잠그고 추출 상태를 판정한다 (ADR-052 결정 7·8).
+
+    권한 확인 **뒤**, 버전 비교 **앞**에 부른다 — 추출 중이면 버전을 맞춰도 풀리지 않으므로
+    그 사유가 먼저다. 잠근 뒤 읽은 값으로 판정하므로 워커의 반영(`apply_extracted_text`도
+    같은 행을 잠근다)과 경합해도 둘 중 하나만 이긴다. 요청 트랜잭션이 끝날 때까지 잠금이 남는다.
+
+    `needs_text`는 편집·복원처럼 지금 텍스트를 딛는 경로다. 인식에 실패해 텍스트가 한 번도
+    없는 문서는 거기서 벗어날 수 없고, 원본 교체나 재추출로만 벗어난다.
+    """
+    cur = conn.cursor(row_factory=dict_row)
+    await cur.execute(
+        """
+        SELECT version, filename, content_hash, extraction_status,
+               length(btrim(content, E' \\t\\r\\n\\f')) = 0 AS blank
+        FROM documents WHERE id = %s FOR UPDATE
+        """,
+        (document_id,),
+    )
+    row = await cur.fetchone()
+    if row is None:
+        raise DocumentNotFound
+    if row["extraction_status"] == "pending":
+        raise ExtractionInProgress
+    if needs_text and row["extraction_status"] == "failed" and row["blank"]:
+        raise NoTextToEdit
+    return row
+
+
+async def _latest_original(conn: psycopg.AsyncConnection, document_id: UUID) -> tuple | None:
+    return await (
+        await conn.execute(
+            """
+            SELECT filename, data FROM document_files
+            WHERE document_id = %s ORDER BY file_version DESC LIMIT 1
+            """,
+            (document_id,),
+        )
+    ).fetchone()
 
 
 def normalize_tags(tags: list[str] | None) -> list[str]:
@@ -606,14 +672,15 @@ async def update_extracted_text(
     (`filename IS NULL`)에는 추출한 대상이 없다 — 거절 문구가 그 구분을 따른다
     (ADR-035 결정 3).
     """
-    current_version, filename = await _load_for_write(conn, document_id, user_id)
+    await _load_for_write(conn, document_id, user_id)
+    locked = await _lock_for_text_change(conn, document_id, needs_text=True)
     return await _write_text(
         conn,
         document_id,
         content=content,
         client_version=client_version,
-        current_version=current_version,
-        filename=filename,
+        current_version=locked["version"],
+        filename=locked["filename"],
     )
 
 
@@ -630,6 +697,11 @@ async def _write_text(
 
     편집·복원·재추출·원본 교체가 모두 이 한 UPDATE를 지난다 — 텍스트를 바꾸는 경로가 둘이 되면
     한쪽만 고쳐지는 자리가 생긴다.
+
+    `extraction_status='done'`을 같은 UPDATE에서 쓴다 — 003 트리거는 새 값이 `done`일 때만
+    발화하므로(022) 인식 실패 문서를 고치거나 교체해도 텍스트 버전·잡이 빠지지 않는다. 추출 중인
+    문서는 호출부가 `_lock_for_text_change`로 이미 막았다. 텍스트가 한 번도 없던 문서(인식 실패한
+    새 스캔)의 첫 텍스트는 워커의 첫 추출처럼 v1이다 — 버전을 올리지 않는다.
     """
     label = text_label(filename)
     if not content.strip():
@@ -643,8 +715,10 @@ async def _write_text(
     await cur.execute(
         f"""
         UPDATE documents
-           SET version = version + 1, content = %(content)s, content_hash = %(hash)s,
-               updated_at = now()
+           SET version = version
+                         + CASE WHEN btrim(content, E' \\t\\r\\n\\f') = '' THEN 0 ELSE 1 END,
+               content = %(content)s, content_hash = %(hash)s,
+               extraction_status = 'done', updated_at = now()
          WHERE id = %(id)s AND version = %(client_version)s
         RETURNING {SUMMARY_COLUMNS}, content
         """,
@@ -677,7 +751,9 @@ async def replace_original_file(
     문서의 정체성(id·제목·태그·링크·관계·공개범위)은 그대로이고 파일명·유형만 바뀐다.
     텍스트 버전·잡은 `documents` 트리거가 만든다. 낙관적 잠금은 편집과 같은 규칙이다 (ADR-017).
     """
-    current_version, _ = await _load_for_write(conn, document_id, user_id)
+    await _load_for_write(conn, document_id, user_id)
+    locked = await _lock_for_text_change(conn, document_id, needs_text=False)
+    current_version = locked["version"]
     if current_version != client_version:
         raise VersionConflict(current_version)
 
@@ -699,14 +775,15 @@ async def replace_original_file(
 
     content_type = detect_content_type(filename)
     content = extract_text(data, content_type)
-    if not content.strip():
+    ocr = needs_ocr(content_type, content)
+    if not ocr and not content.strip():
         raise EmptyExtractedText(EXTRACTION_FAILED_MESSAGE)
-    row = await (
-        await conn.execute("SELECT content_hash FROM documents WHERE id = %s", (document_id,))
-    ).fetchone()
-    if row is None:
-        raise DocumentNotFound
-    text_changed = hashlib.sha256(content.encode("utf-8")).hexdigest() != row[0]
+    # OCR 대상이면 텍스트를 쓰지 않는다 — 요청 안에서 인식하지 않고 추출 잡으로 넘긴다
+    # (ADR-052 결정 3·6). 인식이 끝날 때까지 이전 텍스트·청크로 검색된다.
+    text_changed = (
+        not ocr
+        and hashlib.sha256(content.encode("utf-8")).hexdigest() != locked["content_hash"]
+    )
 
     async with conn.transaction():
         expected_version = client_version
@@ -727,7 +804,7 @@ async def replace_original_file(
             f"""
             UPDATE documents
                SET filename = %(filename)s, content_type = %(content_type)s,
-                   updated_at = now()
+                   extraction_status = %(extraction_status)s, updated_at = now()
              WHERE id = %(id)s AND version = %(version)s
             RETURNING {SUMMARY_COLUMNS}
             """,
@@ -736,6 +813,9 @@ async def replace_original_file(
                 "version": expected_version,
                 "filename": filename,
                 "content_type": content_type,
+                # pending으로 바뀌면 022 트리거가 추출 잡을 만든다. 텍스트 레이어가 있는 원본으로
+                # 바꾼 인식 실패 문서는 여기서 done이 된다. content_hash는 언급하지 않는다(003).
+                "extraction_status": "pending" if ocr else "done",
             },
         )
         document = await cur.fetchone()
@@ -756,7 +836,9 @@ async def replace_original_file(
             file_version=row[0],
             filename=filename,
             data=data,
-            text_version=document["version"],
+            # 인식을 기다리는 판은 아직 자기 텍스트가 없다. 지금 텍스트가 있으면 그것을, 한 번도
+            # 없던 문서면 NULL을 가리키고, 워커가 첫 텍스트를 쓸 때 채운다.
+            text_version=None if ocr and locked["blank"] else document["version"],
             uploaded_by=user_id,
         )
     return document
@@ -770,39 +852,46 @@ async def reextract_text(
     결과가 현재 텍스트와 같으면 아무것도 쓰지 않는다 — `content_hash`를 언급만 해도
     트리거가 발화해(003) 같은 내용의 텍스트 버전과 재임베딩이 생긴다. 다르면 편집 경로를
     그대로 지나므로 낙관적 잠금·길이 검증·트리거 발화가 편집과 같다. 원본 판은 만들지 않는다.
+
+    최신 원본이 OCR 대상(이미지, 텍스트 레이어가 빈 PDF)이면 텍스트를 쓰지 않고 추출 중으로
+    바꿔 워커에 넘긴다 — 돌려주는 문서의 `extraction_status`가 `pending`이다 (ADR-052 결정 6).
     """
-    row = await (
-        await conn.execute(
-            "SELECT version, filename, content_hash FROM documents WHERE id = %s",
-            (document_id,),
-        )
-    ).fetchone()
-    if row is None:
-        raise DocumentNotFound
-    current_version, filename, content_hash = row
+    locked = await _lock_for_text_change(conn, document_id, needs_text=False)
+    current_version = locked["version"]
     # 사람이 고친 텍스트를 덮을 수 있으므로, 결과와 무관하게 호출자가 본 버전이어야 한다.
     if current_version != expected_version:
         raise VersionConflict(current_version)
 
-    original = await (
-        await conn.execute(
-            """
-            SELECT filename, data FROM document_files
-            WHERE document_id = %s ORDER BY file_version DESC LIMIT 1
-            """,
-            (document_id,),
-        )
-    ).fetchone()
+    original = await _latest_original(conn, document_id)
     if original is None:
         raise OriginalFileMissing
 
-    content = extract_text(original[1], detect_content_type(original[0]))
+    content_type = detect_content_type(original[0])
+    content = extract_text(original[1], content_type)
+    cur = conn.cursor(row_factory=dict_row)
+    if needs_ocr(content_type, content):
+        # 요청 안에서 OCR하지 않는다 (ADR-052 결정 3·6). 이전 텍스트는 그대로 두고 추출 중으로
+        # 바꾸면 022 트리거가 추출 잡을 만든다. content_hash를 언급하지 않는다(003).
+        # 인식에 실패했던 문서는 이것이 재시도 경로다.
+        await cur.execute(
+            f"""
+            UPDATE documents SET extraction_status = 'pending', updated_at = now()
+             WHERE id = %s
+            RETURNING {SUMMARY_COLUMNS}, content
+            """,
+            (document_id,),
+        )
+        return await cur.fetchone(), False
     if not content.strip():
         raise EmptyExtractedText(EXTRACTION_FAILED_MESSAGE)
-    if hashlib.sha256(content.encode("utf-8")).hexdigest() == content_hash:
-        cur = conn.cursor(row_factory=dict_row)
+    if hashlib.sha256(content.encode("utf-8")).hexdigest() == locked["content_hash"]:
+        # 인식 실패 표시가 남아 있었다면 지금 원본에서 같은 텍스트를 얻었으니 끝난 것이다.
+        # 워커의 unchanged와 같다 — content_hash는 언급하지 않는다(003).
         await cur.execute(
-            f"SELECT {SUMMARY_COLUMNS}, content FROM documents WHERE id = %s",
+            f"""
+            UPDATE documents SET extraction_status = 'done' WHERE id = %s
+            RETURNING {SUMMARY_COLUMNS}, content
+            """,
             (document_id,),
         )
         return await cur.fetchone(), False
@@ -813,7 +902,7 @@ async def reextract_text(
         content=content,
         client_version=expected_version,
         current_version=current_version,
-        filename=filename,
+        filename=locked["filename"],
     )
     return document, True
 
@@ -870,19 +959,24 @@ async def restore_version(
 ) -> dict:
     """과거 버전의 본문으로 **새 텍스트 버전을 만든다** — 되감기가 아니다 (ADR-037 결정 2).
 
-    편집 경로를 그대로 호출한다. 낙관적 잠금·길이 검증·`content_hash` 갱신·트리거 발화가
+    편집과 같은 `_write_text`를 지난다. 낙관적 잠금·길이 검증·`content_hash` 갱신·트리거 발화가
     편집과 완전히 같아야 하고, 여기에 별도 UPDATE를 두면 한쪽만 고쳐지는 자리가 생긴다.
     `version`을 감소시키거나 이력 행을 지우지 않으므로 정합성 검증 쿼리의 기준도 그대로다.
     """
+    await _load_for_write(conn, document_id, user_id)
+    # 과거 버전을 찾기 전에 판정한다 — 인식에 실패한 새 스캔에는 과거 버전이 없어, 순서가
+    # 바뀌면 벗어나는 방법을 알려주는 409 대신 404가 나간다.
+    locked = await _lock_for_text_change(conn, document_id, needs_text=True)
     past = await get_document_version(
         conn, document_id, version=version, user_id=user_id
     )
-    return await update_extracted_text(
+    return await _write_text(
         conn,
         document_id,
-        user_id=user_id,
         content=past["content"],
         client_version=client_version,
+        current_version=locked["version"],
+        filename=locked["filename"],
     )
 
 

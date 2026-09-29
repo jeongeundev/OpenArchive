@@ -142,6 +142,8 @@ class SystemStatus(BaseModel):
     last_job_finished_at: datetime | None
     inconsistent_documents: int
     stale_edge_documents: int
+    extraction_pending: int
+    extraction_failed: int
     embedding_provider: str
 
 
