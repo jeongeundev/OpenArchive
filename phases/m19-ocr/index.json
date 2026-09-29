@@ -29,7 +29,10 @@
       "type": "feat",
       "scope": "db",
       "desc": "extraction_status와 조건부 빈 본문 제약, 추출 잡(kind='extract')을 만드는 트리거 (021·022)",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-09-29T13:55:54+0900",
+      "summary": "021: documents.extraction_status(pending·failed·done, 기본 done, CHECK documents_extraction_status_valid), documents_content_not_blank를 extraction_status<>'done' OR 비지 않음으로 조건부화(문자셋 002와 동일), document_files.text_version NULL 허용, embedding_jobs_kind_valid에 'extract' 추가. 022: trg_documents_content_changed WHEN에 extraction_status='done' 추가(함수 본체 불변), on_document_extraction_requested()+trg_documents_extraction_requested(INSERT·UPDATE OF extraction_status, pending일 때 kind='extract' 잡+NOTIFY). 테스트 18건 추가, backend 946 passed.",
+      "completed_at": "2026-09-29T14:24:42+0900"
     },
     {
       "step": 3,
