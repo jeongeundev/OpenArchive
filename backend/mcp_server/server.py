@@ -17,7 +17,7 @@ from mcp.server.fastmcp import FastMCP
 from app.config import get_settings
 from app.db import close_pool, connection, get_pool, is_unavailable
 from app.embeddings import get_provider
-from app.services.documents import create_text_document
+from app.services.documents import ExtractionStatus, create_text_document
 from app.services.documents import get_document as get_document_service
 from app.services.documents import list_documents as list_documents_service
 from app.services.related import find_related
@@ -181,7 +181,7 @@ async def get_document(document_id: str) -> dict:
 async def list_documents(
     tag: str | None = None,
     status: str | None = None,
-    extraction_status: Literal["pending", "done", "failed"] | None = None,
+    extraction_status: ExtractionStatus | None = None,
 ) -> dict:
     """접근 가능한 문서의 메타데이터 요약 목록을 반환합니다.
 
