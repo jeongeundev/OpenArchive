@@ -103,7 +103,8 @@
     },
     {
       "dir": "m19-ocr",
-      "status": "pending"
+      "status": "completed",
+      "completed_at": "2026-09-29T15:18:13+0900"
     }
   ]
 }
