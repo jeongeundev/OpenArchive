@@ -5,6 +5,7 @@ from uuid import uuid4
 
 import psycopg
 import pytest
+from test_parsing import minimal_pdf
 
 from app.services.documents import (
     MAX_EXTRACTED_TEXT_LENGTH,
@@ -24,7 +25,6 @@ from app.services.documents import (
     update_extracted_text,
 )
 from app.services.parsing import UnsupportedFileType
-from test_parsing import minimal_pdf
 
 
 @pytest.fixture

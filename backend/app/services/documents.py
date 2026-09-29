@@ -562,11 +562,16 @@ async def apply_extracted_text(
                 },
             )
         ).fetchone()
-        # 추출을 기다리던 원본 판이 방금 기록된 텍스트 버전을 가리키게 한다.
+        # 워커가 읽은 최신 원본 판만 방금 기록된 텍스트 버전을 가리키게 한다. 인식에 실패한 채
+        # 교체된 이전 판은 텍스트를 낸 적이 없으므로 NULL로 남는다.
         await conn.execute(
-            "UPDATE document_files SET text_version = %s"
-            " WHERE document_id = %s AND text_version IS NULL",
-            (updated[0], document_id),
+            """
+            UPDATE document_files SET text_version = %(version)s
+             WHERE document_id = %(id)s AND text_version IS NULL
+               AND file_version = (SELECT max(file_version) FROM document_files
+                                    WHERE document_id = %(id)s)
+            """,
+            {"version": updated[0], "id": document_id},
         )
     return "applied"
 

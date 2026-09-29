@@ -103,9 +103,6 @@ def extract_text(data: bytes, content_type: str) -> str:
     if content_type not in SUPPORTED_CONTENT_TYPES:
         raise UnsupportedFileType(f"지원하지 않는 파일 형식입니다: {content_type}")
 
-    if content_type in IMAGE_CONTENT_TYPES:
-        return ""
-
     if content_type in ("txt", "md"):
         try:
             return data.decode("utf-8")
@@ -113,6 +110,13 @@ def extract_text(data: bytes, content_type: str) -> str:
             raise TextDecodeError("텍스트 파일은 UTF-8 인코딩이어야 합니다.") from error
 
     try:
+        if content_type in IMAGE_CONTENT_TYPES:
+            # OCR은 워커가 한다(ADR-052). 여기서는 끝까지 디코드되는지만 본다 — 못 읽는 파일은
+            # 워커가 몇 번을 다시 읽어도 같으므로 다른 형식처럼 업로드에서 거부한다.
+            with Image.open(io.BytesIO(data)) as image:
+                image.load()
+            return ""
+
         if content_type == "pdf":
             pages = PdfReader(io.BytesIO(data)).pages
             return "\n\n".join(page.extract_text() or "" for page in pages)
