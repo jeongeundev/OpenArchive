@@ -38,7 +38,6 @@ function DuplicatePairs({ result }: { result: DuplicateList }): React.ReactEleme
           <Link className="text-neutral-300 hover:text-[#0ea5e9]" href={`/documents/${pair.first.document_id}`}>{pair.first.title}</Link>
           <span className="text-neutral-600">↔</span>
           <Link className="text-neutral-300 hover:text-[#0ea5e9]" href={`/documents/${pair.second.document_id}`}>{pair.second.title}</Link>
-          {pair.score !== null ? <span className="text-neutral-500">닿은 대목 {Math.round(pair.score * 100)}%</span> : null}
         </li>
       ))}
     </ul>
