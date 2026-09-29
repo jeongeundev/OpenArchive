@@ -1,4 +1,4 @@
-// `015_links_triggers.sql`의 `wikilink_targets` 복제. 한쪽만 바뀌면 API가 해석한
+// `023_links_triggers.sql`의 `wikilink_targets` 복제. 한쪽만 바뀌면 API가 해석한
 // 정상 링크를 화면이 깨진 링크로 그린다 (ADR-027). lookbehind 대신 앞 그룹으로
 // 임베드를 잡는다 — 오래된 Safari.
 export const WIKILINK_PATTERN = /(!?)\[\[([^\[\]\n]+)\]\]/g;
@@ -16,12 +16,13 @@ const trimSpaces = (value: string): string => value.replace(/^ +| +$/g, "");
 
 /** 매치 그룹(bang, raw)을 저장 규칙대로 정규화한다. 링크가 아니면 null. */
 export function parseWikilink(bang: string, raw: string): ParsedWikilink | null {
-  const trimmed = trimSpaces(raw);
+  // 023: 표 셀 안의 `\|`는 `|`와 같은 별칭 구분자다 (#112).
+  const trimmed = trimSpaces(raw.replace(/\\\|/g, "|"));
   // 큰따옴표는 시작 위치만 본다. 제목 안의 큰따옴표까지 막으면 `ADR-015: 제품은
   // "AI를 위한 문서 저장소"이며, …` 같은 실재하는 제목이 깨진 링크가 된다 (#49).
   if (bang === "!" || trimmed === "" || trimmed.startsWith('"')) return null;
 
-  // 015의 `split_part(…, '|', 1)`처럼 첫 `|`에서 자른다. 뒤는 전부 표시 문구다.
+  // 023의 `split_part(…, '|', 1)`처럼 첫 `|`에서 자른다. 뒤는 전부 표시 문구다.
   const bar = trimmed.indexOf("|");
   const target = bar < 0 ? trimmed : trimmed.slice(0, bar);
   const alias = bar < 0 ? "" : trimmed.slice(bar + 1);
