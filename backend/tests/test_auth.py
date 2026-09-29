@@ -9,10 +9,12 @@ from app.services.auth import (
     AuthenticationFailed,
     TokenNotFound,
     UserNotFound,
+    admin_exists,
     authenticate_user,
     change_password,
     create_session,
     create_token,
+    create_user,
     hash_password,
     list_tokens,
     logout,
@@ -438,3 +440,14 @@ async def test_reset_password_replaces_the_hash_without_the_current_one(conn):
 async def test_reset_password_reports_an_unknown_username(conn):
     with pytest.raises(UserNotFound):
         await reset_password(conn, "nobody", "recovered")
+
+
+async def test_admin_exists_ignores_regular_accounts(conn):
+    """init이 첫 관리자를 만들지 판정한다 — 일반 계정만 있으면 아직 관리자가 없다."""
+    assert await admin_exists(conn) is False
+
+    await create_user(conn, "alice", "secret")
+    assert await admin_exists(conn) is False
+
+    await create_user(conn, "boss", "secret", is_admin=True)
+    assert await admin_exists(conn) is True

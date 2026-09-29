@@ -5,7 +5,11 @@ Web UI·REST·MCP와 같은 자리의 인터페이스이며, 로직을 새로 �
 `app.services.system.get_system_status`가 그대로 한다.
 
 **하지 않는 것**: API·워커·프론트 기동, DB 자동 탐색, 문서 공급. init은 DB를 준비된
-상태로 만들고 다음 단계를 안내하는 데서 끝난다.
+상태로 만들고 첫 관리자를 만든 뒤 다음 단계를 안내하는 데서 끝난다.
+
+첫 관리자를 init이 만드는 이유는 자체 가입이 없어서다(ADR-028) — 계정을 만들어 줄 사람이
+있어야 설치가 끝난다. 웹의 "첫 가입자가 관리자" 방식은 설치 직후 URL에 먼저 닿은 사람이
+관리자를 차지하므로 두지 않는다. `create-user`는 그 뒤 셸에서 계정을 더 만드는 경로다.
 
 `reset-password`는 비밀번호를 잊은 계정의 유일한 탈출구다. 웹에는 두지 않는다 — 남의
 비밀번호를 바꾸는 권한을 만들면 is_admin이 계정 관리를 넘어 문서 열람으로 번진다
@@ -17,6 +21,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import getpass
+import os
 import re
 import signal
 import subprocess
@@ -37,7 +42,13 @@ from app.migrations import (
     pending_filenames,
     run_migrations,
 )
-from app.services.auth import UserNotFound, reset_password
+from app.services.auth import (
+    UserAlreadyExists,
+    UserNotFound,
+    admin_exists,
+    create_user,
+    reset_password,
+)
 from app.services.documents import DocumentNotFound, OriginalFileMissing
 from app.services.system import (
     ReextractSummary,
@@ -439,7 +450,61 @@ def run_serve(*, host: str, port: int) -> int:
     return code or 1
 
 
-def run_init(*, dsn: str | None, assume_yes: bool, env_file: Path) -> int:
+def _account_password(prompt: str) -> str:
+    """`ADMIN_PASSWORD`, 없으면 프롬프트. 입력이 닫혀 있으면 빈 문자열.
+
+    환경변수는 스크립트·컨테이너 같은 비대화형 설치용이다. 인자로 받지 않는 이유는
+    셸 이력과 `ps`에 평문이 남기 때문이다.
+    """
+    password = os.environ.get("ADMIN_PASSWORD")
+    if password:
+        return password
+    try:
+        return getpass.getpass(prompt)
+    except EOFError:
+        print()
+        return ""
+
+
+async def _has_admin(dsn: str) -> bool:
+    async with await psycopg.AsyncConnection.connect(dsn) as conn:
+        return await admin_exists(conn)
+
+
+async def _create_account(dsn: str, username: str, password: str, *, is_admin: bool) -> None:
+    """해시·중복 판정은 서비스가 한다 — 여기 복제하면 두 벌이 되어 갈린다."""
+    async with await _connect(dsn, autocommit=True) as conn:
+        await create_user(conn, username, password, is_admin=is_admin)
+
+
+def _ensure_admin(dsn: str, username: str) -> bool | None:
+    """관리자가 있으면 True, 비밀번호가 없어 건너뛰면 False, 이름이 막혀 멈추면 None.
+
+    이미 관리자가 있으면 묻지도 않는다 — init은 다시 실행하는 명령이다.
+    """
+    print()
+    if asyncio.run(_has_admin(dsn)):
+        print("관리자 계정이 이미 있습니다.")
+        return True
+    password = _account_password(f"첫 관리자 '{username}'의 비밀번호 (비우면 건너뜁니다): ")
+    if not password:
+        # 빈 비밀번호 계정은 만들지 않는다. 스키마는 이미 적용됐으므로 설치는 성공으로
+        # 끝내고 계정 생성을 다음 단계로 넘긴다.
+        print("비밀번호가 없어 관리자 계정을 만들지 않았습니다.")
+        return False
+    try:
+        asyncio.run(_create_account(dsn, username, password, is_admin=True))
+    except UserAlreadyExists:
+        print(f"'{username}'은 이미 일반 계정이 쓰고 있어 관리자로 만들지 않았습니다.")
+        print("  --admin-username으로 다른 이름을 주어 다시 실행하십시오.")
+        return None
+    print(f"관리자 '{username}'을 만들었습니다.")
+    return True
+
+
+def run_init(
+    *, dsn: str | None, assume_yes: bool, env_file: Path, admin_username: str = "admin"
+) -> int:
     print("OpenArchive 설치 준비")
     print()
     if dsn is None:
@@ -489,18 +554,20 @@ def run_init(*, dsn: str | None, assume_yes: bool, env_file: Path) -> int:
     print(f"  원본과 어긋난 문서 {status.inconsistent_documents}건")
     print(f"  관계가 아직 계산되지 않은 문서 {status.stale_edge_documents}건")
 
+    has_admin = _ensure_admin(dsn, admin_username)
+    if has_admin is None:
+        return 1
+
     if assume_yes or _confirm(f"이 DSN을 {env_file}에 저장할까요?"):
         _write_dsn(env_file, dsn)
         print(f"  {env_file}에 DATABASE_URL을 기록했습니다")
 
     print()
     print("다음 단계 — 이 명령은 프로세스를 기동하지 않습니다.")
-    # 스크립트는 절대경로로 적는다. init은 실행 위치를 가리지 않는데(venv 실행 파일이고
-    # --env-file 기본값도 절대경로다) 상대경로를 적으면 어느 디렉토리를 전제하는지가
-    # 안내의 일부가 되고, README 빠른 시작이 서 있는 backend/와 어긋난다.
-    admin_script = Path(__file__).resolve().parents[2] / "scripts" / "create_admin.py"
-    print(f"  1) 관리자    ADMIN_PASSWORD='<비밀번호>' python {admin_script} admin --admin")
-    print("  2) 실행      EMBEDDING_PROVIDER=local openarchive serve    (API + 워커 + 웹 화면)")
+    # 설치된 명령만 안내한다. 저장소 안 스크립트는 pip 설치본에 없다.
+    if not has_admin:
+        print(f"  관리자    openarchive create-user {admin_username} --admin")
+    print("  실행      EMBEDDING_PROVIDER=local openarchive serve    (API + 워커 + 웹 화면)")
     return 0
 
 
@@ -541,6 +608,25 @@ def run_reset_password(*, dsn: str | None, username: str) -> int:
         return 1
     print(f"'{username}'의 비밀번호를 재설정하고 그 계정의 로그인 세션을 모두 끊었습니다.")
     print("발급된 API 토큰은 그대로 유효합니다 — 폐기는 계정 설정 화면에서 합니다.")
+    return 0
+
+
+def run_create_user(*, dsn: str | None, username: str, is_admin: bool) -> int:
+    """셸에서 계정을 만든다. 첫 관리자는 init이 만들고, 이것은 그 뒤의 경로다."""
+    dsn = dsn or get_settings().database_url
+    password = _account_password(f"'{username}'의 비밀번호: ")
+    if not password:
+        print("비밀번호가 비어 있어 계정을 만들지 않았습니다.")
+        return 2
+    try:
+        asyncio.run(_create_account(dsn, username, password, is_admin=is_admin))
+    except _ConnectionFailed as error:
+        print(f"연결하지 못했습니다: {error}")
+        return 1
+    except UserAlreadyExists as error:
+        print(error)
+        return 1
+    print(f"사용자 '{username}'을 생성했습니다.")
     return 0
 
 
@@ -617,6 +703,17 @@ def main(argv: list[str] | None = None) -> int:
     init.add_argument(
         "--env-file", type=Path, default=ENV_FILE, help=f"DSN을 기록할 파일 (기본: {ENV_FILE})"
     )
+    init.add_argument(
+        "--admin-username",
+        default="admin",
+        help="관리자가 없을 때 만들 첫 관리자 이름 (기본: admin). 비밀번호는 ADMIN_PASSWORD 또는 프롬프트",
+    )
+    create = subcommands.add_parser(
+        "create-user", help="계정을 만듭니다. 비밀번호는 ADMIN_PASSWORD 또는 프롬프트로 받습니다."
+    )
+    create.add_argument("username")
+    create.add_argument("--admin", action="store_true", help="관리자 권한을 부여합니다.")
+    create.add_argument("--dsn", help="DB 연결 문자열. 생략하면 DATABASE_URL을 씁니다.")
     serve = subcommands.add_parser(
         "serve", help="API 서버와 임베딩 워커를 함께 실행합니다."
     )
@@ -653,7 +750,14 @@ def main(argv: list[str] | None = None) -> int:
         return run_serve(host=args.host, port=args.port)
     if args.command == "reset-password":
         return run_reset_password(dsn=args.dsn, username=args.username)
-    return run_init(dsn=args.dsn, assume_yes=args.yes, env_file=args.env_file)
+    if args.command == "create-user":
+        return run_create_user(dsn=args.dsn, username=args.username, is_admin=args.admin)
+    return run_init(
+        dsn=args.dsn,
+        assume_yes=args.yes,
+        env_file=args.env_file,
+        admin_username=args.admin_username,
+    )
 
 
 if __name__ == "__main__":

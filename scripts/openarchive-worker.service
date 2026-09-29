@@ -36,8 +36,9 @@ StartLimitBurst=5
 [Service]
 Type=simple
 
-# config.py의 `env_file=".env"`가 **상대 경로**다. CWD가 backend/가 아니면 DATABASE_URL·
-# EMBEDDING_PROVIDER를 못 읽고 기본값(로컬 컨테이너·fake)으로 조용히 떨어진다.
+# 설정은 이 user 유닛 사용자의 ~/.openarchive/.env에서 읽는다(config.py, CWD와 무관).
+# 그 파일이 없으면 DATABASE_URL·EMBEDDING_PROVIDER를 못 읽고 기본값(로컬 컨테이너·fake)으로
+# 조용히 떨어진다 — deploy_app_host.sh가 같은 사용자로 그 파일을 쓴다.
 WorkingDirectory=@APP_ROOT@/backend
 ExecStart=@APP_ROOT@/backend/.venv/bin/python -m app.worker
 

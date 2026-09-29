@@ -1,3 +1,4 @@
+import os
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
@@ -5,12 +6,24 @@ from typing import Literal
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-# `.env`는 이 패키지 옆(`backend/.env`)에 두고, 실행 디렉토리와 무관하게 그 파일만 읽는다.
-# cwd 상대 경로로 두면 **같은 .env 하나가 프로세스마다 다르게 해석된다** — API·워커는
-# `backend/`에서, `scripts/create_admin.py`는 저장소 루트에서 실행되기 때문이다. 그러면
-# 계정은 이쪽 DB에 문서는 저쪽 DB에 쌓이는 상태가 에러 없이 만들어진다.
-# `scripts/deploy_app_host.sh`가 쓰는 위치도 여기다.
-ENV_FILE = Path(__file__).resolve().parent.parent / ".env"
+
+def openarchive_home() -> Path:
+    """설정 디렉토리. `$OPENARCHIVE_HOME`, 없으면 `~/.openarchive`.
+
+    설치 위치(패키지 옆)가 아니라 사용자 홈에 둔다 — 비편집 설치에서 패키지 옆은
+    site-packages라 사용자가 손댈 자리가 아니고, 재설치하면 지워진다 (#90-1).
+    """
+    configured = os.environ.get("OPENARCHIVE_HOME")
+    if configured:
+        return Path(configured).expanduser().resolve()
+    return Path.home() / ".openarchive"
+
+
+# 실행 디렉토리와 무관하게 이 파일 하나만 읽는다. cwd 상대 경로로 두면 **같은 .env 하나가
+# 프로세스마다 다르게 해석된다** — `openarchive` CLI·API·워커·MCP 서버가 서로 다른
+# 디렉토리에서 실행되기 때문이다. 그러면 계정은 이쪽 DB에 문서는 저쪽 DB에 쌓이는 상태가
+# 에러 없이 만들어진다. `scripts/deploy_app_host.sh`가 쓰는 위치도 여기다.
+ENV_FILE = openarchive_home() / ".env"
 
 
 class Settings(BaseSettings):

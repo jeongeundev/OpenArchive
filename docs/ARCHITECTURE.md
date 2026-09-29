@@ -58,18 +58,18 @@ OpenArchive/
 │   └── ingest_text.py            # 표준 라이브러리만 쓰는 독립 HTTP 텍스트 공급 예제
 ├── backend/
 │   ├── pyproject.toml            # fastapi, psycopg[binary,pool], pydantic-settings, mcp<2, pypdf, python-docx / [dev]: pytest, ruff / [local]: sentence-transformers
-│   ├── migrations/               # 001~019: extensions, tables, triggers, indexes,
-│   │                             #   trgm, edges(006~008), auth(009), links(010~012), token(013),
-│   │                             #   edges 재설계(014 — rebuild_document_edges), 위키링크 정규화(015),
-│   │                             #   관계 잡 분리(016 — embedding_jobs.kind / 017 — ready 트리거,
-│   │                             #   ADR-029 결정 3 개정), 원본 파일 판 보관(018 — document_files, ADR-046),
-│   │                             #   문서 생성 멱등키(019 — idempotency_keys, ADR-047)
 │   ├── app/
 │   │   ├── main.py               # FastAPI 앱 조립
-│   │   ├── config.py             # pydantic-settings (DATABASE_URL, EMBEDDING_PROVIDER 등)
+│   │   ├── config.py             # pydantic-settings — $OPENARCHIVE_HOME/.env(기본 ~/.openarchive/.env)
 │   │   ├── db.py                 # AsyncConnectionPool만 — import 시 부작용 없음
-│   │   ├── migrations.py         # 마이그레이션 러너 — API startup과 `openarchive init`이 호출
-│   │   ├── cli.py                # `openarchive init`·`serve`·`reset-password`·`rebuild-edges`·`reextract` — 운영자 CLI (ADR-039·040·046)
+│   │   ├── migrations/           # __init__.py = 러너(API startup과 `openarchive init`이 호출)
+│   │   │                         #   + SQL(패키지 안이라 wheel에 실린다) 001~019: extensions, tables, triggers, indexes,
+│   │   │                         #   trgm, edges(006~008), auth(009), links(010~012), token(013),
+│   │   │                         #   edges 재설계(014 — rebuild_document_edges), 위키링크 정규화(015),
+│   │   │                         #   관계 잡 분리(016 — embedding_jobs.kind / 017 — ready 트리거,
+│   │   │                         #   ADR-029 결정 3 개정), 원본 파일 판 보관(018 — document_files, ADR-046),
+│   │   │                         #   문서 생성 멱등키(019 — idempotency_keys, ADR-047)
+│   │   ├── cli.py                # `openarchive init`(첫 관리자 포함)·`serve`·`create-user`·`reset-password`·`rebuild-edges`·`reextract` — 운영자 CLI (ADR-039·040·046)
 │   │   ├── api/                  # 라우터: documents, search, system, auth, admin,
 │   │   │                         #   diagnostics, clusters, retry (+ deps, schemas)
 │   │   ├── services/             # parsing, chunking, documents, search, related,

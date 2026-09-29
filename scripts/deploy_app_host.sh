@@ -68,9 +68,12 @@ python3.12 -m venv .venv
 .venv/bin/pip install -q torch --index-url https://download.pytorch.org/whl/cpu
 .venv/bin/pip install -q -e ".[local]"
 
+# 앱은 $OPENARCHIVE_HOME/.env(기본 ~/.openarchive/.env)만 읽는다. 워커 user 유닛도 같은
+# 사용자로 돌므로 같은 파일을 본다.
+mkdir -p "$HOME/.openarchive"
 printf "%s\n" \
   "DATABASE_URL=$DATABASE_URL" \
-  "EMBEDDING_PROVIDER=local" > .env
+  "EMBEDDING_PROVIDER=local" > "$HOME/.openarchive/.env"
 
 # --- 프론트엔드 ------------------------------------------------------------
 step "프론트엔드 빌드"

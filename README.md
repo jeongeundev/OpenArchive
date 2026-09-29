@@ -72,15 +72,14 @@ pip install -e ".[local]"
 openarchive init --dsn "postgresql://app:secret@<OpenProxy 호스트>:6432/<풀 이름>"
 ```
 
-연결·확장·권한을 점검한 뒤 적용해도 되는지 묻습니다. 이어서 관리자 계정을 만들고 실행합니다.
+연결·확장·권한을 점검한 뒤 적용해도 되는지 묻고, 이어서 첫 관리자 `admin`의 비밀번호를 묻습니다.
+그다음 실행합니다.
 
 ```bash
-ADMIN_PASSWORD='change-me' python ../scripts/create_admin.py admin --admin
 EMBEDDING_PROVIDER=local openarchive serve
 ```
 
-브라우저에서 http://localhost:8000 을 열고 `admin` / `change-me`로 로그인합니다. 비밀번호는 설정
-화면에서 바로 바꿉니다.
+브라우저에서 http://localhost:8000 을 열고 `admin`과 방금 정한 비밀번호로 로그인합니다.
 
 > ⚠️ 풀 이름과 계정은 OpenProxy 설정(`openproxy.toml`)에서 확인합니다. 설치기는 `opensql`
 > 데이터베이스를 만들어 놓고 정작 풀은 관리용 `postgres`를 바라보게 설정하니, DSN을 주기 전에
@@ -98,8 +97,10 @@ EMBEDDING_PROVIDER=local openarchive serve
   합니다. 확인이 적용보다 먼저라 `vector` 확장이 없거나 권한이 모자라면 스키마를 건드리기 전에 무엇이
   왜 필요한지 알려주고 멈추고, 기존 테이블이 있으면 아무것도 바꾸지 않습니다
   ([ADR-039](docs/ADR.md)). `--yes`를 붙이면 묻지 않고 진행합니다 — 건너뛰는 것은 예/아니오 확인뿐이라
-  스크립트처럼 입력이 없는 곳에서는 `--dsn`을 함께 줍니다. 확인한 DSN은 `backend/.env`에 기록됩니다.
-- **`create_admin.py`** — 자체 가입이 없으므로 최초 관리자 계정을 한 번 만듭니다.
+  스크립트처럼 입력이 없는 곳에서는 `--dsn`과 `ADMIN_PASSWORD`를 함께 줍니다. 확인한 DSN은
+  `~/.openarchive/.env`에 기록됩니다(`OPENARCHIVE_HOME`으로 위치를 바꿉니다). 관리자가 없으면 **첫
+  관리자**를 만듭니다 — 자체 가입이 없으므로 계정을 만들어 줄 사람이 있어야 합니다. 이름은
+  `--admin-username`으로 바꾸고, 계정은 이후 웹 관리 화면이나 `openarchive create-user`로 더 만듭니다.
 - **`openarchive serve`** — API + 임베딩 워커 + 웹 화면을 한 명령으로 띄웁니다. 웹 화면은 백엔드에
   동봉된 정적 빌드라 Node.js가 필요 없습니다. **최초 1회는 Hugging Face에서 BGE-M3 모델(약 2GB)을
   내려받으므로 인터넷이 필요하고 기동이 오래 걸립니다.** 한 번 받은 뒤에는 `HF_HUB_OFFLINE=1`로 인터넷 없이
@@ -122,8 +123,7 @@ docker compose up -d --wait
 cd backend
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[local]"
-openarchive init --yes --dsn "postgresql://openarchive:openarchive@localhost:5433/openarchive"
-ADMIN_PASSWORD='change-me' python ../scripts/create_admin.py admin --admin
+ADMIN_PASSWORD='change-me' openarchive init --yes --dsn "postgresql://openarchive:openarchive@localhost:5433/openarchive"
 EMBEDDING_PROVIDER=local openarchive serve
 ```
 
@@ -207,7 +207,7 @@ DB가 잠시 응답할 수 없는 동안(페일오버·switchover 등) API는 **
 ### AI 에이전트 연결 (MCP)
 
 Claude Desktop / Claude Code의 MCP 설정에 stdio 서버로 등록합니다. `<REPOSITORY>`는 이
-저장소의 절대 경로, `DATABASE_URL`은 `backend/.env`와 같은 값입니다.
+저장소의 절대 경로, `DATABASE_URL`은 `~/.openarchive/.env`와 같은 값입니다.
 
 ```json
 {

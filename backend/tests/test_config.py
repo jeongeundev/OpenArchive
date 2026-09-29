@@ -1,9 +1,12 @@
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
 
-from app.config import ENV_FILE, Settings, get_settings
+from app.config import ENV_FILE, Settings, get_settings, openarchive_home
 
 # 개발자 로컬에 .env가 있어도 기본값 검증이 흔들리지 않도록 _env_file=None으로 끊는다.
 NO_ENV_FILE = {"_env_file": None}
@@ -70,12 +73,12 @@ def test_get_settings_is_cached():
     assert get_settings() is get_settings()
 
 
-def test_env_file_is_read_from_the_backend_package_not_the_cwd(tmp_path, monkeypatch):
+def test_env_file_is_read_from_openarchive_home_not_the_cwd(tmp_path, monkeypatch):
     """설정 파일 위치는 실행 디렉토리에 좌우되지 않는다.
 
-    API·워커는 `backend/`에서 실행되고 `scripts/create_admin.py`는 저장소 루트에서
-    실행된다. env_file이 cwd 상대 경로이면 **같은 .env 하나가 프로세스마다 다르게
-    해석돼**, 계정은 이쪽 DB에 문서는 저쪽 DB에 쌓이는 상태가 에러 없이 만들어진다.
+    `openarchive serve`·워커·MCP 서버·`openarchive` CLI가 서로 다른 디렉토리에서 실행된다.
+    env_file이 cwd 상대 경로이면 **같은 .env 하나가 프로세스마다 다르게 해석돼**, 계정은
+    이쪽 DB에 문서는 저쪽 DB에 쌓이는 상태가 에러 없이 만들어진다.
     """
     (tmp_path / ".env").write_text(
         "DATABASE_URL=postgresql://sentinel:sentinel@127.0.0.1:59999/sentinel\n",
@@ -88,22 +91,49 @@ def test_env_file_is_read_from_the_backend_package_not_the_cwd(tmp_path, monkeyp
 
     assert "sentinel" not in settings.database_url
     # 무엇을 읽지 '않는지'만 단언하면 env_file=None으로 바꿔도 통과한다.
-    # 읽는 대상이 backend/.env로 고정됐다는 것까지 함께 고정한다.
     assert Path(Settings.model_config["env_file"]) == ENV_FILE
     assert ENV_FILE.is_absolute()
-    assert ENV_FILE.parent.name == "backend"
 
 
-def test_env_file_values_are_applied_from_the_backend_package(tmp_path, monkeypatch):
-    """고정된 위치의 .env를 실제로 읽는다 — 위 테스트의 반대 방향."""
-    env_file = tmp_path / "backend" / ".env"
-    env_file.parent.mkdir()
-    env_file.write_text(
+def test_openarchive_home_defaults_to_a_directory_in_the_user_home(monkeypatch):
+    """설치 위치(site-packages)가 아니라 사용자 홈에 둔다 — 비편집 설치의 패키지 옆은
+    사용자가 손댈 자리가 아니고, 재설치하면 지워진다 (#90-1)."""
+    monkeypatch.delenv("OPENARCHIVE_HOME", raising=False)
+
+    assert openarchive_home() == Path.home() / ".openarchive"
+
+
+def test_openarchive_home_can_be_overridden_by_environment(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("OPENARCHIVE_HOME", "relative-home")
+
+    # 상대 경로는 절대 경로로 굳힌다. 굳히지 않으면 위 cwd 문제가 이 변수로 되살아난다.
+    assert openarchive_home() == (tmp_path / "relative-home").resolve()
+
+
+def test_a_process_reads_the_env_file_in_openarchive_home(tmp_path):
+    """규칙 전체를 실제 프로세스로 확인한다 — ENV_FILE은 import 시점에 정해진다."""
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / ".env").write_text(
         "DATABASE_URL=postgresql://fromfile:fromfile@127.0.0.1:5433/fromfile\n",
         encoding="utf-8",
     )
-    monkeypatch.delenv("DATABASE_URL", raising=False)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    env = {k: v for k, v in os.environ.items() if k != "DATABASE_URL"}
+    env["OPENARCHIVE_HOME"] = str(home)
 
-    settings = Settings(_env_file=env_file)
+    result = subprocess.run(
+        [
+            sys.executable, "-c",
+            "from app.config import get_settings; print(get_settings().database_url)",
+        ],
+        cwd=elsewhere,
+        env={**env, "PYTHONPATH": str(Path(__file__).resolve().parents[1])},
+        capture_output=True,
+        text=True,
+        check=True,
+    )
 
-    assert settings.database_url == "postgresql://fromfile:fromfile@127.0.0.1:5433/fromfile"
+    assert result.stdout.strip() == "postgresql://fromfile:fromfile@127.0.0.1:5433/fromfile"

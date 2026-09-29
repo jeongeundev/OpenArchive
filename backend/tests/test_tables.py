@@ -2,7 +2,7 @@
 
 여기서 검증하는 것은 테이블의 "존재"가 아니라 **제약이 실제로 막아주는가**다.
 빈 본문 차단·벡터 차원 고정·CASCADE·코얼레싱은 전부 DB가 판정하므로 Mock으로는
-확인할 수 없다. 실제 pgvector 컨테이너에 `backend/migrations/`를 적용한
+확인할 수 없다. 실제 pgvector 컨테이너에 `backend/app/migrations/`를 적용한
 `migrated_db` 픽스처 위에서 돈다.
 
 문서를 INSERT하면 003_triggers.sql의 트리거가 v1 이력과 pending 잡을 함께 만든다.

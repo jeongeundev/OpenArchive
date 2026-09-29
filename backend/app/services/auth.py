@@ -117,6 +117,12 @@ async def create_user(
     return await cur.fetchone()
 
 
+async def admin_exists(conn: psycopg.AsyncConnection) -> bool:
+    """관리자 계정이 하나라도 있는지. init이 첫 관리자를 만들지 이것으로 판정한다."""
+    cur = await conn.execute("SELECT EXISTS (SELECT 1 FROM users WHERE is_admin)")
+    return (await cur.fetchone())[0]
+
+
 async def list_users(conn: psycopg.AsyncConnection) -> list[dict]:
     """비밀번호 해시를 제외한 계정 목록을 반환한다."""
     cur = conn.cursor(row_factory=dict_row)

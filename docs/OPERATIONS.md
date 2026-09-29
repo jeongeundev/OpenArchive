@@ -5,21 +5,23 @@ README 「시작하기」로 기동한 뒤, 설정을 바꾸거나 운영하면�
 
 ## 환경변수 파일
 
-애플리케이션 설정 파일은 **`backend/.env` 하나**입니다. 기본값만으로 README 절차가 완주하므로
-설정을 바꿀 때만 만듭니다.
+애플리케이션 설정 파일은 **`~/.openarchive/.env` 하나**입니다. `openarchive init`이 DSN을 여기에
+기록하고, 다른 설정은 바꿀 때만 적습니다. 위치는 환경변수 `OPENARCHIVE_HOME`으로 바꿉니다
+(`$OPENARCHIVE_HOME/.env`).
 
 ```bash
-cd backend && cp .env.example .env
+mkdir -p ~/.openarchive && cp backend/.env.example ~/.openarchive/.env   # 예시에서 시작할 때
 ```
 
-설정을 읽는 주체는 API·워커·MCP 서버와 `scripts/create_admin.py` 넷인데 실행 디렉토리가 서로
-다릅니다. `app/config.py`가 `backend/.env` 한 곳만 절대경로로 읽어 넷이 같은 값을 보게 합니다.
-환경변수를 직접 주는 방식(`DATABASE_URL=... uvicorn ...`)은 언제나 파일보다 우선합니다.
+설정을 읽는 주체는 `openarchive` CLI·API·워커·MCP 서버인데 실행 디렉토리가 서로 다릅니다.
+`app/config.py`가 이 파일 한 곳만 절대경로로 읽어 모두 같은 값을 보게 합니다. 설치 위치(패키지 옆)에
+두지 않는 이유는 `pip install`로 깐 설치본에서 그 자리가 site-packages이기 때문입니다.
+환경변수를 직접 주는 방식(`DATABASE_URL=... openarchive serve`)은 언제나 파일보다 우선합니다.
 
 > **저장소 루트의 `.env`는 다른 파일입니다.** 애플리케이션은 읽지 않지만 **`docker compose`가
 > 읽습니다** — `docker-compose.yml`의 `${POSTGRES_USER:-openarchive}` 세 자리를 채우는 것이 그
 > 파일입니다. 로컬 DB의 자격증명·DB 이름을 바꾸려면 루트 `.env`에 `POSTGRES_*`를 두고, 앱이 붙을
-> 주소는 `backend/.env`의 `DATABASE_URL`에 둡니다. 한쪽에 몰아 쓰면 컨테이너와 앱이 서로 다른
+> 주소는 `~/.openarchive/.env`의 `DATABASE_URL`에 둡니다. 한쪽에 몰아 쓰면 컨테이너와 앱이 서로 다른
 > DB를 가리킵니다.
 
 | 환경변수 | 기본값 | 설명 |
@@ -93,7 +95,8 @@ openarchive init                                                         # 대�
 openarchive init --dsn "postgresql://app@<vip>:6432/<pool_name>" --yes   # 비대화형 — --dsn 필수
 ```
 
-DSN을 확인한 뒤 `backend/.env`의 `DATABASE_URL` 줄만 갈아 끼웁니다. 다른 설정은 보존됩니다.
+DSN을 확인한 뒤 `~/.openarchive/.env`의 `DATABASE_URL` 줄만 갈아 끼웁니다. 다른 설정은 보존됩니다.
+관리자 계정이 없으면 첫 관리자(`admin`, `--admin-username`으로 변경)를 만듭니다 — 아래 「인증과 계정」.
 
 > **기존 데이터베이스를 덮어쓰지 않습니다.** `schema_migrations`가 없는데 OpenArchive가 쓰는
 > 테이블 이름(`documents`·`users` 등)이 이미 있으면 아무것도 바꾸지 않고 중단합니다.
@@ -224,13 +227,18 @@ SELECT count(*), min(created_at) FROM idempotency_keys;
 
 ## 인증과 계정
 
-초기 계정은 환경변수로 자동 생성되지 않습니다. 스키마가 적용된 뒤 `scripts/create_admin.py`를
-실행합니다. 비밀번호를 셸 기록에 남기고 싶지 않으면 `ADMIN_PASSWORD`를 생략하면 대화형으로
-입력받습니다.
+첫 관리자는 `openarchive init`이 만듭니다. 관리자가 하나도 없을 때만 비밀번호를 묻고, 이미 있으면
+건너뜁니다. 입력이 없는 환경(스크립트·컨테이너)은 `ADMIN_PASSWORD`로 줍니다 — 비밀번호를 인자로 받지
+않는 것은 셸 이력과 `ps`에 평문이 남기 때문입니다. 비밀번호가 없으면 스키마만 적용하고 계정은 만들지
+않습니다.
 
 ```bash
-ADMIN_PASSWORD='<초기 비밀번호>' python scripts/create_admin.py admin --admin
+ADMIN_PASSWORD='<초기 비밀번호>' openarchive init --yes --dsn "..."    # 첫 관리자까지
+ADMIN_PASSWORD='<비밀번호>' openarchive create-user alice [--admin]    # 셸에서 계정 추가
 ```
+
+웹의 "첫 가입자가 관리자" 방식은 두지 않습니다. 설치 직후 URL에 먼저 닿은 사람이 관리자를 차지하기
+때문입니다 (ADR-028).
 
 이후 관리자는 `/admin/users`에서 일반 사용자나 다른 관리자를 발급합니다. **관리자 권한은 계정 관리
 전용**이며 다른 사용자의 private 문서를 열람하게 하지는 않습니다.

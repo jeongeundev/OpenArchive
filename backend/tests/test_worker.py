@@ -4,7 +4,7 @@
 청크의 최종 상태는 문서의 최신 버전으로 수렴한다.** 그 수렴을 만드는 두 장치가
 `FOR UPDATE SKIP LOCKED`(안전한 선점)와 커밋 직전 `content_hash` 재확인(낡은 결과
 폐기)이며, 둘 다 원리상 Mock으로 확인할 수 없으므로 실제 pgvector 컨테이너에
-`backend/migrations/`를 적용한 `migrated_db` 픽스처 위에서 돈다 (CLAUDE.md CRITICAL).
+`backend/app/migrations/`를 적용한 `migrated_db` 픽스처 위에서 돈다 (CLAUDE.md CRITICAL).
 
 테스트는 `embedding_jobs`에 직접 INSERT하지 않는다 — 문서를 INSERT/UPDATE하면
 트리거가 잡을 만든다. 워커 경쟁은 커넥션 두 개(`conn`·`other_conn`)로 재현한다.
