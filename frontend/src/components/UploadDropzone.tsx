@@ -113,7 +113,7 @@ export function UploadDropzone({
       setTitle("");
       setTags("");
       setVisibility("public");
-      setMessage("업로드했습니다. 임베딩이 끝나면 상태가 완료로 바뀝니다.");
+      setMessage("업로드했습니다. 텍스트 인식(스캔 문서)과 임베딩이 끝나면 상태가 완료로 바뀝니다.");
     } else {
       setError(succeeded > 0 ? "일부 파일을 업로드하지 못했습니다." : "업로드에 실패했습니다.");
     }

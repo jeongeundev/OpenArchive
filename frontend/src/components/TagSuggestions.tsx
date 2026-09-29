@@ -1,17 +1,24 @@
 import type { TagSuggestionsResponse } from "@/lib/types";
 
+// textMissing은 RelatedDocuments와 같다 — 인식 실패 문서에 오지 않을 완료를 약속하지 않는다.
 export function TagSuggestions({
   response,
   onApply,
+  textMissing = false,
 }: {
   response: TagSuggestionsResponse;
   onApply?: (tag: string) => void | Promise<void>;
+  textMissing?: boolean;
 }): React.ReactElement {
   return (
     <section className="space-y-4">
       <h2 className="text-sm font-medium text-neutral-400">태그 추천</h2>
       {response.reason === "not_indexed" ? (
-        <p className="text-sm text-neutral-500">임베딩이 완료되면 표시됩니다.</p>
+        <p className="text-sm text-neutral-500">
+          {textMissing
+            ? "텍스트를 인식하지 못해 표시할 수 없습니다."
+            : "임베딩이 완료되면 표시됩니다."}
+        </p>
       ) : response.items.length === 0 ? (
         <p className="text-sm text-neutral-500">추천할 태그가 없습니다.</p>
       ) : (

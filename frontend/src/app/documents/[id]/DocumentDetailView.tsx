@@ -155,7 +155,10 @@ export function DocumentDetailView(): React.ReactElement {
       />
 
       {relatedData.related !== null ? (
-        <RelatedDocuments response={relatedData.related} />
+        <RelatedDocuments
+          response={relatedData.related}
+          textMissing={document.extraction_status === "failed"}
+        />
       ) : (
         <section className="space-y-3">
           <h2 className="text-sm font-medium text-neutral-400">관련 문서</h2>
@@ -173,6 +176,7 @@ export function DocumentDetailView(): React.ReactElement {
               : (tag) => saveTags([...tags, tag])
           }
           response={relatedData.suggestions}
+          textMissing={document.extraction_status === "failed"}
         />
       ) : (
         <section className="space-y-3">
