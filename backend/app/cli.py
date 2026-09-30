@@ -721,21 +721,20 @@ def run_reextract(*, dsn: str | None, document_id: UUID | None) -> int:
     return 1 if summary.failed else 0
 
 
-class _UnknownUser(Exception):
-    """`--user`로 받은 계정이 없다."""
-
-
 async def _require_user(conn: psycopg.AsyncConnection, username: str) -> None:
     if username not in {user["username"] for user in await list_users(conn)}:
-        raise _UnknownUser(username)
+        raise UserNotFound(username)
 
 
 # 파일 첫 줄이 `---`인 YAML 블록. export가 쓰는 모양이자 Obsidian 볼트의 관례다.
 _FRONTMATTER_RE = re.compile(r"\A---\r?\n(.*?)^---[ \t]*(?:\r?\n|\Z)", re.DOTALL | re.MULTILINE)
 
 # 파일 하나의 실패로 보고하고 다음 파일로 넘어가는 예외. 파싱 실패(ValueError)는 업로드
-# 라우터가 400으로 옮기는 것과 같은 범위다. 그 밖의 DB 오류는 폴더를 계속 돌 이유가 없다.
-_IMPORT_FILE_ERRORS = (ValueError, EmptyExtractedText, ExtractedTextTooLarge, InvalidVisibility)
+# 라우터가 400으로 옮기는 것과 같은 범위다. OSError는 그 파일을 읽지 못한 것(권한 등)이다.
+# 그 밖의 DB 오류는 폴더를 계속 돌 이유가 없다.
+_IMPORT_FILE_ERRORS = (
+    ValueError, OSError, EmptyExtractedText, ExtractedTextTooLarge, InvalidVisibility
+)
 
 
 @dataclass
@@ -849,8 +848,9 @@ async def _import(
                 summary.unsupported += 1
                 continue
             try:
-                # 업로드와 같은 상한이다 — CLI가 웹보다 큰 파일을 받을 이유가 없다.
-                if path.stat().st_size > limit_mb * 1024 * 1024:
+                # 업로드와 같은 상한이다 — CLI가 웹보다 큰 파일을 받을 이유가 없다. MB도 업로드처럼
+                # 10^6 바이트다(api/documents.py `_read_upload`).
+                if path.stat().st_size > limit_mb * 1_000_000:
                     raise ValueError(f"업로드 파일은 {limit_mb}MB를 넘을 수 없습니다.")
                 document = await _import_file(
                     conn, path, username=username, tags=tags, visibility=visibility
@@ -883,7 +883,7 @@ def run_import(
     except _ConnectionFailed as error:
         print(f"연결하지 못했습니다: {error}")
         return 1
-    except _UnknownUser:
+    except UserNotFound:
         print(f"'{username}' 계정이 없습니다. 아무것도 넣지 않았습니다.")
         return 1
     print(
@@ -972,7 +972,7 @@ def run_export(*, dsn: str | None, folder: Path, username: str) -> int:
     except _ConnectionFailed as error:
         print(f"연결하지 못했습니다: {error}")
         return 1
-    except _UnknownUser:
+    except UserNotFound:
         print(f"'{username}' 계정이 없습니다.")
         return 1
     print(f"내보냄 {written}건 → {folder}")
@@ -1025,7 +1025,7 @@ def run_search(
     except _ConnectionFailed as error:
         print(f"연결하지 못했습니다: {error}")
         return 1
-    except _UnknownUser:
+    except UserNotFound:
         print(f"'{username}' 계정이 없습니다.")
         return 1
     if not hits:

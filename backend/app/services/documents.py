@@ -681,11 +681,12 @@ async def find_same_original(
 async def find_same_text(
     conn: psycopg.AsyncConnection, *, owner_id: str, content: str
 ) -> UUID | None:
-    """이 텍스트를 가진 소유자의 원본 없는 문서. 파일 문서는 원본 기준(`find_same_original`)으로 본다."""
+    """이 텍스트를 가진 소유자의 문서. 원본이 있는 문서도 본다 — export는 파일 문서도 텍스트로
+    내보내므로, 같은 설치에 다시 넣을 때 두 벌을 만들지 않게. 인식 전 문서는 텍스트가 비어 있을 뿐이다."""
     cur = await conn.execute(
         """
         SELECT id FROM documents
-        WHERE owner_id = %s AND filename IS NULL AND content_hash = %s
+        WHERE owner_id = %s AND extraction_status = 'done' AND content_hash = %s
         LIMIT 1
         """,
         (owner_id, hashlib.sha256(content.encode("utf-8")).hexdigest()),
