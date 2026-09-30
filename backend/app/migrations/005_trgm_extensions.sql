@@ -15,7 +15,11 @@
 -- 근거가 되지 않는다. 지우려면 위 ②를 먼저 해결해야 한다. pg_trgm 1.6은 로컬 pgvector
 -- 컨테이너와 실 OpenSQL VM 양쪽에서 확인됐다 (OPENSQL_RESEARCH.md §14, ADR-026).
 --
--- 적용 여부와 멱등성은 schema_migrations가 담당하므로 IF NOT EXISTS를 쓰지 않는다
--- (ADR-005). 확장이 없는 환경을 조용히 통과시키면 관계 판정이 뒤늦게 실패한다.
+-- 적용 여부와 멱등성은 schema_migrations가 담당하지만, 확장은 스키마가 아니라 DB 전체에
+-- 하나라 그 이력 밖에 있다. 처음엔 ADR-005 관례대로 가드를 두지 않았으나, DBA가 미리 깔아 둔
+-- 조직 DB(`init --schema`의 대상)에서 이 파일이 duplicate_object로 죽어 설치 자체가 막혔다.
+-- 001의 vector처럼 IF NOT EXISTS로 둔다 (#95-c, ADR-039 2026-09-30 개정). 이미 적용된
+-- 설치는 이 파일을 다시 돌리지 않으므로 영향이 없다. 확장이 **없는** 환경은 여전히 init의
+-- capability 확인이 먼저 막는다.
 
-CREATE EXTENSION pg_trgm;
+CREATE EXTENSION IF NOT EXISTS pg_trgm;

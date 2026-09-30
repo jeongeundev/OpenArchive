@@ -98,13 +98,6 @@ _CREATE_TABLE_RE = re.compile(
     re.IGNORECASE | re.MULTILINE,
 )
 
-# `IF NOT EXISTS` 없이 만드는 확장만 잡는다. 그런 문장은 확장이 이미 있으면 duplicate_object로
-# 죽고, ADR-005 관례상 마이그레이션은 멱등성을 schema_migrations에 맡겨 가드를 쓰지 않는다.
-_UNGUARDED_EXTENSION_RE = re.compile(
-    r'^\s*CREATE\s+EXTENSION\s+(?!IF\s+NOT\s+EXISTS)"?([A-Za-z_][A-Za-z0-9_]*)',
-    re.IGNORECASE | re.MULTILINE,
-)
-
 
 def _owned_tables(migrations_dir: Path = MIGRATIONS_DIR) -> frozenset[str]:
     """마이그레이션이 만드는 테이블 이름. 충돌 판정의 기준이다.
@@ -241,8 +234,7 @@ def _unmet_requirements(capabilities: Capabilities) -> list[str]:
             name not in capabilities.installed_extensions
             and name not in capabilities.creatable_extensions
         ):
-            # 이미 설치돼 있으면 만들 권한은 필요 없다 — 001은 IF NOT EXISTS로 넘어가고,
-            # 005처럼 가드 없는 파일은 _blocking_extensions가 따로 잡는다.
+            # 이미 설치돼 있으면 만들 권한은 필요 없다 — 001·005는 IF NOT EXISTS로 넘어간다.
             unmet.append(
                 f"'{capabilities.username}'에게 확장 '{name}' 생성 권한이 없습니다 "
                 "— 슈퍼유저로 실행하거나, DBA에게 미리 설치를 요청하십시오 "
@@ -293,22 +285,6 @@ def _pending_migrations(conn: psycopg.Connection, schema: str) -> list[str]:
         return pending_filenames(set())
     applied = {name for (name,) in conn.execute(APPLIED_SQL).fetchall()}
     return pending_filenames(applied)
-
-
-def _blocking_extensions(pending: list[str], installed: frozenset[str]) -> dict[str, str]:
-    """이미 설치돼 있어 미적용 마이그레이션을 실패시킬 확장 → 그 마이그레이션 파일명.
-
-    적용을 시작한 뒤 중간 파일에서 죽으면 부분 적용 스키마가 남는다. "확인이 적용보다
-    먼저"라는 계약이 지켜지려면 이것을 미리 잡아야 한다.
-    """
-    blocking: dict[str, str] = {}
-    for path in migration_files():
-        if path.name not in pending:
-            continue
-        for name in _UNGUARDED_EXTENSION_RE.findall(path.read_text("utf-8")):
-            if name in installed:
-                blocking.setdefault(name, path.name)
-    return blocking
 
 
 async def _read_status(dsn: str):
@@ -387,16 +363,7 @@ def _inspect(conn: psycopg.Connection, *, own_schema: bool) -> list[str] | None:
         print("  빈 데이터베이스를 새로 만들어 다시 실행하십시오.")
         return None
 
-    pending = _pending_migrations(conn, capabilities.schema)
-    blocking = _blocking_extensions(pending, capabilities.installed_extensions)
-    if blocking:
-        print()
-        print("확장이 이미 설치돼 있어 마이그레이션이 중간에 실패합니다. 아무것도 바꾸지 않았습니다.")
-        for name, filename in sorted(blocking.items()):
-            print(f"  - {filename}은 '{name}'을 IF NOT EXISTS 없이 만듭니다")
-        print("  DROP EXTENSION으로 걷어내거나, 빈 데이터베이스를 새로 만들어 다시 실행하십시오.")
-        return None
-    return pending
+    return _pending_migrations(conn, capabilities.schema)
 
 
 # Ctrl-C 뒤 자식이 스스로 정리할 시간. 워커는 처리 중인 잡을 마치고 멈춘다 (ADR-004).
