@@ -1,0 +1,13 @@
+# 이미지에는 설치에 필요한 것만 보낸다. egg-info를 보내면 옛 빌드의 파일 목록이 wheel에
+# 새어 들어가 작업 트리에 없는 파일이 실린다 (#95-a).
+.venv/
+tests/
+*.egg-info/
+build/
+dist/
+**/__pycache__/
+.pytest_cache/
+.ruff_cache/
+.env
+Dockerfile
+.dockerignore

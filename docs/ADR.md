@@ -2448,6 +2448,26 @@ CLI는 진행 출력과 연결 오류 처리만 맡는다. 왜 필요한지는 A
 > `uvicorn openarchive.main:app`, `python -m openarchive.worker`, MCP는 `python -m openarchive.mcp_server.server`다.
 > 이 문서와 `phases/`·`notes/`에 남은 `app/` 경로는 당시 기록이라 고치지 않았다.
 
+> **개정 (2026-09-30, #95-e2) — 앱 이미지는 기동할 때마다 `init --yes` 뒤 `serve`를 실행한다.** 이미지
+> (`backend/Dockerfile`)에는 API·워커·웹 화면·`[local]`(CPU 전용 torch)·tesseract 한국어 모델이 들어 있고
+> **DB는 없다**. 앱은 OpenSQL에 붙는 클라이언트이기 때문이다(ROADMAP 「배포와 설치」).
+>
+> - **진입점이 `init`을 부른다.** API startup도 마이그레이션을 적용하지만(ADR-012), 관리자 계정은 init만
+>   만든다. init은 다시 실행해도 되는 명령이라, `docker run -e DATABASE_URL=… -e ADMIN_PASSWORD=…` 한 줄로
+>   첫 기동에는 스키마와 관리자까지 만들어지고 이후 기동은 그냥 지나간다. 충돌 테이블이나 확장 부족도
+>   API 트레이스백이 아니라 init의 안내로 멈춘다. init이 실패하면 serve를 띄우지 않는다.
+> - **serve는 `exec`로 실행한다.** 컨테이너 stop은 PID 1에만 SIGTERM을 보내므로, serve가 PID 1이어야
+>   워커가 처리 중인 잡을 정리한다(실측: `docker stop`이 2.8초 만에 정상 종료).
+> - **인자를 주면 그 명령만 실행한다**(`docker run … openarchive create-user bob`). init을 끼우지 않는다.
+> - **BGE-M3 가중치는 이미지에 넣지 않는다.** 첫 기동 때 `/data` 볼륨(`HF_HOME`)에 받는다. 설정 파일도
+>   같은 볼륨에 둔다(`OPENARCHIVE_HOME`). 이미지는 1.59GB이고, 첫 기동은 약 90초, 볼륨을 재사용한 재기동은
+>   16초였다(실측). 이미지 기본값은 `EMBEDDING_PROVIDER=local`이다.
+>
+> 트레이드오프: ① `ADMIN_PASSWORD`가 컨테이너 설정에 남는다. 첫 기동 뒤에는 이 값 없이 컨테이너를
+> 다시 만들어도 된다(관리자가 이미 있으면 묻지 않는다). ② API와 워커가 모델을 따로 올려 메모리가 약
+> 4.2GB 든다 — serve의 구조를 그대로 따른 결과다. ③ `--schema` 설치는 진입점이 하지 않는다. 처음 한 번
+> `openarchive init --schema`를 명령으로 실행하면, 그 뒤 진입점의 init은 롤 이름 스키마를 보고 그냥 지나간다.
+
 ---
 
 ### ADR-040: 세션으로만 할 수 있는 일에는 웹 입구를 만들고, 잊은 비밀번호는 CLI가 푼다

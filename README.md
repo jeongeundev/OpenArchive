@@ -11,13 +11,13 @@
 
 ## 소개
 
-OpenArchive는 조직의 문서를 올리면 **텍스트 추출 → 청킹 → 임베딩 → 벡터 저장 → 문서 관계
-생성**이 자동으로 일어나고, 정형 필터(태그·유형·권한)와 벡터 유사도와 문서 관계를 **하나의
-SQL**로 결합해 검색하는 문서관리 플랫폼입니다. 사람은 웹 화면으로, 프로그램은 REST API로,
-AI 에이전트는 MCP로 같은 문서와 같은 권한 규칙 위에서 접근합니다.
+OpenArchive는 **조직의 OpenSQL에 설치하는 AI 문서관리 플랫폼**입니다. 문서를 올리면 **텍스트
+추출 → 청킹 → 임베딩 → 벡터 저장 → 문서 관계 생성**이 자동으로 일어나고, 정형 필터(태그·유형·권한)와
+벡터 유사도와 문서 관계를 **하나의 SQL**로 결합해 검색합니다. 사람은 웹 화면으로, 프로그램은 REST
+API로, AI 에이전트는 MCP로 같은 문서와 같은 권한 규칙 위에서 접근합니다.
 
 [Tmax OpenSQL](https://docs.tibero.com/tmaxopensql/overview)(PostgreSQL 17 + pgvector) 위에서
-동작하며, 기업 과제가 제시한 두 문제를 **DB 계층에서** 풉니다.
+기업 과제가 제시한 두 문제를 **DB 계층에서** 풉니다.
 
 - **원본과 벡터의 정합성** — 문서를 저장하면 DB 트리거가 **같은 트랜잭션 안에서** 임베딩
   작업·버전 이력·문서 관계를 만듭니다. 애플리케이션 코드에는 임베딩 호출이 없고, "문서만
@@ -50,49 +50,64 @@ AI 에이전트는 MCP로 같은 문서와 같은 권한 규칙 위에서 접근
 
 ## 시작하기
 
-필요한 것은 Git, Python 3.12+, 그리고 OpenSQL입니다. 배포 패키지는 없으므로 소스에서
-설치합니다. 이미지·스캔 PDF의 텍스트 인식에는 시스템 패키지 **tesseract와 한국어 모델**이
-필요합니다 — 없으면 그 문서만 「텍스트 인식 실패」로 끝나고 다른 형식은 그대로 동작합니다 (설치 명령은
-[운영 가이드](docs/OPERATIONS.md#ocr-엔진-tesseract)).
-
-저장소를 받고 의존성을 설치합니다. 그대로 붙여넣으면 됩니다.
+필요한 것은 Python 3.12+와 OpenSQL입니다. 세 줄이면 설치부터 실행까지 끝납니다. **DSN만 자기 환경으로
+바꿉니다** — OpenProxy 경유라면 데이터베이스 자리에 **풀 이름**을 적습니다. `<OpenProxy 호스트>`와
+`<풀 이름>`을 실제 값으로 바꾸지 않으면 그 문자열이 그대로 호스트명이 되어 연결에 실패합니다.
 
 ```bash
-git clone https://github.com/jeongeundev/OpenArchive.git
-cd OpenArchive/backend
-python3 -m venv .venv && source .venv/bin/activate
-pip install -e ".[local]"
-```
-
-**DSN 한 줄만 자기 환경으로 바꿉니다.** OpenProxy 경유라면 데이터베이스 자리에 **풀 이름**을
-적습니다 — `<OpenProxy 호스트>`와 `<풀 이름>`을 실제 값으로 바꾸지 않으면 그 문자열이 그대로
-호스트명이 되어 연결에 실패합니다.
-
-```bash
+pipx install "openarchive-server[local]"
 openarchive init --dsn "postgresql://app:secret@<OpenProxy 호스트>:6432/<풀 이름>"
-```
-
-연결·확장·권한을 점검한 뒤 적용해도 되는지 묻고, 이어서 첫 관리자 `admin`의 비밀번호를 묻습니다.
-그다음 실행합니다.
-
-```bash
 EMBEDDING_PROVIDER=local openarchive serve
 ```
 
-브라우저에서 http://localhost:8000 을 열고 `admin`과 방금 정한 비밀번호로 로그인합니다.
+`init`은 연결·확장·권한을 점검한 뒤 적용해도 되는지 묻고, 이어서 첫 관리자 `admin`의 비밀번호를
+묻습니다. 브라우저에서 http://localhost:8000 을 열고 `admin`과 방금 정한 비밀번호로 로그인합니다.
+예제 문서로 먼저 둘러보려면 `openarchive demo --user admin`을 실행합니다(가상 회사의 사내 규정 64건).
+
+![검색 화면 — 예제 문서에서 "연차 휴가는 어떻게 신청하나요"를 찾은 결과](docs/images/search.png)
+
+이미지·스캔 PDF의 텍스트 인식에는 시스템 패키지 **tesseract와 한국어 모델**이 필요합니다 — 없으면 그
+문서만 「텍스트 인식 실패」로 끝나고 다른 형식은 그대로 동작합니다 (설치 명령은
+[운영 가이드](docs/OPERATIONS.md#ocr-엔진-tesseract)).
 
 > ⚠️ 풀 이름과 계정은 OpenProxy 설정(`openproxy.toml`)에서 확인합니다. 설치기는 `opensql`
 > 데이터베이스를 만들어 놓고 정작 풀은 관리용 `postgres`를 바라보게 설정하니, DSN을 주기 전에
 > 풀이 어느 DB를 가리키는지 확인하세요 — 파일 위치와 교정 절차는
 > [OpenSQL 환경 구축 §10](docs/SETUP_OPENSQL.md#10-설치-확인)에 있습니다. 업무 데이터가 이미 있는
 > OpenSQL이라면 새 DB·새 풀로 설치합니다 — DBA가 미리 만들 확장(`vector`만, `pg_trgm`은 만들지 않음)과
-> 풀 크기(설치기 기본 `pool_size = 10`은 모자람, 권장 20)가 같은 절에 있습니다.
+> 풀 크기(설치기 기본 `pool_size = 10`은 모자람, 권장 20)가 같은 절에 있습니다. 새 DB를 만들 수 없으면
+> `init --schema`로 접속 롤 이름의 스키마에 설치합니다 ([운영 가이드](docs/OPERATIONS.md#openarchive-init)).
+
+### 컨테이너로 실행
+
+Python 없이 한 줄로도 띄울 수 있습니다. 이미지에는 API·워커·웹 화면과 tesseract가 들어 있고
+**DB는 들어 있지 않습니다** — 위와 같은 DSN을 줍니다.
+
+```bash
+docker run -d --name openarchive -p 8000:8000 -v openarchive:/data \
+  -e DATABASE_URL="postgresql://app:secret@<OpenProxy 호스트>:6432/<풀 이름>" \
+  -e ADMIN_PASSWORD='change-me' \
+  ghcr.io/jeongeundev/openarchive
+```
+
+기동할 때마다 `init`을 먼저 실행한 뒤 `serve`로 넘어갑니다. 첫 기동에는 스키마를 적용하고
+`ADMIN_PASSWORD`로 관리자 `admin`을 만들며, 그 뒤로는 "스키마는 이미 최신입니다." · "관리자 계정이
+이미 있습니다."를 출력하고 지나갑니다.
+`ADMIN_PASSWORD`는 컨테이너 설정에 남으므로, 첫 로그인 뒤 비밀번호를 바꾸고 이 값 없이 컨테이너를 다시
+만들어도 됩니다. 일회성 명령은 명령을 붙여 실행합니다 — 예:
+`docker exec openarchive openarchive demo --user admin`.
+
+- **첫 기동은 BGE-M3 가중치를 받느라 1~2분 걸리고, 메모리는 5GB 이상**을 줍니다. 가중치는 `/data`
+  볼륨에 남습니다 — 볼륨·자원·진입점 상세는 [운영 가이드 「앱 이미지」](docs/OPERATIONS.md#앱-이미지).
+- 같은 호스트의 DB에 붙을 때는 `localhost` 대신 `host.docker.internal`(Linux는
+  `--add-host=host.docker.internal:host-gateway`를 함께)을 씁니다.
 
 ### 각 단계가 하는 일
 
-- **`pip install -e ".[local]"`** — `local`은 BGE-M3 임베딩 모델입니다 (torch 포함, 수 GB). 동작만
-  빠르게 확인하려면 `".[dev]"`로 설치하고 `EMBEDDING_PROVIDER=local`을 빼도 됩니다 — 가짜 벡터로
-  파이프라인 전 구간이 돌지만 **검색 결과에 의미가 없으므로** 실제 사용에는 `local`이 필요합니다.
+- **`pipx install "openarchive-server[local]"`** — `local`은 BGE-M3 임베딩 모델입니다 (torch 포함, 수 GB).
+  pipx가 3.12보다 낮은 Python을 기본으로 쓰면 `--python python3.12`를 붙입니다. 동작만 빠르게 확인하려면
+  `[local]` 없이 설치하고 `EMBEDDING_PROVIDER=local`을 빼도 됩니다 — 가짜 벡터로 파이프라인 전 구간이
+  돌지만 **검색 결과에 의미가 없으므로** 실제 사용에는 `local`이 필요합니다.
 - **`openarchive init`** — **연결 확인 → 확장·권한 점검 → 스키마 적용 → 준비 상태 보고**를 한 번에
   합니다. 확인이 적용보다 먼저라 `vector` 확장이 없거나 권한이 모자라면 스키마를 건드리기 전에 무엇이
   왜 필요한지 알려주고 멈추고, 기존 테이블이 있으면 아무것도 바꾸지 않습니다
@@ -117,17 +132,18 @@ OpenArchive는 표준 PostgreSQL 17 + pgvector 인터페이스에 의존하므�
 <summary>Docker로 DB만 띄우는 명령 — 바꿀 줄이 없습니다</summary>
 
 ```bash
-git clone https://github.com/jeongeundev/OpenArchive.git
-cd OpenArchive
-docker compose up -d --wait
-cd backend
-python3 -m venv .venv && source .venv/bin/activate
-pip install -e ".[local]"
+docker run -d --name openarchive-db -p 5433:5432 \
+  -e POSTGRES_USER=openarchive -e POSTGRES_PASSWORD=openarchive -e POSTGRES_DB=openarchive \
+  pgvector/pgvector:pg17
+until docker exec openarchive-db pg_isready -h 127.0.0.1 -q; do sleep 1; done   # DB가 연결을 받을 때까지
+pipx install "openarchive-server[local]"
 ADMIN_PASSWORD='change-me' openarchive init --yes --dsn "postgresql://openarchive:openarchive@localhost:5433/openarchive"
 EMBEDDING_PROVIDER=local openarchive serve
 ```
 
 </details>
+
+소스에서 설치해 개발하는 절차는 [CONTRIBUTING](CONTRIBUTING.md#개발-환경)에 있습니다.
 
 ---
 
