@@ -20,6 +20,8 @@ from app.services.documents import (
     apply_extracted_text,
     create_document,
     create_text_document,
+    find_same_original,
+    find_same_text,
     get_document_version,
     list_documents,
     replace_original_file,
@@ -846,3 +848,57 @@ async def test_embedding_status_filter_keeps_its_column_meaning(documents_conn):
         documents_conn, embedding_status="pending", extraction_status="done"
     )
     assert [d["id"] for d in will_embed] == [ids["done"]]
+
+
+# ── import 재실행이 두 벌을 만들지 않게 — 같은 소유자·같은 내용을 찾는다 (#95-b) ────
+
+
+async def test_find_same_original_matches_any_file_version_of_the_owner(documents_conn):
+    """원본을 교체해도 옛 판을 다시 가져오면 이미 있는 것으로 본다 — 판은 지워지지 않는다(ADR-046)."""
+    document = await create_document(
+        documents_conn, filename="guide.txt", data=b"first", owner_id="alice"
+    )
+    await replace_original_file(
+        documents_conn,
+        document["id"],
+        user_id="alice",
+        filename="guide.txt",
+        data=b"second",
+        client_version=1,
+    )
+
+    found = [
+        await find_same_original(documents_conn, owner_id="alice", data=data)
+        for data in (b"first", b"second", b"other")
+    ]
+    assert found == [document["id"], document["id"], None]
+
+
+async def test_find_same_original_ignores_other_owners(documents_conn):
+    """남의 공개 문서와 바이트가 같아도 내 문서는 따로 만들어야 한다 — 소유가 다르다."""
+    await create_document(documents_conn, filename="guide.txt", data=b"shared", owner_id="bob")
+
+    assert await find_same_original(documents_conn, owner_id="alice", data=b"shared") is None
+
+
+async def test_find_same_text_matches_recognized_documents_of_the_owner(documents_conn):
+    """원본이 있는 문서의 텍스트도 본다 — export한 파일 문서를 같은 설치에 다시 넣으면 두 벌이
+    되어서는 안 된다. 인식 전 문서는 텍스트가 비어 있을 뿐이라 비교 대상이 아니다."""
+    text_doc = await create_text_document(
+        documents_conn, title="메모", content="같은 본문", owner_id="alice"
+    )
+    file_doc = await create_document(
+        documents_conn, filename="file.md", data="파일 본문".encode(), owner_id="alice"
+    )
+    scan = (Path(__file__).parent / "fixtures" / "scan_tax_page1.jpg").read_bytes()
+    pending = await create_document(
+        documents_conn, filename="scan.jpg", data=scan, owner_id="alice"
+    )
+    assert pending["extraction_status"] == "pending"
+    await create_text_document(documents_conn, title="남", content="남의 본문", owner_id="bob")
+
+    found = [
+        await find_same_text(documents_conn, owner_id="alice", content=content)
+        for content in ("같은 본문", "파일 본문", "", "남의 본문")
+    ]
+    assert found == [text_doc["id"], file_doc["id"], None, None]

@@ -657,6 +657,44 @@ async def get_document(
     return document
 
 
+async def find_same_original(
+    conn: psycopg.AsyncConnection, *, owner_id: str, data: bytes
+) -> UUID | None:
+    """이 바이트와 같은 원본 판을 가진 소유자의 문서. import 재실행이 두 벌을 만들지 않게 한다.
+
+    교체된 옛 판도 본다 — 판은 지워지지 않으므로(ADR-046) 옛 파일을 다시 넣는 것도 이미 있는 것이다.
+    """
+    cur = await conn.execute(
+        """
+        SELECT f.document_id
+        FROM document_files f
+        JOIN documents d ON d.id = f.document_id
+        WHERE d.owner_id = %s AND f.sha256 = %s
+        LIMIT 1
+        """,
+        (owner_id, hashlib.sha256(data).hexdigest()),
+    )
+    row = await cur.fetchone()
+    return row[0] if row else None
+
+
+async def find_same_text(
+    conn: psycopg.AsyncConnection, *, owner_id: str, content: str
+) -> UUID | None:
+    """이 텍스트를 가진 소유자의 문서. 원본이 있는 문서도 본다 — export는 파일 문서도 텍스트로
+    내보내므로, 같은 설치에 다시 넣을 때 두 벌을 만들지 않게. 인식 전 문서는 텍스트가 비어 있을 뿐이다."""
+    cur = await conn.execute(
+        """
+        SELECT id FROM documents
+        WHERE owner_id = %s AND extraction_status = 'done' AND content_hash = %s
+        LIMIT 1
+        """,
+        (owner_id, hashlib.sha256(content.encode("utf-8")).hexdigest()),
+    )
+    row = await cur.fetchone()
+    return row[0] if row else None
+
+
 async def get_original_file(
     conn: psycopg.AsyncConnection,
     document_id: UUID,
