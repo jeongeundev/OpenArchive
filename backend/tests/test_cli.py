@@ -15,7 +15,7 @@ from psycopg.conninfo import conninfo_to_dict, make_conninfo
 from test_triggers import insert_document, mark_document_ready, unit_vector
 
 from openarchive.cli import OWNED_TABLES, main, probe_capabilities
-from openarchive.migrations import migration_files
+from openarchive.migrations import migration_files, run_migrations
 from openarchive.services.auth import hash_password, verify_password
 from openarchive.services.documents import create_document
 
@@ -315,6 +315,31 @@ def test_init_proceeds_when_a_dba_preinstalled_the_untrusted_extension(
     )
 
     assert exit_code == 0
+    assert applied_migrations(non_superuser_dsn) == [path.name for path in migration_files()]
+
+
+def test_a_non_superuser_can_apply_every_migration_as_an_upgrade(
+    non_superuser_dsn: str, clean_db: str, tmp_path
+):
+    """마이그레이션 하나하나를 **새 세션에서 처음 적용되는 파일**로 적용해도 통과한다.
+
+    새 설치는 한 세션에서 001부터 적용하므로 앞 파일이 pgvector 라이브러리를 이미 로드한다.
+    업그레이드(`pip install -U` 뒤 `init`)는 새 파일만 적용하는데, 라이브러리가 아직 로드되지
+    않은 세션에서 함수 정의의 `SET hnsw.ef_search`는 정의되지 않은 자리표시자라 비슈퍼유저에게
+    거부된다 — 실 OpenSQL VM에서 023 → 024 업그레이드가 InsufficientPrivilege로 멈췄다.
+    로컬 컨테이너의 기본 롤은 슈퍼유저라 이 경로가 가려져 있었다.
+    """
+    with psycopg.connect(clean_db) as conn:  # DBA가 vector만 미리 깔아주는 기사용자 경로
+        conn.execute("CREATE EXTENSION vector")
+        conn.commit()
+
+    upgraded = tmp_path / "migrations"
+    upgraded.mkdir()
+    for path in migration_files():
+        (upgraded / path.name).write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
+        # 호출마다 새 연결 — 이 파일 하나만 적용하는 업그레이드 세션이다.
+        assert asyncio.run(run_migrations(non_superuser_dsn, upgraded)) == [path.name]
+
     assert applied_migrations(non_superuser_dsn) == [path.name for path in migration_files()]
 
 
