@@ -5,7 +5,12 @@ Web UI·REST·MCP와 같은 자리의 인터페이스이며, 로직을 새로 �
 `app.services.system.get_system_status`가 그대로 한다.
 
 **하지 않는 것**: API·워커·프론트 기동, DB 자동 탐색, 문서 공급. init은 DB를 준비된
-상태로 만들고 첫 관리자를 만든 뒤 다음 단계를 안내하는 데서 끝난다.
+상태로 만들고 첫 관리자를 만든 뒤 다음 단계를 안내하는 데서 끝난다. 기동은 `serve`,
+문서를 넣고 빼고 찾는 일은 `import`·`export`·`search`가 따로 맡는다(ADR-039 결정 2 개정).
+
+`import`·`export`·`search`는 `--user`로 받은 계정의 권한으로 동작한다. 셸 접근자는 이미
+DB를 만질 수 있으므로 비밀번호를 받지 않는다 — `reset-password`와 같은 이유다. 대신 계정이
+실제로 있는지는 확인한다. 없는 이름으로 넣은 문서는 아무도 로그인해 볼 수 없다.
 
 첫 관리자를 init이 만드는 이유는 자체 가입이 없어서다(ADR-028) — 계정을 만들어 줄 사람이
 있어야 설치가 끝난다. 웹의 "첫 가입자가 관리자" 방식은 설치 직후 URL에 먼저 닿은 사람이
@@ -32,8 +37,10 @@ from pathlib import Path
 from uuid import UUID
 
 import psycopg
+import yaml
 
 from app.config import ENV_FILE, get_settings
+from app.embeddings import get_provider
 from app.migrations import (
     APPLIED_SQL,
     HISTORY_TABLE_SQL,
@@ -47,9 +54,28 @@ from app.services.auth import (
     UserNotFound,
     admin_exists,
     create_user,
+    list_users,
     reset_password,
 )
-from app.services.documents import DocumentNotFound, OriginalFileMissing
+from app.services.documents import (
+    DocumentNotFound,
+    EmptyExtractedText,
+    ExtractedTextTooLarge,
+    InvalidVisibility,
+    OriginalFileMissing,
+    create_document,
+    create_text_document,
+    find_same_original,
+    find_same_text,
+    get_document,
+    list_documents,
+)
+from app.services.parsing import (
+    SUPPORTED_CONTENT_TYPES,
+    UnsupportedFileType,
+    detect_content_type,
+)
+from app.services.search import MAX_K, SearchHit, search_documents
 from app.services.system import (
     ReextractSummary,
     get_system_status,
@@ -57,6 +83,7 @@ from app.services.system import (
     reextract_all,
     reextract_one,
 )
+from app.services.visibility import VISIBILITY_VALUES
 
 # gen_random_uuid()가 코어에 들어온 버전. 그 아래에서는 002가 기동하지 못한다.
 MINIMUM_SERVER_VERSION_NUM = 130000
@@ -694,6 +721,326 @@ def run_reextract(*, dsn: str | None, document_id: UUID | None) -> int:
     return 1 if summary.failed else 0
 
 
+class _UnknownUser(Exception):
+    """`--user`로 받은 계정이 없다."""
+
+
+async def _require_user(conn: psycopg.AsyncConnection, username: str) -> None:
+    if username not in {user["username"] for user in await list_users(conn)}:
+        raise _UnknownUser(username)
+
+
+# 파일 첫 줄이 `---`인 YAML 블록. export가 쓰는 모양이자 Obsidian 볼트의 관례다.
+_FRONTMATTER_RE = re.compile(r"\A---\r?\n(.*?)^---[ \t]*(?:\r?\n|\Z)", re.DOTALL | re.MULTILINE)
+
+# 파일 하나의 실패로 보고하고 다음 파일로 넘어가는 예외. 파싱 실패(ValueError)는 업로드
+# 라우터가 400으로 옮기는 것과 같은 범위다. 그 밖의 DB 오류는 폴더를 계속 돌 이유가 없다.
+_IMPORT_FILE_ERRORS = (ValueError, EmptyExtractedText, ExtractedTextTooLarge, InvalidVisibility)
+
+
+@dataclass
+class _Frontmatter:
+    title: str | None
+    tags: list[str]
+    visibility: str | None
+    body: str
+
+
+def _read_frontmatter(data: bytes) -> _Frontmatter | None:
+    """frontmatter가 있는 마크다운이면 메타데이터와 본문으로 나눈다. 없으면 None.
+
+    frontmatter는 문서 텍스트가 아니라 메타데이터다 — 본문에 남기면 검색·청킹에 YAML이 섞인다.
+    title·tags·visibility만 읽고 나머지 키(aliases 등)는 버린다.
+    """
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+    match = _FRONTMATTER_RE.match(text)
+    if match is None:
+        return None
+    try:
+        header = yaml.safe_load(match.group(1)) or {}
+    except yaml.YAMLError as error:
+        raise ValueError(f"frontmatter를 읽지 못했습니다: {error.__class__.__name__}") from error
+    if not isinstance(header, dict):
+        # 호출부 타입 오류가 아니라 파일 내용이 잘못된 것이다 — 파싱 실패와 같은 ValueError로 둬야
+        # import가 이 파일만 실패로 보고하고 다음 파일로 넘어간다.
+        raise ValueError("frontmatter가 키: 값 형식이 아닙니다.")  # noqa: TRY004
+    tags = header.get("tags") or []
+    return _Frontmatter(
+        title=str(header["title"]) if header.get("title") is not None else None,
+        tags=[str(tag) for tag in tags] if isinstance(tags, list) else [str(tags)],
+        visibility=header.get("visibility"),
+        body=text[match.end():],
+    )
+
+
+def _import_candidates(folder: Path) -> list[Path]:
+    """하위 폴더까지의 파일. 숨김 파일·폴더(.obsidian, .git)는 문서가 아니므로 뺀다."""
+    return [
+        path
+        for path in sorted(folder.rglob("*"))
+        if path.is_file()
+        and not any(part.startswith(".") for part in path.relative_to(folder).parts)
+    ]
+
+
+@dataclass
+class _ImportSummary:
+    imported: int = 0
+    existing: int = 0
+    unsupported: int = 0
+    failed: int = 0
+    awaiting_ocr: int = 0
+
+
+async def _import_file(
+    conn: psycopg.AsyncConnection,
+    path: Path,
+    *,
+    username: str,
+    tags: list[str],
+    visibility: str,
+) -> dict | None:
+    """파일 하나를 문서로 만든다. 이미 있으면 None.
+
+    업로드와 같은 진입점(`create_document`)이라 원본을 보관한다(ADR-046). frontmatter가
+    있는 마크다운만 예외로, 본문을 텍스트 진입점으로 넣는다 — 원본 바이트에는 메타데이터가
+    섞여 있어 그대로 추출하면 문서 텍스트가 달라진다.
+    """
+    data = path.read_bytes()
+    front = _read_frontmatter(data) if detect_content_type(path.name) == "md" else None
+    if front is None:
+        if await find_same_original(conn, owner_id=username, data=data):
+            return None
+        return await create_document(
+            conn,
+            filename=path.name,
+            data=data,
+            owner_id=username,
+            tags=tags,
+            visibility=visibility,
+        )
+    if await find_same_text(conn, owner_id=username, content=front.body):
+        return None
+    return await create_text_document(
+        conn,
+        title=front.title or path.stem,
+        content=front.body,
+        owner_id=username,
+        tags=front.tags + tags,
+        visibility=front.visibility or visibility,
+    )
+
+
+async def _import(
+    dsn: str, folder: Path, *, username: str, tags: list[str], visibility: str
+) -> _ImportSummary:
+    limit_mb = get_settings().max_upload_mb
+    summary = _ImportSummary()
+    async with await _connect(dsn, autocommit=True) as conn:
+        await _require_user(conn, username)
+        for path in _import_candidates(folder):
+            name = path.relative_to(folder).as_posix()
+            try:
+                detect_content_type(path.name)
+            except UnsupportedFileType:
+                summary.unsupported += 1
+                continue
+            try:
+                # 업로드와 같은 상한이다 — CLI가 웹보다 큰 파일을 받을 이유가 없다.
+                if path.stat().st_size > limit_mb * 1024 * 1024:
+                    raise ValueError(f"업로드 파일은 {limit_mb}MB를 넘을 수 없습니다.")
+                document = await _import_file(
+                    conn, path, username=username, tags=tags, visibility=visibility
+                )
+            except _IMPORT_FILE_ERRORS as error:
+                summary.failed += 1
+                print(f"  실패 {name}: {error}")
+                continue
+            if document is None:
+                summary.existing += 1
+                continue
+            summary.imported += 1
+            if document["extraction_status"] == "pending":
+                summary.awaiting_ocr += 1
+    return summary
+
+
+def run_import(
+    *, dsn: str | None, folder: Path, username: str, tags: list[str], visibility: str
+) -> int:
+    """폴더의 문서를 `username` 소유로 넣는다. 같은 내용이 이미 있으면 건너뛴다."""
+    if not folder.is_dir():
+        print(f"폴더가 아닙니다: {folder}")
+        return 2
+    dsn = dsn or get_settings().database_url
+    try:
+        summary = asyncio.run(
+            _import(dsn, folder, username=username, tags=tags, visibility=visibility)
+        )
+    except _ConnectionFailed as error:
+        print(f"연결하지 못했습니다: {error}")
+        return 1
+    except _UnknownUser:
+        print(f"'{username}' 계정이 없습니다. 아무것도 넣지 않았습니다.")
+        return 1
+    print(
+        f"가져옴 {summary.imported}건 · 이미 있음 {summary.existing}건"
+        f" · 지원하지 않는 형식 {summary.unsupported}건 · 실패 {summary.failed}건"
+    )
+    if summary.awaiting_ocr:
+        print(
+            f"텍스트 인식 대기 {summary.awaiting_ocr}건 — 원본이 이미지나 스캔이라"
+            " 워커가 텍스트를 인식한 뒤 문서 텍스트가 채워집니다."
+        )
+    if summary.imported:
+        print("임베딩과 관계 판정은 워커가 합니다 — openarchive serve가 돌고 있어야 검색에 나타납니다.")
+        print("많이 넣었다면 워커가 다 처리한 뒤 openarchive rebuild-edges로 관계를 전체 기준으로 맞추세요.")
+    return 1 if summary.failed else 0
+
+
+# 파일 이름에 쓸 수 없거나(`/`, NUL) 운영체제마다 막히는(`:`, `?` 등) 문자.
+_UNSAFE_FILENAME_RE = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
+
+
+def _export_filename(title: str, taken: set[str]) -> str:
+    """제목에서 파일 이름을 만든다. 겹치면 ` (2)`를 붙인다.
+
+    대소문자만 다른 이름도 겹친 것으로 본다 — macOS·Windows 파일 시스템은 둘을 같은 파일로
+    다뤄 뒤의 것이 앞의 것을 덮는다. 앞의 점은 뗀다 — 숨김 파일이 되면 import가 건너뛴다.
+    """
+    stem = _UNSAFE_FILENAME_RE.sub("_", title).strip().lstrip(".")[:100].strip() or "문서"
+    name, counter = f"{stem}.md", 2
+    while name.casefold() in taken:
+        name, counter = f"{stem} ({counter}).md", counter + 1
+    taken.add(name.casefold())
+    return name
+
+
+def _markdown_with_frontmatter(document: dict) -> str:
+    header = yaml.safe_dump(
+        {
+            "title": document["title"],
+            "tags": list(document["tags"]),
+            "visibility": document["visibility"],
+        },
+        allow_unicode=True,
+        sort_keys=False,
+    )
+    return f"---\n{header}---\n{document['content']}"
+
+
+async def _export(dsn: str, folder: Path, *, username: str) -> tuple[int, int]:
+    written = skipped = 0
+    async with await _connect(dsn, autocommit=True) as conn:
+        await _require_user(conn, username)
+        # 목록은 열람 범위(공개 + 소유)다. 그중 소유 문서만 내보낸다 — 남의 공개 문서를
+        # 다시 넣으면 넣은 사람의 소유가 되어 소유자가 조용히 바뀐다.
+        summaries = [
+            summary
+            for summary in await list_documents(conn, user_id=username)
+            if summary["owner_id"] == username
+        ]
+        folder.mkdir(parents=True, exist_ok=True)
+        taken: set[str] = set()
+        # 목록은 최신순이다. 오래된 문서부터 이름을 잡아야 제목이 겹칠 때 번호가 매번 같다.
+        for summary in reversed(summaries):
+            # 인식 중·인식 실패 문서는 문서 텍스트가 비어 있다. 빈 파일은 다시 넣을 때 실패한다.
+            if summary["extraction_status"] != "done":
+                skipped += 1
+                continue
+            document = await get_document(conn, summary["id"], user_id=username)
+            path = folder / _export_filename(document["title"], taken)
+            path.write_text(_markdown_with_frontmatter(document), encoding="utf-8", newline="")
+            written += 1
+    return written, skipped
+
+
+def run_export(*, dsn: str | None, folder: Path, username: str) -> int:
+    """`username` 소유 문서를 문서 텍스트 + frontmatter(title·tags·visibility) 마크다운으로 쓴다.
+
+    원본 파일은 내보내지 않는다 — 다시 넣으면 파일 문서도 문서 텍스트로 돌아온다.
+    """
+    if folder.exists() and (not folder.is_dir() or any(folder.iterdir())):
+        print(f"폴더가 비어 있지 않습니다: {folder} — 덮어쓰지 않으려고 멈췄습니다.")
+        return 2
+    dsn = dsn or get_settings().database_url
+    try:
+        written, skipped = asyncio.run(_export(dsn, folder, username=username))
+    except _ConnectionFailed as error:
+        print(f"연결하지 못했습니다: {error}")
+        return 1
+    except _UnknownUser:
+        print(f"'{username}' 계정이 없습니다.")
+        return 1
+    print(f"내보냄 {written}건 → {folder}")
+    if skipped:
+        print(f"텍스트가 없어 건너뜀 {skipped}건 — 텍스트 인식 중이거나 인식에 실패한 문서입니다.")
+    return 0
+
+
+async def _search(
+    dsn: str, query: str, *, username: str, tags: list[str], content_type: str | None, k: int
+) -> list[SearchHit]:
+    async with await _connect(dsn, autocommit=True) as conn:
+        await _require_user(conn, username)
+        return await search_documents(
+            conn,
+            get_provider(),
+            query=query,
+            user_id=username,
+            tags=tags,
+            content_type=content_type,
+            k=k,
+        )
+
+
+def _snippet(text: str, width: int = 160) -> str:
+    flat = " ".join(text.split())
+    return flat if len(flat) <= width else flat[: width - 1] + "…"
+
+
+def run_search(
+    *,
+    dsn: str | None,
+    query: str,
+    username: str,
+    tags: list[str],
+    content_type: str | None,
+    k: int,
+) -> int:
+    """`username`이 볼 수 있는 문서에서 찾는다. 웹 검색과 같은 단일 SQL이다(`search_documents`)."""
+    if not 1 <= k <= MAX_K:
+        print(f"k는 1 이상 {MAX_K} 이하여야 합니다.")
+        return 2
+    dsn = dsn or get_settings().database_url
+    try:
+        hits = asyncio.run(
+            _search(
+                dsn, query, username=username, tags=tags, content_type=content_type, k=k
+            )
+        )
+    except _ConnectionFailed as error:
+        print(f"연결하지 못했습니다: {error}")
+        return 1
+    except _UnknownUser:
+        print(f"'{username}' 계정이 없습니다.")
+        return 1
+    if not hits:
+        print("결과가 없습니다.")
+        return 0
+    for rank, hit in enumerate(hits, start=1):
+        tag_text = f"  [{', '.join(hit.tags)}]" if hit.tags else ""
+        print(f"{rank}. {hit.title}  {hit.score:.3f}{tag_text}")
+        print(f"   {_snippet(hit.content)}")
+        if hit.via is not None:
+            print(f"   관계로 찾음: {hit.via.kind} · {hit.via.depth}단계")
+        print(f"   {hit.document_id}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="openarchive", description="OpenArchive 운영 CLI")
     subcommands = parser.add_subparsers(dest="command", required=True)
@@ -741,7 +1088,57 @@ def main(argv: list[str] | None = None) -> int:
     target.add_argument("document_id", nargs="?", type=UUID, help="다시 추출할 문서 ID")
     target.add_argument("--all", action="store_true", help="원본이 있는 문서 전부")
     reextract.add_argument("--dsn", help="DB 연결 문자열. 생략하면 DATABASE_URL을 씁니다.")
+    user_help = "이 계정의 권한으로 동작합니다."
+    importer = subcommands.add_parser(
+        "import", help="폴더의 문서를 하위 폴더까지 넣습니다. 이미 있는 내용은 건너뜁니다."
+    )
+    importer.add_argument("folder", type=Path)
+    importer.add_argument("--user", required=True, help=f"{user_help} 넣은 문서의 소유자가 됩니다.")
+    importer.add_argument(
+        "--tag", action="append", default=[], help="모든 문서에 붙일 태그. 여러 번 줄 수 있습니다."
+    )
+    importer.add_argument(
+        "--visibility",
+        choices=VISIBILITY_VALUES,
+        default="public",
+        help="frontmatter에 없을 때의 열람 범위 (기본: public)",
+    )
+    importer.add_argument("--dsn", help="DB 연결 문자열. 생략하면 DATABASE_URL을 씁니다.")
+    exporter = subcommands.add_parser(
+        "export", help="소유 문서를 frontmatter 붙은 마크다운으로 내보냅니다."
+    )
+    exporter.add_argument("folder", type=Path, help="비어 있거나 없는 폴더")
+    exporter.add_argument("--user", required=True, help=f"{user_help} 이 계정 소유 문서만 내보냅니다.")
+    exporter.add_argument("--dsn", help="DB 연결 문자열. 생략하면 DATABASE_URL을 씁니다.")
+    searcher = subcommands.add_parser(
+        "search", help="문서를 검색합니다. 질의 임베딩은 EMBEDDING_PROVIDER를 따릅니다."
+    )
+    searcher.add_argument("query")
+    searcher.add_argument("--user", required=True, help=f"{user_help} 볼 수 있는 문서만 찾습니다.")
+    searcher.add_argument("--tag", action="append", default=[], help="이 태그 중 하나가 붙은 문서만")
+    searcher.add_argument("--type", choices=SUPPORTED_CONTENT_TYPES, help="이 형식의 문서만")
+    searcher.add_argument("-k", type=int, default=10, help=f"결과 수 (1~{MAX_K}, 기본: 10)")
+    searcher.add_argument("--dsn", help="DB 연결 문자열. 생략하면 DATABASE_URL을 씁니다.")
     args = parser.parse_args(argv)
+    if args.command == "import":
+        return run_import(
+            dsn=args.dsn,
+            folder=args.folder,
+            username=args.user,
+            tags=args.tag,
+            visibility=args.visibility,
+        )
+    if args.command == "export":
+        return run_export(dsn=args.dsn, folder=args.folder, username=args.user)
+    if args.command == "search":
+        return run_search(
+            dsn=args.dsn,
+            query=args.query,
+            username=args.user,
+            tags=args.tag,
+            content_type=args.type,
+            k=args.k,
+        )
     if args.command == "reextract":
         return run_reextract(dsn=args.dsn, document_id=None if args.all else args.document_id)
     if args.command == "rebuild-edges":

@@ -126,6 +126,43 @@ openarchive serve --host 0.0.0.0 --port 9000
 - **죽은 프로세스를 되살리지는 않습니다.** 배포 호스트에서는 systemd가 그 역할을 합니다
   (ADR-038 · `scripts/openarchive-worker.service`).
 
+### `openarchive import` · `export` · `search`
+
+셸에서 문서를 넣고, 빼고, 찾습니다. 셋 다 `--user`로 준 계정의 권한으로 동작합니다 — 넣은 문서의
+소유자, 검색·내보내기의 열람 범위가 이 계정입니다. 계정이 없으면 아무것도 하지 않고 끝납니다.
+
+```bash
+openarchive import ./docs --user alice                        # 하위 폴더까지
+openarchive import ./docs --user alice --tag 회의 --visibility private
+openarchive export ./backup --user alice                      # 비어 있거나 없는 폴더
+openarchive search "설치 절차" --user alice --tag 운영 -k 5
+```
+
+**import**
+- 업로드와 같은 형식을 받고 같은 상한(`MAX_UPLOAD_MB`)을 적용합니다. 원본 파일도 업로드처럼 보관합니다.
+  숨김 파일·폴더(`.obsidian`, `.git`)는 건너뛰고, 모르는 형식은 **지원하지 않는 형식**으로 셉니다.
+- **frontmatter가 있는 마크다운**은 `title`·`tags`·`visibility`를 메타데이터로 읽고 본문만 문서 텍스트로
+  넣습니다(원본 파일 없음). `--tag`는 더해지고, `--visibility`는 frontmatter에 없을 때만 씁니다.
+- **같은 내용은 다시 넣지 않습니다** — 같은 소유자에게 같은 원본 파일(교체된 옛 판 포함)이나 같은 문서
+  텍스트가 있으면 **이미 있음**으로 셉니다. 중간에 실패했으면 그대로 다시 실행하면 됩니다.
+- 한 파일의 실패(추출 실패·빈 파일·상한 초과·잘못된 frontmatter)는 **실패**로 출력하고 계속합니다.
+  실패가 하나라도 있으면 종료 코드가 1입니다.
+- 임베딩과 관계 판정은 워커가 합니다. `openarchive serve`가 돌고 있어야 검색에 나타나고, 이미지·스캔은
+  워커가 텍스트를 인식한 뒤 채워집니다. 많이 넣었다면 워커가 다 처리한 뒤 `rebuild-edges`를 한 번 돌립니다.
+
+**export**
+- `--user` **소유 문서만** 문서 텍스트 + frontmatter(`title`·`tags`·`visibility`) 마크다운으로 씁니다.
+  남의 공개 문서를 빼는 이유는 다시 넣으면 넣은 사람의 소유가 되기 때문입니다.
+- 원본 파일은 내보내지 않습니다. 텍스트 인식 중이거나 인식에 실패한 문서는 텍스트가 없어 건너뜁니다.
+- 파일 이름은 제목에서 만들고, 겹치면 ` (2)`를 붙입니다. 이미 파일이 있는 폴더에는 쓰지 않습니다.
+- 결과를 다른 설치에 `import`하면 문서 텍스트·태그·열람 범위가 그대로 돌아옵니다.
+
+**search**
+- 웹 검색과 같은 단일 SQL(`search_documents`)입니다. `--tag`(여러 번)·`--type`·`-k`(1~20)를 받습니다.
+- 질의 임베딩은 `EMBEDDING_PROVIDER`를 따릅니다. **문서를 임베딩한 워커와 같은 값이어야** 합니다 —
+  다르면 에러 없이 무의미한 결과가 나옵니다. 워커를 `local`로 돌렸다면 `EMBEDDING_PROVIDER=local
+  openarchive search …`처럼 맞춥니다.
+
 ### `openarchive rebuild-edges`
 
 모든 문서의 관계(`document_edges`)를 **전체 코퍼스 기준으로** 다시 계산합니다. **대량 적재 뒤 한 번**
