@@ -167,6 +167,24 @@ openarchive search "설치 절차" --user alice --tag 운영 -k 5
   다르면 에러 없이 무의미한 결과가 나옵니다. 워커를 `local`로 돌렸다면 `EMBEDDING_PROVIDER=local
   openarchive search …`처럼 맞춥니다.
 
+### `openarchive demo`
+
+예제 문서 64건(가상 회사 다섯 부서의 사내 규정, `backend/app/demo_corpus/`)을 넣어 검색·관계·군집을 바로
+살펴봅니다. 코퍼스는 패키지에 실려 있어 pip 설치본에서도 이 한 줄로 됩니다.
+
+```bash
+openarchive demo --user admin              # 넣고 → 임베딩 대기 → 관계 재계산까지
+openarchive demo --user admin --no-wait    # 넣기만
+```
+
+- `--user`는 필수입니다. 예제 문서의 소유자가 되고, 비공개 4건은 이 계정에만 보입니다(ADR-018) —
+  로그인해서 볼 계정을 줍니다.
+- 기본은 **워커가 전부 임베딩할 때까지 기다린 뒤 `rebuild-edges`를 한 번** 합니다. 다른 터미널에서
+  `openarchive serve`가 돌고 있어야 하며, `--timeout`(기본 600초) 안에 끝나지 않으면 종료 코드 1로
+  끝납니다 — 문서는 들어가 있으니 워커를 띄워 처리한 뒤 `rebuild-edges`만 실행하면 됩니다.
+- 같은 계정에 같은 제목이 이미 있으면 건너뜁니다. 다시 실행해도 두 벌이 되지 않습니다.
+- 측정용 `scripts/seed_demo.py`도 같은 적재 로직을 씁니다. 계정 없는 소유자(`seed`)와 `--reset`이 더 있습니다.
+
 ### `openarchive rebuild-edges`
 
 모든 문서의 관계(`document_edges`)를 **전체 코퍼스 기준으로** 다시 계산합니다. **대량 적재 뒤 한 번**
@@ -182,7 +200,7 @@ openarchive rebuild-edges --dsn "postgresql://app@<vip>:6432/<pool_name>"
   문서는 남고, 다시 실행하면 처음부터 같은 결과로 수렴합니다.
 - 진행은 `done/total`로 출력됩니다. 관계 판정은 트리거와 같은 DB 함수(`rebuild_document_edges`)라
   결과의 규칙이 다르지 않습니다.
-- `scripts/seed_demo.py`는 적재를 마친 뒤 이것을 자동으로 한 번 합니다.
+- `openarchive demo`(와 `scripts/seed_demo.py`)는 적재를 마친 뒤 이것을 자동으로 한 번 합니다.
 - **평소의 관계 계산은 워커가 잡으로 처리합니다**(`embedding_jobs`의 `kind='edges'` — ADR-029 결정 3
   개정). 적재 직후 관계가 보이지 않으면 이 명령부터 돌리기 전에 **워커가 도는지**와 `/admin/status`의
   관계 미반영 문서 수를 먼저 확인하세요 — 잡이 아직 처리되지 않았거나 워커가 멈춘 것일 수 있습니다.

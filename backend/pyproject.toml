@@ -61,7 +61,7 @@ local = ["sentence-transformers"]
 # 빌드된 프론트(ADR-041)와 마이그레이션 SQL을 wheel에 담는다. 빠지면 설치본에서 화면이
 # 뜨지 않거나 init·API startup이 스키마를 찾지 못한다.
 [tool.setuptools.package-data]
-app = ["static/**/*", "migrations/*.sql"]
+app = ["static/**/*", "migrations/*.sql", "demo_corpus/**/*.md"]
 
 [tool.setuptools.packages.find]
 # tests는 설치 대상이 아니다. app과 MCP 서버 패키지만 배포한다.

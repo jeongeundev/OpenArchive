@@ -24,6 +24,17 @@ class DocumentSummary(BaseModel):
     updated_at: datetime
 
 
+class DocumentProgress(BaseModel):
+    """열람 범위 안 문서의 파이프라인 단계별 수. 인식이 끝난 문서만 임베딩 단계로 센다 (ADR-052)."""
+
+    extracting: int
+    extraction_failed: int
+    pending: int
+    processing: int
+    ready: int
+    error: int
+
+
 class TextVersion(BaseModel):
     version: int
     created_at: datetime

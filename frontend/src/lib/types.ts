@@ -34,6 +34,16 @@ export interface DocumentSummary {
   updated_at: string;
 }
 
+/** 열람 범위 안 문서의 파이프라인 단계별 수. 인식이 끝난 문서만 임베딩 단계로 센다 (ADR-052). */
+export interface DocumentProgress {
+  extracting: number;
+  extraction_failed: number;
+  pending: number;
+  processing: number;
+  ready: number;
+  error: number;
+}
+
 export interface TextVersion {
   version: number;
   created_at: string;

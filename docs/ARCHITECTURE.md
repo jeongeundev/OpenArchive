@@ -384,7 +384,7 @@ CREATE TRIGGER trg_build_document_edges                          -- (008) 정의
 
 - **저장은 단방향, 조회는 대칭이다.** `src_document_id`가 계산 주체이고 재계산은 자기 `src` 행만 교체한다. 양방향 두 행 + `DELETE both`는 남이 발견한 관계를 지워 재실행만으로 그래프가 흔들렸다(같은 규칙 재실행의 자카드 0.971 → 단방향 0.990). 읽는 쪽(검색 순회·관련 문서·태그 추천·군집·진단)이 `src ∪ dst`로 합친다 (ADR-029 개정).
 - **세 설정은 함수 정의에 둔다.** 함수가 끝나면 호출 전 값으로 복원되어 관계 잡 트랜잭션의 나머지를 오염시키지 않는다. `SET LOCAL`로는 안 된다 — OpenProxy 풀 백엔드에 남는 PL/pgSQL generic plan이 이전 계획을 재사용해 `DISCARD PLANS` 뒤에야 먹었다. 실 VM 판정 비용은 10청크 4.6 s → 0.2 s, 159청크 40 s → 2.7 s다 (`OPENSQL_RESEARCH.md` §16). **이 시간이 임베딩 트랜잭션에서 빠진 것이 관계 잡 분리의 이유다.**
-- **이웃 후보는 관계 잡이 처리되는 시점에 청크가 있는 문서뿐이다.** `ready` 전이 시점이 아니라 잡 처리 시점이므로, 큐가 밀리면 그 사이 적재된 문서도 후보에 들어와 대량 적재의 결과가 처리 순서에 따라 달라진다. 어느 쪽이든 먼저 들어온 문서가 나중 문서를 발견하는 것은 보장되지 않으므로, 대량 적재 뒤에는 `openarchive rebuild-edges`로 전체 기준으로 수렴시킨다 (ADR-029 결정 6). `scripts/seed_demo.py`는 적재 끝에 이를 한 번 자동으로 한다.
+- **이웃 후보는 관계 잡이 처리되는 시점에 청크가 있는 문서뿐이다.** `ready` 전이 시점이 아니라 잡 처리 시점이므로, 큐가 밀리면 그 사이 적재된 문서도 후보에 들어와 대량 적재의 결과가 처리 순서에 따라 달라진다. 어느 쪽이든 먼저 들어온 문서가 나중 문서를 발견하는 것은 보장되지 않으므로, 대량 적재 뒤에는 `openarchive rebuild-edges`로 전체 기준으로 수렴시킨다 (ADR-029 결정 6). `openarchive demo`(`app/demo.py`)는 적재 끝에 이를 한 번 자동으로 한다.
 - **판정이 실패해도 청크와 `ready`는 남는다.** 롤백 범위가 관계 잡 트랜잭션뿐이기 때문이다. 예외를 삼키지 않으며 워커의 재시도·백오프가 처리하고, 예산을 소진하면 **잡만** `error`로 격리된다 — `documents.embedding_status`는 건드리지 않는다(청크가 멀쩡해 검색이 그대로 되므로 임베딩 실패 배지를 붙이면 화면이 거짓말을 한다). 그 문서는 `/api/system/status`의 관계 미반영 수에 계속 세어진다.
 - **관계 잡은 낡았다는 이유로 폐기하지 않는다.** 재임베딩이 시작된 문서라도 워커는 `documents`를 `FOR UPDATE`로 잠근 뒤 **지금 있는 청크로 판정하고** 마감한다. 임베딩 잡의 폐기 규칙(워커 루프 3번)을 옮겨 오지 않는 이유는 그 규칙의 전제 *"곧 올 `ready` 전이가 새 잡을 만든다"*가 재임베딩이 성공할 때만 참이기 때문이다 — `error`로 끝나면 `ready` 전이가 영영 오지 않아, 관계를 한 번도 계산하지 않은 문서가 남는데 잡은 `done`이라 관계 미반영 수는 0을 보고한다. 지키는 불변식은 **"`done`이 된 관계 잡은 반드시 판정을 돌렸다"**이며, 그래야 그 0이 참이다 (ADR-029 결정 3 개정).
 
@@ -636,6 +636,8 @@ OpenSQL `patroni.yml`의 PostgreSQL 파라미터는 `max_connections: 100`이다
 | `POST /api/documents` | multipart 업로드. 형식별 파서로 추출 → INSERT. 여기서 트리거가 파이프라인을 자동 기동 — 임베딩 관련 코드 없음. **이미지와 텍스트 레이어가 빈 PDF는 추출하지 않고 `extraction_status='pending'`으로 INSERT해 OCR을 워커 잡에 넘긴다** (「추출 잡」). 그 밖의 형식에서 **텍스트 추출 결과가 비면 400** (아래). **원본 파일은 같은 트랜잭션에서 `document_files`에 1판으로 저장한다** — 원본 저장이 실패하면 문서·텍스트 버전·잡도 남지 않는다. 상한 `MAX_UPLOAD_MB`(기본 50) 초과는 413. 선택 헤더 `Idempotency-Key`(아래) |
 | `POST /api/documents/text` | JSON 텍스트 공급(`txt`·`md`). `filename`은 NULL이며, 파생 데이터는 업로드 경로와 동일하게 DB 트리거가 만든다. 빈 문서 텍스트와 500,000자 초과는 400. 선택 헤더 `Idempotency-Key`(아래) |
 | `GET /api/documents` | 목록 + `status`(임베딩 상태)/`extraction_status`/`tag` 필터, embedding_status·extraction_status 포함. 인식 실패 문서는 `status=pending`에 남으므로 곧 임베딩될 문서는 `extraction_status=done`을 함께 준다 (ADR-052 결정 4 보강) |
+| `GET /api/documents?limit=&offset=` | 같은 목록의 한 페이지(`limit` 1~100). 빼면 전부 — MCP·export는 전체를 본다. 첫 화면은 50건씩 쓴다 (#95-d) |
+| `GET /api/documents/progress` | 열람 범위 안 문서의 파이프라인 단계별 수(`extracting`·`extraction_failed`·`pending`·`processing`·`ready`·`error`). 인식이 끝난 문서만 임베딩 단계로 센다. 합이 목록의 전체 수다 (#95-d) |
 | `GET /api/documents/{id}` | 상세 + 텍스트 버전 목록 + 청크 수 + 청크 기준 버전 + `files`(원본 판 목록 — 메타데이터만, 바이트는 싣지 않는다) |
 | `GET /api/documents/{id}/file` · `GET /api/documents/{id}/files/{n}` | **원본 내려받기** — 최신 판 · 특정 판. 항상 `Content-Disposition: attachment` + `X-Content-Type-Options: nosniff`, 미디어 타입은 확장자 고정 매핑. 볼 수 없는 문서·원본 없음·없는 판은 404 (ADR-046) |
 | `PUT /api/documents/{id}/file` | **원본 교체.** multipart `file` + `current_version`. 새 판을 쌓고(이전 판 보존), 추출 텍스트가 달라졌을 때만 새 텍스트 버전(트리거가 이력·잡 생성). 새 원본이 OCR 대상이면 텍스트를 쓰지 않고 추출 잡으로 넘긴다. 최신 판과 같은 바이트면 아무것도 바꾸지 않는다. 버전 불일치·추출 중 409 · 추출 실패 400 · 상한 초과 413 |
