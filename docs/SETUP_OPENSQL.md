@@ -523,9 +523,9 @@ psql -U postgres -d <기존 DB> -c "CREATE EXTENSION IF NOT EXISTS vector;"
 - 확장이 DB에 없어 앱 롤이 직접 만들면 확장은 public이 아니라 그 스키마에 생긴다 — `vector`(슈퍼유저일 때)뿐
   아니라 `pg_trgm`(trusted라 DB CREATE만으로 만든다)도 그렇다. 확장은 DB에 하나뿐이라, 다른 롤이 쓰려면 그
   스키마의 USAGE가 필요해진다. 조직 DB라면 DBA가 둘 다 public에 미리 만들어 두는 편이 낫다.
-- ⚠️ **HA 구성(동기 복제)에서는 풀 사용자를 추가할 수 없었다(2026-09-30).** OpenProxy 1.1.3이 Patroni
+- ⚠️ **Patroni 동기 복제를 켠 HA 구성에서는 풀 사용자를 추가할 수 없다.** OpenProxy 1.1.3이 Patroni
   `/cluster`의 `sync_standby` 역할을 해석하지 못해, 설정 재로드도 재기동도 실패한다(로그 `unknown variant
-  sync_standby`). 떠 있던 프로세스는 옛 설정으로 계속 서비스한다.
+  sync_standby`). 이 저장소의 HA 환경은 그래서 2026-09-30 비동기로 되돌렸다(§16 5번, ADR-049 개정).
 
 ---
 
@@ -822,7 +822,7 @@ aws ec2 revoke-security-group-ingress --region ap-northeast-2 \
                                   │  쓰기·BEGIN → primary / 트랜잭션 밖 SELECT → replica
    node1 (.201)                node2 (.202)                node3 (.203)
    PostgreSQL Leader    ──►    Replica             ──►     Replica
-                               (둘 중 1대가 sync_standby, 나머지 async — 교정 5)
+                               (둘 다 async — 교정 5)
    Patroni · etcd              Patroni · etcd              Patroni · etcd
 ```
 
@@ -896,14 +896,20 @@ python3 opensql_remote_installer.py --mode 3node
    ExecStartPre=/bin/sh -c "for i in $(seq 30); do /home/opensql/bin/etcdctl --endpoints=http://127.0.0.1:2379 --dial-timeout=1s endpoint health >/dev/null 2>&1 && exit 0; sleep 1; done; exit 0"
    ```
    - 로그: OpenProxy는 journald와 `/home/opensql/logs/<날짜>.openproxy.log`, Patroni는 `/home/opensql/logs/patroni.log`
-5. **동기 복제 1대 (ADR-049)** — 설치기 기본은 비동기다. Patroni DCS 설정에 걸면 재시작 없이 반영된다
+5. **복제는 비동기 그대로 둔다 (ADR-049 개정)** — 설치기 기본이자 공식 문서 예시가 비동기다. failover 때
+   잃을 수 있는 양은 `maximum_lag_on_failover`(1MB)가 막는다 — 그보다 뒤처진 replica는 승격하지 않는다.
+   - ⛔ **OpenProxy 1.1.3에서는 동기 모드(`synchronous_mode: true`)를 켜지 않는다.** Patroni `/cluster`에
+     `sync_standby` 역할이 생기면 OpenProxy가 기동·설정 재로드 때 `unknown variant sync_standby` →
+     `Config parse error`로 종료한다(exit 78). 떠 있는 프로세스는 버티지만 **재시작하는 순간 죽는다.** 9/27에
+     켰다가 9/30에 node2가 이 상태로 발견돼 되돌렸다(#148)
+   - 켜져 있다면 끈다(재시작 없음). 그 뒤 OpenProxy는 자동 재시작 루프에서 바로 뜬다
 
-   ```bash
-   sudo -u opensql /home/opensql/bin/patronictl -c /home/opensql/etc/patroni/patroni.yml edit-config \
-     -s synchronous_mode=true -s synchronous_mode_strict=false -s synchronous_node_count=1 --force
-   ```
-   - 확인: `curl -s http://<노드>:8008/cluster`에서 한 replica의 role이 `sync_standby`, Primary의 `pg_stat_replication.sync_state`가 `sync` 1개·`async` 1개
-   - ⚠️ 동기 모드에서는 **switchover 후보가 `sync_standby`여야 한다.** 다른 replica를 고르면 `412, candidate name does not match with sync_standby`로 거부된다. 특정 노드로 리더를 옮기려면 그 노드가 `sync_standby`가 될 때까지 "현재 sync_standby로 switchover"를 반복한다
+     ```bash
+     sudo -u opensql /home/opensql/bin/patronictl -c /home/opensql/etc/patroni/patroni.yml edit-config \
+       -s synchronous_mode=false --force
+     ```
+   - 확인: `patronictl list`에 `Sync Standby`가 없고, Primary의 `pg_stat_replication.sync_state`가 모두 `async`
+   - 참고(동기 모드를 쓰는 OpenProxy 수정판이 나왔을 때): 동기 모드에서는 **switchover 후보가 `sync_standby`여야 한다.** 다른 replica를 고르면 `412, candidate name does not match with sync_standby`로 거부된다. 특정 노드로 리더를 옮기려면 그 노드가 `sync_standby`가 될 때까지 "현재 sync_standby로 switchover"를 반복한다
 6. **서버 keepalive와 idle 트랜잭션 상한 (ADR-051)** — 기본값(keepalive 7200초, 상한 없음)이면 **죽은 OpenProxy 노드를 거치던 트랜잭션이 Primary에 약 2시간 락을 쥔 채 남는다**(#122 S5a-2 — 워커 13분 넘게 정지). 앱 쪽 keepalive(ADR-048)와 같은 값으로 맞춘다
 
    ```bash
@@ -945,7 +951,7 @@ DATABASE_URL=postgresql://…@192.168.64.200:6432/opensql HA_PASSWORD=… \
 ```
 
 - ⚠️ **측정 전에 QEMU 프로세스 우선순위를 확인한다.** `ps -axo pri,command | grep QEMULauncher`가 `4`(macOS 백그라운드)면 그 VM은 5~6배 느리다. 9/27 측정 중 다시 켠 node1이 이 상태로 하루 동안 돌며 워커 처리량 저하·etcd 지연 경고·무부하 자동 failover의 원인이 됐다. `taskpolicy -B`로는 풀리지 않았고, 리더를 옮긴 뒤 VM을 정상 종료하고 다시 켜서(`31`) 풀었다. 어떤 경로로 백그라운드 우선순위가 붙었는지는 확정하지 못했다
-- 동기 모드에서 리더를 되돌리는 법은 「설치 후 교정」 5를 본다. 전원을 끊은 VM이 다시 VIP를 되찾기까지는 부팅 시간(1~4분)이 걸리므로, 되돌린 뒤 VIP가 node2에 있는지 확인하고 다음 회차를 시작한다
+- 아래 표는 **동기 1대 구성**(9/27~9/30)에서 쟀다. 지금 구성은 비동기다(「설치 후 교정」 5, ADR-049 개정). 동기 모드에서 리더를 되돌리는 법도 교정 5의 참고를 본다. 전원을 끊은 VM이 다시 VIP를 되찾기까지는 부팅 시간(1~4분)이 걸리므로, 되돌린 뒤 VIP가 node2에 있는지 확인하고 다음 회차를 시작한다
 
 | 시나리오 (동기 1대, 표시 없으면 교정 6 적용 후) | 쓰기 중단 | 승격 | 사용자 가시 실패 | 원시 500 | 유실 | 수렴(부하 종료 뒤) |
 |---|---|---|---|---|---|---|
