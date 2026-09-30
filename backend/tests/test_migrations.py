@@ -183,6 +183,23 @@ async def test_a_failing_file_does_not_roll_back_earlier_files(clean_db: str, tm
     assert [r[0] for r in recorded] == ["001_create.sql"]
 
 
+def test_every_extension_is_created_only_if_missing():
+    """확장은 DB 전체에 하나라 우리 이력(`schema_migrations`)이 멱등성을 맡을 수 없다.
+
+    가드 없는 `CREATE EXTENSION`은 DBA가 미리 깔아 둔 DB에서 중간 파일이 duplicate_object로
+    죽어 부분 적용 스키마를 남긴다. 조직 DB에 설치하는 경로(`init --schema`)에서 흔한 일이다.
+    """
+    statements = [
+        line.strip()
+        for path in sorted(MIGRATIONS_DIR.glob("*.sql"))
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip().upper().startswith("CREATE EXTENSION")
+    ]
+
+    assert statements
+    assert [s for s in statements if "IF NOT EXISTS" not in s.upper()] == []
+
+
 async def test_empty_directory_applies_nothing(clean_db: str, tmp_path: Path):
     d = tmp_path / "migrations"
     d.mkdir()

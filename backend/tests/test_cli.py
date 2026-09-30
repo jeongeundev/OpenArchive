@@ -219,13 +219,11 @@ def test_capability_probe_reads_schema_level_create_privilege(clean_db: str):
             conn.execute("DROP ROLE IF EXISTS cli_probe_role")
 
 
-def test_init_refuses_when_a_guarded_extension_is_already_installed(
-    clean_db: str, capsys, tmp_path
-):
-    """005는 IF NOT EXISTS 없이 CREATE EXTENSION pg_trgm을 실행한다 (ADR-005 관례).
+def test_init_proceeds_when_a_dba_already_installed_pg_trgm(clean_db: str, tmp_path):
+    """확장은 스키마가 아니라 DB 전체에 하나다 — 조직 DB에는 `pg_trgm`이 이미 있는 일이 흔하다.
 
-    DBA가 미리 깔아둔 DB에서는 001~004가 적용된 뒤 005가 duplicate_object로 죽어,
-    "확인이 적용보다 먼저"라는 계약이 깨지고 부분 적용 스키마가 남는다.
+    005가 `IF NOT EXISTS` 없이 만들던 동안 init은 이 DB를 "DROP EXTENSION 하거나 새 DB를
+    쓰라"며 거부했다. `--schema`가 겨냥하는 조직 DB에서 `--schema`가 막히는 셈이었다 (#95-c).
     """
     with psycopg.connect(clean_db) as conn:
         conn.execute("CREATE EXTENSION pg_trgm")
@@ -233,11 +231,8 @@ def test_init_refuses_when_a_guarded_extension_is_already_installed(
 
     exit_code = main(["init", "--dsn", clean_db, "--yes", "--env-file", str(tmp_path / ".env")])
 
-    assert exit_code == 1
-    assert "pg_trgm" in capsys.readouterr().out
-    # 아무것도 적용하지 않았어야 한다 — 부분 적용이 이 검사의 존재 이유다.
-    with psycopg.connect(clean_db) as conn:
-        assert conn.execute("SELECT to_regclass('public.schema_migrations')").fetchone() == (None,)
+    assert exit_code == 0
+    assert applied_migrations(clean_db) == [path.name for path in migration_files()]
 
 
 @pytest.fixture
@@ -390,8 +385,8 @@ def test_a_schema_install_is_what_the_role_sees_without_any_connection_option(
     """런타임 설정 없이 그 롤의 연결이 곧 전용 스키마를 본다 — 기본 search_path의 `"$user"`.
 
     GUC(`ALTER ROLE … SET search_path`·DSN `options`)에 기대지 않는 이유는 OpenProxy 실측이다:
-    `options`는 조용히 버려졌고, 역할 설정은 풀에 이미 떠 있던 백엔드가 받지 않아 남의
-    public 테이블을 읽었다 (`OPENSQL_RESEARCH.md` §12-26).
+    `options`는 조용히 버려졌고, 역할 설정은 풀에 이미 떠 있던 백엔드가 받지 않아 옛
+    search_path(public)가 계속 쓰였다 (`OPENSQL_RESEARCH.md` §12-25).
     """
     main(["init", "--dsn", org_db, "--schema", "--yes", "--env-file", str(tmp_path / ".env")])
 
