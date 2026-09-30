@@ -198,15 +198,37 @@ def test_import_reports_failed_files_and_keeps_going(archive_db: str, tmp_path: 
 def test_import_refuses_a_file_over_the_upload_limit(
     archive_db: str, tmp_path: Path, monkeypatch, capsys
 ):
-    """업로드와 같은 상한이다 — CLI가 웹보다 큰 파일을 받을 이유가 없다."""
+    """업로드와 같은 상한이다 — CLI가 웹보다 큰 파일을 받을 이유가 없다.
+
+    경계 바로 위(1MB + 1바이트)로 잰다. 업로드의 MB는 10^6 바이트라, MiB로 재면 이 파일이 들어간다.
+    이미지라 텍스트 상한(500KB)에 먼저 걸리지 않는다.
+    """
     monkeypatch.setenv("MAX_UPLOAD_MB", "1")
-    write(tmp_path, "big.txt", "가" * (1024 * 1024))
+    scan = (Path(__file__).parent / "fixtures" / "scan_tax_page1.jpg").read_bytes()
+    write(tmp_path, "big.jpg", scan + b"\0" * (1_000_001 - len(scan)))
 
     exit_code = main(["import", str(tmp_path), "--user", "alice", "--dsn", archive_db])
 
     assert exit_code == 1
     assert documents(archive_db) == []
-    assert "1MB" in capsys.readouterr().out
+    assert "실패 big.jpg: 업로드 파일은 1MB를 넘을 수 없습니다." in capsys.readouterr().out
+
+
+def test_import_reports_an_unreadable_file_and_keeps_going(
+    archive_db: str, tmp_path: Path, capsys
+):
+    """권한이 없는 파일 하나가 폴더 전체를 트레이스백으로 멈추지 않는다."""
+    locked = write(tmp_path, "locked.txt", "잠긴 문서")
+    locked.chmod(0)
+    write(tmp_path, "good.md", "정상 문서")
+    try:
+        exit_code = main(["import", str(tmp_path), "--user", "alice", "--dsn", archive_db])
+    finally:
+        locked.chmod(0o644)
+
+    assert exit_code == 1
+    assert [r["title"] for r in documents(archive_db)] == ["good"]
+    assert "실패 locked.txt:" in capsys.readouterr().out
 
 
 def test_import_leaves_scans_for_the_worker_and_says_so(archive_db: str, tmp_path: Path, capsys):
@@ -367,6 +389,26 @@ def test_export_then_import_preserves_text_tags_and_visibility(archive_db: str, 
     assert after == before
 
 
+def test_export_then_import_into_the_same_install_adds_nothing(
+    archive_db: str, tmp_path: Path, capsys
+):
+    """파일 문서도 텍스트가 같으면 이미 있는 것이다 — 원본이 있다는 이유로 두 벌을 만들지 않는다."""
+    seed(
+        archive_db,
+        lambda conn: create_text_document(conn, title="원칙", content="본문", owner_id="alice"),
+        lambda conn: create_document(
+            conn, filename="guide.txt", data="안내 본문".encode(), owner_id="alice"
+        ),
+    )
+    target = tmp_path / "out"
+    assert main(["export", str(target), "--user", "alice", "--dsn", archive_db]) == 0
+
+    assert main(["import", str(target), "--user", "alice", "--dsn", archive_db]) == 0
+
+    assert len(documents(archive_db)) == 2
+    assert "가져옴 0건 · 이미 있음 2건" in capsys.readouterr().out
+
+
 def test_export_refuses_an_unknown_user(archive_db: str, tmp_path: Path, capsys):
     exit_code = main(["export", str(tmp_path / "out"), "--user", "carol", "--dsn", archive_db])
 
@@ -414,8 +456,7 @@ def test_search_owner_sees_private_documents(searchable_db: str, capsys):
 
 def test_search_passes_filters_to_the_single_query(searchable_db: str, capsys):
     exit_code = main(
-        ["search", "OpenSQL 설치", "--user", "alice", "--tag", "운영", "-k", "1",
-         "--dsn", searchable_db]
+        ["search", "OpenSQL 설치", "--user", "alice", "--tag", "운영", "--dsn", searchable_db]
     )
 
     assert exit_code == 0

@@ -881,18 +881,24 @@ async def test_find_same_original_ignores_other_owners(documents_conn):
     assert await find_same_original(documents_conn, owner_id="alice", data=b"shared") is None
 
 
-async def test_find_same_text_matches_only_text_documents_of_the_owner(documents_conn):
-    """원본 없는 문서끼리만 본다. 같은 텍스트가 추출된 파일 문서는 원본 기준으로 따로 판정한다."""
+async def test_find_same_text_matches_recognized_documents_of_the_owner(documents_conn):
+    """원본이 있는 문서의 텍스트도 본다 — export한 파일 문서를 같은 설치에 다시 넣으면 두 벌이
+    되어서는 안 된다. 인식 전 문서는 텍스트가 비어 있을 뿐이라 비교 대상이 아니다."""
     text_doc = await create_text_document(
         documents_conn, title="메모", content="같은 본문", owner_id="alice"
     )
-    await create_document(
+    file_doc = await create_document(
         documents_conn, filename="file.md", data="파일 본문".encode(), owner_id="alice"
     )
+    scan = (Path(__file__).parent / "fixtures" / "scan_tax_page1.jpg").read_bytes()
+    pending = await create_document(
+        documents_conn, filename="scan.jpg", data=scan, owner_id="alice"
+    )
+    assert pending["extraction_status"] == "pending"
     await create_text_document(documents_conn, title="남", content="남의 본문", owner_id="bob")
 
     found = [
         await find_same_text(documents_conn, owner_id="alice", content=content)
-        for content in ("같은 본문", "파일 본문", "남의 본문")
+        for content in ("같은 본문", "파일 본문", "", "남의 본문")
     ]
-    assert found == [text_doc["id"], None, None]
+    assert found == [text_doc["id"], file_doc["id"], None, None]
