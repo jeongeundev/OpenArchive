@@ -7,6 +7,7 @@ SQL 픽스처는 tmp_path에 직접 쓴다. 실제 `001_extensions.sql`·`002_ta
 다음 step의 범위이며, 러너는 그것들과 무관하게 검증 가능해야 한다.
 """
 
+import email
 import re
 import shutil
 import subprocess
@@ -96,6 +97,29 @@ def test_the_built_wheel_installs_only_the_openarchive_package(built_wheel: Path
 
     dist_info = {name for name in top_level if name.endswith(".dist-info")}
     assert top_level - dist_info == {"openarchive"}
+
+
+def test_the_built_wheel_carries_the_pypi_page_and_the_license(built_wheel: Path):
+    """PyPI 페이지는 wheel 메타데이터가 전부다 — 한 번 올린 버전은 다시 올릴 수 없다 (#95).
+
+    설명이 비면 프로젝트 페이지가 빈 채로 게시되고, 라이선스 본문이 빠지면 MIT 고지 의무를
+    어긴 배포가 된다. 설명 안의 상대 링크는 PyPI에서 깨지므로 절대 URL만 쓴다.
+    """
+    with zipfile.ZipFile(built_wheel) as archive:
+        names = set(archive.namelist())
+        (metadata_path,) = [name for name in names if name.endswith(".dist-info/METADATA")]
+        metadata = email.message_from_bytes(archive.read(metadata_path))
+        license_files = [name for name in names if ".dist-info/licenses/" in name]
+        license_text = archive.read(license_files[0]).decode() if license_files else ""
+
+    assert metadata["License-Expression"] == "MIT"
+    assert license_text.startswith("MIT License")
+    assert metadata["Description-Content-Type"] == "text/markdown"
+    description = metadata.get_payload()
+    assert 'pipx install "openarchive-server[local]"' in description
+    assert re.findall(r"\]\((?!https?://)[^)]*\)", description) == []
+    urls = dict(value.split(", ", maxsplit=1) for value in metadata.get_all("Project-URL"))
+    assert urls["Repository"] == "https://github.com/jeongeundev/OpenArchive"
 
 
 def test_clean_db_targets_the_dedicated_test_database(clean_db: str):

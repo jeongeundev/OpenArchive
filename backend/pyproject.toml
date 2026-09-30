@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,6 +7,12 @@ name = "openarchive-server"
 version = "0.1.0"
 description = "OpenArchive — PostgreSQL·OpenSQL에 설치하는 AI 문서관리 플랫폼 (API·임베딩 워커·MCP 서버·웹 UI)"
 requires-python = ">=3.12"
+# PyPI 페이지(#95). 저장소 루트 README는 상대경로 이미지·링크가 PyPI에서 깨지므로 따로 둔다.
+readme = "README.md"
+# SPDX 표현식은 setuptools 77부터다. LICENSE는 루트 파일의 사본이다 — 이미지 빌드 컨텍스트(backend/)가
+# 루트를 보지 못해 심볼릭 링크는 이미지 안에서 끊긴다.
+license = "MIT"
+license-files = ["LICENSE"]
 dependencies = [
     "fastapi",
     "uvicorn[standard]",
@@ -39,6 +45,11 @@ dependencies = [
 
 # 상용 임베딩 API 클라이언트는 넣지 않는다 — 대회 규정상 사용할 수 없다 (ADR-003).
 
+[project.urls]
+Repository = "https://github.com/jeongeundev/OpenArchive"
+Documentation = "https://github.com/jeongeundev/OpenArchive#readme"
+Issues = "https://github.com/jeongeundev/OpenArchive/issues"
+
 [project.scripts]
 # 설치 준비 CLI (ADR-039). Web UI·REST·MCP와 같은 자리의 인터페이스이며 코어를 재사용한다.
 openarchive = "openarchive.cli:main"
@@ -51,7 +62,7 @@ dev = [
     "ruff",
     # wheel 내용 테스트가 --no-build-isolation으로 빌드한다. 3.12+ venv에는 setuptools가 없어
     # 이게 빠지면 CI에서만 빌드 백엔드를 못 찾는다. build-system.requires와 같은 하한이다.
-    "setuptools>=68",
+    "setuptools>=77",
 ]
 # 실제 임베딩(BAAI/bge-m3)을 돌릴 때만 필요하다. 기본 dependencies에 두지 않는 이유는
 # sentence-transformers가 torch를 끌고 와 설치 용량이 수 GB 늘어나는 데 반해,
