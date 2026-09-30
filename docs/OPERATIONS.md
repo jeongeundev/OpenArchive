@@ -93,6 +93,7 @@ brew install tesseract tesseract-lang                    # macOS
 ```bash
 openarchive init                                                         # 대화형 — DSN 한 줄만 입력
 openarchive init --dsn "postgresql://app@<vip>:6432/<pool_name>" --yes   # 비대화형 — --dsn 필수
+openarchive init --dsn "..." --schema                                    # 기존 DB 안 전용 스키마(= 접속 롤 이름)
 ```
 
 DSN을 확인한 뒤 `~/.openarchive/.env`의 `DATABASE_URL` 줄만 갈아 끼웁니다. 다른 설정은 보존됩니다.
@@ -101,7 +102,9 @@ DSN을 확인한 뒤 `~/.openarchive/.env`의 `DATABASE_URL` 줄만 갈아 끼�
 > **기존 데이터베이스를 덮어쓰지 않습니다.** `schema_migrations`가 없는데 OpenArchive가 쓰는
 > 테이블 이름(`documents`·`users` 등)이 이미 있으면 아무것도 바꾸지 않고 중단합니다.
 > 마이그레이션에 `ALTER TABLE documents`가 있어, 같은 이름의 다른 테이블 위에서 돌면 그 데이터가
-> 손상되기 때문입니다 (ADR-039).
+> 손상되기 때문입니다 (ADR-039). 새 데이터베이스를 만들 수 없으면 `--schema`로 접속 롤 이름의 스키마에
+> 설치합니다 — public은 건드리지 않고, 앱에 따로 설정할 것은 없습니다. 준비 절차는
+> [OpenSQL 환경 구축 §10 ④](SETUP_OPENSQL.md#이미-쓰고-있는-opensql에-설치할-때--새-db와-새-풀).
 
 **하지 않는 것**: API·워커·프론트 기동, DB 자동 탐색·설치, 문서 공급, 계정 생성. 이 명령을
 건너뛰어도 API 서버가 startup에서 같은 마이그레이션을 적용하므로(ADR-012), init은 **필수가 아니라

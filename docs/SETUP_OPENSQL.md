@@ -449,8 +449,9 @@ PGPASSWORD=pg_password psql -h <VM_IP> -p 6432 -U postgres -d opensql \
 멈추기 때문이다(ADR-039). 앱 계정도 슈퍼유저가 아닌 별도 롤을 쓴다(2026-08-25 실측 경로).
 
 **① DBA — 롤·DB·`vector` 확장.** `vector`는 신뢰 확장(trusted)이 아니라 슈퍼유저만 만들 수 있으므로
-DBA가 **그 데이터베이스 안에서** 미리 만든다. **`pg_trgm`은 미리 만들지 않는다** — 마이그레이션(005)이
-직접 만들고, 이미 있으면 `init`이 적용 전에 거부한다. 앱 롤이 DB 소유자라 `pg_trgm`(trusted)은 스스로 만든다.
+DBA가 **그 데이터베이스 안에서** 미리 만든다. `pg_trgm`은 미리 만들 필요가 없다 — 마이그레이션(005)이
+없으면 만들고 있으면 넘어간다(2026-09-30 전에는 이미 있으면 `init`이 거부했다). 앱 롤이 DB 소유자라
+`pg_trgm`(trusted)은 스스로 만든다.
 
 ```bash
 psql -U postgres -c "CREATE ROLE openarchive LOGIN PASSWORD '<비밀번호>';"
@@ -498,6 +499,29 @@ HA 구성(etcd 공유 설정)이면 파일이 아니라 `openproxy edit` 또는 
 `couldn't get a connection after 30.00 sec`로 실패한다(2026-08-25 VM에서 10/10 소진 재현). 위 블록의
 20은 MCP 창 하나와 관리 접속 몇 개를 더한 값이다. 백엔드 합계는 `max_connections`(100) 안에 들어가야 한다.
 §16의 HA 구성처럼 `transaction` 모드면 트랜잭션 사이에 백엔드를 나눠 쓰므로 이 산식이 그대로 적용되지 않는다.
+
+**④ 새 DB를 만들 수 없을 때 — 같은 DB 안 전용 스키마(`init --schema`).** 롤 이름과 같은 스키마에 설치하고
+public은 건드리지 않는다. public에 `documents`·`users`가 있어도 된다. DBA가 할 일은 롤과 `vector`뿐이다.
+
+```bash
+psql -U postgres -c "CREATE ROLE openarchive LOGIN PASSWORD '<비밀번호>';"
+psql -U postgres -c "GRANT CONNECT, CREATE ON DATABASE <기존 DB> TO openarchive;"   # CREATE = 스키마를 만들 권한
+psql -U postgres -d <기존 DB> -c "CREATE EXTENSION IF NOT EXISTS vector;"
+```
+
+풀은 새로 만들지 않고 그 DB를 바라보는 기존 풀에 `users` 항목을 하나 더한다(`[pools.<풀>.users.N]`). 그다음
+`openarchive init --dsn "postgresql://openarchive:<비밀번호>@<OpenProxy 호스트>:6432/<풀>" --schema`.
+
+- 스키마 이름은 **접속 롤 이름**이다. 앱은 따로 설정하지 않는다 — 기본 search_path `"$user", public`이
+  그 스키마를 먼저 찾는다. `ALTER ROLE … SET search_path`나 DSN `options`로 스키마를 고르는 방식은
+  OpenProxy를 거치면 동작하지 않는다(`OPENSQL_RESEARCH.md` §12-25). 같은 이유로 그 롤에 search_path를
+  따로 설정해 두면 `init`이 거부한다.
+- 롤에 DB CREATE를 줄 수 없으면 DBA가 스키마를 먼저 만든다(`CREATE SCHEMA openarchive AUTHORIZATION openarchive`).
+  다만 `pg_trgm`이 그 DB에 없다면 만들 권한(DB CREATE)이 필요하므로 DBA가 `pg_trgm`도 미리 만든다.
+- `vector`가 DB에 없고 앱 롤이 슈퍼유저라 직접 만들면, 확장은 public이 아니라 그 스키마에 생긴다.
+- ⚠️ **HA 구성(동기 복제)에서는 풀 사용자를 추가할 수 없었다(2026-09-30).** OpenProxy 1.1.3이 Patroni
+  `/cluster`의 `sync_standby` 역할을 해석하지 못해, 설정 재로드도 재기동도 실패한다(로그 `unknown variant
+  sync_standby`). 떠 있던 프로세스는 옛 설정으로 계속 서비스한다.
 
 ---
 
