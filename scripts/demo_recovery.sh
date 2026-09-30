@@ -233,7 +233,7 @@ ensure_demo_session() {
   fi
   # 계정이 없는 설치에서는 운영 CLI로 만든다. 해시 로직을 여기에 복제하지 않는다.
   ADMIN_PASSWORD="$DEMO_PASSWORD" \
-    "$PYTHON" -m app.cli create-user "$DEMO_USER" --dsn "$DATABASE_URL" ||
+    "$PYTHON" -m openarchive.cli create-user "$DEMO_USER" --dsn "$DATABASE_URL" ||
     fail "데모 계정 '$DEMO_USER'을 만들지 못했습니다 (이미 있는 계정이면 DEMO_PASSWORD를 함께 주입하세요)"
   try_login || fail "데모 계정 '$DEMO_USER'으로 로그인하지 못했습니다"
 }
@@ -282,7 +282,7 @@ mark_stage "1. 기준선 확인: role=$BASE_ROLE, TL=$BASE_TL, inconsistent=0"
 (
   cd backend
   exec env DATABASE_URL="$DATABASE_URL" EMBEDDING_PROVIDER=fake \
-    .venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port "$API_PORT"
+    .venv/bin/python -m uvicorn openarchive.main:app --host 127.0.0.1 --port "$API_PORT"
 ) >"$API_LOG" 2>&1 &
 API_PID=$!
 wait_until 30 "API 기동" api_ready || fail "API가 기동하지 않았습니다"
@@ -291,7 +291,7 @@ ensure_demo_session
 (
   cd backend
   exec env DATABASE_URL="$DATABASE_URL" EMBEDDING_PROVIDER=fake \
-    .venv/bin/python -m app.worker
+    .venv/bin/python -m openarchive.worker
 ) >"$WORKER_LOG" 2>&1 &
 WORKER_PID=$!
 

@@ -5,12 +5,12 @@ import psycopg
 import pytest
 from conftest import insert_test_document, process_all_embedding_jobs, seed_extraction_states
 
-from app.config import get_settings
-from app.db import close_pool, get_pool
-from app.embeddings import FakeProvider
-from app.main import app
-from app.services.documents import InvalidVisibility
-from app.services.parsing import UnsupportedFileType
+from openarchive.config import get_settings
+from openarchive.db import close_pool, get_pool
+from openarchive.embeddings import FakeProvider
+from openarchive.main import app
+from openarchive.services.documents import InvalidVisibility
+from openarchive.services.parsing import UnsupportedFileType
 
 
 @pytest.fixture
@@ -81,7 +81,7 @@ async def _document_count_by_title(dsn: str, title: str) -> int:
 
 
 async def test_registers_exactly_four_document_tools():
-    from mcp_server.server import mcp
+    from openarchive.mcp_server.server import mcp
 
     tools = await mcp.list_tools()
 
@@ -99,7 +99,7 @@ async def test_registers_exactly_four_document_tools():
 async def test_create_requires_user_context_without_changing_anonymous_reads(
     monkeypatch, mcp_database, env_value
 ):
-    from mcp_server.server import (
+    from openarchive.mcp_server.server import (
         MissingUserContext,
         create_document,
         list_documents,
@@ -129,7 +129,7 @@ async def test_create_requires_user_context_without_changing_anonymous_reads(
 async def test_create_uses_mcp_owner_and_starts_all_database_derivatives(
     monkeypatch, mcp_database
 ):
-    from mcp_server.server import create_document
+    from openarchive.mcp_server.server import create_document
 
     monkeypatch.setenv("MCP_USER_ID", "alice")
     get_settings.cache_clear()
@@ -183,7 +183,7 @@ async def test_create_uses_mcp_owner_and_starts_all_database_derivatives(
 async def test_private_created_document_is_hidden_from_other_mcp_users(
     monkeypatch, mcp_database
 ):
-    from mcp_server.server import create_document, list_documents, search_documents
+    from openarchive.mcp_server.server import create_document, list_documents, search_documents
 
     monkeypatch.setenv("MCP_USER_ID", "alice")
     get_settings.cache_clear()
@@ -218,7 +218,7 @@ async def test_private_created_document_is_hidden_from_other_mcp_users(
 async def test_create_propagates_core_validation_without_saving_document(
     monkeypatch, mcp_database, field, value, expected_exception
 ):
-    from mcp_server.server import create_document
+    from openarchive.mcp_server.server import create_document
 
     monkeypatch.setenv("MCP_USER_ID", "alice")
     get_settings.cache_clear()
@@ -232,7 +232,7 @@ async def test_create_propagates_core_validation_without_saving_document(
 
 async def _login(client, dsn: str, username: str, password: str = "test-password") -> None:
     """비동기 REST 클라이언트에 실제 쿠키 세션을 만든다."""
-    from app.services.auth import hash_password
+    from openarchive.services.auth import hash_password
 
     async with await psycopg.AsyncConnection.connect(dsn, autocommit=True) as conn:
         await conn.execute(
@@ -255,7 +255,7 @@ async def test_search_tool_matches_the_rest_endpoint_and_returns_evidence(
     MCP는 HTTP를 타지 않아 로그인과 무관하지만(ADR-028) REST는 이제 로그인을 요구한다.
     같은 결과를 비교하려면 양쪽 시선을 같은 계정으로 맞춰야 한다.
     """
-    from mcp_server.server import search_documents
+    from openarchive.mcp_server.server import search_documents
 
     await _seed_documents(migrated_db)
     monkeypatch.setenv("MCP_USER_ID", "alice")
@@ -283,8 +283,8 @@ async def test_search_tool_matches_the_rest_endpoint_and_returns_evidence(
 async def test_mcp_user_setting_controls_private_access_for_all_tools(
     monkeypatch, mcp_database
 ):
-    from app.services.documents import DocumentNotFound
-    from mcp_server.server import get_document, list_documents, search_documents
+    from openarchive.mcp_server.server import get_document, list_documents, search_documents
+    from openarchive.services.documents import DocumentNotFound
 
     public_id, private_id = await _seed_documents(mcp_database)
 
@@ -319,7 +319,7 @@ async def test_expanded_search_hits_carry_no_similarity_score(mcp_database):
     같은 결정을 MCP에도 적용해 확장 결과에는 score를 싣지 않고 via만 남긴다. 직접
     매칭의 score는 그대로다.
     """
-    from mcp_server.server import search_documents
+    from openarchive.mcp_server.server import search_documents
 
     async with await psycopg.AsyncConnection.connect(
         mcp_database, autocommit=True
@@ -342,15 +342,15 @@ async def test_expanded_search_hits_carry_no_similarity_score(mcp_database):
 
 
 async def test_get_document_rejects_missing_document(mcp_database):
-    from app.services.documents import DocumentNotFound
-    from mcp_server.server import get_document
+    from openarchive.mcp_server.server import get_document
+    from openarchive.services.documents import DocumentNotFound
 
     with pytest.raises(DocumentNotFound):
         await get_document(str(uuid4()))
 
 
 async def test_get_document_returns_related_kind(monkeypatch, mcp_database):
-    from mcp_server.server import get_document
+    from openarchive.mcp_server.server import get_document
 
     public_id, _ = await _seed_documents(mcp_database)
     # _seed_documents는 문서 2건만 만들어 관련 문서가 1건뿐이다. 그러면 아래 정렬
@@ -381,7 +381,7 @@ async def test_get_document_returns_related_kind(monkeypatch, mcp_database):
 
 async def test_get_document_lists_original_files_without_bytes(mcp_database):
     """상세의 원본 판 목록은 메타데이터만 싣는다 — 바이트가 MCP 응답에 섞이지 않는다."""
-    from mcp_server.server import get_document
+    from openarchive.mcp_server.server import get_document
 
     public_id, _ = await _seed_documents(mcp_database)
     async with await psycopg.AsyncConnection.connect(
@@ -421,7 +421,7 @@ async def test_a_tool_call_that_ends_in_a_db_error_does_not_return_its_connectio
     API와 같은 풀 규칙이다 — 오염된 연결이 풀로 돌아가면 이후 도구 호출마다
     `transaction()`이 `AssertionError`를 낸다(#110 B-2).
     """
-    from mcp_server import server
+    from openarchive.mcp_server import server
 
     borrowed = []
 
@@ -458,7 +458,7 @@ class FakeClock:
 
 @pytest.fixture
 def clock(monkeypatch):
-    from mcp_server import server
+    from openarchive.mcp_server import server
 
     fake = FakeClock()
     monkeypatch.setattr(server, "_now", fake.monotonic)
@@ -485,7 +485,7 @@ def _failing_then(real, failures: int, borrowed: list):
 
 async def test_read_tools_wait_out_an_outage(monkeypatch, mcp_database, clock):
     """#110 B의 쓰기 중단은 7~42초였다. 읽기 도구는 그동안 기다렸다 성공해야 한다."""
-    from mcp_server import server
+    from openarchive.mcp_server import server
 
     await _seed_documents(mcp_database)
     borrowed: list = []
@@ -506,7 +506,7 @@ async def test_read_tools_wait_out_an_outage(monkeypatch, mcp_database, clock):
 
 
 async def test_backoff_is_capped_and_gives_up_after_a_minute(monkeypatch, mcp_database, clock):
-    from mcp_server import server
+    from openarchive.mcp_server import server
 
     borrowed: list = []
     monkeypatch.setattr(
@@ -528,7 +528,7 @@ async def test_backoff_is_capped_and_gives_up_after_a_minute(monkeypatch, mcp_da
 
 
 async def test_get_document_also_waits_out_an_outage(monkeypatch, mcp_database, clock):
-    from mcp_server import server
+    from openarchive.mcp_server import server
 
     ids = await _seed_documents(mcp_database)
     borrowed: list = []
@@ -545,7 +545,7 @@ async def test_get_document_also_waits_out_an_outage(monkeypatch, mcp_database, 
 
 
 async def test_errors_that_do_not_pass_with_time_are_not_retried(monkeypatch, mcp_database, clock):
-    from mcp_server import server
+    from openarchive.mcp_server import server
 
     async def failing_list(conn, **_):
         await conn.execute("SELECT 1/0")
@@ -564,7 +564,7 @@ async def test_create_document_retries_an_ambiguous_commit_with_one_key_per_call
     """커밋은 됐는데 응답을 잃은 경우(#110 B-6)를 재현한다 — 첫 시도가 문서를 만든 뒤
     AllServersDown을 낸다. 같은 도구 호출 안의 재시도는 같은 키를 써서 처음 문서를 돌려받고,
     다음 도구 호출은 새 키로 새 문서를 만든다 (ADR-047, ADR-048 결정 4)."""
-    from mcp_server import server
+    from openarchive.mcp_server import server
 
     monkeypatch.setenv("MCP_USER_ID", "alice")
     get_settings.cache_clear()
@@ -595,7 +595,7 @@ async def test_create_document_retries_an_ambiguous_commit_with_one_key_per_call
 async def test_create_document_gives_up_after_the_backoff_budget(
     monkeypatch, mcp_database, clock
 ):
-    from mcp_server import server
+    from openarchive.mcp_server import server
 
     monkeypatch.setenv("MCP_USER_ID", "alice")
     get_settings.cache_clear()
@@ -613,7 +613,7 @@ async def test_create_document_gives_up_after_the_backoff_budget(
 
 async def test_wrapped_read_tools_keep_their_argument_schema():
     """백오프로 감싸도 에이전트가 보는 도구 인자는 그대로여야 한다."""
-    from mcp_server.server import mcp
+    from openarchive.mcp_server.server import mcp
 
     tools = {tool.name: tool for tool in await mcp.list_tools()}
 
@@ -637,7 +637,7 @@ async def test_wrapped_read_tools_keep_their_argument_schema():
 
 async def test_list_documents_filters_by_extraction_status(mcp_database):
     """#139 — 인식 실패 문서를 '임베딩 대기'와 구분해 고를 수 있어야 한다."""
-    from mcp_server.server import list_documents
+    from openarchive.mcp_server.server import list_documents
 
     async with await psycopg.AsyncConnection.connect(mcp_database, autocommit=True) as conn:
         ids = await seed_extraction_states(conn)

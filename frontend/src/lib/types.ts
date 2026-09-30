@@ -248,5 +248,5 @@ export const SUPPORTED_CONTENT_TYPES = [
 export const EXTRACTING_NOTICE =
   "원본에서 텍스트를 인식하는 중이라 텍스트 편집·되돌리기·다시 추출·원본 교체를 할 수 없습니다.";
 
-// backend/app/services/search.py의 MAX_K와 같아야 하며, 초과하면 API가 422를 반환한다.
+// backend/openarchive/services/search.py의 MAX_K와 같아야 하며, 초과하면 API가 422를 반환한다.
 export const MAX_K = 20;

@@ -1,19 +1,19 @@
 from uuid import uuid4
 
-from app.api.schemas import (
+from openarchive.api.schemas import (
     AuthStatus,
     RelatedResponse,
     SystemStatus,
     TagSuggestionsResponse,
 )
-from app.services.related import (
+from openarchive.services.related import (
     IdenticalDocument,
     RelatedDocument,
     RelatedResult,
     TagSuggestion,
     TagSuggestionResult,
 )
-from app.services.system import JobCounts, SystemStatusResult
+from openarchive.services.system import JobCounts, SystemStatusResult
 
 
 def test_related_response_accepts_service_dataclasses():

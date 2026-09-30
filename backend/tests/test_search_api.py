@@ -5,9 +5,9 @@ import pytest
 from conftest import insert_test_document, login_as, process_all_embedding_jobs
 from fastapi.testclient import TestClient
 
-from app.embeddings.fake import FakeProvider
-from app.main import app
-from app.services.search import MAX_K, SEARCH_SQL
+from openarchive.embeddings.fake import FakeProvider
+from openarchive.main import app
+from openarchive.services.search import MAX_K, SEARCH_SQL
 
 
 def seed_documents(dsn: str, documents: list[dict], *, process: bool = True) -> list[str]:

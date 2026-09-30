@@ -1,0 +1,218 @@
+"""예제 코퍼스(`demo_corpus/`)를 적재한다 — `openarchive demo`와 `scripts/seed_demo.py`가 쓴다.
+
+1청크와 여러 청크 문서가 섞여 있어 다양한 길이의 사내 규정을 시연한다.
+코퍼스는 가상 회사의 사내 문서다. 저장소 자체 문서를 쪼개 넣던 이전 방식은 전부 한
+주제여서 관계 그래프가 거의 완전그래프가 됐고(문서당 평균 19.6개 관계), Louvain
+덩어리가 출처 태그로만 갈려 화면에서 읽을 것이 없었다. 부서가 다섯이면 청크의 최근접
+이웃이 부서 안에 모이고, 부서를 가로지르는 위키링크가 그 사이를 잇는다.
+
+코퍼스는 패키지 안에 있어야 한다 — pip 설치본에는 저장소의 `scripts/`가 없다 (#95-d).
+"""
+
+from __future__ import annotations
+
+import asyncio
+import re
+import time
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from pathlib import Path
+
+import psycopg
+
+from openarchive.services.documents import create_text_document
+from openarchive.services.system import rebuild_all_edges
+
+CORPUS_ROOT = Path(__file__).resolve().parent / "demo_corpus"
+FRONT_MATTER_KEYS = frozenset({"title", "tags", "visibility"})
+VISIBILITIES = ("public", "private")
+FRONT_MATTER = re.compile(r"\A---\n(.*?)\n---\n", re.DOTALL)
+
+
+@dataclass(frozen=True)
+class SeedDocument:
+    title: str
+    content: str
+    tags: list[str] = field(default_factory=list)
+    visibility: str = "public"
+
+
+def parse_seed_document(text: str) -> SeedDocument:
+    """코퍼스 파일 한 개를 적재할 문서로 바꾼다.
+
+    프런트매터의 `title`은 선택이며, 없으면 본문 첫 `# ` 헤딩을 제목으로 쓴다. 본문이
+    같은 문서를 서로 다른 제목으로 넣을 때만 `title`을 적는다 — 제목이 겹치면
+    `seed_documents`가 중복으로 보고 조용히 건너뛴다.
+    """
+    match = FRONT_MATTER.match(text)
+    if match is None:
+        raise ValueError("파일이 '---' 프런트매터 블록으로 시작하지 않는다")
+
+    meta: dict[str, str] = {}
+    for line in match.group(1).splitlines():
+        key, separator, value = line.partition(":")
+        if not separator:
+            raise ValueError(f"프런트매터 항목이 'key: value' 형식이 아니다: {line!r}")
+        meta[key.strip()] = value.strip()
+
+    unknown = set(meta) - FRONT_MATTER_KEYS
+    if unknown:
+        raise ValueError(f"모르는 프런트매터 항목: {sorted(unknown)}")
+
+    tags = [tag.strip() for tag in meta.get("tags", "").split(",") if tag.strip()]
+    if not tags:
+        raise ValueError("tags에 최소 한 개가 있어야 한다")
+
+    visibility = meta.get("visibility", "public")
+    if visibility not in VISIBILITIES:
+        raise ValueError(f"visibility는 {VISIBILITIES} 중 하나여야 한다: {visibility!r}")
+
+    content = text[match.end() :].strip()
+    if not content:
+        raise ValueError("본문이 비어 있다")
+
+    return SeedDocument(
+        title=meta.get("title") or _heading_title(content),
+        content=content,
+        tags=tags,
+        visibility=visibility,
+    )
+
+
+def _heading_title(content: str) -> str:
+    for line in content.splitlines():
+        if line.startswith("# "):
+            return line[2:].strip()
+    raise ValueError("본문에 '# 제목' 헤딩이 없고 프런트매터에도 title이 없다")
+
+
+def load_seed_documents(root: Path = CORPUS_ROOT) -> list[SeedDocument]:
+    """코퍼스 디렉토리의 Markdown을 경로 순서대로 읽는다."""
+    paths = sorted(root.rglob("*.md"))
+    if not paths:
+        raise ValueError(f"코퍼스 파일이 없다: {root}")
+
+    documents = []
+    for path in paths:
+        try:
+            documents.append(parse_seed_document(path.read_text(encoding="utf-8")))
+        except ValueError as exc:
+            raise ValueError(f"{path.relative_to(root)}: {exc}") from exc
+    return documents
+
+
+async def seed_documents(
+    conn: psycopg.AsyncConnection,
+    documents: list[SeedDocument],
+    owner: str,
+) -> int:
+    """없는 문서만 서비스 계층을 통해 적재하고 생성 건수를 반환한다.
+
+    중복 판정은 소유자 안에서만 한다 — 같은 제목이라도 소유자가 다르면 다른 문서다.
+    """
+    existing = {
+        row[0]
+        for row in await (
+            await conn.execute(
+                "SELECT title FROM documents WHERE owner_id = %s", (owner,)
+            )
+        ).fetchall()
+    }
+    created = 0
+    for document in documents:
+        if document.title in existing:
+            continue
+        await create_text_document(
+            conn,
+            title=document.title,
+            content=document.content,
+            content_type="md",
+            owner_id=owner,
+            tags=document.tags,
+            visibility=document.visibility,
+        )
+        existing.add(document.title)
+        created += 1
+    return created
+
+
+async def wait_until_ready(
+    conn: psycopg.AsyncConnection,
+    titles: list[str],
+    timeout: float,
+    owner: str,
+) -> tuple[int, float]:
+    started = time.monotonic()
+    expected = len(titles)
+    while time.monotonic() - started < timeout:
+        ready, failed = (
+            await (
+                await conn.execute(
+                    """
+                    SELECT count(*) FILTER (WHERE embedding_status = 'ready'),
+                           count(*) FILTER (WHERE embedding_status = 'error')
+                    FROM documents WHERE owner_id = %s AND title = ANY(%s)
+                    """,
+                    (owner, titles),
+                )
+            ).fetchone()
+        )
+        if failed:
+            raise RuntimeError(f"임베딩에 실패한 코퍼스 문서가 {failed}개 있습니다.")
+        if ready == expected:
+            return ready, time.monotonic() - started
+        await asyncio.sleep(1)
+    raise TimeoutError("임베딩 대기 시간이 초과되었습니다. 워커가 떠 있는지 확인하세요.")
+
+
+async def summarize(conn: psycopg.AsyncConnection, owner: str) -> tuple[int, int]:
+    """적재 결과로 만들어진 청크 수와 관계 문서쌍 수를 센다.
+
+    관계는 그 계정 문서가 한쪽이라도 걸린 것만 센다 — 기존 문서끼리의 관계는 예제 결과가 아니다.
+    저장은 단방향이지만 양쪽이 서로를 발견하면 두 행이 남으므로(ADR-029 개정) 문서쌍으로 접어 센다.
+    """
+    return await (
+        await conn.execute(
+            """
+            SELECT (SELECT count(*) FROM document_chunks c
+                      JOIN documents d ON d.id = c.document_id
+                     WHERE d.owner_id = %s),
+                   (SELECT count(*) FROM (
+                        SELECT DISTINCT least(e.src_document_id, e.dst_document_id),
+                                        greatest(e.src_document_id, e.dst_document_id)
+                        FROM document_edges e
+                        JOIN documents s ON s.id = e.src_document_id
+                        JOIN documents t ON t.id = e.dst_document_id
+                        WHERE %s IN (s.owner_id, t.owner_id)) pairs)
+            """,
+            (owner, owner),
+        )
+    ).fetchone()
+
+
+@dataclass(frozen=True)
+class Converged:
+    ready: int
+    elapsed: float
+    rebuilt: int
+    chunks: int
+    edge_pairs: int
+
+
+async def converge(
+    conn: psycopg.AsyncConnection,
+    documents: list[SeedDocument],
+    owner: str,
+    *,
+    timeout: float,
+    on_progress: Callable[[int, int], None] | None = None,
+) -> Converged:
+    """워커가 코퍼스를 전부 임베딩할 때까지 기다린 뒤 관계를 전체 기준으로 맞춘다."""
+    ready, elapsed = await wait_until_ready(
+        conn, [document.title for document in documents], timeout, owner
+    )
+    # 트리거는 처리 시점까지의 문서만 후보로 보므로 적재 순서에 따라 관계가 달라진다.
+    # 적재가 끝난 뒤 한 번 전체 기준으로 수렴시킨다 (ADR-029 결정 6).
+    rebuilt = await rebuild_all_edges(conn, on_progress=on_progress)
+    chunks, edge_pairs = await summarize(conn, owner)
+    return Converged(ready, elapsed, rebuilt, chunks, edge_pairs)

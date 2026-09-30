@@ -16,7 +16,7 @@ from itertools import pairwise
 
 import pytest
 
-from app.services.chunking import chunk_text
+from openarchive.services.chunking import chunk_text
 
 # 문단 경계(빈 줄)가 하나도 없는 본문. 강제 분할 경로를 탄다.
 LONG_SENTENCE = "임베딩 잡은 트리거가 만들고 워커는 그것을 집어간다. "

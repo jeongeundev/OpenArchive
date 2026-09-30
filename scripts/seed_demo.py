@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""시연·측정용으로 예제 코퍼스(`backend/app/demo_corpus/`)를 적재한다.
+"""시연·측정용으로 예제 코퍼스(`backend/openarchive/demo_corpus/`)를 적재한다.
 
-적재 로직은 `openarchive demo`와 같다(`app.demo`). 이 스크립트가 더하는 것은 계정이 없어도
+적재 로직은 `openarchive demo`와 같다(`openarchive.demo`). 이 스크립트가 더하는 것은 계정이 없어도
 되는 측정용 소유자(`seed`)와 `--reset`뿐이다 — 설치한 사람이 쓰는 입구는 `openarchive demo`다.
 """
 
@@ -19,8 +19,8 @@ BACKEND = ROOT / "backend"
 if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
 
-from app.config import get_settings
-from app.demo import converge, load_seed_documents, seed_documents
+from openarchive.config import get_settings
+from openarchive.demo import converge, load_seed_documents, seed_documents
 
 SEED_OWNER = "seed"
 

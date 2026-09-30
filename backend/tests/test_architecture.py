@@ -9,14 +9,13 @@ DERIVED_TABLE_INSERT = re.compile(
     re.IGNORECASE,
 )
 APPLICATION_SOURCE_ROOTS = (
-    REPOSITORY_ROOT / "backend" / "app",
-    REPOSITORY_ROOT / "backend" / "mcp_server",
+    REPOSITORY_ROOT / "backend" / "openarchive",
     REPOSITORY_ROOT / "scripts",
 )
 # 셸도 검사한다 — scripts/ 는 psql 힙독으로 SQL을 담는다.
 SOURCE_SUFFIXES = {".py", ".sh"}
 HTTP_MODULES = {"fastapi", "starlette"}
-FORBIDDEN_EXAMPLE_MODULES = {"app", "backend", "mcp_server"}
+FORBIDDEN_EXAMPLE_MODULES = {"backend", "openarchive"}
 
 
 def _example_imports() -> dict[Path, set[str]]:
@@ -50,7 +49,7 @@ def test_application_code_does_not_insert_into_derived_tables():
 
 def test_mcp_server_does_not_execute_sql_directly():
     violations = []
-    mcp_root = REPOSITORY_ROOT / "backend" / "mcp_server"
+    mcp_root = REPOSITORY_ROOT / "backend" / "openarchive" / "mcp_server"
     for path in mcp_root.rglob("*.py"):
         if ".execute(" in path.read_text():
             violations.append(str(path.relative_to(REPOSITORY_ROOT)))
@@ -60,7 +59,7 @@ def test_mcp_server_does_not_execute_sql_directly():
 
 def test_services_do_not_import_http_frameworks():
     violations = []
-    services_root = REPOSITORY_ROOT / "backend" / "app" / "services"
+    services_root = REPOSITORY_ROOT / "backend" / "openarchive" / "services"
     for path in services_root.glob("*.py"):
         tree = ast.parse(path.read_text(), filename=str(path))
         for node in ast.walk(tree):

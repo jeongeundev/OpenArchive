@@ -5,8 +5,8 @@ from uuid import uuid4
 import psycopg
 from fastapi.testclient import TestClient
 
-from app.api.deps import SESSION_COOKIE
-from app.services.auth import hash_password
+from openarchive.api.deps import SESSION_COOKIE
+from openarchive.services.auth import hash_password
 
 
 def create_user(dsn: str, username: str = "alice", password: str = "secret") -> None:

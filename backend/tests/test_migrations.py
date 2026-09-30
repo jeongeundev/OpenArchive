@@ -18,9 +18,9 @@ import psycopg
 import pytest
 from psycopg.conninfo import conninfo_to_dict
 
-import app
-from app.config import get_settings
-from app.migrations import MIGRATIONS_DIR, run_migrations
+import openarchive
+from openarchive.config import get_settings
+from openarchive.migrations import MIGRATIONS_DIR, run_migrations
 
 
 @pytest.fixture
@@ -33,26 +33,23 @@ def ordered_migrations(tmp_path: Path) -> Path:
     return d
 
 
-def test_default_migrations_dir_is_inside_the_app_package():
-    """마이그레이션은 `app` 패키지 안에 있어야 설치본(site-packages)에서도 찾는다.
+def test_default_migrations_dir_is_inside_the_openarchive_package():
+    """마이그레이션은 `openarchive` 패키지 안에 있어야 설치본(site-packages)에서도 찾는다.
 
     패키지 밖(`backend/migrations/`)에 두면 편집 설치에서만 보이고, `pip install`로 깐
     설치본에서는 `init`과 API startup이 스키마를 찾지 못해 죽는다 (#90-1).
     """
-    assert MIGRATIONS_DIR == Path(app.__file__).resolve().parent / "migrations"
+    assert MIGRATIONS_DIR == Path(openarchive.__file__).resolve().parent / "migrations"
     assert sorted(MIGRATIONS_DIR.glob("*.sql"))
 
 
-def test_the_built_wheel_carries_every_migration_and_the_demo_corpus(tmp_path: Path):
-    """위치만으로는 부족하다 — package-data에 없으면 wheel에서 빠진다.
-
-    예제 코퍼스도 같다 — 빠지면 설치본의 `openarchive demo`가 빈 폴더를 읽는다 (#95-d).
-
-    작업 트리를 그대로 빌드하면 편집 설치가 남긴 `*.egg-info`의 파일 목록이 새어 들어와,
+@pytest.fixture(scope="module")
+def built_wheel(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """작업 트리를 그대로 빌드하면 편집 설치가 남긴 `*.egg-info`의 파일 목록이 새어 들어와,
     package-data에서 SQL을 빼도 wheel에 실린다(실측). 깨끗한 사본에서 빌드한다.
     """
-    app_dir = Path(app.__file__).resolve().parent
-    backend = app_dir.parent
+    tmp_path = tmp_path_factory.mktemp("wheel")
+    backend = Path(openarchive.__file__).resolve().parent.parent
     source = tmp_path / "source"
     shutil.copytree(
         backend,
@@ -69,15 +66,36 @@ def test_the_built_wheel_carries_every_migration_and_the_demo_corpus(tmp_path: P
         check=True,
     )
     (wheel,) = tmp_path.glob("*.whl")
+    return wheel
 
-    with zipfile.ZipFile(wheel) as archive:
+
+def test_the_built_wheel_carries_every_migration_and_the_demo_corpus(built_wheel: Path):
+    """위치만으로는 부족하다 — package-data에 없으면 wheel에서 빠진다.
+
+    예제 코퍼스도 같다 — 빠지면 설치본의 `openarchive demo`가 빈 폴더를 읽는다 (#95-d).
+    """
+    package_dir = Path(openarchive.__file__).resolve().parent
+    with zipfile.ZipFile(built_wheel) as archive:
         names = set(archive.namelist())
 
-    assert names >= {f"app/migrations/{path.name}" for path in MIGRATIONS_DIR.glob("*.sql")}
-    corpus = app_dir / "demo_corpus"
+    assert names >= {f"openarchive/migrations/{path.name}" for path in MIGRATIONS_DIR.glob("*.sql")}
+    corpus = package_dir / "demo_corpus"
     assert names >= {
-        path.relative_to(app_dir.parent).as_posix() for path in corpus.rglob("*.md")
+        path.relative_to(package_dir.parent).as_posix() for path in corpus.rglob("*.md")
     }
+
+
+def test_the_built_wheel_installs_only_the_openarchive_package(built_wheel: Path):
+    """PyPI 배포 이름은 `openarchive-server`, 설치되는 최상위 모듈은 `openarchive` 하나다 (#95-e).
+
+    `app`·`mcp_server` 같은 흔한 이름을 최상위에 깔면 같은 환경의 다른 패키지와 부딪힌다.
+    """
+    assert built_wheel.name.startswith("openarchive_server-")
+    with zipfile.ZipFile(built_wheel) as archive:
+        top_level = {name.split("/", maxsplit=1)[0] for name in archive.namelist()}
+
+    dist_info = {name for name in top_level if name.endswith(".dist-info")}
+    assert top_level - dist_info == {"openarchive"}
 
 
 def test_clean_db_targets_the_dedicated_test_database(clean_db: str):

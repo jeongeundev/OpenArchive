@@ -6,15 +6,15 @@ import pytest
 from conftest import insert_test_document, process_all_embedding_jobs
 from test_triggers import edges_for, insert_document, mark_document_ready, unit_vector
 
-from app.embeddings import FakeProvider
-from app.services.documents import DocumentNotFound, OriginalFileMissing, create_document
-from app.services.system import (
+from openarchive.embeddings import FakeProvider
+from openarchive.services.documents import DocumentNotFound, OriginalFileMissing, create_document
+from openarchive.services.system import (
     get_system_status,
     rebuild_all_edges,
     reextract_all,
     reextract_one,
 )
-from app.worker import process_once
+from openarchive.worker import process_once
 
 FIXTURES = Path(__file__).parent / "fixtures"
 

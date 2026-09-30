@@ -14,7 +14,7 @@ from docx import Document
 from fastapi.testclient import TestClient
 from test_parsing import hwp_without_text, hwpx_without_text
 
-from app.config import get_settings
+from openarchive.config import get_settings
 
 
 def edit(client: TestClient, document_id: str, *, content: str, version: int, user_id="alice"):
@@ -1577,7 +1577,7 @@ def test_reextract_uses_the_latest_file_version(db_client: TestClient, migrated_
 def test_reextract_applies_an_improved_parser(
     db_client: TestClient, migrated_db: str, monkeypatch
 ):
-    from app.services import documents as service
+    from openarchive.services import documents as service
 
     document_id = upload(db_client, content=b"OpenSQL guide").json()["id"]
     finish_jobs(migrated_db, document_id)

@@ -2,8 +2,8 @@ import psycopg
 import pytest
 from fastapi.testclient import TestClient
 
-from app.config import get_settings
-from app.main import app
+from openarchive.config import get_settings
+from openarchive.main import app
 
 
 def test_health_returns_ok(client: TestClient):
@@ -61,7 +61,7 @@ def test_startup_warms_up_the_embedding_provider(monkeypatch, clean_db: str, rec
     """
     monkeypatch.setenv("DATABASE_URL", clean_db)
     get_settings.cache_clear()
-    monkeypatch.setattr("app.main.get_provider", lambda: recording_provider)
+    monkeypatch.setattr("openarchive.main.get_provider", lambda: recording_provider)
 
     with TestClient(app):
         # 단언은 **블록 안에서** 한다. 밖에서 보면 예열이 startup이 아니라 shutdown에
@@ -79,7 +79,7 @@ def test_startup_survives_a_failed_warmup(monkeypatch, clean_db: str, warmup_fai
     """
     monkeypatch.setenv("DATABASE_URL", clean_db)
     get_settings.cache_clear()
-    monkeypatch.setattr("app.main.get_provider", lambda: warmup_failing_provider)
+    monkeypatch.setattr("openarchive.main.get_provider", lambda: warmup_failing_provider)
 
     with TestClient(app) as started:
         assert started.get("/api/health").json() == {"status": "ok"}

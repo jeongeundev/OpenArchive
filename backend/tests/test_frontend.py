@@ -11,7 +11,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.frontend import FALLBACK_SEGMENT, mount_frontend
+from openarchive.frontend import FALLBACK_SEGMENT, mount_frontend
 
 
 @pytest.fixture
