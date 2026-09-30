@@ -33,7 +33,7 @@ def ordered_migrations(tmp_path: Path) -> Path:
     return d
 
 
-def test_default_migrations_dir_is_inside_the_app_package():
+def test_default_migrations_dir_is_inside_the_openarchive_package():
     """마이그레이션은 `openarchive` 패키지 안에 있어야 설치본(site-packages)에서도 찾는다.
 
     패키지 밖(`backend/migrations/`)에 두면 편집 설치에서만 보이고, `pip install`로 깐
@@ -74,14 +74,14 @@ def test_the_built_wheel_carries_every_migration_and_the_demo_corpus(built_wheel
 
     예제 코퍼스도 같다 — 빠지면 설치본의 `openarchive demo`가 빈 폴더를 읽는다 (#95-d).
     """
-    app_dir = Path(openarchive.__file__).resolve().parent
+    package_dir = Path(openarchive.__file__).resolve().parent
     with zipfile.ZipFile(built_wheel) as archive:
         names = set(archive.namelist())
 
     assert names >= {f"openarchive/migrations/{path.name}" for path in MIGRATIONS_DIR.glob("*.sql")}
-    corpus = app_dir / "demo_corpus"
+    corpus = package_dir / "demo_corpus"
     assert names >= {
-        path.relative_to(app_dir.parent).as_posix() for path in corpus.rglob("*.md")
+        path.relative_to(package_dir.parent).as_posix() for path in corpus.rglob("*.md")
     }
 
 

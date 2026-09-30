@@ -10,7 +10,6 @@ DERIVED_TABLE_INSERT = re.compile(
 )
 APPLICATION_SOURCE_ROOTS = (
     REPOSITORY_ROOT / "backend" / "openarchive",
-    REPOSITORY_ROOT / "backend" / "openarchive" / "mcp_server",
     REPOSITORY_ROOT / "scripts",
 )
 # 셸도 검사한다 — scripts/ 는 psql 힙독으로 SQL을 담는다.
