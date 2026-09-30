@@ -811,7 +811,7 @@ aws ec2 revoke-security-group-ingress --region ap-northeast-2 \
 
 ## 16. HA 3노드 구성 (#110)
 
-2차 평가를 위해 HA 라이선스(node1~3, 만료 **2026-10-28**)를 받아 VM 3대에 구축했다 (2026-09-25~26 실측). **설치기가 끝난 상태는 공식 HA 구성이 아니다** — 아래 「설치 후 교정」을 전부 해야 앱을 받을 수 있다.
+2차 평가를 위해 HA 라이선스(node1~3, 만료 **2026-10-28**)를 받아 VM 3대에 구축했다 (2026-09-25~26 실측). **설치기가 끝난 상태는 공식 HA 구성이 아니다** — 아래 「설치 후 교정」을 전부 해야 앱을 받을 수 있다. 교정마다 OpenSQL 문서·배포판과 어디가 왜 다른지는 [`OPENSQL_DEVIATIONS.md`](OPENSQL_DEVIATIONS.md)에 모았다.
 
 ```
                      VIP 192.168.64.200:6432  (VRRP, node2 MASTER · node3 BACKUP)
@@ -872,10 +872,13 @@ python3 opensql_remote_installer.py --mode 3node
 
    [pools.opensql]
    pool_mode = "transaction"
+   auth_type = "scram-sha-256"
    query_parser_enabled = true
    query_parser_read_write_splitting = true
    # default_role 줄은 지운다 (공식 예시에 없고 효과도 없었다)
    ```
+   - `[general]`에 `worker_threads = 2` — HA 템플릿 권고(DB와 같은 노드면 코어 수의 절반, VM 4코어). 반영은 재시작
+   - `auth_type`을 지정하지 않으면 OpenProxy 기본 `md5`다. HA 템플릿은 `scram-sha-256`이다(2026-09-30 맞춤, #150)
    - 먼저 뜬 노드가 자기 파일을 etcd `/service/opensql/openproxy/config/current`에 **초기 설정으로 올리고**, 이후 노드는 로컬 파일을 무시한다. 그래서 두 파일은 `virtual_router`의 `priority`·`unicast_peers`만 다르게 둔다
    - etcd 모드에서는 **파일 autoreload가 꺼진다.** 공유 설정 변경은 `openproxy edit` 또는 etcd 키로 한다
    - 역할 감지가 30초 폴링(`Patroni role refresh … 30 second interval`)에서 **etcd leader·members watch**로 바뀐다
@@ -910,14 +913,44 @@ python3 opensql_remote_installer.py --mode 3node
      ```
    - 확인: `patronictl list`에 `Sync Standby`가 없고, Primary의 `pg_stat_replication.sync_state`가 모두 `async`
    - 참고(동기 모드를 쓰는 OpenProxy 수정판이 나왔을 때): 동기 모드에서는 **switchover 후보가 `sync_standby`여야 한다.** 다른 replica를 고르면 `412, candidate name does not match with sync_standby`로 거부된다. 특정 노드로 리더를 옮기려면 그 노드가 `sync_standby`가 될 때까지 "현재 sync_standby로 switchover"를 반복한다
-6. **서버 keepalive와 idle 트랜잭션 상한 (ADR-051)** — 기본값(keepalive 7200초, 상한 없음)이면 **죽은 OpenProxy 노드를 거치던 트랜잭션이 Primary에 약 2시간 락을 쥔 채 남는다**(#122 S5a-2 — 워커 13분 넘게 정지). 앱 쪽 keepalive(ADR-048)와 같은 값으로 맞춘다
+6. **서버 keepalive (ADR-051)** — 기본값(keepalive 7200초)이면 **죽은 OpenProxy 노드를 거치던 트랜잭션이 Primary에 약 2시간 락을 쥔 채 남는다**(#122 S5a-2 — 워커 13분 넘게 정지). 앱 쪽 keepalive(ADR-048)와 같은 값으로 맞춘다. **OpenSQL 공식 구성에 없는 설정이다** — OpenProxy가 죽은 경우를 막을 공식 대안이 없어서 더했다([`OPENSQL_DEVIATIONS.md`](OPENSQL_DEVIATIONS.md) 1절)
 
    ```bash
    sudo -u opensql /home/opensql/bin/patronictl -c /home/opensql/etc/patroni/patroni.yml edit-config \
      -p tcp_keepalives_idle=30 -p tcp_keepalives_interval=10 -p tcp_keepalives_count=3 \
-     -p tcp_user_timeout=60000 -p idle_in_transaction_session_timeout=60s --force
+     -p tcp_user_timeout=60000 --force
    ```
    - 재시작 없이 세 노드에 반영되고, 이미 열린 OpenProxy 풀 연결에도 적용된다(`ss -tno`의 keepalive 타이머가 30초 이하로 바뀐다)
+   - `idle_in_transaction_session_timeout`은 걸지 않는다. 9/28~9/30에 60s를 클러스터 전체에 걸었으나, 같은 DB의 다른 앱 세션까지 끊고 위 keepalive로 충분해 걷었다(#150, ADR-051 개정). 켜져 있다면 `-s postgresql.parameters.idle_in_transaction_session_timeout=null`
+7. **앱 전용 롤·DB·풀** — 설치기 풀 사용자는 `postgres` 슈퍼유저 하나다. 앱은 HA 템플릿처럼 전용 롤로 붙는다. 롤·DB·`vector`는 §10 「새 DB와 새 풀」 ①과 같고, 풀은 HA 형태로 공유 설정에 더한다(`openproxy edit`, 편집 뒤 두 노드 재시작)
+
+   ```toml
+   [pools.openarchive]
+   pool_mode = "transaction"
+   auth_type = "scram-sha-256"
+   query_parser_enabled = true
+   query_parser_read_write_splitting = true
+
+   [pools.openarchive.users.0]
+   username = "openarchive"
+   password = "<비밀번호>"
+   server_username = "openarchive"
+   server_password = "<비밀번호>"
+   pool_size = 20
+   statement_timeout = 0
+
+   [pools.openarchive.shards.0]
+   servers = [
+       ["192.168.64.201", 5432, "Auto"],
+       ["192.168.64.202", 5432, "Auto"],
+       ["192.168.64.203", 5432, "Auto"],
+   ]
+   database = "openarchive"
+   use_patroni = true
+   patroni_port = "8008"
+   ```
+   - 그다음 `openarchive init --dsn "postgresql://openarchive:<비밀번호>@192.168.64.200:6432/openarchive"`. 2026-09-30 실측: 비슈퍼유저로 23개 마이그레이션 적용·관리자 생성, 업로드→임베딩→검색, switchover 뒤 재시작 없이 업로드 3건·검색 정상. 틀린 비밀번호는 `invalid client proof`로 거부
+   - `postgres` 풀은 운영 접속(`psql`, 측정 도구의 노드 대조)용으로 남긴다
 
 ### 검증 (2026-09-26 실측)
 

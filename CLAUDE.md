@@ -10,6 +10,7 @@
 | `docs/ADR.md` | 설계 결정의 근거와 트레이드오프 | 설계 결정을 바꾸거나 추가할 때 |
 | `docs/ARCHITECTURE.md` | 스키마·트리거·워커·검색·HA 상세 | 구현할 때 |
 | `docs/SETUP_OPENSQL.md` | OpenSQL VM 구축 절차, 설치 후 검증 | 실 DB 환경을 만들거나 고칠 때 |
+| `docs/OPENSQL_DEVIATIONS.md` | HA 환경이 OpenSQL 문서·배포판과 다른 점과 그 이유 | **클러스터 설정을 바꾸기 전** — 공식이 기본, 다르게 하려면 실측 이유 |
 | `docs/PRD.md`, `docs/UI_GUIDE.md` | 기능 범위, UI 규칙 | 화면·기능 작업 시 |
 | `docs/ROADMAP.md` | 확장점 지도, 단계적 발전 경로, 하지 않는 것 | 새 기능·확장 제안의 채택 여부를 판단할 때 |
 

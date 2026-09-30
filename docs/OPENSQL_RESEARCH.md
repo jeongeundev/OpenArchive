@@ -480,7 +480,7 @@ REST API: `listen: 0.0.0.0:8008`
 | 추가한 것 | 이유 |
 |---|---|
 | ~~`synchronous_mode: true` · strict off · 동기 1대~~ → **2026-09-30 되돌림(비동기)** | 설치기 기본은 **비동기**라 failover에서 커밋 응답을 받은 데이터를 잃을 수 있다(`maximum_lag_on_failover`만큼). 동기 1대로 닫았으나, **OpenProxy 1.1.3이 `sync_standby` 역할을 해석하지 못해 기동·설정 재로드가 실패**한다(`unknown variant sync_standby` → `Config parse error`, exit 78). 고객 관행(9/21 멘토링)과 공식 구성도 비동기라 되돌렸다 (ADR-049 개정, #148) |
-| `tcp_keepalives_*` 30/10/3 · `tcp_user_timeout` 60000 · `idle_in_transaction_session_timeout` 60s | 기본값이면 죽은 OpenProxy 노드를 거치던 트랜잭션이 Primary에 약 2시간 락을 쥔 채 남는다 (ADR-051) |
+| `tcp_keepalives_*` 30/10/3 · `tcp_user_timeout` 60000 (~~`idle_in_transaction_session_timeout` 60s~~ 9/30 걷음) | 기본값이면 죽은 OpenProxy 노드를 거치던 트랜잭션이 Primary에 약 2시간 락을 쥔 채 남는다 (ADR-051). OpenSQL 공식 구성에 없는 설정 — `OPENSQL_DEVIATIONS.md` |
 
 부하(업로드 약 2건/초 · 검색 · 100ms 쓰기 probe) 중 측정한 쓰기 중단:
 
