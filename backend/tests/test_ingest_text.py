@@ -20,7 +20,7 @@ sys.path.insert(0, str(ROOT))
 from examples import ingest_text
 from examples.ingest_text import DOCUMENT_PATH, INGEST_PATH, LOGIN_PATH, is_in_progress
 
-from app.main import app
+from openarchive.main import app
 
 
 def test_example_paths_are_registered_routes():

@@ -8,7 +8,7 @@ import psycopg
 import pytest
 from conftest import insert_test_document
 
-from app.services.links import find_backlinks, resolve_links
+from openarchive.services.links import find_backlinks, resolve_links
 
 
 @pytest.fixture

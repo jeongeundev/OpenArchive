@@ -91,7 +91,7 @@ BACKEND_URL=http://127.0.0.1:8000 npm run build
 # nohup 그대로 둔다 (ADR-038).
 step "앱 3종 기동"
 
-pkill -f 'uvicorn app.main:app' 2>/dev/null || true
+pkill -f 'uvicorn openarchive.main:app' 2>/dev/null || true
 pkill -f 'next-server' 2>/dev/null || true
 
 # 워커는 pkill 하지 않는다 — systemctl stop이 SIGTERM 경로로 세운다. pkill로 죽이면
@@ -124,7 +124,7 @@ cd "$APP_ROOT/backend"
 # API는 127.0.0.1에만 연다. 외부에 노출되는 것은 프론트뿐이고, /api/*는 Next.js가
 # rewrite로 프록시한다 (next.config.ts). 신원은 세션 쿠키 검증으로만 해석되지만
 # (ADR-028), API를 직접 열면 로그인·쓰기 엔드포인트가 그대로 인터넷에 노출된다.
-setsid nohup .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 \
+setsid nohup .venv/bin/uvicorn openarchive.main:app --host 127.0.0.1 --port 8000 \
   </dev/null > "$HOME/api.log" 2>&1 &
 
 cd "$APP_ROOT/frontend"

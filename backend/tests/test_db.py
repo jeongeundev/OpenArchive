@@ -1,6 +1,6 @@
-"""`app.db`의 import 부작용 부재를 검증한다 (ADR-012).
+"""`openarchive.db`의 import 부작용 부재를 검증한다 (ADR-012).
 
-MCP 서버는 `app.services`를 직접 import하고(ADR-008) 워커도 같은 패키지를 쓴다.
+MCP 서버는 `openarchive.services`를 직접 import하고(ADR-008) 워커도 같은 패키지를 쓴다.
 import가 곧 접속이면 세 프로세스가 의도치 않게 각자 풀을 연다.
 그래서 여기서는 "접속이 되는가"가 아니라 **"import만으로는 아무 일도 일어나지 않는가"**를 본다.
 DB 컨테이너 없이 통과해야 한다.
@@ -14,15 +14,15 @@ import pytest
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
 from psycopg_pool import AsyncConnectionPool
 
-import app.db
-from app.config import get_settings
+import openarchive.db
+from openarchive.config import get_settings
 
 
 @pytest.fixture(autouse=True)
 def _restore_db_module():
     """모듈 전역 상태(_pool)와 패치된 클래스가 테스트 간에 새지 않게 되돌린다."""
     yield
-    importlib.reload(app.db)
+    importlib.reload(openarchive.db)
 
 
 @pytest.fixture
@@ -48,7 +48,7 @@ def pool_spy(monkeypatch):
             pass
 
     monkeypatch.setattr(psycopg_pool, "AsyncConnectionPool", SpyPool)
-    importlib.reload(app.db)
+    importlib.reload(openarchive.db)
     return created
 
 
@@ -56,19 +56,19 @@ def test_import_alone_creates_no_pool(monkeypatch, pool_spy):
     """DATABASE_URL이 없어도 import가 성공하고, 그것만으로 풀이 만들어지지 않는다."""
     monkeypatch.delenv("DATABASE_URL", raising=False)
 
-    importlib.reload(app.db)
+    importlib.reload(openarchive.db)
 
     assert pool_spy == []
-    assert app.db._pool is None
+    assert openarchive.db._pool is None
 
 
 def test_get_pool_creates_lazily_and_reuses(pool_spy):
     assert pool_spy == []
 
-    pool = app.db.get_pool()
+    pool = openarchive.db.get_pool()
 
     assert len(pool_spy) == 1
-    assert app.db.get_pool() is pool
+    assert openarchive.db.get_pool() is pool
     assert len(pool_spy) == 1
 
 
@@ -78,15 +78,15 @@ def test_pool_is_created_with_auto_open_disabled(pool_spy):
     켜져 있으면 get_pool()을 부르는 순간 커넥션이 생겨, 여는 시점을 호출부가
     통제할 수 없게 된다.
     """
-    app.db.get_pool()
+    openarchive.db.get_pool()
 
     assert pool_spy[0].kwargs["open"] is False
 
 
 def test_pool_checks_connections_when_borrowed(pool_spy):
-    app.db.get_pool()
+    openarchive.db.get_pool()
 
-    assert pool_spy[0].kwargs["check"] is app.db.AsyncConnectionPool.check_connection
+    assert pool_spy[0].kwargs["check"] is openarchive.db.AsyncConnectionPool.check_connection
 
 
 def test_pool_uses_dsn_from_settings(monkeypatch, pool_spy):
@@ -94,34 +94,34 @@ def test_pool_uses_dsn_from_settings(monkeypatch, pool_spy):
     monkeypatch.setenv("DATABASE_URL", "postgresql://app@openproxy.example:6432/pool_a")
     get_settings.cache_clear()
 
-    app.db.get_pool()
+    openarchive.db.get_pool()
 
     assert pool_spy[0].conninfo == "postgresql://app@openproxy.example:6432/pool_a"
 
 
 def test_real_pool_is_not_open_on_creation():
     """스파이가 아닌 실제 AsyncConnectionPool로도 확인한다."""
-    pool = app.db.get_pool()
+    pool = openarchive.db.get_pool()
 
     assert isinstance(pool, AsyncConnectionPool)
     assert pool.closed
 
 
 async def test_close_pool_resets_state(pool_spy):
-    pool = app.db.get_pool()
+    pool = openarchive.db.get_pool()
 
-    await app.db.close_pool()
+    await openarchive.db.close_pool()
 
-    assert app.db._pool is None
-    assert app.db.get_pool() is not pool
+    assert openarchive.db._pool is None
+    assert openarchive.db.get_pool() is not pool
     assert len(pool_spy) == 2
 
 
 async def test_close_pool_without_a_pool_is_noop():
     """풀을 만든 적 없는 프로세스가 종료돼도 예외가 나지 않아야 한다."""
-    await app.db.close_pool()
+    await openarchive.db.close_pool()
 
-    assert app.db._pool is None
+    assert openarchive.db._pool is None
 
 
 def _effective_params(pool) -> dict:
@@ -139,7 +139,7 @@ def test_pool_connections_detect_a_dead_peer_within_a_minute(monkeypatch, pool_s
     monkeypatch.setenv("DATABASE_URL", "postgresql://app@openproxy.example:6432/pool_a")
     get_settings.cache_clear()
 
-    app.db.get_pool()
+    openarchive.db.get_pool()
 
     assert pool_spy[0].conninfo == "postgresql://app@openproxy.example:6432/pool_a"
     params = _effective_params(pool_spy[0])
@@ -157,7 +157,7 @@ def test_keepalive_written_in_the_dsn_wins_over_the_defaults(monkeypatch, pool_s
     )
     get_settings.cache_clear()
 
-    app.db.get_pool()
+    openarchive.db.get_pool()
 
     params = _effective_params(pool_spy[0])
     assert params["keepalives_idle"] == "5"
@@ -206,7 +206,7 @@ async def test_openproxy_backend_errors_are_unavailable(test_dsn, message):
     error = await _server_error(test_dsn, _raise_sql("58000", message.replace("'", "''")))
 
     assert isinstance(error, psycopg.errors.SystemError)
-    assert app.db.is_unavailable(error)
+    assert openarchive.db.is_unavailable(error)
 
 
 async def test_write_routed_to_a_replica_during_promotion_is_unavailable(test_dsn):
@@ -217,7 +217,7 @@ async def test_write_routed_to_a_replica_during_promotion_is_unavailable(test_ds
     )
 
     assert isinstance(error, psycopg.errors.ReadOnlySqlTransaction)
-    assert app.db.is_unavailable(error)
+    assert openarchive.db.is_unavailable(error)
 
 
 async def test_terminated_backend_is_unavailable(test_dsn):
@@ -228,7 +228,7 @@ async def test_terminated_backend_is_unavailable(test_dsn):
         with pytest.raises(psycopg.OperationalError) as caught:
             await victim.execute("SELECT 1")
 
-    assert app.db.is_unavailable(caught.value)
+    assert openarchive.db.is_unavailable(caught.value)
 
 
 async def test_lost_connection_is_unavailable(test_dsn):
@@ -243,12 +243,12 @@ async def test_lost_connection_is_unavailable(test_dsn):
             await victim.execute("SELECT 1")
 
     assert caught.value.sqlstate is None
-    assert app.db.is_unavailable(caught.value)
+    assert openarchive.db.is_unavailable(caught.value)
 
 
 def test_pool_timeout_is_unavailable():
     """장애 중 풀이 연결을 내주지 못하는 경우. 서버 응답이 없어 SQLSTATE도 없다."""
-    assert app.db.is_unavailable(psycopg_pool.PoolTimeout("couldn't get a connection"))
+    assert openarchive.db.is_unavailable(psycopg_pool.PoolTimeout("couldn't get a connection"))
 
 
 @pytest.mark.parametrize(
@@ -267,13 +267,13 @@ async def test_permanent_operational_errors_are_not_unavailable(test_dsn, sqlsta
     error = await _server_error(test_dsn, _raise_sql(sqlstate, "permanent"))
 
     assert isinstance(error, psycopg.OperationalError)
-    assert not app.db.is_unavailable(error)
+    assert not openarchive.db.is_unavailable(error)
 
 
 def test_cannot_connect_now_is_unavailable():
     """기동·복구 중인 서버가 접속을 거절하는 경우(57P03). 실 서버로 만들 수 없어
     psycopg가 SQLSTATE로 고르는 클래스를 그대로 쓴다."""
-    assert app.db.is_unavailable(psycopg.errors.lookup("57P03")())
+    assert openarchive.db.is_unavailable(psycopg.errors.lookup("57P03")())
 
 
 async def test_statement_timeout_is_not_unavailable(test_dsn):
@@ -281,11 +281,11 @@ async def test_statement_timeout_is_not_unavailable(test_dsn):
     error = await _server_error(test_dsn, "SET statement_timeout = 10; SELECT pg_sleep(1)")
 
     assert isinstance(error, psycopg.errors.QueryCanceled)
-    assert not app.db.is_unavailable(error)
+    assert not openarchive.db.is_unavailable(error)
 
 
 async def test_code_defects_are_not_unavailable(test_dsn):
     error = await _server_error(test_dsn, "SELECT * FROM no_such_table")
 
-    assert not app.db.is_unavailable(error)
-    assert not app.db.is_unavailable(RuntimeError("버그"))
+    assert not openarchive.db.is_unavailable(error)
+    assert not openarchive.db.is_unavailable(RuntimeError("버그"))

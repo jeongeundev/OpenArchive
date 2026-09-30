@@ -4,7 +4,7 @@
 
 ```
 ┌─────────────┐   ┌──────────────────────────────────────────────┐
-│  Next.js UI  │──▶│  FastAPI (backend/app)                       │
+│  Next.js UI  │──▶│  FastAPI (backend/openarchive)               │
 └─────────────┘   │  문서 CRUD/버전 · 하이브리드 검색 · 시스템 상태 │
 ┌─────────────┐   └───────────────┬──────────────────────────────┘
 │  MCP Server  │──(services 직접 재사용)──┐
@@ -29,7 +29,7 @@
                                   │ 5초 폴링 (주 경로)
                                   │ + LISTEN/NOTIFY (최적화, 선택)
                   ┌───────────────▼──────────────────────────────┐
-                  │  Embedding Worker (python -m app.worker)      │
+                  │  Worker (python -m openarchive.worker)        │
                   │  SKIP LOCKED claim → 청킹 → 임베딩 →           │
                   │  해시 재확인 + 청크 교체 + job done (단일 트랜잭션)│
                   │  관계 잡(edges)은 판정만 — 자기 트랜잭션       │
@@ -58,7 +58,7 @@ OpenArchive/
 │   └── ingest_text.py            # 표준 라이브러리만 쓰는 독립 HTTP 텍스트 공급 예제
 ├── backend/
 │   ├── pyproject.toml            # fastapi, psycopg[binary,pool], pydantic-settings, mcp<2, pypdf, python-docx / [dev]: pytest, ruff / [local]: sentence-transformers
-│   ├── app/
+│   ├── openarchive/              # 설치되는 최상위 패키지 하나 (배포 이름 openarchive-server)
 │   │   ├── main.py               # FastAPI 앱 조립
 │   │   ├── config.py             # pydantic-settings — $OPENARCHIVE_HOME/.env(기본 ~/.openarchive/.env)
 │   │   ├── db.py                 # AsyncConnectionPool만 — import 시 부작용 없음
@@ -75,8 +75,8 @@ OpenArchive/
 │   │   ├── services/             # parsing, chunking, documents, search, related,
 │   │   │                         #   links, diagnostics, clusters, auth, system, visibility
 │   │   ├── embeddings/           # base.py(Protocol), local.py(bge-m3), fake.py
-│   │   └── worker.py             # 워커 진입점 — 임베딩 잡과 관계 잡을 같은 큐에서 처리
-│   ├── mcp_server/server.py      # FastMCP stdio — search_documents, get_document, list_documents, create_document
+│   │   ├── worker.py             # 워커 진입점 — 임베딩 잡과 관계 잡을 같은 큐에서 처리
+│   │   └── mcp_server/server.py  # FastMCP stdio — search_documents, get_document, list_documents, create_document
 │   └── tests/                    # test_chunking.py, test_triggers.py, test_worker.py, test_search_api.py ...
 └── frontend/
     └── src/
@@ -89,7 +89,7 @@ OpenArchive/
 
 `services/visibility.py`의 `VISIBLE_TO_USER`는 **모든 조회 경로가 공유하는 단일 열람 술어**다. 검색·관련 문서·그래프 순회·집계·위키링크 해석이 각자 조건을 쓰면 한 곳만 빠져도 비공개 문서가 새어 나간다 (ADR-018, ADR-027).
 
-MCP 서버는 `app.services`를 직접 재사용한다. `search_documents`는 발췌(`excerpt`)·출처(`document_id`, `title`, `filename`)·기준 버전(`based_on_version`)을 반환하고, `get_document`는 문서 텍스트와 텍스트 버전·청크 상태를, `list_documents`는 접근 가능한 문서 메타데이터를 반환한다. `create_document`는 `title`·`content`·`content_type`(`txt`·`md`)·`tags`·`visibility`를 받아 기존 텍스트 진입점으로 공급한다. 사용자 컨텍스트는 툴 인자가 아니라 `MCP_USER_ID` 환경변수로 고정한다. 미설정 시 public 문서 읽기는 허용하지만 소유자를 확정할 수 없어 쓰기는 거부한다 (ADR-025, ADR-036).
+MCP 서버는 `openarchive.services`를 직접 재사용한다. `search_documents`는 발췌(`excerpt`)·출처(`document_id`, `title`, `filename`)·기준 버전(`based_on_version`)을 반환하고, `get_document`는 문서 텍스트와 텍스트 버전·청크 상태를, `list_documents`는 접근 가능한 문서 메타데이터를 반환한다. `create_document`는 `title`·`content`·`content_type`(`txt`·`md`)·`tags`·`visibility`를 받아 기존 텍스트 진입점으로 공급한다. 사용자 컨텍스트는 툴 인자가 아니라 `MCP_USER_ID` 환경변수로 고정한다. 미설정 시 public 문서 읽기는 허용하지만 소유자를 확정할 수 없어 쓰기는 거부한다 (ADR-025, ADR-036).
 
 `POST /api/search`도 같은 근거 필드(`filename`·`based_on_version`)를 함께 내려준다. 서비스가 하나여도 두 경로의 응답 스키마가 갈라지면 "REST와 MCP의 결과가 같다"가 깨진다 — `tests/test_mcp_server.py`가 두 응답을 직접 비교해 이를 지킨다.
 
@@ -384,7 +384,7 @@ CREATE TRIGGER trg_build_document_edges                          -- (008) 정의
 
 - **저장은 단방향, 조회는 대칭이다.** `src_document_id`가 계산 주체이고 재계산은 자기 `src` 행만 교체한다. 양방향 두 행 + `DELETE both`는 남이 발견한 관계를 지워 재실행만으로 그래프가 흔들렸다(같은 규칙 재실행의 자카드 0.971 → 단방향 0.990). 읽는 쪽(검색 순회·관련 문서·태그 추천·군집·진단)이 `src ∪ dst`로 합친다 (ADR-029 개정).
 - **세 설정은 함수 정의에 둔다.** 함수가 끝나면 호출 전 값으로 복원되어 관계 잡 트랜잭션의 나머지를 오염시키지 않는다. `SET LOCAL`로는 안 된다 — OpenProxy 풀 백엔드에 남는 PL/pgSQL generic plan이 이전 계획을 재사용해 `DISCARD PLANS` 뒤에야 먹었다. 실 VM 판정 비용은 10청크 4.6 s → 0.2 s, 159청크 40 s → 2.7 s다 (`OPENSQL_RESEARCH.md` §16). **이 시간이 임베딩 트랜잭션에서 빠진 것이 관계 잡 분리의 이유다.**
-- **이웃 후보는 관계 잡이 처리되는 시점에 청크가 있는 문서뿐이다.** `ready` 전이 시점이 아니라 잡 처리 시점이므로, 큐가 밀리면 그 사이 적재된 문서도 후보에 들어와 대량 적재의 결과가 처리 순서에 따라 달라진다. 어느 쪽이든 먼저 들어온 문서가 나중 문서를 발견하는 것은 보장되지 않으므로, 대량 적재 뒤에는 `openarchive rebuild-edges`로 전체 기준으로 수렴시킨다 (ADR-029 결정 6). `openarchive demo`(`app/demo.py`)는 적재 끝에 이를 한 번 자동으로 한다.
+- **이웃 후보는 관계 잡이 처리되는 시점에 청크가 있는 문서뿐이다.** `ready` 전이 시점이 아니라 잡 처리 시점이므로, 큐가 밀리면 그 사이 적재된 문서도 후보에 들어와 대량 적재의 결과가 처리 순서에 따라 달라진다. 어느 쪽이든 먼저 들어온 문서가 나중 문서를 발견하는 것은 보장되지 않으므로, 대량 적재 뒤에는 `openarchive rebuild-edges`로 전체 기준으로 수렴시킨다 (ADR-029 결정 6). `openarchive demo`(`openarchive/demo.py`)는 적재 끝에 이를 한 번 자동으로 한다.
 - **판정이 실패해도 청크와 `ready`는 남는다.** 롤백 범위가 관계 잡 트랜잭션뿐이기 때문이다. 예외를 삼키지 않으며 워커의 재시도·백오프가 처리하고, 예산을 소진하면 **잡만** `error`로 격리된다 — `documents.embedding_status`는 건드리지 않는다(청크가 멀쩡해 검색이 그대로 되므로 임베딩 실패 배지를 붙이면 화면이 거짓말을 한다). 그 문서는 `/api/system/status`의 관계 미반영 수에 계속 세어진다.
 - **관계 잡은 낡았다는 이유로 폐기하지 않는다.** 재임베딩이 시작된 문서라도 워커는 `documents`를 `FOR UPDATE`로 잠근 뒤 **지금 있는 청크로 판정하고** 마감한다. 임베딩 잡의 폐기 규칙(워커 루프 3번)을 옮겨 오지 않는 이유는 그 규칙의 전제 *"곧 올 `ready` 전이가 새 잡을 만든다"*가 재임베딩이 성공할 때만 참이기 때문이다 — `error`로 끝나면 `ready` 전이가 영영 오지 않아, 관계를 한 번도 계산하지 않은 문서가 남는데 잡은 `done`이라 관계 미반영 수는 0을 보고한다. 지키는 불변식은 **"`done`이 된 관계 잡은 반드시 판정을 돌렸다"**이며, 그래야 그 0이 참이다 (ADR-029 결정 3 개정).
 
@@ -466,7 +466,7 @@ COMMIT;
    **어떤 락도 워커를 끝없이 세우지 못한다** (#128, #122 S5a-2). 죽은 OpenProxy 노드를 거치던 트랜잭션은 Primary가 끊을 때까지(서버 keepalive 기본 2시간) 문서·잡 행 락을 쥔 채 남는다. S5a-2에서 lease 연장이 그 락을 761초 넘게 기다렸고, 워커는 heartbeat 종료를 상한 없이 기다려 13분 넘게 처리 0이었다. 서버 설정(ADR-051)이 근본 해결이고, 앱은 그 설정이 없는 DB에서도 버티도록 셋을 둔다.
    - **일감을 고르는 쿼리는 기다리지 않는다.** claim(1번)과 스윕은 잠긴 문서·잡을 `SKIP LOCKED`로 건너뛴다. 스윕이 서거나 실패하면 루프 머리의 drain도 돌지 않기 때문이다. 건너뛴 좀비는 막은 쪽이 풀린 뒤의 스윕이 회수한다.
    - **자기 잡에 쓰는 트랜잭션은 한 heartbeat 주기(lease의 1/3)까지만 기다린다.** lease 연장·결과 반영·관계 판정·실패 기록·반납이 첫 문장으로 `set_config('lock_timeout', …, true)`를 건다(OpenProxy transaction 모드라 트랜잭션 밖 SET은 못 쓴다). 상한에 걸리면 `LockNotAvailable`로 끝나고, 잡은 lease 만료 뒤 스윕이 회수한다. 반영이 상한에 걸리면 이어지는 실패 기록도 같은 문서 행 락에 걸리므로, 예외가 루프까지 올라가 그 주기의 drain을 접고 연결을 버린 뒤 다음 주기로 넘어간다.
-   - **heartbeat는 최대 한 lease만 기다린다.** 넘기면 취소하지 않고 떼어 둔다 — 취소는 풀을 오염시키고(#110 B-2), 쿼리가 도는 연결을 밖에서 닫는 것은 안전하지 않으며, OpenProxy 너머의 쿼리 취소는 실패했다. 떼어 둔 heartbeat는 진행 중인 호출이 끝나면 멈추고, 오류로 끝난 연결은 `app.db.connection`이 버린다. 그때까지 풀 연결 하나를 쥐며(락이면 한 주기, 응답 없는 네트워크면 클라이언트 keepalive 약 60초), 쌓여서 풀이 차면 다음 heartbeat가 연장하지 못해 그 잡의 결과를 버린다(ADR-050 트레이드오프 6).
+   - **heartbeat는 최대 한 lease만 기다린다.** 넘기면 취소하지 않고 떼어 둔다 — 취소는 풀을 오염시키고(#110 B-2), 쿼리가 도는 연결을 밖에서 닫는 것은 안전하지 않으며, OpenProxy 너머의 쿼리 취소는 실패했다. 떼어 둔 heartbeat는 진행 중인 호출이 끝나면 멈추고, 오류로 끝난 연결은 `openarchive.db.connection`이 버린다. 그때까지 풀 연결 하나를 쥐며(락이면 한 주기, 응답 없는 네트워크면 클라이언트 keepalive 약 60초), 쌓여서 풀이 차면 다음 heartbeat가 연장하지 못해 그 잡의 결과를 버린다(ADR-050 트레이드오프 6).
 
    **회수에도 4번과 같은 재시도 예산이 걸린다.** lease가 만료된 잡의 `attempts`가 이미 3회를 소진했으면 `pending`으로 되돌리지 않고 job `error` + `documents.embedding_status='error'`로 격리한다(`last_error`는 `WorkerCrashLoop: …`). 여기서도 `embedding_status`를 건드리는 것은 임베딩 잡뿐이며(추출 잡은 `extraction_status='failed'`), 회수·격리 판정은 종류를 가리지 않고 `(document_id, kind)` 단위로 이뤄진다. 이것이 없으면 상한이 4번(예외로 잡히는 실패)에만 걸린다 — `claim_job`은 `attempts`를 보지 않으므로, 워커 프로세스를 죽이는 잡은 회수 → 재선점 → 재크래시를 무한 반복하고 그때마다 워커가 함께 죽는다. `attempts`를 초기화하지 않는 것은 이 판정의 전제이지 그 자체로 상한을 만들지는 않는다.
 
@@ -568,11 +568,11 @@ DATABASE_URL="postgresql://app@<vip>:6432/<pool_name>"
 ### 애플리케이션이 담당하는 복구 로직
 
 - **API**: `psycopg_pool.AsyncConnectionPool(check=AsyncConnectionPool.check_connection)` — 죽은 연결을 대여 시점에 감지·폐기·재수립. 처리 도중 끊긴 요청은 미들웨어가 **1회 재시도**하되 대상은 **읽기 전용 요청**뿐이다(`GET`·`HEAD`·`POST /api/search`). 쓰기는 커밋 도달 여부를 구분할 수 없어 재시도 시 중복 생성 위험이 있다 (ADR-023).
-- **일시 불가용은 503 + `Retry-After`**: 기다리면 풀리는 DB 오류를 `app.db.is_unavailable` 하나로 가른다 — 연결 유실·풀 대여 시간 초과(SQLSTATE 없는 `OperationalError`), 연결 예외 `08xxx`, OpenProxy `AllServersDown`과 서버 소켓 오류가 올라오는 `58000`, 서버 종료·기동 중인 `57P01`·`57P02`·`57P03`, 승격 직후 쓰기가 replica로 간 `25006`. **나열한 것만** 일시 불가용이다 — `OperationalError`에는 디스크 가득 참(`53100`)·인증 실패(`28P01`)·statement timeout(`57014`)처럼 기다려도 풀리지 않는 것도 섞여 있어, 그것을 503으로 주면 결함이 가려진다. 한계: 잘못된 DSN·비밀번호는 풀에서 `PoolTimeout`으로 보여 장애와 구별되지 않는다. 미들웨어(`api/retry.py`)의 즉시 1회 재시도도 이 기준을 따르고, 끝내 풀리지 않으면 **503 + `Retry-After: 1`**로 응답한다. 쓰기도 503은 받지만 즉시 재시도는 `Idempotency-Key`가 있는 문서 생성(`POST /api/documents`·`/api/documents/text`)만 한다 — 다른 쓰기는 헤더가 붙어 와도 키를 지키지 않는다. 그 밖의 오류는 500이며, 500은 코드 결함에만 남는다. #110 B에서는 장애 구간 응답이 전부 500이었다(B-5) (ADR-048 결정 3).
+- **일시 불가용은 503 + `Retry-After`**: 기다리면 풀리는 DB 오류를 `openarchive.db.is_unavailable` 하나로 가른다 — 연결 유실·풀 대여 시간 초과(SQLSTATE 없는 `OperationalError`), 연결 예외 `08xxx`, OpenProxy `AllServersDown`과 서버 소켓 오류가 올라오는 `58000`, 서버 종료·기동 중인 `57P01`·`57P02`·`57P03`, 승격 직후 쓰기가 replica로 간 `25006`. **나열한 것만** 일시 불가용이다 — `OperationalError`에는 디스크 가득 참(`53100`)·인증 실패(`28P01`)·statement timeout(`57014`)처럼 기다려도 풀리지 않는 것도 섞여 있어, 그것을 503으로 주면 결함이 가려진다. 한계: 잘못된 DSN·비밀번호는 풀에서 `PoolTimeout`으로 보여 장애와 구별되지 않는다. 미들웨어(`api/retry.py`)의 즉시 1회 재시도도 이 기준을 따르고, 끝내 풀리지 않으면 **503 + `Retry-After: 1`**로 응답한다. 쓰기도 503은 받지만 즉시 재시도는 `Idempotency-Key`가 있는 문서 생성(`POST /api/documents`·`/api/documents/text`)만 한다 — 다른 쓰기는 헤더가 붙어 와도 키를 지키지 않는다. 그 밖의 오류는 500이며, 500은 코드 결함에만 남는다. #110 B에서는 장애 구간 응답이 전부 500이었다(B-5) (ADR-048 결정 3).
 - **긴 재시도는 클라이언트가 한다**: 즉시 1회로는 7~42초 중단을 덮지 못한다. 웹 UI(`lib/api.ts`)의 읽기와 업로드, MCP 도구 4개(읽기 3개와 `create_document`)가 503·네트워크 오류(MCP는 분류된 DB 오류)를 **지수 백오프(1초 시작·상한 8초) + 전체 지터, 총 60초**로 다시 시도한다. 웹 UI는 503의 `Retry-After`보다 일찍 보내지 않는다 — 간격은 `max(Retry-After, 지터 백오프)`이고, 알린 값이 남은 예산을 넘으면 바로 포기한다(RFC 9110 §10.2.3). MCP는 HTTP를 거치지 않고 서비스를 직접 불러 받을 헤더가 없다. 쓰기는 멱등키가 있는 것만 재시도한다 — 웹 UI는 업로드 동작마다, MCP는 `create_document` 호출마다 키를 하나 만들어 그 요청의 모든 재시도에 쓴다(ADR-047). 편집·태그·삭제 등 다른 쓰기는 재시도하지 않는다. 서버는 요청을 붙잡고 버티지 않는다 (ADR-048 결정 4).
 - **워커 (잡 처리)**: 동일한 풀 정책. 처리 중 연결이 끊기면 트랜잭션이 롤백되고, 잡은 `processing` 상태로 남았다가 좀비 회수 스윕이 `pending`으로 되돌린다.
-- **죽은 연결 감지 (keepalive)**: 풀과 워커 `LISTEN` 연결은 TCP keepalive(`keepalives_idle=30`·`interval=10`·`count=3`)와 `tcp_user_timeout=60000`을 **코드 기본값**으로 연다(`app/db.py`). VIP가 원래 노드로 돌아가는 순간(선점) 응답을 기다리던 연결은 FIN도 RST도 받지 못하는데, OS 기본값으로는 약 2시간 뒤에야 풀려 워커가 멈춰 있었다(#110 B-1). 감지는 약 60초 안에 된다. DSN에 같은 키를 적으면 그 값이 이기며, DSN 문자열 자체는 바꾸지 않는다 — 환경변수 하나·호스트 하나(ADR-006) 그대로다 (ADR-048 결정 1).
-- **오류가 난 연결은 풀에 돌려보내지 않는다**: API 요청·MCP 도구 호출이 DB 오류로 끝나면(`app.db.connection`), 워커 처리 루프는 어떤 오류로든 끝나면 그 연결을 닫아 풀이 버리게 한다. OpenProxy가 `BEGIN`에 `AllServersDown`을 돌려주면 psycopg의 `transaction()` 카운터가 되돌려지지 않은 채 연결이 IDLE로 남고, 풀은 IDLE만 보고 받아들여 그 연결의 다음 `transaction()`마다 `AssertionError`가 났다(#110 B-2, 한때 워커 풀 4개 중 3개). 요청 경로는 HTTP 거절(401·404)로는 닫지 않는다. 워커는 좁히지 않는다 — 잡 처리 중 오염되면 `process_once`가 첫 DB 오류를 잡아 `fail_job`으로 넘기고, 루프에 올라오는 것은 `fail_job`의 `AssertionError`다 (ADR-048 결정 2).
+- **죽은 연결 감지 (keepalive)**: 풀과 워커 `LISTEN` 연결은 TCP keepalive(`keepalives_idle=30`·`interval=10`·`count=3`)와 `tcp_user_timeout=60000`을 **코드 기본값**으로 연다(`openarchive/db.py`). VIP가 원래 노드로 돌아가는 순간(선점) 응답을 기다리던 연결은 FIN도 RST도 받지 못하는데, OS 기본값으로는 약 2시간 뒤에야 풀려 워커가 멈춰 있었다(#110 B-1). 감지는 약 60초 안에 된다. DSN에 같은 키를 적으면 그 값이 이기며, DSN 문자열 자체는 바꾸지 않는다 — 환경변수 하나·호스트 하나(ADR-006) 그대로다 (ADR-048 결정 1).
+- **오류가 난 연결은 풀에 돌려보내지 않는다**: API 요청·MCP 도구 호출이 DB 오류로 끝나면(`openarchive.db.connection`), 워커 처리 루프는 어떤 오류로든 끝나면 그 연결을 닫아 풀이 버리게 한다. OpenProxy가 `BEGIN`에 `AllServersDown`을 돌려주면 psycopg의 `transaction()` 카운터가 되돌려지지 않은 채 연결이 IDLE로 남고, 풀은 IDLE만 보고 받아들여 그 연결의 다음 `transaction()`마다 `AssertionError`가 났다(#110 B-2, 한때 워커 풀 4개 중 3개). 요청 경로는 HTTP 거절(401·404)로는 닫지 않는다. 워커는 좁히지 않는다 — 잡 처리 중 오염되면 `process_once`가 첫 DB 오류를 잡아 `fail_job`으로 넘기고, 루프에 올라오는 것은 `fail_job`의 `AssertionError`다 (ADR-048 결정 2).
 - **워커 (기동)**: **주기 폴링(5초)이 주 경로**다. `LISTEN`은 최적화이며, 연결이 끊기면 백오프 재연결 후 `LISTEN`을 재등록한다. **LISTEN이 아예 동작하지 않아도 파이프라인은 정상 작동한다** (ADR-009).
 - **잡 큐 내구성**: `embedding_jobs`는 일반 WAL 로깅 테이블이므로 스탠바이에 복제된다. Failover 후 미처리 잡이 새 Primary에 그대로 존재하고, 워커 재연결 즉시 재개된다.
 

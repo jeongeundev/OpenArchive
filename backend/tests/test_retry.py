@@ -6,7 +6,7 @@ from conftest import upload_document
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.api.retry import RetryOnUnavailable
+from openarchive.api.retry import RetryOnUnavailable
 
 # #110 B에서 장애 구간 응답이 전부 이것이었다 — OpenProxy가 돌려준 SQLSTATE 58000.
 ALL_SERVERS_DOWN = psycopg.errors.lookup("58000")(
@@ -145,7 +145,7 @@ def test_a_503_still_leaves_the_error_in_the_log(caplog):
     """응답을 503으로 바꿔도 원인은 운영자가 봐야 한다 — 삼키면 로그에서 장애가 사라진다."""
     client, _ = build_app("/api/documents", "GET", failures=2, error=ALL_SERVERS_DOWN)
 
-    with caplog.at_level(logging.WARNING, logger="app.api.retry"):
+    with caplog.at_level(logging.WARNING, logger="openarchive.api.retry"):
         client.get("/api/documents")
 
     assert "AllServersDown" in caplog.text

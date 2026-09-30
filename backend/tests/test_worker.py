@@ -4,7 +4,7 @@
 청크의 최종 상태는 문서의 최신 버전으로 수렴한다.** 그 수렴을 만드는 두 장치가
 `FOR UPDATE SKIP LOCKED`(안전한 선점)와 커밋 직전 `content_hash` 재확인(낡은 결과
 폐기)이며, 둘 다 원리상 Mock으로 확인할 수 없으므로 실제 pgvector 컨테이너에
-`backend/app/migrations/`를 적용한 `migrated_db` 픽스처 위에서 돈다 (CLAUDE.md CRITICAL).
+`backend/openarchive/migrations/`를 적용한 `migrated_db` 픽스처 위에서 돈다 (CLAUDE.md CRITICAL).
 
 테스트는 `embedding_jobs`에 직접 INSERT하지 않는다 — 문서를 INSERT/UPDATE하면
 트리거가 잡을 만든다. 워커 경쟁은 커넥션 두 개(`conn`·`other_conn`)로 재현한다.
@@ -32,12 +32,12 @@ import psycopg
 import pytest
 from PIL import Image
 
-from app.config import get_settings
-from app.db import close_pool
-from app.embeddings import FakeProvider
-from app.services.chunking import chunk_text
-from app.services.documents import create_document
-from app.worker import (
+from openarchive.config import get_settings
+from openarchive.db import close_pool
+from openarchive.embeddings import FakeProvider
+from openarchive.services.chunking import chunk_text
+from openarchive.services.documents import create_document
+from openarchive.worker import (
     CHANNEL,
     MAX_ATTEMPTS,
     ZOMBIE_EXHAUSTED_ERROR,
@@ -1308,7 +1308,7 @@ async def test_run_worker_holds_no_open_transaction_while_embedding(
     시점에 어차피 커밋되기 때문이다. 처리 **도중**의 상태를 봐야만 드러난다.
     """
     provider = BlockingProvider()
-    monkeypatch.setattr("app.worker.get_provider", lambda: provider)
+    monkeypatch.setattr("openarchive.worker.get_provider", lambda: provider)
     monkeypatch.setenv("DATABASE_URL", migrated_db)
     get_settings.cache_clear()
     await close_pool()
@@ -1370,7 +1370,7 @@ async def test_run_worker_warms_up_the_model_before_taking_any_job(
     monkeypatch.setenv("DATABASE_URL", migrated_db)
     get_settings.cache_clear()
     await close_pool()  # 앞선 테스트가 다른 DSN으로 열어둔 풀을 물려받지 않는다
-    monkeypatch.setattr("app.worker.get_provider", lambda: recording_provider)
+    monkeypatch.setattr("openarchive.worker.get_provider", lambda: recording_provider)
 
     worker = asyncio.create_task(run_worker())
     try:
@@ -1401,7 +1401,7 @@ async def test_run_worker_survives_a_failed_warmup(
     get_settings.cache_clear()
     await close_pool()
     provider = warmup_failing_provider
-    monkeypatch.setattr("app.worker.get_provider", lambda: provider)
+    monkeypatch.setattr("openarchive.worker.get_provider", lambda: provider)
 
     doc_id = await insert_document(conn)
 
@@ -1589,10 +1589,10 @@ async def test_a_connection_broken_by_a_failed_begin_does_not_return_to_the_pool
     async def swept_enough() -> bool:
         return sweeps >= 30
 
-    monkeypatch.setattr("app.worker.sweep_zombies", counting_sweep)
-    monkeypatch.setattr("app.worker.POLL_INTERVAL_SECONDS", 0.02)
+    monkeypatch.setattr("openarchive.worker.sweep_zombies", counting_sweep)
+    monkeypatch.setattr("openarchive.worker.POLL_INTERVAL_SECONDS", 0.02)
     monkeypatch.setenv("EMBEDDING_PROVIDER", "fake")
-    caplog.set_level(logging.ERROR, logger="app.worker")
+    caplog.set_level(logging.ERROR, logger="openarchive.worker")
 
     async with BeginFailer(migrated_db) as relay:
         monkeypatch.setenv("DATABASE_URL", relay.dsn)
@@ -1608,7 +1608,7 @@ async def test_a_connection_broken_by_a_failed_begin_does_not_return_to_the_pool
 
     # 주입이 실제로 일어났는지 — 아니면 오류 0건으로 무조건 통과한다.
     assert relay.injected == 1
-    errors = [r.exc_info[1] for r in caplog.records if r.name == "app.worker" and r.exc_info]
+    errors = [r.exc_info[1] for r in caplog.records if r.name == "openarchive.worker" and r.exc_info]
     assert [type(e) for e in errors] == expected_errors
 
 
@@ -1940,7 +1940,7 @@ async def test_run_worker_keeps_the_lease_of_the_job_it_is_embedding(
     """
     monkeypatch.setenv("JOB_LEASE_SECONDS", "1")
     provider = BlockingProvider()
-    monkeypatch.setattr("app.worker.get_provider", lambda: provider)
+    monkeypatch.setattr("openarchive.worker.get_provider", lambda: provider)
     monkeypatch.setenv("DATABASE_URL", migrated_db)
     get_settings.cache_clear()
     await close_pool()
@@ -2067,7 +2067,7 @@ async def test_finishing_a_job_does_not_cut_a_heartbeat_in_flight(conn, migrated
     """처리가 끝나도 연장 중인 heartbeat를 도중에 끊지 않는다 (#110 B-2).
 
     취소는 풀 연결을 트랜잭션 중간에 되돌린다. `CancelledError`는 DB 오류가 아니라서
-    `app.db.connection`의 폐기 분기도 타지 않는다. 연장이 임베딩보다 늦게 끝나도록 붙잡아
+    `openarchive.db.connection`의 폐기 분기도 타지 않는다. 연장이 임베딩보다 늦게 끝나도록 붙잡아
     두고, 연결이 예외 없이 반납되는지 본다.
     """
     monkeypatch.setenv("JOB_LEASE_SECONDS", "1")
@@ -2080,7 +2080,7 @@ async def test_finishing_a_job_does_not_cut_a_heartbeat_in_flight(conn, migrated
         await asyncio.sleep(0.5)
         return await real_extend(connection, job)
 
-    monkeypatch.setattr("app.worker.extend_lease", slow_extend)
+    monkeypatch.setattr("openarchive.worker.extend_lease", slow_extend)
     interrupted: list[BaseException] = []
 
     async with await psycopg.AsyncConnection.connect(migrated_db, autocommit=True) as hb:
@@ -2234,7 +2234,7 @@ async def test_a_heartbeat_stuck_past_its_lease_does_not_hold_up_the_worker(conn
             raise
         return True
 
-    monkeypatch.setattr("app.worker.extend_lease", hanging_extend)
+    monkeypatch.setattr("openarchive.worker.extend_lease", hanging_extend)
     try:
         assert await asyncio.wait_for(
             process_once(conn, provider, lease_conn=lease_conn_from(None)), timeout=5
@@ -2258,9 +2258,9 @@ async def test_a_job_locked_by_an_orphaned_transaction_does_not_stop_the_worker(
     문서 락을, heartbeat가 잡 락을 끝없이 기다려 워커가 13분 넘게 처리 0이었다.
     """
     monkeypatch.setenv("JOB_LEASE_SECONDS", "1")
-    monkeypatch.setattr("app.worker.POLL_INTERVAL_SECONDS", 0.1)
+    monkeypatch.setattr("openarchive.worker.POLL_INTERVAL_SECONDS", 0.1)
     provider = BlockingProvider()
-    monkeypatch.setattr("app.worker.get_provider", lambda: provider)
+    monkeypatch.setattr("openarchive.worker.get_provider", lambda: provider)
     monkeypatch.setenv("DATABASE_URL", migrated_db)
     get_settings.cache_clear()
     await close_pool()
@@ -2410,7 +2410,7 @@ async def test_an_ocr_exception_retries_then_fails_the_extraction(conn, monkeypa
     def broken_ocr(data: bytes, content_type: str) -> str:
         raise RuntimeError("tesseract 비정상 종료를 재현한다")
 
-    monkeypatch.setattr("app.worker.ocr_text", broken_ocr)
+    monkeypatch.setattr("openarchive.worker.ocr_text", broken_ocr)
     doc_id = await upload_scan(conn)
     embedding_before = (await extraction_state(conn, doc_id))[2]
 
@@ -2470,7 +2470,7 @@ async def test_a_worker_that_lost_its_lease_drops_the_ocr_result(
 ):
     monkeypatch.setenv("JOB_LEASE_SECONDS", "1")
     ocr = BlockingOcr()
-    monkeypatch.setattr("app.worker.ocr_text", ocr)
+    monkeypatch.setattr("openarchive.worker.ocr_text", ocr)
     doc_id = await upload_scan(conn)
 
     async with await psycopg.AsyncConnection.connect(migrated_db, autocommit=True) as hb:
@@ -2498,7 +2498,7 @@ async def test_a_worker_that_lost_its_lease_drops_the_ocr_result(
 
 async def test_a_document_deleted_during_ocr_is_not_a_failure(conn, other_conn, monkeypatch):
     ocr = BlockingOcr()
-    monkeypatch.setattr("app.worker.ocr_text", ocr)
+    monkeypatch.setattr("openarchive.worker.ocr_text", ocr)
     doc_id = await upload_scan(conn)
 
     task = asyncio.create_task(process_once(conn, FakeProvider()))

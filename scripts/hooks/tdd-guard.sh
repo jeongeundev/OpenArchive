@@ -79,7 +79,7 @@ esac
 # (main.py=앱 조립, config.py=설정 선언, db.py=풀 생성, base.py=Protocol, fake.py=테스트용 구현)
 # 단 마이그레이션 러너는 패키지 본체가 __init__.py다 — 면제하지 않고 아래에서 폴더명으로 매핑한다.
 case "$FILE_PATH" in
-  */app/migrations/__init__.py)
+  */openarchive/migrations/__init__.py)
     ;;
   */__init__.py|*/conftest.py|*/main.py|*/config.py|*/db.py|*/base.py|*/fake.py)
     exit 0
@@ -91,7 +91,7 @@ case "$FILE_PATH" in
   *.py)
     DIR=$(dirname "$FILE_PATH")
     BASENAME=$(basename "$FILE_PATH" .py)
-    # 패키지 본체(__init__.py)는 폴더명이 모듈명이다. 예: app/migrations/__init__.py → migrations
+    # 패키지 본체(__init__.py)는 폴더명이 모듈명이다. 예: openarchive/migrations/__init__.py → migrations
     if [ "$BASENAME" = "__init__" ]; then
       BASENAME=$(basename "$DIR")
     fi
@@ -105,7 +105,7 @@ case "$FILE_PATH" in
     fi
 
     # backend/tests/ — 테스트 파일명이 모듈명과 1:1이 아닌 경우가 있어 부분 일치로 찾는다.
-    # 예: app/api/search.py → tests/test_search.py 또는 tests/test_search_api.py
+    # 예: openarchive/api/search.py → tests/test_search.py 또는 tests/test_search_api.py
     if [ "$TEST_FOUND" = false ] &&
       [ -n "$(find "${PROJECT_ROOT}/backend/tests" -maxdepth 1 -name "test_*${BASENAME}*.py" -print -quit 2>/dev/null)" ]; then
       TEST_FOUND=true

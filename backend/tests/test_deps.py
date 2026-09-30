@@ -1,14 +1,14 @@
 import pytest
 from fastapi import FastAPI, HTTPException, Request
 
-from app.api.deps import (
+from openarchive.api.deps import (
     get_embedding_provider,
     require_admin,
     require_session_user,
     require_user_id,
     require_write_user_id,
 )
-from app.embeddings.fake import FakeProvider
+from openarchive.embeddings.fake import FakeProvider
 
 
 async def test_require_user_id_returns_the_authenticated_username():
@@ -111,10 +111,10 @@ async def test_a_write_is_committed_before_the_response_starts(monkeypatch, migr
 
     import psycopg
 
-    from app.config import get_settings
-    from app.db import close_pool, get_pool
-    from app.main import app
-    from app.services.auth import create_user
+    from openarchive.config import get_settings
+    from openarchive.db import close_pool, get_pool
+    from openarchive.main import app
+    from openarchive.services.auth import create_user
 
     monkeypatch.setenv("DATABASE_URL", migrated_db)
     get_settings.cache_clear()
@@ -164,8 +164,8 @@ async def test_a_write_is_committed_before_the_response_starts(monkeypatch, migr
 @pytest.fixture
 async def request_pool(monkeypatch, migrated_db):
     """테스트 DB로 연 실제 풀 — lifespan 없이 요청 경로가 쓰는 것만."""
-    from app.config import get_settings
-    from app.db import close_pool, get_pool
+    from openarchive.config import get_settings
+    from openarchive.db import close_pool, get_pool
 
     monkeypatch.setenv("DATABASE_URL", migrated_db)
     get_settings.cache_clear()
@@ -186,7 +186,7 @@ async def test_a_request_that_ends_in_a_db_error_does_not_return_its_connection(
     """
     import psycopg
 
-    from app.api.deps import get_conn
+    from openarchive.api.deps import get_conn
 
     requests = get_conn()
     conn = await anext(requests)
@@ -198,7 +198,7 @@ async def test_a_request_that_ends_in_a_db_error_does_not_return_its_connection(
 
 async def test_a_request_that_ends_in_an_http_error_keeps_its_connection(request_pool):
     """404·401 같은 평범한 거절로는 연결을 버리지 않는다 — 요청마다 새 연결을 열게 된다."""
-    from app.api.deps import get_conn
+    from openarchive.api.deps import get_conn
 
     requests = get_conn()
     conn = await anext(requests)
@@ -213,7 +213,7 @@ async def test_request_connections_use_keepalive(request_pool):
 
     인자만 넘기고 libpq가 모르는 키면 연결 자체가 실패하므로, 실제 연결로 확인한다.
     """
-    from app.api.deps import get_conn
+    from openarchive.api.deps import get_conn
 
     requests = get_conn()
     conn = await anext(requests)
@@ -233,7 +233,7 @@ async def test_an_endpoint_db_error_reaches_the_connection_through_fastapi(reque
     """
     import httpx
 
-    from app.api.deps import Connection
+    from openarchive.api.deps import Connection
 
     borrowed = []
     app = FastAPI()

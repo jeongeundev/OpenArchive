@@ -40,7 +40,7 @@ Type=simple
 # 그 파일이 없으면 DATABASE_URL·EMBEDDING_PROVIDER를 못 읽고 기본값(로컬 컨테이너·fake)으로
 # 조용히 떨어진다 — deploy_app_host.sh가 같은 사용자로 그 파일을 쓴다.
 WorkingDirectory=@APP_ROOT@/backend
-ExecStart=@APP_ROOT@/backend/.venv/bin/python -m app.worker
+ExecStart=@APP_ROOT@/backend/.venv/bin/python -m openarchive.worker
 
 Restart=always
 RestartSec=10

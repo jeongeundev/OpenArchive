@@ -1,4 +1,4 @@
-"""`scripts/seed_demo.py` — 측정·시연용 적재 스크립트. 적재 로직은 app.demo와 같다.
+"""`scripts/seed_demo.py` — 측정·시연용 적재 스크립트. 적재 로직은 openarchive.demo와 같다.
 
 스크립트가 더하는 것은 소유자 고정(`seed`)과 `--reset`뿐이다. 코퍼스·적재 자체는 test_demo.py.
 """
@@ -9,9 +9,9 @@ from pathlib import Path
 import psycopg
 from conftest import process_all_embedding_jobs
 
-from app.config import get_settings
-from app.demo import load_seed_documents, seed_documents
-from app.embeddings.fake import FakeProvider
+from openarchive.config import get_settings
+from openarchive.demo import load_seed_documents, seed_documents
+from openarchive.embeddings.fake import FakeProvider
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))

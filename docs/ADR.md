@@ -88,7 +88,7 @@
 **트레이드오프**: 실행할 프로세스가 하나 늘어난다. docker compose/README에 명시해 운영 부담을 줄인다.
 
 ### ADR-005: 마이그레이션은 번호 붙은 raw SQL + 소형 러너
-> 위치는 **ADR-039 개정(2026-09-29)**에서 `backend/app/migrations/`(러너 = 그 패키지의 `__init__.py`)로 옮겨졌다 — pip 설치본에 SQL이 실려야 한다. 결정 자체는 그대로다.
+> 위치는 **ADR-039 개정(2026-09-29)**에서 `backend/app/migrations/`(러너 = 그 패키지의 `__init__.py`)로 옮겨졌다 — pip 설치본에 SQL이 실려야 한다. 결정 자체는 그대로다. 패키지 이름은 #95-e에서 `openarchive`로 바뀌었다(ADR-039 개정).
 
 **결정**: Alembic 등 마이그레이션 도구 대신 `backend/migrations/00N_*.sql` 파일을 순서대로 적용하는 소형 러너를 `db.py`에 둔다.
 **이유**: 이 과제의 심사 핵심 산출물이 트리거·파셜 인덱스·HNSW 인덱스 SQL 그 자체다. 읽기 좋은 SQL 파일로 전시하는 것이 심사에 유리하고, 트리거·파셜 인덱스는 어차피 수동 SQL로 작성해야 한다.
@@ -468,7 +468,7 @@ k가 아니라 **깊이 2 × 문서당 edge 수**에서 온다.
 **상태**: 2026-08-04 신규. **2026-08-19 개정** — 실행 주체를 "API 서버"에서 "상시 프로세스 중
 API 서버 하나"로 좁힌다. 운영자가 명시적으로 호출하는 CLI는 예외다 (ADR-039).
 
-> 러너 위치는 **ADR-039 개정(2026-09-29)**에서 `app/migrations/__init__.py`로 옮겨졌다. import 경로 `app.migrations`와 이 결정은 그대로다.
+> 러너 위치는 **ADR-039 개정(2026-09-29)**에서 `app/migrations/__init__.py`로 옮겨졌다. 이 결정은 그대로다. import 경로는 #95-e에서 `openarchive.migrations`로 바뀌었다(ADR-039 개정).
 
 **결정**: 마이그레이션 러너를 `app/migrations.py`로 분리하고, **API 서버 startup에서만** 호출한다. 워커와 MCP 서버는 스키마가 이미 준비되었다고 가정하고 실행하지 않는다. `app/db.py`는 커넥션 풀만 제공하며 **import 시 부작용이 없다**.
 
@@ -2439,6 +2439,14 @@ CLI는 진행 출력과 연결 오류 처리만 맡는다. 왜 필요한지는 A
 > 못해 풀 사용자를 추가하는 설정 재로드가 실패했다(`SETUP_OPENSQL.md` §10 ④). 메커니즘(이름 해석)은 같은 VIP에서
 > `postgres` 롤로 실측했다. (2026-09-30: 원인이던 동기 복제를 되돌려 설정 재로드가 다시 된다 — #148, ADR-049 개정.
 > 전용 롤 완주 재실측은 아직이다.)
+
+> **개정 (2026-09-30, #95-e) — 설치되는 최상위 패키지는 `openarchive` 하나다.** PyPI 배포 이름은
+> `openarchive-server`다(`openarchive`는 다른 사람이 등록해 두었다). 명령어는 그대로 `openarchive`다.
+> 그전 wheel은 `app`·`mcp_server`를 최상위에 설치했는데, 두 이름 모두 흔해서 같은 환경의 다른 패키지와
+> 부딪힌다. 그래서 `backend/app/`을 `backend/openarchive/`로, `backend/mcp_server/`를
+> `backend/openarchive/mcp_server/`로 옮겼다. 동작은 바뀌지 않았다. 바뀐 것은 경로와 import 이름뿐이다 —
+> `uvicorn openarchive.main:app`, `python -m openarchive.worker`, MCP는 `python -m openarchive.mcp_server.server`다.
+> 이 문서와 `phases/`·`notes/`에 남은 `app/` 경로는 당시 기록이라 고치지 않았다.
 
 ---
 

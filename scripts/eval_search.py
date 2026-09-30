@@ -29,9 +29,9 @@ BACKEND = ROOT / "backend"
 if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
 
-from app.config import get_settings
-from app.embeddings import get_provider
-from app.services.search import search_documents
+from openarchive.config import get_settings
+from openarchive.embeddings import get_provider
+from openarchive.services.search import search_documents
 
 SEARCH_K = 10
 DEFAULT_KS = (1, 5, 10)

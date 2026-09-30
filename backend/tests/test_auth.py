@@ -5,7 +5,7 @@ import psycopg
 import pytest
 from conftest import login_as
 
-from app.services.auth import (
+from openarchive.services.auth import (
     AuthenticationFailed,
     TokenNotFound,
     UserNotFound,

@@ -14,7 +14,7 @@ mkdir -p ~/.openarchive && cp backend/.env.example ~/.openarchive/.env   # 예�
 ```
 
 설정을 읽는 주체는 `openarchive` CLI·API·워커·MCP 서버인데 실행 디렉토리가 서로 다릅니다.
-`app/config.py`가 이 파일 한 곳만 절대경로로 읽어 모두 같은 값을 보게 합니다. 설치 위치(패키지 옆)에
+`openarchive/config.py`가 이 파일 한 곳만 절대경로로 읽어 모두 같은 값을 보게 합니다. 설치 위치(패키지 옆)에
 두지 않는 이유는 `pip install`로 깐 설치본에서 그 자리가 site-packages이기 때문입니다.
 환경변수를 직접 주는 방식(`DATABASE_URL=... openarchive serve`)은 언제나 파일보다 우선합니다.
 
@@ -40,8 +40,8 @@ mkdir -p ~/.openarchive && cp backend/.env.example ~/.openarchive/.env   # 예�
 
 ```bash
 pip install -e ".[dev,local]"                              # sentence-transformers + torch (수 GB)
-EMBEDDING_PROVIDER=local uvicorn app.main:app --reload     # API — 검색 질의를 임베딩한다
-EMBEDDING_PROVIDER=local python -m app.worker              # 워커 — 문서를 임베딩한다
+EMBEDDING_PROVIDER=local uvicorn openarchive.main:app --reload # API — 검색 질의를 임베딩한다
+EMBEDDING_PROVIDER=local python -m openarchive.worker      # 워커 — 문서를 임베딩한다
 ```
 
 **API·워커·MCP 서버는 각자 프로바이더를 생성하므로 세 프로세스에 같은 값을 주어야 합니다.**
@@ -169,7 +169,7 @@ openarchive search "설치 절차" --user alice --tag 운영 -k 5
 
 ### `openarchive demo`
 
-예제 문서 64건(가상 회사 다섯 부서의 사내 규정, `backend/app/demo_corpus/`)을 넣어 검색·관계·군집을 바로
+예제 문서 64건(가상 회사 다섯 부서의 사내 규정, `backend/openarchive/demo_corpus/`)을 넣어 검색·관계·군집을 바로
 살펴봅니다. 코퍼스는 패키지에 실려 있어 pip 설치본에서도 이 한 줄로 됩니다.
 
 ```bash

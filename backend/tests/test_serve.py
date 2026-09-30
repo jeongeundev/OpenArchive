@@ -21,7 +21,7 @@ from pathlib import Path
 
 import pytest
 
-from app import cli
+from openarchive import cli
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 STARTUP_TIMEOUT = 40.0
@@ -94,7 +94,7 @@ def spawn_serve(tmp_path):
     def _spawn(env: dict[str, str], port: int) -> tuple[subprocess.Popen, int, Path]:
         handle = log_path.open("a")
         process = subprocess.Popen(
-            [sys.executable, "-m", "app.cli", "serve", "--port", str(port)],
+            [sys.executable, "-m", "openarchive.cli", "serve", "--port", str(port)],
             cwd=BACKEND_DIR,
             env=env,
             stdout=handle,

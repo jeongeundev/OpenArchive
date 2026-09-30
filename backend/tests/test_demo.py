@@ -1,4 +1,4 @@
-"""예제 코퍼스(`app/demo_corpus/`)와 `openarchive demo` (#95-d).
+"""예제 코퍼스(`openarchive/demo_corpus/`)와 `openarchive demo` (#95-d).
 
 코퍼스는 패키지에 실려 pip 설치본에서도 `openarchive demo` 한 줄로 들어간다. 측정용
 `scripts/seed_demo.py`도 같은 적재 로직을 쓴다(test_seed_demo.py).
@@ -12,9 +12,9 @@ import psycopg
 import pytest
 from conftest import run_embedding_worker
 
-import app
-from app.cli import main
-from app.demo import (
+import openarchive
+from openarchive.cli import main
+from openarchive.demo import (
     CORPUS_ROOT,
     SeedDocument,
     load_seed_documents,
@@ -22,8 +22,8 @@ from app.demo import (
     seed_documents,
     summarize,
 )
-from app.services.auth import hash_password
-from app.services.chunking import chunk_text
+from openarchive.services.auth import hash_password
+from openarchive.services.chunking import chunk_text
 
 
 def test_front_matter_supplies_tags_and_body_keeps_the_heading():
@@ -279,8 +279,8 @@ async def test_summary_counts_only_edges_touching_the_owners_documents(migrated_
 
 
 def test_corpus_ships_inside_the_package():
-    """pip 설치본에는 저장소의 scripts/가 없다 — 코퍼스가 app 패키지 안에 있어야 demo가 돈다."""
-    assert CORPUS_ROOT.parent == Path(app.__file__).resolve().parent
+    """pip 설치본에는 저장소의 scripts/가 없다 — 코퍼스가 openarchive 패키지 안에 있어야 demo가 돈다."""
+    assert CORPUS_ROOT.parent == Path(openarchive.__file__).resolve().parent
     assert len(load_seed_documents()) == 64
 
 

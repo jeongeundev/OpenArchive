@@ -14,7 +14,7 @@ from PIL import Image
 from pptx import Presentation
 from pptx.util import Inches
 
-from app.services.parsing import (
+from openarchive.services.parsing import (
     TextDecodeError,
     UnsupportedFileType,
     detect_content_type,
@@ -124,7 +124,7 @@ def test_extract_text_rejects_unsupported_content_type() -> None:
 
 
 def test_media_type_is_fixed_by_extension_with_octet_stream_fallback():
-    from app.services.parsing import media_type_for
+    from openarchive.services.parsing import media_type_for
 
     assert media_type_for("a.PDF") == "application/pdf"
     assert media_type_for("a.md") == "text/markdown; charset=utf-8"
@@ -393,7 +393,7 @@ def test_extract_text_does_not_ocr(monkeypatch) -> None:
     def unexpected_ocr(*args, **kwargs):
         pytest.fail("extract_text must not call OCR")
 
-    monkeypatch.setattr("app.services.parsing.ocr_text", unexpected_ocr)
+    monkeypatch.setattr("openarchive.services.parsing.ocr_text", unexpected_ocr)
     assert extract_text(fixture("scan_tax_page1.jpg"), "jpg") == ""
     assert extract_text(fixture("scan_tax_pages.pdf"), "pdf").strip() == ""
 

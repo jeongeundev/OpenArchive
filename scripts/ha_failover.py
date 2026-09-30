@@ -57,9 +57,9 @@ BACKEND = Path(__file__).resolve().parents[1] / "backend"
 if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
 
-from app.db import keepalive_kwargs
+from openarchive.db import keepalive_kwargs
 
-# 클라이언트 백오프 — 웹 UI(`frontend/src/lib/api.ts`)·MCP(`mcp_server/server.py`)와 같은 값.
+# 클라이언트 백오프 — 웹 UI(`frontend/src/lib/api.ts`)·MCP(`openarchive/mcp_server/server.py`)와 같은 값.
 BACKOFF_START_SECONDS = 1
 BACKOFF_CAP_SECONDS = 8
 BACKOFF_BUDGET_SECONDS = 60

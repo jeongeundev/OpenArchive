@@ -16,7 +16,7 @@ BACKEND = ROOT / "backend"
 if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
 
-from app.config import get_settings
+from openarchive.config import get_settings
 
 NEIGHBOR_COUNTS = (5, 10, 20, 40)
 

@@ -1,6 +1,6 @@
 """`openarchive import`·`export`·`search` — 셸에서 문서를 넣고 빼고 찾는 CLI (#95-b).
 
-세 명령 모두 코어(`app.services`)를 그대로 부른다. 여기서 지키는 것은 CLI가 더하는
+세 명령 모두 코어(`openarchive.services`)를 그대로 부른다. 여기서 지키는 것은 CLI가 더하는
 부분 — 폴더 순회·frontmatter·재실행 건너뛰기·행위 주체 확인·출력 — 이고, 문서 생성과
 검색 자체는 실제 DB 위에서 트리거·워커가 만든 결과로 확인한다.
 """
@@ -13,9 +13,9 @@ import pytest
 import yaml
 from conftest import run_embedding_worker
 
-from app.cli import main
-from app.services.auth import hash_password
-from app.services.documents import create_document, create_text_document
+from openarchive.cli import main
+from openarchive.services.auth import hash_password
+from openarchive.services.documents import create_document, create_text_document
 
 UNREACHABLE_DSN = "postgresql://nobody@127.0.0.1:1/none"
 

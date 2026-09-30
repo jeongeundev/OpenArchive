@@ -1,7 +1,7 @@
 import psycopg
 import pytest
 
-from app.vectors import to_pgvector_literal
+from openarchive.vectors import to_pgvector_literal
 
 
 def test_literal_has_no_spaces_and_keeps_element_order():

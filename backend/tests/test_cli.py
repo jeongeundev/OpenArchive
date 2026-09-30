@@ -14,10 +14,10 @@ import pytest
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
 from test_triggers import insert_document, mark_document_ready, unit_vector
 
-from app.cli import OWNED_TABLES, main, probe_capabilities
-from app.migrations import migration_files
-from app.services.auth import hash_password, verify_password
-from app.services.documents import create_document
+from openarchive.cli import OWNED_TABLES, main, probe_capabilities
+from openarchive.migrations import migration_files
+from openarchive.services.auth import hash_password, verify_password
+from openarchive.services.documents import create_document
 
 
 def table_names(dsn: str) -> set[str]:
@@ -44,7 +44,7 @@ def _no_terminal(monkeypatch):
     테스트가 비밀번호를 기다리며 멈추고, 개발자 셸의 ADMIN_PASSWORD가 결과를 바꾼다.
     """
     monkeypatch.delenv("ADMIN_PASSWORD", raising=False)
-    monkeypatch.setattr("app.cli.getpass.getpass", _no_stdin)
+    monkeypatch.setattr("openarchive.cli.getpass.getpass", _no_stdin)
 
 
 def accounts(dsn: str) -> list[tuple[str, bool]]:
@@ -697,7 +697,7 @@ def test_init_names_the_first_admin_with_an_option(clean_db: str, monkeypatch, t
 def test_init_asks_for_the_admin_password_when_it_is_not_in_the_environment(
     clean_db: str, monkeypatch, tmp_path
 ):
-    monkeypatch.setattr("app.cli.getpass.getpass", lambda _prompt: "typed-secret")
+    monkeypatch.setattr("openarchive.cli.getpass.getpass", lambda _prompt: "typed-secret")
 
     exit_code = main(["init", "--dsn", clean_db, "--yes", "--env-file", str(tmp_path / ".env")])
 
@@ -714,7 +714,7 @@ def test_init_without_a_password_finishes_without_an_admin(
     스키마는 이미 적용됐으므로 설치 자체는 성공으로 끝내고, 계정 생성을 다음 단계로 넘긴다.
     """
     if answer is not None:
-        monkeypatch.setattr("app.cli.getpass.getpass", lambda _prompt: answer)
+        monkeypatch.setattr("openarchive.cli.getpass.getpass", lambda _prompt: answer)
 
     exit_code = main(["init", "--dsn", clean_db, "--yes", "--env-file", str(tmp_path / ".env")])
 
@@ -765,7 +765,7 @@ def test_create_user_makes_a_regular_account_from_the_environment(
 
 
 def test_create_user_grants_admin_with_the_flag(migrated_db: str, monkeypatch):
-    monkeypatch.setattr("app.cli.getpass.getpass", lambda _prompt: "typed-secret")
+    monkeypatch.setattr("openarchive.cli.getpass.getpass", lambda _prompt: "typed-secret")
 
     exit_code = main(["create-user", "root", "--admin", "--dsn", migrated_db])
 
@@ -791,7 +791,7 @@ def test_create_user_refuses_to_overwrite_an_existing_username(
 @pytest.mark.parametrize("answer", ["", None], ids=["empty", "closed-stdin"])
 def test_create_user_refuses_an_empty_password(migrated_db: str, monkeypatch, answer):
     if answer is not None:
-        monkeypatch.setattr("app.cli.getpass.getpass", lambda _prompt: answer)
+        monkeypatch.setattr("openarchive.cli.getpass.getpass", lambda _prompt: answer)
 
     exit_code = main(["create-user", "alice", "--dsn", migrated_db])
 
@@ -824,7 +824,7 @@ def test_reset_password_lets_a_locked_out_user_log_in_again(
 ):
     """분실 복구 경로. 현재 비밀번호를 모르는 채로 갈아끼운다."""
     _insert_user(migrated_db, "alice", "forgotten")
-    monkeypatch.setattr("app.cli.getpass.getpass", lambda _prompt: "recovered")
+    monkeypatch.setattr("openarchive.cli.getpass.getpass", lambda _prompt: "recovered")
 
     exit_code = main(["reset-password", "alice", "--dsn", migrated_db])
 
@@ -849,7 +849,7 @@ def test_reset_password_invalidates_the_sessions_of_that_user(migrated_db: str, 
                 "VALUES (%s, %s, now() + interval '1 hour')",
                 (token, owner),
             )
-    monkeypatch.setattr("app.cli.getpass.getpass", lambda _prompt: "recovered")
+    monkeypatch.setattr("openarchive.cli.getpass.getpass", lambda _prompt: "recovered")
 
     main(["reset-password", "alice", "--dsn", migrated_db])
 
@@ -862,7 +862,7 @@ def test_reset_password_reports_an_unknown_user_without_changing_anything(
     migrated_db: str, monkeypatch, capsys
 ):
     _insert_user(migrated_db, "alice", "forgotten")
-    monkeypatch.setattr("app.cli.getpass.getpass", lambda _prompt: "recovered")
+    monkeypatch.setattr("openarchive.cli.getpass.getpass", lambda _prompt: "recovered")
 
     exit_code = main(["reset-password", "nobody", "--dsn", migrated_db])
 
@@ -874,7 +874,7 @@ def test_reset_password_reports_an_unknown_user_without_changing_anything(
 
 def test_reset_password_refuses_an_empty_password(migrated_db: str, monkeypatch, capsys):
     _insert_user(migrated_db, "alice", "forgotten")
-    monkeypatch.setattr("app.cli.getpass.getpass", lambda _prompt: "")
+    monkeypatch.setattr("openarchive.cli.getpass.getpass", lambda _prompt: "")
 
     exit_code = main(["reset-password", "alice", "--dsn", migrated_db])
 
@@ -888,7 +888,7 @@ def test_reset_password_refuses_an_empty_password(migrated_db: str, monkeypatch,
 
 
 def test_reset_password_reports_a_connection_failure_without_traceback(monkeypatch, capsys):
-    monkeypatch.setattr("app.cli.getpass.getpass", lambda _prompt: "recovered")
+    monkeypatch.setattr("openarchive.cli.getpass.getpass", lambda _prompt: "recovered")
 
     exit_code = main(
         ["reset-password", "alice", "--dsn", "postgresql://nobody@127.0.0.1:1/none"]
@@ -902,7 +902,7 @@ def test_reset_password_does_not_report_a_query_failure_as_a_connection_failure(
     clean_db: str, monkeypatch, capsys
 ):
     """연결은 되지만 스키마가 없는 DB. 넓은 except가 이 실패를 "연결하지 못했습니다"로 가렸다."""
-    monkeypatch.setattr("app.cli.getpass.getpass", lambda _prompt: "recovered")
+    monkeypatch.setattr("openarchive.cli.getpass.getpass", lambda _prompt: "recovered")
 
     with pytest.raises(psycopg.Error):
         main(["reset-password", "alice", "--dsn", clean_db])

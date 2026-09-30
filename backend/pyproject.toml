@@ -3,9 +3,9 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "openarchive-backend"
+name = "openarchive-server"
 version = "0.1.0"
-description = "OpenArchive 백엔드 — 문서 API·임베딩 워커·MCP 서버가 공유하는 패키지"
+description = "OpenArchive — PostgreSQL·OpenSQL에 설치하는 AI 문서관리 플랫폼 (API·임베딩 워커·MCP 서버·웹 UI)"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi",
@@ -32,7 +32,7 @@ dependencies = [
     # Louvain 군집(services/clusters.py). 순수 Python·BSD. torch가 끌고 오던 것을 기본
     # 의존성으로 승격 — [local] 없이도 덩어리가 계산되어야 한다.
     "networkx",
-    # `openarchive import`·`export`의 마크다운 frontmatter(app/cli.py). MIT. [local]이 끌고
+    # `openarchive import`·`export`의 마크다운 frontmatter(openarchive/cli.py). MIT. [local]이 끌고
     # 오던 것이라 기본 설치에는 없었다.
     "pyyaml",
 ]
@@ -41,7 +41,7 @@ dependencies = [
 
 [project.scripts]
 # 설치 준비 CLI (ADR-039). Web UI·REST·MCP와 같은 자리의 인터페이스이며 코어를 재사용한다.
-openarchive = "app.cli:main"
+openarchive = "openarchive.cli:main"
 
 [project.optional-dependencies]
 dev = [
@@ -61,11 +61,11 @@ local = ["sentence-transformers"]
 # 빌드된 프론트(ADR-041)와 마이그레이션 SQL을 wheel에 담는다. 빠지면 설치본에서 화면이
 # 뜨지 않거나 init·API startup이 스키마를 찾지 못한다.
 [tool.setuptools.package-data]
-app = ["static/**/*", "migrations/*.sql", "demo_corpus/**/*.md"]
+openarchive = ["static/**/*", "migrations/*.sql", "demo_corpus/**/*.md"]
 
 [tool.setuptools.packages.find]
-# tests는 설치 대상이 아니다. app과 MCP 서버 패키지만 배포한다.
-include = ["app*", "mcp_server*"]
+# tests는 설치 대상이 아니다. 최상위는 openarchive 하나다 — MCP 서버도 그 안에 있다 (#95-e).
+include = ["openarchive*"]
 
 [tool.ruff]
 target-version = "py312"

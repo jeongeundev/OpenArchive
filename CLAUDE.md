@@ -47,8 +47,8 @@
 - CRITICAL: `document_edges`는 **단방향 저장**이다 — `src_document_id`가 계산한 문서이고 재계산은 자기 `src` 행만 교체한다. 읽는 쪽(검색 순회·관련 문서·태그 추천·군집·진단)은 반드시 `src ∪ dst`로 읽는다. 이유: 양방향 두 행 + DELETE both는 남이 발견한 관계를 지웠다(#93 R4, ADR-029 개정).
 - CRITICAL: 관계 판정 함수 `rebuild_document_edges`는 **함수 정의 `SET enable_seqscan = off`**를 유지한다. 1만 청크 미만에서 플래너가 HNSW를 안 골라 트리거가 청크당 0.26초였다. `SET LOCAL`은 OpenProxy 풀 백엔드에 남는 generic plan 때문에 안 먹는다. 대량 적재 뒤에는 `openarchive rebuild-edges`로 전체 기준으로 수렴시킨다 (ADR-029 결정 6).
 - 벡터 컬럼은 `vector(1024)` 고정. 임베딩 프로바이더가 바뀌어도 차원은 바꾸지 않는다.
-- 스키마 변경은 `backend/app/migrations/`의 번호 붙은 raw SQL 파일로만 한다 (ORM 마이그레이션 도구 금지).
-- 백엔드 비즈니스 로직은 `backend/app/services/`에 두고, API 라우터와 MCP 서버는 이를 재사용만 한다.
+- 스키마 변경은 `backend/openarchive/migrations/`의 번호 붙은 raw SQL 파일로만 한다 (ORM 마이그레이션 도구 금지).
+- 백엔드 비즈니스 로직은 `backend/openarchive/services/`에 두고, API 라우터와 MCP 서버는 이를 재사용만 한다.
 - CRITICAL: API 토큰의 발급·목록·폐기와 `/api/admin/*` 관리 API는 세션 전용으로 둔다. 토큰이 토큰을 발급하면 폐기 뒤에도 자격증명을 스스로 재생할 수 있고, 문서 공급용 토큰에 계정 관리 권한을 주면 최소 권한이 무효가 된다 (ADR-034).
 
 ## 개발 프로세스
@@ -72,8 +72,8 @@ docker compose up -d                 # 로컬 DB (pgvector 컨테이너)
 python3 -m venv .venv                # 가상환경 생성 (최초 1회)
 source .venv/bin/activate            # 활성화 — 아래 명령은 활성화 상태 전제
 pip install -e ".[dev]"              # 의존성 설치
-uvicorn app.main:app --reload        # API 개발 서버
-python -m app.worker                 # 임베딩 워커 (별도 프로세스)
+uvicorn openarchive.main:app --reload # API 개발 서버
+python -m openarchive.worker         # 임베딩 워커 (별도 프로세스)
 ruff check .                         # 린트
 pytest                               # 테스트
 

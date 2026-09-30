@@ -9,14 +9,14 @@ import pytest
 from fastapi.testclient import TestClient
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
 
-from app.config import get_settings
-from app.db import close_pool
-from app.embeddings.base import EmbeddingProvider
-from app.embeddings.fake import FakeProvider
-from app.main import app
-from app.migrations import run_migrations
-from app.services.auth import hash_password
-from app.worker import process_once
+from openarchive.config import get_settings
+from openarchive.db import close_pool
+from openarchive.embeddings.base import EmbeddingProvider
+from openarchive.embeddings.fake import FakeProvider
+from openarchive.main import app
+from openarchive.migrations import run_migrations
+from openarchive.services.auth import hash_password
+from openarchive.worker import process_once
 
 # 개발 DB(openarchive)와 분리한다. 테스트는 매번 스키마를 통째로 비우므로
 # 같은 DB를 쓰면 개발 데이터가 사라진다.
@@ -117,7 +117,7 @@ def clean_db(test_dsn: str) -> str:
 
 @pytest.fixture
 async def migrated_db(clean_db: str) -> str:
-    """실제 app/migrations/ 를 적용한 테스트 DB의 DSN.
+    """실제 openarchive/migrations/ 를 적용한 테스트 DB의 DSN.
 
     테스트가 스키마를 자체 SQL로 만들면 검증 대상이 테스트 코드가 되어버린다.
     러너를 그대로 태워, 심사 산출물인 마이그레이션 파일 자체를 검증 대상으로 삼는다.
@@ -135,7 +135,7 @@ def db_client(monkeypatch, migrated_db: str) -> TestClient:
     with TestClient(app) as started:
         yield started
 
-    # app.db의 풀은 모듈 전역이므로 다음 테스트에 DSN이 누수되지 않게 닫는다.
+    # openarchive.db의 풀은 모듈 전역이므로 다음 테스트에 DSN이 누수되지 않게 닫는다.
     import asyncio
 
     asyncio.run(close_pool())

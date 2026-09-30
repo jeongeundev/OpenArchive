@@ -12,8 +12,8 @@ import sys
 
 import pytest
 
-from app.embeddings.base import EMBEDDING_DIM
-from app.embeddings.local import LocalProvider
+from openarchive.embeddings.base import EMBEDDING_DIM
+from openarchive.embeddings.local import LocalProvider
 
 
 def test_provider_declares_the_model_and_dimension():

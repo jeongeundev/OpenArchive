@@ -20,10 +20,10 @@ from pathlib import Path
 
 import pytest
 
-from app.embeddings import get_provider
-from app.embeddings.base import EMBEDDING_DIM
-from app.embeddings.fake import FakeProvider
-from app.embeddings.local import LocalProvider
+from openarchive.embeddings import get_provider
+from openarchive.embeddings.base import EMBEDDING_DIM
+from openarchive.embeddings.fake import FakeProvider
+from openarchive.embeddings.local import LocalProvider
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 
@@ -36,7 +36,7 @@ DISJOINT_C = "회의실 예약은 금요일 오후 여섯시에 마감된다"
 # PYTHONHASHSEED가 실제로 먹히는 환경인지(=이 테스트가 의미 있는지) 확인한다.
 PROBE = (
     "import json;"
-    "from app.embeddings.fake import FakeProvider;"
+    "from openarchive.embeddings.fake import FakeProvider;"
     "print(json.dumps({"
     "  'vector': FakeProvider().embed(['정합성은 DB가 보장한다 opensql'])[0],"
     "  'builtin_hash': hash('정합성은 DB가 보장한다 opensql'),"

@@ -4,13 +4,13 @@ import psycopg
 import pytest
 from conftest import insert_test_document, process_all_embedding_jobs
 
-from app.embeddings import FakeProvider
-from app.services.related import (
+from openarchive.embeddings import FakeProvider
+from openarchive.services.related import (
     find_related,
     suggest_tags,
 )
-from app.services.search import CANDIDATE_MULTIPLIER as SEARCH_CANDIDATE_MULTIPLIER
-from app.services.search import EF_SEARCH, MAX_K
+from openarchive.services.search import CANDIDATE_MULTIPLIER as SEARCH_CANDIDATE_MULTIPLIER
+from openarchive.services.search import EF_SEARCH, MAX_K
 
 
 @pytest.fixture

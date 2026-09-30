@@ -2,7 +2,7 @@ import pytest
 from conftest import login_as, run_embedding_worker, upload_document
 from fastapi.testclient import TestClient
 
-from app.services.search import MAX_K
+from openarchive.services.search import MAX_K
 
 
 def upload(

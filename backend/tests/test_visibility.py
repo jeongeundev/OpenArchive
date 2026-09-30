@@ -4,14 +4,14 @@ import psycopg
 import pytest
 from conftest import insert_test_document, process_all_embedding_jobs
 
-from app.embeddings import FakeProvider
-from app.services.auth import hash_password
-from app.services.clusters import get_clusters
-from app.services.diagnostics import get_diagnostics
-from app.services.documents import DocumentNotFound
-from app.services.links import find_backlinks, resolve_links
-from app.services.related import find_related, suggest_tags
-from app.services.search import search_documents
+from openarchive.embeddings import FakeProvider
+from openarchive.services.auth import hash_password
+from openarchive.services.clusters import get_clusters
+from openarchive.services.diagnostics import get_diagnostics
+from openarchive.services.documents import DocumentNotFound
+from openarchive.services.links import find_backlinks, resolve_links
+from openarchive.services.related import find_related, suggest_tags
+from openarchive.services.search import search_documents
 
 
 @pytest.fixture

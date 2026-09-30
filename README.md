@@ -214,7 +214,7 @@ Claude Desktop / Claude Code의 MCP 설정에 stdio 서버로 등록합니다. `
   "mcpServers": {
     "openarchive": {
       "command": "<REPOSITORY>/backend/.venv/bin/python",
-      "args": ["-m", "mcp_server.server"],
+      "args": ["-m", "openarchive.mcp_server.server"],
       "env": {
         "DATABASE_URL": "postgresql://openarchive:openarchive@localhost:5433/openarchive",
         "EMBEDDING_PROVIDER": "local",
@@ -258,7 +258,7 @@ REST 전체 목록과 스키마는 `http://localhost:8000/docs`(OpenAPI)에 있�
  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘
         └─────────────────┼─────────────────┘
                           ▼
-              backend/app/services/
+              backend/openarchive/services/
               모든 인터페이스가 공유하는 단일 진입점
                           │  documents INSERT/UPDATE만 — 임베딩 호출 없음
                           ▼

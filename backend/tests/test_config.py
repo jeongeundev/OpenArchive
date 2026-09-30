@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from app.config import ENV_FILE, Settings, get_settings, openarchive_home
+from openarchive.config import ENV_FILE, Settings, get_settings, openarchive_home
 
 # 개발자 로컬에 .env가 있어도 기본값 검증이 흔들리지 않도록 _env_file=None으로 끊는다.
 NO_ENV_FILE = {"_env_file": None}
@@ -127,7 +127,7 @@ def test_a_process_reads_the_env_file_in_openarchive_home(tmp_path):
     result = subprocess.run(
         [
             sys.executable, "-c",
-            "from app.config import get_settings; print(get_settings().database_url)",
+            "from openarchive.config import get_settings; print(get_settings().database_url)",
         ],
         cwd=elsewhere,
         env={**env, "PYTHONPATH": str(Path(__file__).resolve().parents[1])},

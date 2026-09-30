@@ -37,7 +37,7 @@ DB 계층에 있고, 애플리케이션 코드에는 파이프라인을 조율�
 각 항목이 독립적인 기여 단위가 된다. 항목의 채택 여부와 순서는 아래 「단계적 발전 경로」에
 비추어 판단한다 (ADR-031 결정 4).
 
-### 파서 (`backend/app/services/parsing.py`)
+### 파서 (`backend/openarchive/services/parsing.py`)
 
 | 후보 | 시기 | 메모 |
 |---|---|---|

@@ -8,7 +8,7 @@ import pytest
 from conftest import insert_test_document, seed_extraction_states
 from test_parsing import minimal_pdf
 
-from app.services.documents import (
+from openarchive.services.documents import (
     MAX_EXTRACTED_TEXT_LENGTH,
     DocumentAccessDenied,
     DocumentNotFound,
@@ -29,7 +29,7 @@ from app.services.documents import (
     restore_version,
     update_extracted_text,
 )
-from app.services.parsing import UnsupportedFileType
+from openarchive.services.parsing import UnsupportedFileType
 
 
 @pytest.fixture

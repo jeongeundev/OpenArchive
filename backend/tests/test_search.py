@@ -5,15 +5,15 @@ import psycopg
 import pytest
 from conftest import insert_test_document, process_all_embedding_jobs
 
-from app.embeddings import FakeProvider
-from app.services.search import (
+from openarchive.embeddings import FakeProvider
+from openarchive.services.search import (
     CANDIDATE_MULTIPLIER,
     EF_SEARCH,
     MAX_K,
     SEARCH_SQL,
     search_documents,
 )
-from app.vectors import to_pgvector_literal
+from openarchive.vectors import to_pgvector_literal
 
 
 class RecordingConnection:

@@ -5,7 +5,7 @@
 `document_versions`·`embedding_jobs`에 직접 INSERT하지 않는다. 트리거가 만든 것만 센다.
 
 트리거·NOTIFY는 원리상 Mock으로 확인할 수 없으므로 실제 pgvector 컨테이너에
-`backend/app/migrations/`를 적용한 `migrated_db` 픽스처 위에서 돈다 (CLAUDE.md CRITICAL).
+`backend/openarchive/migrations/`를 적용한 `migrated_db` 픽스처 위에서 돈다 (CLAUDE.md CRITICAL).
 
 > NOTIFY 테스트가 통과한다고 해서 파이프라인이 NOTIFY에 의존해도 된다는 뜻은 아니다.
 > 여기는 DB 직결이고, 실 환경은 OpenProxy를 경유해 동작이 보장되지 않는다. 워커는
@@ -17,8 +17,8 @@ import asyncio
 import psycopg
 import pytest
 
-from app.embeddings.fake import FakeProvider
-from app.vectors import to_pgvector_literal
+from openarchive.embeddings.fake import FakeProvider
+from openarchive.vectors import to_pgvector_literal
 
 CHANNEL = "embedding_jobs"
 
@@ -311,7 +311,7 @@ def test_escaped_bar_migration_rebuilds_links_stored_by_the_old_rule(
     clean_db: str, tmp_path
 ):
     """023은 트리거가 다시 돌지 않는 기존 행을 전량 재생성한다 — 015와 같은 방식."""
-    from app.migrations import MIGRATIONS_DIR, migration_files, run_migrations
+    from openarchive.migrations import MIGRATIONS_DIR, migration_files, run_migrations
 
     before = tmp_path / "before-023"
     before.mkdir()
