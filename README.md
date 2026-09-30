@@ -91,14 +91,14 @@ docker run -d --name openarchive -p 8000:8000 -v openarchive:/data \
 ```
 
 기동할 때마다 `init`을 먼저 실행한 뒤 `serve`로 넘어갑니다. 첫 기동에는 스키마를 적용하고
-`ADMIN_PASSWORD`로 관리자 `admin`을 만들며, 그 뒤로는 "이미 최신 · 관리자 있음"으로 지나갑니다.
+`ADMIN_PASSWORD`로 관리자 `admin`을 만들며, 그 뒤로는 "스키마는 이미 최신입니다." · "관리자 계정이
+이미 있습니다."를 출력하고 지나갑니다.
 `ADMIN_PASSWORD`는 컨테이너 설정에 남으므로, 첫 로그인 뒤 비밀번호를 바꾸고 이 값 없이 컨테이너를 다시
 만들어도 됩니다. 일회성 명령은 명령을 붙여 실행합니다 — 예:
 `docker exec openarchive openarchive demo --user admin`.
 
-- **첫 기동은 BGE-M3 가중치(약 2.3GB)를 받느라 1~2분 걸립니다.** 가중치와 설정은 `/data` 볼륨에 남아
-  컨테이너를 다시 만들어도 다시 받지 않습니다.
-- **메모리는 5GB 이상**을 줍니다 — API와 워커가 모델을 각자 올립니다(실측 약 4.2GB).
+- **첫 기동은 BGE-M3 가중치를 받느라 1~2분 걸리고, 메모리는 5GB 이상**을 줍니다. 가중치는 `/data`
+  볼륨에 남습니다 — 볼륨·자원·진입점 상세는 [운영 가이드 「앱 이미지」](docs/OPERATIONS.md#앱-이미지).
 - 같은 호스트의 DB에 붙을 때는 `localhost` 대신 `host.docker.internal`(Linux는
   `--add-host=host.docker.internal:host-gateway`를 함께)을 씁니다.
 
@@ -135,7 +135,7 @@ OpenArchive는 표준 PostgreSQL 17 + pgvector 인터페이스에 의존하므�
 docker run -d --name openarchive-db -p 5433:5432 \
   -e POSTGRES_USER=openarchive -e POSTGRES_PASSWORD=openarchive -e POSTGRES_DB=openarchive \
   pgvector/pgvector:pg17
-sleep 5   # DB가 연결을 받을 때까지
+until docker exec openarchive-db pg_isready -h 127.0.0.1 -q; do sleep 1; done   # DB가 연결을 받을 때까지
 pipx install "openarchive-server[local]"
 ADMIN_PASSWORD='change-me' openarchive init --yes --dsn "postgresql://openarchive:openarchive@localhost:5433/openarchive"
 EMBEDDING_PROVIDER=local openarchive serve
