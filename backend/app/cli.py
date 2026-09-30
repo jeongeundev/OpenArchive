@@ -155,7 +155,7 @@ def probe_capabilities(conn: psycopg.Connection, *, own_schema: bool = False) ->
         """
     ).fetchone()
     server_version_num, username, is_superuser, creates_in_database = row[1], row[3], row[4], row[5]
-    search_path = row[7]
+    search_path = _configured_search_path(conn) or row[7]
     schema = username if own_schema else row[6]
     (schema_exists,) = conn.execute(
         "SELECT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = %s)", (schema,)
@@ -170,6 +170,7 @@ def probe_capabilities(conn: psycopg.Connection, *, own_schema: bool = False) ->
     else:
         can_create = creates_in_database
     # 대상 스키마가 search_path의 첫 자리로 풀려야 런타임의 모든 연결이 그곳을 본다.
+    # `search_path`는 이 백엔드의 값이 아니라 새 연결이 받을 설정이다 — 위 docstring.
     first_entry = search_path.split(",")[0].strip().strip('"')
     reaches_schema = not own_schema or first_entry in {"$user", username}
     # `trusted` 컬럼은 PostgreSQL 13에서 생겼다. 그 아래 버전은 어차피 거부되므로
@@ -217,6 +218,37 @@ def probe_capabilities(conn: psycopg.Connection, *, own_schema: bool = False) ->
     )
 
 
+def _configured_search_path(conn: psycopg.Connection) -> str | None:
+    """새 연결이 받을 search_path — 롤·DB 설정(`ALTER ROLE/DATABASE … SET`). 없으면 None.
+
+    이 백엔드의 `current_setting`을 믿지 않는 이유: OpenProxy 풀에 떠 있던 옛 백엔드는 설정
+    변경을 받지 않아(§12-25), init은 `"$user"`를 보고 통과해도 새 연결은 다른 값을 쓴다.
+    우선순위는 PostgreSQL과 같다 — 롤+DB, 롤, DB, `ALTER ROLE ALL` 순.
+    """
+    rows = conn.execute(
+        """
+        SELECT setconfig
+          FROM pg_db_role_setting
+         WHERE setrole IN (0, (SELECT oid FROM pg_roles WHERE rolname = current_user))
+           AND setdatabase IN (0, (SELECT oid FROM pg_database WHERE datname = current_database()))
+         ORDER BY setrole = 0, setdatabase = 0
+        """
+    ).fetchall()
+    for (config,) in rows:
+        for entry in config:
+            name, _, value = entry.partition("=")
+            if name == "search_path":
+                return value
+    return None
+
+
+def _sql_name(name: str) -> str:
+    """DBA가 복사해 실행할 안내문 속 식별자. 대문자·공백이 든 이름은 따옴표 없이 다른 대상이 된다."""
+    if re.fullmatch(r"[a-z_][a-z0-9_$]*", name):
+        return name
+    return '"' + name.replace('"', '""') + '"'
+
+
 def _unmet_requirements(capabilities: Capabilities) -> list[str]:
     if capabilities.server_version_num < MINIMUM_SERVER_VERSION_NUM:
         # 버전이 미달이면 나머지 판정은 의미가 없다. probe도 확장을 조회하지 않는다.
@@ -240,21 +272,29 @@ def _unmet_requirements(capabilities: Capabilities) -> list[str]:
                 "— 슈퍼유저로 실행하거나, DBA에게 미리 설치를 요청하십시오 "
                 f"(CREATE EXTENSION {name};)"
             )
-    user, schema = capabilities.username, capabilities.schema
+    user, schema = _sql_name(capabilities.username), capabilities.schema
+    if schema is None:
+        unmet.append(
+            f"'{capabilities.username}'의 search_path({capabilities.search_path})에 있는 스키마가 "
+            f"하나도 없어 테이블을 만들 자리가 없습니다 (ALTER ROLE {user} RESET search_path)"
+        )
+        return unmet
     if not capabilities.search_path_reaches_schema:
         unmet.append(
-            f"'{user}'의 search_path({capabilities.search_path})가 스키마 '{schema}'로 "
-            f"시작하지 않습니다 — 롤 설정을 걷어내십시오 (ALTER ROLE {user} RESET search_path)"
+            f"'{capabilities.username}'의 search_path({capabilities.search_path})가 스키마 "
+            f"'{schema}'로 시작하지 않습니다 — 롤 설정을 걷어내십시오 "
+            f"(ALTER ROLE {user} RESET search_path)"
         )
+    schema = _sql_name(schema)
     if not capabilities.can_create:
         if capabilities.schema_exists:
             unmet.append(
-                f"'{user}'에게 '{capabilities.database}'의 {schema} 스키마에 대한 "
+                f"'{capabilities.username}'에게 '{capabilities.database}'의 {schema} 스키마에 대한 "
                 f"CREATE 권한이 없습니다 (GRANT CREATE ON SCHEMA {schema} TO {user})"
             )
         else:
             unmet.append(
-                f"'{user}'에게 '{capabilities.database}'에 스키마를 만들 권한이 없습니다 "
+                f"'{capabilities.username}'에게 '{capabilities.database}'에 스키마를 만들 권한이 없습니다 "
                 f"— DBA에게 미리 만들어 달라고 요청하십시오 (CREATE SCHEMA {schema} AUTHORIZATION {user};)"
             )
     return unmet
@@ -341,8 +381,9 @@ def _inspect(conn: psycopg.Connection, *, own_schema: bool) -> list[str] | None:
     capabilities = probe_capabilities(conn, own_schema=own_schema)
     print(f"  연결됨 — PostgreSQL {capabilities.server_version}")
     print(f"  데이터베이스 {capabilities.database} · 사용자 {capabilities.username}")
-    created = "" if capabilities.schema_exists else " (새로 만듭니다)"
-    print(f"  스키마 {capabilities.schema}{created}")
+    if capabilities.schema is not None:
+        created = "" if capabilities.schema_exists else " (새로 만듭니다)"
+        print(f"  스키마 {capabilities.schema}{created}")
 
     unmet = _unmet_requirements(capabilities)
     if unmet:
@@ -363,7 +404,27 @@ def _inspect(conn: psycopg.Connection, *, own_schema: bool) -> list[str] | None:
         print("  빈 데이터베이스를 새로 만들어 다시 실행하십시오.")
         return None
 
+    shadowed = _shadowed_install(conn, capabilities.schema) if own_schema else None
+    if shadowed:
+        print()
+        print(f"이미 {shadowed} 스키마에 설치돼 있습니다. 아무것도 바꾸지 않았습니다.")
+        print(f"  --schema로 새로 설치하면 모든 연결이 빈 '{capabilities.schema}' 스키마를 봐")
+        print("  기존 문서가 보이지 않게 됩니다. --schema 없이 실행하십시오.")
+        return None
+
     return _pending_migrations(conn, capabilities.schema)
+
+
+def _shadowed_install(conn: psycopg.Connection, schema: str) -> str | None:
+    """`--schema`가 가릴 기존 설치 — 지금 연결이 테이블을 찾는 스키마에 이력이 있으면 그 이름.
+
+    롤 이름 스키마가 생기는 순간 기본 search_path의 `"$user"`가 먼저 풀려, 그 뒤에 있던
+    설치(대개 public)는 API·워커·MCP 어디에서도 보이지 않는다. 에러 없이.
+    """
+    (current,) = conn.execute("SELECT current_schema()").fetchone()
+    if current in (None, schema) or not _has_history_table(conn, current):
+        return None
+    return current
 
 
 # Ctrl-C 뒤 자식이 스스로 정리할 시간. 워커는 처리 중인 잡을 마치고 멈춘다 (ADR-004).
@@ -585,8 +646,8 @@ def run_init(
         if own_schema:
             # 이름을 생략하면 롤 이름이 스키마 이름이 된다. 만든 순간부터 그 롤의 모든 연결이
             # 기본 search_path의 "$user"로 이곳을 본다 — 풀에 떠 있던 백엔드까지 (§12-25).
-            with psycopg.connect(dsn) as conn:
-                conn.execute("CREATE SCHEMA IF NOT EXISTS AUTHORIZATION CURRENT_USER")
+            with psycopg.connect(dsn) as schema_conn:
+                schema_conn.execute("CREATE SCHEMA IF NOT EXISTS AUTHORIZATION CURRENT_USER")
         applied = asyncio.run(run_migrations(dsn))
         print(f"  {len(applied)}개 적용 완료")
     else:

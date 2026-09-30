@@ -521,6 +521,24 @@ def test_schema_probe_reads_the_role_setting_not_this_backends_search_path(org_d
     assert capabilities.search_path_reaches_schema is False
 
 
+def test_schema_probe_lets_the_role_setting_override_the_database_setting(
+    org_db: str, clean_db: str
+):
+    """PostgreSQL 우선순위대로 롤 설정이 DB 설정을 이긴다 — 거꾸로 읽으면 멀쩡한 롤을 거부한다."""
+    dbname = conninfo_to_dict(clean_db)["dbname"]
+    with psycopg.connect(clean_db, autocommit=True) as conn:
+        conn.execute(f'ALTER DATABASE "{dbname}" SET search_path = public')
+        conn.execute(f"ALTER ROLE {SCHEMA_ROLE} SET search_path = \"$user\", public")
+    try:
+        with psycopg.connect(org_db) as conn:
+            capabilities = probe_capabilities(conn, own_schema=True)
+    finally:
+        with psycopg.connect(clean_db, autocommit=True) as conn:
+            conn.execute(f'ALTER DATABASE "{dbname}" RESET search_path')
+
+    assert capabilities.search_path_reaches_schema is True
+
+
 def test_init_explains_a_search_path_with_no_existing_schema(
     org_db: str, clean_db: str, capsys, tmp_path
 ):
