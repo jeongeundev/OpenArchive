@@ -219,13 +219,11 @@ def test_capability_probe_reads_schema_level_create_privilege(clean_db: str):
             conn.execute("DROP ROLE IF EXISTS cli_probe_role")
 
 
-def test_init_refuses_when_a_guarded_extension_is_already_installed(
-    clean_db: str, capsys, tmp_path
-):
-    """005는 IF NOT EXISTS 없이 CREATE EXTENSION pg_trgm을 실행한다 (ADR-005 관례).
+def test_init_proceeds_when_a_dba_already_installed_pg_trgm(clean_db: str, tmp_path):
+    """확장은 스키마가 아니라 DB 전체에 하나다 — 조직 DB에는 `pg_trgm`이 이미 있는 일이 흔하다.
 
-    DBA가 미리 깔아둔 DB에서는 001~004가 적용된 뒤 005가 duplicate_object로 죽어,
-    "확인이 적용보다 먼저"라는 계약이 깨지고 부분 적용 스키마가 남는다.
+    005가 `IF NOT EXISTS` 없이 만들던 동안 init은 이 DB를 "DROP EXTENSION 하거나 새 DB를
+    쓰라"며 거부했다. `--schema`가 겨냥하는 조직 DB에서 `--schema`가 막히는 셈이었다 (#95-c).
     """
     with psycopg.connect(clean_db) as conn:
         conn.execute("CREATE EXTENSION pg_trgm")
@@ -233,11 +231,8 @@ def test_init_refuses_when_a_guarded_extension_is_already_installed(
 
     exit_code = main(["init", "--dsn", clean_db, "--yes", "--env-file", str(tmp_path / ".env")])
 
-    assert exit_code == 1
-    assert "pg_trgm" in capsys.readouterr().out
-    # 아무것도 적용하지 않았어야 한다 — 부분 적용이 이 검사의 존재 이유다.
-    with psycopg.connect(clean_db) as conn:
-        assert conn.execute("SELECT to_regclass('public.schema_migrations')").fetchone() == (None,)
+    assert exit_code == 0
+    assert applied_migrations(clean_db) == [path.name for path in migration_files()]
 
 
 @pytest.fixture
@@ -321,6 +316,263 @@ def test_init_proceeds_when_a_dba_preinstalled_the_untrusted_extension(
 
     assert exit_code == 0
     assert applied_migrations(non_superuser_dsn) == [path.name for path in migration_files()]
+
+
+SCHEMA_ROLE = "cli_schema_role"
+
+
+def tables_in(dsn: str, schema: str) -> set[str]:
+    with psycopg.connect(dsn) as conn:
+        rows = conn.execute(
+            "SELECT tablename FROM pg_tables WHERE schemaname = %s", (schema,)
+        ).fetchall()
+    return {row[0] for row in rows}
+
+
+@pytest.fixture
+def org_db(clean_db: str):
+    """조직이 이미 쓰는 DB — `--schema`가 겨냥하는 도입 형태다 (#95 C, #84).
+
+    public에 OpenArchive와 같은 이름의 남의 테이블(`documents`·`users`)이 있고, DBA는
+    `vector`를 public에 미리 깔아 두었다. 앱 전용 롤은 슈퍼유저가 아니며 DB에 스키마를
+    만들 권한(DB CREATE)만 받았다. public에는 CREATE 권한이 없다.
+    """
+    params = conninfo_to_dict(clean_db)
+    dbname = params["dbname"]
+    with psycopg.connect(clean_db, autocommit=True) as conn:
+        conn.execute("CREATE EXTENSION vector")
+        conn.execute("CREATE TABLE documents (id int PRIMARY KEY, note text)")
+        conn.execute("INSERT INTO documents VALUES (1, '조직 문서')")
+        conn.execute("CREATE TABLE users (id int PRIMARY KEY, name text)")
+        conn.execute(f"DROP ROLE IF EXISTS {SCHEMA_ROLE}")
+        conn.execute(f"CREATE ROLE {SCHEMA_ROLE} LOGIN PASSWORD 'schema-role'")
+        conn.execute(f'GRANT CONNECT, CREATE ON DATABASE "{dbname}" TO {SCHEMA_ROLE}')
+        # vector 타입은 public에 있다. 실제 DB에는 PUBLIC 롤의 기본 USAGE가 있다.
+        conn.execute(f"GRANT USAGE ON SCHEMA public TO {SCHEMA_ROLE}")
+    try:
+        yield make_conninfo(**{**params, "user": SCHEMA_ROLE, "password": "schema-role"})
+    finally:
+        with psycopg.connect(clean_db, autocommit=True) as conn:
+            conn.execute(f"REVOKE ALL ON DATABASE \"{dbname}\" FROM {SCHEMA_ROLE}")
+            conn.execute(f"DROP OWNED BY {SCHEMA_ROLE} CASCADE")
+            conn.execute(f"DROP ROLE IF EXISTS {SCHEMA_ROLE}")
+
+
+def test_init_with_schema_installs_beside_existing_tables_without_touching_public(
+    org_db: str, clean_db: str, tmp_path
+):
+    """#95 C — `\\dt public.*`가 그대로여야 한다. 스키마 이름은 접속 롤 이름이다."""
+    public_before = tables_in(clean_db, "public")
+
+    exit_code = main(
+        ["init", "--dsn", org_db, "--schema", "--yes", "--env-file", str(tmp_path / ".env")]
+    )
+
+    assert exit_code == 0
+    assert tables_in(clean_db, "public") == public_before
+    assert OWNED_TABLES | {"schema_migrations"} <= tables_in(clean_db, SCHEMA_ROLE)
+    with psycopg.connect(clean_db) as conn:
+        assert conn.execute("SELECT note FROM public.documents").fetchall() == [("조직 문서",)]
+        (applied,) = conn.execute(
+            f"SELECT count(*) FROM {SCHEMA_ROLE}.schema_migrations"
+        ).fetchone()
+    assert applied == len(migration_files())
+
+
+def test_a_schema_install_is_what_the_role_sees_without_any_connection_option(
+    org_db: str, clean_db: str, tmp_path
+):
+    """런타임 설정 없이 그 롤의 연결이 곧 전용 스키마를 본다 — 기본 search_path의 `"$user"`.
+
+    GUC(`ALTER ROLE … SET search_path`·DSN `options`)에 기대지 않는 이유는 OpenProxy 실측이다:
+    `options`는 조용히 버려졌고, 역할 설정은 풀에 이미 떠 있던 백엔드가 받지 않아 옛
+    search_path(public)가 계속 쓰였다 (`OPENSQL_RESEARCH.md` §12-25).
+    """
+    main(["init", "--dsn", org_db, "--schema", "--yes", "--env-file", str(tmp_path / ".env")])
+
+    document = asyncio.run(_create_as(org_db))
+
+    with psycopg.connect(clean_db) as conn:
+        (count,) = conn.execute(
+            f"SELECT count(*) FROM {SCHEMA_ROLE}.documents WHERE id = %s", (document["id"],)
+        ).fetchone()
+        assert conn.execute("SELECT count(*) FROM public.documents").fetchone() == (1,)
+    assert count == 1
+
+
+async def _create_as(dsn: str) -> dict:
+    async with await psycopg.AsyncConnection.connect(dsn) as conn:
+        return await create_document(
+            conn, filename="note.md", data="전용 스키마".encode(), owner_id="alice"
+        )
+
+
+def test_init_with_schema_is_idempotent(org_db: str, capsys, tmp_path):
+    """두 번째 실행은 자기 스키마의 이력을 봐야 한다. public의 이력을 보면 겹치는 이름을
+    남의 테이블로 오인해 거부한다."""
+    argv = ["init", "--dsn", org_db, "--schema", "--yes", "--env-file", str(tmp_path / ".env")]
+    main(argv)
+    capsys.readouterr()
+
+    exit_code = main(argv)
+
+    assert exit_code == 0
+    assert "이미 최신" in capsys.readouterr().out
+
+
+def test_init_with_schema_refuses_a_search_path_without_the_role_schema(
+    org_db: str, clean_db: str, capsys, tmp_path
+):
+    """DBA가 롤의 search_path를 `"$user"` 없이 고정해 두면 만든 스키마를 아무도 보지 않는다.
+
+    그대로 진행하면 마이그레이션이 public에 테이블을 만들려 들거나, 적용은 스키마에 하고
+    런타임은 public을 읽는 상태가 된다.
+    """
+    with psycopg.connect(clean_db, autocommit=True) as conn:
+        conn.execute(f"ALTER ROLE {SCHEMA_ROLE} SET search_path = public")
+
+    exit_code = main(
+        ["init", "--dsn", org_db, "--schema", "--yes", "--env-file", str(tmp_path / ".env")]
+    )
+
+    assert exit_code == 1
+    assert "search_path" in capsys.readouterr().out
+    with psycopg.connect(clean_db) as conn:
+        assert conn.execute(
+            "SELECT count(*) FROM pg_namespace WHERE nspname = %s", (SCHEMA_ROLE,)
+        ).fetchone() == (0,)
+
+
+def test_init_with_schema_refuses_a_role_that_cannot_create_the_schema(
+    org_db: str, clean_db: str, capsys, tmp_path
+):
+    params = conninfo_to_dict(clean_db)
+    with psycopg.connect(clean_db, autocommit=True) as conn:
+        conn.execute(f'REVOKE CREATE ON DATABASE "{params["dbname"]}" FROM {SCHEMA_ROLE}')
+
+    exit_code = main(
+        ["init", "--dsn", org_db, "--schema", "--yes", "--env-file", str(tmp_path / ".env")]
+    )
+
+    assert exit_code == 1
+    output = capsys.readouterr().out
+    assert f"CREATE SCHEMA {SCHEMA_ROLE}" in output
+    assert "Traceback" not in output
+
+
+def test_init_checks_the_schema_it_will_write_into(org_db: str, clean_db: str, capsys, tmp_path):
+    """`--schema` 없이도 마이그레이션은 search_path의 첫 스키마에 테이블을 만든다.
+
+    롤 이름의 스키마가 이미 있으면 그곳이다. 충돌 검사가 public만 보면 그 스키마의 남의
+    `documents` 위에 009의 ALTER TABLE이 돈다.
+    """
+    with psycopg.connect(clean_db, autocommit=True) as conn:
+        conn.execute(f"CREATE SCHEMA {SCHEMA_ROLE} AUTHORIZATION {SCHEMA_ROLE}")
+        conn.execute(f"CREATE TABLE {SCHEMA_ROLE}.documents (id int PRIMARY KEY)")
+        conn.execute(f"ALTER TABLE {SCHEMA_ROLE}.documents OWNER TO {SCHEMA_ROLE}")
+        # public의 남의 테이블은 치워 둔다 — 이 테스트는 롤 스키마 쪽 판정만 본다.
+        conn.execute("DROP TABLE public.documents, public.users")
+
+    exit_code = main(["init", "--dsn", org_db, "--yes", "--env-file", str(tmp_path / ".env")])
+
+    assert exit_code == 1
+    assert "documents" in capsys.readouterr().out
+    assert "schema_migrations" not in tables_in(clean_db, SCHEMA_ROLE)
+
+
+def test_init_with_schema_refuses_to_shadow_an_existing_public_install(
+    org_db: str, clean_db: str, capsys, tmp_path
+):
+    """public에 이미 설치된 DB에서 `--schema`를 돌리면 빈 설치가 한 벌 더 생긴다.
+
+    롤 이름 스키마가 생기는 순간 `"$user"`가 먼저 풀려 API·워커·MCP의 모든 연결이 빈
+    스키마를 본다 — 기존 문서가 에러 없이 전부 사라진 것처럼 보인다.
+    """
+    with psycopg.connect(clean_db, autocommit=True) as conn:
+        conn.execute("DROP TABLE public.documents, public.users")
+        conn.execute(f"GRANT CREATE ON SCHEMA public TO {SCHEMA_ROLE}")
+    env_file = str(tmp_path / ".env")
+    assert main(["init", "--dsn", org_db, "--yes", "--env-file", env_file]) == 0
+    capsys.readouterr()
+
+    exit_code = main(["init", "--dsn", org_db, "--schema", "--yes", "--env-file", env_file])
+
+    assert exit_code == 1
+    assert "public" in capsys.readouterr().out
+    with psycopg.connect(clean_db) as conn:
+        assert conn.execute(
+            "SELECT count(*) FROM pg_namespace WHERE nspname = %s", (SCHEMA_ROLE,)
+        ).fetchone() == (0,)
+
+
+def test_schema_probe_reads_the_role_setting_not_this_backends_search_path(org_db: str, clean_db: str):
+    """`ALTER ROLE … SET search_path`는 풀에 이미 떠 있던 백엔드가 받지 않는다 (§12-25).
+
+    init이 그런 옛 백엔드에 붙으면 `current_setting`은 `"$user"`를 보여 통과하지만, 새
+    백엔드는 롤 설정을 쓴다. 세션 SET으로 옛 백엔드를 흉내 낸다.
+    """
+    with psycopg.connect(clean_db, autocommit=True) as conn:
+        conn.execute(f"ALTER ROLE {SCHEMA_ROLE} SET search_path = public")
+
+    with psycopg.connect(org_db) as conn:
+        conn.execute('SET search_path = "$user", public')
+        capabilities = probe_capabilities(conn, own_schema=True)
+
+    assert capabilities.search_path_reaches_schema is False
+
+
+def test_schema_probe_lets_the_role_setting_override_the_database_setting(
+    org_db: str, clean_db: str
+):
+    """PostgreSQL 우선순위대로 롤 설정이 DB 설정을 이긴다 — 거꾸로 읽으면 멀쩡한 롤을 거부한다."""
+    dbname = conninfo_to_dict(clean_db)["dbname"]
+    with psycopg.connect(clean_db, autocommit=True) as conn:
+        conn.execute(f'ALTER DATABASE "{dbname}" SET search_path = public')
+        conn.execute(f"ALTER ROLE {SCHEMA_ROLE} SET search_path = \"$user\", public")
+    try:
+        with psycopg.connect(org_db) as conn:
+            capabilities = probe_capabilities(conn, own_schema=True)
+    finally:
+        with psycopg.connect(clean_db, autocommit=True) as conn:
+            conn.execute(f'ALTER DATABASE "{dbname}" RESET search_path')
+
+    assert capabilities.search_path_reaches_schema is True
+
+
+def test_init_explains_a_search_path_with_no_existing_schema(
+    org_db: str, clean_db: str, capsys, tmp_path
+):
+    """search_path의 어떤 스키마도 없으면 `current_schema()`가 NULL이다 — 테이블을 만들 자리가 없다."""
+    with psycopg.connect(clean_db, autocommit=True) as conn:
+        conn.execute(f"ALTER ROLE {SCHEMA_ROLE} SET search_path = no_such_schema")
+
+    exit_code = main(["init", "--dsn", org_db, "--yes", "--env-file", str(tmp_path / ".env")])
+
+    assert exit_code == 1
+    assert "no_such_schema" in capsys.readouterr().out
+
+
+def test_dba_instructions_quote_a_role_name_that_needs_quoting(clean_db: str, capsys, tmp_path):
+    """안내문은 DBA가 그대로 복사해 실행한다. 대문자·공백이 든 롤 이름은 따옴표 없이는
+    다른 롤을 가리키거나 문법 오류가 난다."""
+    role = "Cli Team"
+    params = conninfo_to_dict(clean_db)
+    with psycopg.connect(clean_db, autocommit=True) as conn:
+        conn.execute(f'DROP ROLE IF EXISTS "{role}"')
+        conn.execute(f"CREATE ROLE \"{role}\" LOGIN PASSWORD 'team'")
+        conn.execute(f'GRANT CONNECT ON DATABASE "{params["dbname"]}" TO "{role}"')
+    try:
+        dsn = make_conninfo(**{**params, "user": role, "password": "team"})
+        exit_code = main(
+            ["init", "--dsn", dsn, "--schema", "--yes", "--env-file", str(tmp_path / ".env")]
+        )
+    finally:
+        with psycopg.connect(clean_db, autocommit=True) as conn:
+            conn.execute(f'REVOKE ALL ON DATABASE "{params["dbname"]}" FROM "{role}"')
+            conn.execute(f'DROP ROLE IF EXISTS "{role}"')
+
+    assert exit_code == 1
+    assert f'CREATE SCHEMA "{role}" AUTHORIZATION "{role}"' in capsys.readouterr().out
 
 
 def test_init_asks_for_the_dsn_when_it_is_not_given(clean_db: str, monkeypatch, tmp_path):

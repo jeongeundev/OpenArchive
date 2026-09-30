@@ -98,13 +98,6 @@ _CREATE_TABLE_RE = re.compile(
     re.IGNORECASE | re.MULTILINE,
 )
 
-# `IF NOT EXISTS` 없이 만드는 확장만 잡는다. 그런 문장은 확장이 이미 있으면 duplicate_object로
-# 죽고, ADR-005 관례상 마이그레이션은 멱등성을 schema_migrations에 맡겨 가드를 쓰지 않는다.
-_UNGUARDED_EXTENSION_RE = re.compile(
-    r'^\s*CREATE\s+EXTENSION\s+(?!IF\s+NOT\s+EXISTS)"?([A-Za-z_][A-Za-z0-9_]*)',
-    re.IGNORECASE | re.MULTILINE,
-)
-
 
 def _owned_tables(migrations_dir: Path = MIGRATIONS_DIR) -> frozenset[str]:
     """마이그레이션이 만드는 테이블 이름. 충돌 판정의 기준이다.
@@ -131,27 +124,55 @@ class Capabilities:
     installed_extensions: frozenset[str]
     creatable_extensions: frozenset[str]
     can_create: bool
+    # 마이그레이션이 테이블을 만들 스키마. 충돌·이력·권한 판정이 모두 이곳을 본다.
+    schema: str | None
+    schema_exists: bool
+    search_path: str
+    search_path_reaches_schema: bool
 
 
-def probe_capabilities(conn: psycopg.Connection) -> Capabilities:
-    """붙은 DB가 OpenArchive 스키마를 받을 수 있는지 조회한다. 아무것도 바꾸지 않는다."""
+def probe_capabilities(conn: psycopg.Connection, *, own_schema: bool = False) -> Capabilities:
+    """붙은 DB가 OpenArchive 스키마를 받을 수 있는지 조회한다. 아무것도 바꾸지 않는다.
+
+    `own_schema`면 대상은 접속 롤과 같은 이름의 스키마다(`init --schema`). 아니면 search_path의
+    첫 스키마 — 러너가 실제로 테이블을 만드는 자리다. 둘 다 GUC 없이 기본 search_path의
+    `"$user"`로 풀린다. `ALTER ROLE … SET search_path`는 OpenProxy 풀에 이미 떠 있던 백엔드가
+    받지 않고, DSN의 `options`는 프록시가 조용히 버린다 (`OPENSQL_RESEARCH.md` §12-25).
+    """
     row = conn.execute(
         """
         SELECT current_setting('server_version'),
                current_setting('server_version_num')::int,
                current_database(),
                current_user,
-               -- 테이블을 만들 수 있는지는 데이터베이스가 아니라 **스키마** 권한이 정한다.
-               -- has_database_privilege(..., 'CREATE')는 "DB 안에 스키마를 만들 권한"이라,
-               -- public에만 CREATE를 받은 롤에서 false가 되어 멀쩡한 DB를 거부한다.
-               has_schema_privilege(current_user, 'public', 'CREATE'),
                current_setting('is_superuser') = 'on',
-               -- 반대로 **확장**을 만들 권한은 데이터베이스가 정하는 자리다. trusted
-               -- 확장은 이 권한만으로 만들 수 있고, untrusted 확장은 이것으로도 안 된다.
-               has_database_privilege(current_user, current_database(), 'CREATE')
+               -- **확장**을 만들 권한은 데이터베이스가 정하는 자리다. trusted 확장은 이
+               -- 권한만으로 만들 수 있고, untrusted 확장은 이것으로도 안 된다. 스키마를
+               -- 새로 만들 권한도 이것이다.
+               has_database_privilege(current_user, current_database(), 'CREATE'),
+               current_schema(),
+               current_setting('search_path')
         """
     ).fetchone()
-    server_version_num, is_superuser, creates_in_database = row[1], row[5], row[6]
+    server_version_num, username, is_superuser, creates_in_database = row[1], row[3], row[4], row[5]
+    search_path = _configured_search_path(conn) or row[7]
+    schema = username if own_schema else row[6]
+    (schema_exists,) = conn.execute(
+        "SELECT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = %s)", (schema,)
+    ).fetchone()
+    if schema_exists:
+        # 테이블을 만들 수 있는지는 데이터베이스가 아니라 **스키마** 권한이 정한다.
+        # has_database_privilege(..., 'CREATE')는 "DB 안에 스키마를 만들 권한"이라,
+        # public에만 CREATE를 받은 롤에서 false가 되어 멀쩡한 DB를 거부한다.
+        (can_create,) = conn.execute(
+            "SELECT has_schema_privilege(current_user, %s, 'CREATE')", (schema,)
+        ).fetchone()
+    else:
+        can_create = creates_in_database
+    # 대상 스키마가 search_path의 첫 자리로 풀려야 런타임의 모든 연결이 그곳을 본다.
+    # `search_path`는 이 백엔드의 값이 아니라 새 연결이 받을 설정이다 — 위 docstring.
+    first_entry = search_path.split(",")[0].strip().strip('"')
+    reaches_schema = not own_schema or first_entry in {"$user", username}
     # `trusted` 컬럼은 PostgreSQL 13에서 생겼다. 그 아래 버전은 어차피 거부되므로
     # 조회하지 않는다 — 하면 UndefinedColumn으로 죽어, "13 이상이 필요합니다"라는
     # 안내가 나갈 자리에 traceback이 나간다.
@@ -177,7 +198,7 @@ def probe_capabilities(conn: psycopg.Connection) -> Capabilities:
         server_version=row[0],
         server_version_num=server_version_num,
         database=row[2],
-        username=row[3],
+        username=username,
         extensions={name: name in available for name in REQUIRED_EXTENSIONS},
         installed_extensions=frozenset(
             name for name, is_installed, _ in extension_rows if is_installed
@@ -189,8 +210,43 @@ def probe_capabilities(conn: psycopg.Connection) -> Capabilities:
             for name, _, trusted in extension_rows
             if is_superuser or (trusted and creates_in_database)
         ),
-        can_create=row[4],
+        can_create=can_create,
+        schema=schema,
+        schema_exists=schema_exists,
+        search_path=search_path,
+        search_path_reaches_schema=reaches_schema,
     )
+
+
+def _configured_search_path(conn: psycopg.Connection) -> str | None:
+    """새 연결이 받을 search_path — 롤·DB 설정(`ALTER ROLE/DATABASE … SET`). 없으면 None.
+
+    이 백엔드의 `current_setting`을 믿지 않는 이유: OpenProxy 풀에 떠 있던 옛 백엔드는 설정
+    변경을 받지 않아(§12-25), init은 `"$user"`를 보고 통과해도 새 연결은 다른 값을 쓴다.
+    우선순위는 PostgreSQL과 같다 — 롤+DB, 롤, DB, `ALTER ROLE ALL` 순.
+    """
+    rows = conn.execute(
+        """
+        SELECT setconfig
+          FROM pg_db_role_setting
+         WHERE setrole IN (0, (SELECT oid FROM pg_roles WHERE rolname = current_user))
+           AND setdatabase IN (0, (SELECT oid FROM pg_database WHERE datname = current_database()))
+         ORDER BY setrole = 0, setdatabase = 0
+        """
+    ).fetchall()
+    for (config,) in rows:
+        for entry in config:
+            name, _, value = entry.partition("=")
+            if name == "search_path":
+                return value
+    return None
+
+
+def _sql_name(name: str) -> str:
+    """DBA가 복사해 실행할 안내문 속 식별자. 대문자·공백이 든 이름은 따옴표 없이 다른 대상이 된다."""
+    if re.fullmatch(r"[a-z_][a-z0-9_$]*", name):
+        return name
+    return '"' + name.replace('"', '""') + '"'
 
 
 def _unmet_requirements(capabilities: Capabilities) -> list[str]:
@@ -210,62 +266,65 @@ def _unmet_requirements(capabilities: Capabilities) -> list[str]:
             name not in capabilities.installed_extensions
             and name not in capabilities.creatable_extensions
         ):
-            # 이미 설치돼 있으면 만들 권한은 필요 없다 — 001은 IF NOT EXISTS로 넘어가고,
-            # 005처럼 가드 없는 파일은 _blocking_extensions가 따로 잡는다.
+            # 이미 설치돼 있으면 만들 권한은 필요 없다 — 001·005는 IF NOT EXISTS로 넘어간다.
             unmet.append(
                 f"'{capabilities.username}'에게 확장 '{name}' 생성 권한이 없습니다 "
                 "— 슈퍼유저로 실행하거나, DBA에게 미리 설치를 요청하십시오 "
                 f"(CREATE EXTENSION {name};)"
             )
-    if not capabilities.can_create:
+    user, schema = _sql_name(capabilities.username), capabilities.schema
+    if schema is None:
         unmet.append(
-            f"'{capabilities.username}'에게 '{capabilities.database}'의 public 스키마에 대한 "
-            "CREATE 권한이 없습니다 (GRANT CREATE ON SCHEMA public TO ...)"
+            f"'{capabilities.username}'의 search_path({capabilities.search_path})에 있는 스키마가 "
+            f"하나도 없어 테이블을 만들 자리가 없습니다 (ALTER ROLE {user} RESET search_path)"
         )
+        return unmet
+    if not capabilities.search_path_reaches_schema:
+        unmet.append(
+            f"'{capabilities.username}'의 search_path({capabilities.search_path})가 스키마 "
+            f"'{schema}'로 시작하지 않습니다 — 롤 설정을 걷어내십시오 "
+            f"(ALTER ROLE {user} RESET search_path)"
+        )
+    schema = _sql_name(schema)
+    if not capabilities.can_create:
+        if capabilities.schema_exists:
+            unmet.append(
+                f"'{capabilities.username}'에게 '{capabilities.database}'의 {schema} 스키마에 대한 "
+                f"CREATE 권한이 없습니다 (GRANT CREATE ON SCHEMA {schema} TO {user})"
+            )
+        else:
+            unmet.append(
+                f"'{capabilities.username}'에게 '{capabilities.database}'에 스키마를 만들 권한이 없습니다 "
+                f"— DBA에게 미리 만들어 달라고 요청하십시오 (CREATE SCHEMA {schema} AUTHORIZATION {user};)"
+            )
     return unmet
 
 
-def _conflicting_tables(conn: psycopg.Connection) -> list[str]:
+def _conflicting_tables(conn: psycopg.Connection, schema: str) -> list[str]:
     """이미 있는 테이블 중 OpenArchive가 쓰는 이름. `schema_migrations`가 있으면 우리 것이다.
 
     마이그레이션 009는 `ALTER TABLE documents`를, 012·015·023은
     `DELETE FROM document_links`를 실행한다. 같은 이름의 남의 테이블 위에 적용하면
     그 데이터가 손상된다.
     """
-    if _has_history_table(conn):
+    if _has_history_table(conn, schema):
         return []
     rows = conn.execute(
-        "SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND tablename = ANY(%s)",
-        (sorted(OWNED_TABLES),),
+        "SELECT tablename FROM pg_tables WHERE schemaname = %s AND tablename = ANY(%s)",
+        (schema, sorted(OWNED_TABLES)),
     ).fetchall()
     return sorted(name for (name,) in rows)
 
 
-def _has_history_table(conn: psycopg.Connection) -> bool:
-    return conn.execute(HISTORY_TABLE_SQL).fetchone()[0] is not None
+def _has_history_table(conn: psycopg.Connection, schema: str) -> bool:
+    return conn.execute(HISTORY_TABLE_SQL, (schema,)).fetchone()[0] is not None
 
 
-def _pending_migrations(conn: psycopg.Connection) -> list[str]:
-    if not _has_history_table(conn):
+def _pending_migrations(conn: psycopg.Connection, schema: str) -> list[str]:
+    if not _has_history_table(conn, schema):
         return pending_filenames(set())
     applied = {name for (name,) in conn.execute(APPLIED_SQL).fetchall()}
     return pending_filenames(applied)
-
-
-def _blocking_extensions(pending: list[str], installed: frozenset[str]) -> dict[str, str]:
-    """이미 설치돼 있어 미적용 마이그레이션을 실패시킬 확장 → 그 마이그레이션 파일명.
-
-    적용을 시작한 뒤 중간 파일에서 죽으면 부분 적용 스키마가 남는다. "확인이 적용보다
-    먼저"라는 계약이 지켜지려면 이것을 미리 잡아야 한다.
-    """
-    blocking: dict[str, str] = {}
-    for path in migration_files():
-        if path.name not in pending:
-            continue
-        for name in _UNGUARDED_EXTENSION_RE.findall(path.read_text("utf-8")):
-            if name in installed:
-                blocking.setdefault(name, path.name)
-    return blocking
 
 
 async def _read_status(dsn: str):
@@ -314,14 +373,17 @@ def _confirm(prompt: str) -> bool:
         return False
 
 
-def _inspect(conn: psycopg.Connection) -> list[str] | None:
+def _inspect(conn: psycopg.Connection, *, own_schema: bool) -> list[str] | None:
     """설치할 수 있는 DB인지 확인하고 미적용 마이그레이션을 낸다. 막히면 None.
 
     아무것도 바꾸지 않는다 — 이 단계가 적용보다 먼저 오는 것이 init의 존재 이유다.
     """
-    capabilities = probe_capabilities(conn)
+    capabilities = probe_capabilities(conn, own_schema=own_schema)
     print(f"  연결됨 — PostgreSQL {capabilities.server_version}")
     print(f"  데이터베이스 {capabilities.database} · 사용자 {capabilities.username}")
+    if capabilities.schema is not None:
+        created = "" if capabilities.schema_exists else " (새로 만듭니다)"
+        print(f"  스키마 {capabilities.schema}{created}")
 
     unmet = _unmet_requirements(capabilities)
     if unmet:
@@ -334,7 +396,7 @@ def _inspect(conn: psycopg.Connection) -> list[str] | None:
         state = "이미 설치됨" if name in capabilities.installed_extensions else "사용 가능"
         print(f"  확장 {name} — {state}")
 
-    conflicts = _conflicting_tables(conn)
+    conflicts = _conflicting_tables(conn, capabilities.schema)
     if conflicts:
         print()
         print("이미 다른 용도로 쓰이는 데이터베이스로 보입니다. 아무것도 바꾸지 않았습니다.")
@@ -342,16 +404,27 @@ def _inspect(conn: psycopg.Connection) -> list[str] | None:
         print("  빈 데이터베이스를 새로 만들어 다시 실행하십시오.")
         return None
 
-    pending = _pending_migrations(conn)
-    blocking = _blocking_extensions(pending, capabilities.installed_extensions)
-    if blocking:
+    shadowed = _shadowed_install(conn, capabilities.schema) if own_schema else None
+    if shadowed:
         print()
-        print("확장이 이미 설치돼 있어 마이그레이션이 중간에 실패합니다. 아무것도 바꾸지 않았습니다.")
-        for name, filename in sorted(blocking.items()):
-            print(f"  - {filename}은 '{name}'을 IF NOT EXISTS 없이 만듭니다")
-        print("  DROP EXTENSION으로 걷어내거나, 빈 데이터베이스를 새로 만들어 다시 실행하십시오.")
+        print(f"이미 {shadowed} 스키마에 설치돼 있습니다. 아무것도 바꾸지 않았습니다.")
+        print(f"  --schema로 새로 설치하면 모든 연결이 빈 '{capabilities.schema}' 스키마를 봐")
+        print("  기존 문서가 보이지 않게 됩니다. --schema 없이 실행하십시오.")
         return None
-    return pending
+
+    return _pending_migrations(conn, capabilities.schema)
+
+
+def _shadowed_install(conn: psycopg.Connection, schema: str) -> str | None:
+    """`--schema`가 가릴 기존 설치 — 지금 연결이 테이블을 찾는 스키마에 이력이 있으면 그 이름.
+
+    롤 이름 스키마가 생기는 순간 기본 search_path의 `"$user"`가 먼저 풀려, 그 뒤에 있던
+    설치(대개 public)는 API·워커·MCP 어디에서도 보이지 않는다. 에러 없이.
+    """
+    (current,) = conn.execute("SELECT current_schema()").fetchone()
+    if current in (None, schema) or not _has_history_table(conn, current):
+        return None
+    return current
 
 
 # Ctrl-C 뒤 자식이 스스로 정리할 시간. 워커는 처리 중인 잡을 마치고 멈춘다 (ADR-004).
@@ -530,7 +603,12 @@ def _ensure_admin(dsn: str, username: str) -> bool | None:
 
 
 def run_init(
-    *, dsn: str | None, assume_yes: bool, env_file: Path, admin_username: str = "admin"
+    *,
+    dsn: str | None,
+    assume_yes: bool,
+    env_file: Path,
+    admin_username: str = "admin",
+    own_schema: bool = False,
 ) -> int:
     print("OpenArchive 설치 준비")
     print()
@@ -553,7 +631,7 @@ def run_init(
         return 1
 
     with connection as conn:
-        pending = _inspect(conn)
+        pending = _inspect(conn, own_schema=own_schema)
         if pending is None:
             return 1
 
@@ -565,6 +643,11 @@ def run_init(
         if not assume_yes and not _confirm("적용할까요?"):
             print("취소했습니다. 아무것도 바꾸지 않았습니다.")
             return 1
+        if own_schema:
+            # 이름을 생략하면 롤 이름이 스키마 이름이 된다. 만든 순간부터 그 롤의 모든 연결이
+            # 기본 search_path의 "$user"로 이곳을 본다 — 풀에 떠 있던 백엔드까지 (§12-25).
+            with psycopg.connect(dsn) as schema_conn:
+                schema_conn.execute("CREATE SCHEMA IF NOT EXISTS AUTHORIZATION CURRENT_USER")
         applied = asyncio.run(run_migrations(dsn))
         print(f"  {len(applied)}개 적용 완료")
     else:
@@ -1055,6 +1138,11 @@ def main(argv: list[str] | None = None) -> int:
         default="admin",
         help="관리자가 없을 때 만들 첫 관리자 이름 (기본: admin). 비밀번호는 ADMIN_PASSWORD 또는 프롬프트",
     )
+    init.add_argument(
+        "--schema",
+        action="store_true",
+        help="접속 롤과 같은 이름의 전용 스키마에 설치합니다. public은 건드리지 않습니다.",
+    )
     create = subcommands.add_parser(
         "create-user", help="계정을 만듭니다. 비밀번호는 ADMIN_PASSWORD 또는 프롬프트로 받습니다."
     )
@@ -1154,6 +1242,7 @@ def main(argv: list[str] | None = None) -> int:
         assume_yes=args.yes,
         env_file=args.env_file,
         admin_username=args.admin_username,
+        own_schema=args.schema,
     )
 
 

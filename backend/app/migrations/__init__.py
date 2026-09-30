@@ -22,7 +22,9 @@ MIGRATIONS_DIR = Path(__file__).resolve().parent
 
 # 이력 조회는 이 모듈이 정본이다. 적용 여부를 판정하는 곳이 둘로 갈리면 러너와 그것을
 # 부르는 쪽(`openarchive init`)이 서로 다른 목록을 보게 된다.
-HISTORY_TABLE_SQL = "SELECT to_regclass('public.schema_migrations')"
+# 스키마는 인자로 받는다. 러너는 search_path의 첫 스키마에 이력을 만드는데, 그것이 public이
+# 아닐 수 있다 — `init --schema`는 아직 없는 롤 이름 스키마를 미리 조회해야 한다.
+HISTORY_TABLE_SQL = "SELECT to_regclass(format('%%I.schema_migrations', %s::text))"
 APPLIED_SQL = "SELECT filename FROM schema_migrations"
 
 
