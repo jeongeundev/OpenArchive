@@ -546,7 +546,7 @@ COMMIT;
 | 클러스터 상태 공유 | **OpenHA DCS (etcd)** |
 | 커넥션 풀링, 백엔드 축출 후 재연결 | **OpenProxy** |
 | Primary 변경 감지 후 재연결, VIP 이중화 | **OpenProxy** (etcd 연동 + VRRP VIP — 3노드에서 실측, 아래 참조) |
-| 커밋 응답을 받은 쓰기의 failover 생존 | **OpenHA Cluster Manager (Patroni)** — 동기 복제 1대 (ADR-049) |
+| 커밋 응답을 받은 쓰기의 failover 생존 | **OpenHA Cluster Manager (Patroni)** — 비동기 복제, 뒤처진 replica 승격 제외(`maximum_lag_on_failover` 1MB) (ADR-049 개정) |
 | 미처리 잡의 무손실 보존 | **DB 계층** (`embedding_jobs`는 WAL 로깅 테이블 → 스탠바이 복제) |
 | 연결 끊김 시 재시도, 잡 재개, 좀비 회수 | **애플리케이션 (우리)** |
 | 죽은 연결 감지·오염 연결 폐기, 일시 불가용의 503·백오프, 문서 생성 멱등키, 잡 lease | **애플리케이션 (우리)** (ADR-047·048·050) |
@@ -600,7 +600,7 @@ bash scripts/demo_recovery.sh
 
 **④ 3노드 장애 주입 — 실행 코드 (#110·#122).** `scripts/ha_failover.py`는 앱 API·워커를 VIP에 붙인 채 업로드·검색·쓰기 probe 부하를 걸고 장애 명령을 실행한 뒤, 장부(커밋 응답을 받은 업로드의 존재·sha256, 실패 응답인데 남은 행, 중복)·사용자 가시 실패·원시 500·정합성 카운터 수렴·3노드 다이제스트·승격 대상을 자동 판정한다. 사용법과 회차별 결과는 `SETUP_OPENSQL.md` §16 「장애 주입 측정」. Primary 노드 사망·동기 standby 사망·VIP MASTER 사망·postmaster kill·etcd 정지·switchover 전부에서 **앱 무재시작 · 유실 0 · 사용자 가시 실패 0 · 카운터 0 수렴**이었다.
 
-**공식 3노드 구성에서 Primary 노드 사망·switchover·VIP 이동·프로세스 장애를 부하 중에 주입해, 앱을 재시작하지 않고 수십 초 안에 자동 복구됨을 실측했다. 커밋 응답을 받은 데이터의 유실은 0이었고(동기 복제 1대), 정합성 카운터는 매번 0으로 수렴했다. 복구 구간에는 쓰기가 멈추며, 클라이언트는 그 구간을 백오프 재시도로 넘긴다.** (ADR-020 결정 4, 2026-09-28 개정)
+**공식 3노드 구성에서 Primary 노드 사망·switchover·VIP 이동·프로세스 장애를 부하 중에 주입해, 앱을 재시작하지 않고 수십 초 안에 자동 복구됨을 실측했다. 커밋 응답을 받은 데이터의 유실은 측정한 모든 회차에서 0이었고(비동기·동기 1대 모두), 정합성 카운터는 매번 0으로 수렴했다. 기본 구성은 비동기라 유실 보장 범위는 `maximum_lag_on_failover`(1MB) 이내다. 복구 구간에는 쓰기가 멈추며, 클라이언트는 그 구간을 백오프 재시도로 넘긴다.** (ADR-020 결정 4, 2026-09-28 개정)
 
 검증 대상이 잡 큐와 정합성이라 임베딩 품질은 무관하다. 그래서 스크립트가 `.env` 설정과 무관하게 **`EMBEDDING_PROVIDER=fake`를 고정**한다 — BGE-M3 로딩 시간이 복구 시나리오의 타임아웃 여유를 잠식하기 때문이다. 실 모델로 재현하려면 스크립트를 고쳐야 한다.
 
@@ -615,9 +615,9 @@ OpenSQL이 배포하는 `patroni.yml` 기준값:
 | `retry_timeout` | 10초 |
 | `maximum_lag_on_failover` | 1MB |
 | `failsafe_mode` | `true` |
-| `synchronous_mode` | **`true`, strict off, 동기 1대** — 템플릿은 비동기, 이 프로젝트가 추가 (ADR-049) |
+| `synchronous_mode` | **끔(템플릿 그대로, 비동기)** — 9/27 동기 1대로 켰다가 9/30 되돌림. OpenProxy 1.1.3이 `sync_standby` 역할을 몰라 기동하지 못한다 (ADR-049 개정) |
 
-3노드 실측 쓰기 중단(부하 중, #122): Primary 노드 사망 30.7~40.7초 · switchover 10.3초 · VIP 이동 8.2초 · postmaster kill 11.4초 · 동기 standby 사망 24.5초(커밋 대기). 상세는 `OPENSQL_RESEARCH.md` §3 「3노드 실측」.
+3노드 실측 쓰기 중단(부하 중, #122): Primary 노드 사망 30.7~40.7초 · switchover 10.3초 · VIP 이동 8.2초 · postmaster kill 11.4초 · 동기 standby 사망 24.5초(커밋 대기, 동기 구성 때 측정). 상세는 `OPENSQL_RESEARCH.md` §3 「3노드 실측」.
 
 > **정확한 표현은 "짧은 중단 후 자동 복구"다.** 장애 감지부터 승격까지 수십 초가 걸린다(위 실측). 그 구간의 쓰기는 멈추고, 서버는 503을 돌려주며 클라이언트가 백오프로 넘긴다(ADR-048). 이 자리에서 쓰지 말아야 할 반대말은 **ADR-015와 ADR-020 결정 4가 문자 그대로 지정한다** — 이 문서에서 되풀이하지 않는다.
 
