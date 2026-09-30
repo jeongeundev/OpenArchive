@@ -480,6 +480,83 @@ def test_init_checks_the_schema_it_will_write_into(org_db: str, clean_db: str, c
     assert "schema_migrations" not in tables_in(clean_db, SCHEMA_ROLE)
 
 
+def test_init_with_schema_refuses_to_shadow_an_existing_public_install(
+    org_db: str, clean_db: str, capsys, tmp_path
+):
+    """public에 이미 설치된 DB에서 `--schema`를 돌리면 빈 설치가 한 벌 더 생긴다.
+
+    롤 이름 스키마가 생기는 순간 `"$user"`가 먼저 풀려 API·워커·MCP의 모든 연결이 빈
+    스키마를 본다 — 기존 문서가 에러 없이 전부 사라진 것처럼 보인다.
+    """
+    with psycopg.connect(clean_db, autocommit=True) as conn:
+        conn.execute("DROP TABLE public.documents, public.users")
+        conn.execute(f"GRANT CREATE ON SCHEMA public TO {SCHEMA_ROLE}")
+    env_file = str(tmp_path / ".env")
+    assert main(["init", "--dsn", org_db, "--yes", "--env-file", env_file]) == 0
+    capsys.readouterr()
+
+    exit_code = main(["init", "--dsn", org_db, "--schema", "--yes", "--env-file", env_file])
+
+    assert exit_code == 1
+    assert "public" in capsys.readouterr().out
+    with psycopg.connect(clean_db) as conn:
+        assert conn.execute(
+            "SELECT count(*) FROM pg_namespace WHERE nspname = %s", (SCHEMA_ROLE,)
+        ).fetchone() == (0,)
+
+
+def test_schema_probe_reads_the_role_setting_not_this_backends_search_path(org_db: str, clean_db: str):
+    """`ALTER ROLE … SET search_path`는 풀에 이미 떠 있던 백엔드가 받지 않는다 (§12-25).
+
+    init이 그런 옛 백엔드에 붙으면 `current_setting`은 `"$user"`를 보여 통과하지만, 새
+    백엔드는 롤 설정을 쓴다. 세션 SET으로 옛 백엔드를 흉내 낸다.
+    """
+    with psycopg.connect(clean_db, autocommit=True) as conn:
+        conn.execute(f"ALTER ROLE {SCHEMA_ROLE} SET search_path = public")
+
+    with psycopg.connect(org_db) as conn:
+        conn.execute('SET search_path = "$user", public')
+        capabilities = probe_capabilities(conn, own_schema=True)
+
+    assert capabilities.search_path_reaches_schema is False
+
+
+def test_init_explains_a_search_path_with_no_existing_schema(
+    org_db: str, clean_db: str, capsys, tmp_path
+):
+    """search_path의 어떤 스키마도 없으면 `current_schema()`가 NULL이다 — 테이블을 만들 자리가 없다."""
+    with psycopg.connect(clean_db, autocommit=True) as conn:
+        conn.execute(f"ALTER ROLE {SCHEMA_ROLE} SET search_path = no_such_schema")
+
+    exit_code = main(["init", "--dsn", org_db, "--yes", "--env-file", str(tmp_path / ".env")])
+
+    assert exit_code == 1
+    assert "no_such_schema" in capsys.readouterr().out
+
+
+def test_dba_instructions_quote_a_role_name_that_needs_quoting(clean_db: str, capsys, tmp_path):
+    """안내문은 DBA가 그대로 복사해 실행한다. 대문자·공백이 든 롤 이름은 따옴표 없이는
+    다른 롤을 가리키거나 문법 오류가 난다."""
+    role = "Cli Team"
+    params = conninfo_to_dict(clean_db)
+    with psycopg.connect(clean_db, autocommit=True) as conn:
+        conn.execute(f'DROP ROLE IF EXISTS "{role}"')
+        conn.execute(f"CREATE ROLE \"{role}\" LOGIN PASSWORD 'team'")
+        conn.execute(f'GRANT CONNECT ON DATABASE "{params["dbname"]}" TO "{role}"')
+    try:
+        dsn = make_conninfo(**{**params, "user": role, "password": "team"})
+        exit_code = main(
+            ["init", "--dsn", dsn, "--schema", "--yes", "--env-file", str(tmp_path / ".env")]
+        )
+    finally:
+        with psycopg.connect(clean_db, autocommit=True) as conn:
+            conn.execute(f'REVOKE ALL ON DATABASE "{params["dbname"]}" FROM "{role}"')
+            conn.execute(f'DROP ROLE IF EXISTS "{role}"')
+
+    assert exit_code == 1
+    assert f'CREATE SCHEMA "{role}" AUTHORIZATION "{role}"' in capsys.readouterr().out
+
+
 def test_init_asks_for_the_dsn_when_it_is_not_given(clean_db: str, monkeypatch, tmp_path):
     """대화형 경로 — 프롬프트 응답만 바꿔 끼운다."""
     answers = iter([clean_db, "y", "y"])

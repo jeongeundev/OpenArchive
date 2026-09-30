@@ -7,6 +7,7 @@ SQL 픽스처는 tmp_path에 직접 쓴다. 실제 `001_extensions.sql`·`002_ta
 다음 step의 범위이며, 러너는 그것들과 무관하게 검증 가능해야 한다.
 """
 
+import re
 import shutil
 import subprocess
 import sys
@@ -189,15 +190,20 @@ def test_every_extension_is_created_only_if_missing():
     가드 없는 `CREATE EXTENSION`은 DBA가 미리 깔아 둔 DB에서 중간 파일이 duplicate_object로
     죽어 부분 적용 스키마를 남긴다. 조직 DB에 설치하는 경로(`init --schema`)에서 흔한 일이다.
     """
-    statements = [
-        line.strip()
+    # 줄 단위로 보면 줄바꿈으로 나뉜 문장(`CREATE\nEXTENSION`)이나 주석 뒤 문장을 놓친다.
+    create = re.compile(r"\bCREATE\s+EXTENSION\b(\s+IF\s+NOT\s+EXISTS\b)?", re.IGNORECASE)
+    matches = [
+        (path.name, match)
         for path in sorted(MIGRATIONS_DIR.glob("*.sql"))
-        for line in path.read_text(encoding="utf-8").splitlines()
-        if line.strip().upper().startswith("CREATE EXTENSION")
+        for match in create.finditer(_without_comments(path.read_text(encoding="utf-8")))
     ]
 
-    assert statements
-    assert [s for s in statements if "IF NOT EXISTS" not in s.upper()] == []
+    assert matches
+    assert [name for name, match in matches if match.group(1) is None] == []
+
+
+def _without_comments(sql: str) -> str:
+    return re.sub(r"--[^\n]*", "", sql)
 
 
 async def test_empty_directory_applies_nothing(clean_db: str, tmp_path: Path):
