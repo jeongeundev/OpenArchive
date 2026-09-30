@@ -2,10 +2,23 @@
 
 ## 개발 환경
 
-기동 절차는 **[README 「시작하기」](README.md#시작하기)가 정본**입니다. 여기에 복제해 두면
-한쪽만 고쳐져 갈라지므로 옮겨 적지 않습니다. **OpenSQL 라이선스 없이 그 절차와
-`scripts/check.sh`가 그대로 완주합니다** — 무엇이 로컬로 되고 무엇이 실 OpenSQL 환경을
-요구하는지는 [운영 가이드](docs/OPERATIONS.md#실-opensql에서만-검증되는-것)의 표에 있습니다.
+설치본(`pipx`·컨테이너)의 기동 절차는 **[README 「시작하기」](README.md#시작하기)가 정본**입니다.
+개발할 때는 소스를 편집 설치해 같은 `openarchive` 명령을 씁니다. DB는 저장소의 `docker-compose.yml`이
+띄우는 pgvector 컨테이너이고, 바꿀 줄이 없습니다.
+
+```bash
+git clone https://github.com/jeongeundev/OpenArchive.git
+cd OpenArchive
+docker compose up -d --wait
+cd backend
+python3 -m venv .venv && source .venv/bin/activate
+pip install -e ".[dev,local]"
+ADMIN_PASSWORD='change-me' openarchive init --yes --dsn "postgresql://openarchive:openarchive@localhost:5433/openarchive"
+```
+
+**OpenSQL 라이선스 없이 이 절차와 `scripts/check.sh`가 그대로 완주합니다** — 무엇이 로컬로 되고
+무엇이 실 OpenSQL 환경을 요구하는지는 [운영 가이드](docs/OPERATIONS.md#실-opensql에서만-검증되는-것)의
+표에 있습니다. 앱 이미지는 `docker build -t openarchive backend/`로 만듭니다 (`backend/Dockerfile`).
 
 검증은 한 번에:
 

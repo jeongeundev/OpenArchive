@@ -121,8 +121,8 @@ DB 계층에 있고, 애플리케이션 코드에는 파이프라인을 조율�
 | 순서 | 할 일 | 근거·주의 |
 |---|---|---|
 | 1 ✅ | `backend/migrations/`를 `app/` 안으로 옮기고 `package-data`에 넣는다 — #95에서 완료, `.env`는 `$OPENARCHIVE_HOME/.env`(기본 `~/.openarchive/.env`, ADR-039 개정) | **비편집 설치에서 `init`·API startup이 실패한다**(2026-08-27 확인). `app/migrations.py`가 `parent.parent / "migrations"`를 찾는데 site-packages에는 그 자리가 없다. `config.py`의 `.env` 경로도 같은 방식이라 설치 위치가 아니라 작업 디렉토리(또는 `~/.openarchive`) 기준으로 바꾼다. CLAUDE.md의 마이그레이션 규칙·tdd-guard 훅·`SETUP_OPENSQL.md`가 경로를 참조하므로 함께 고친다 |
-| 2 | PyPI 배포 | 이름 `openarchive-server` 확보를 먼저 확인한다. 그 전 단계로, 저장소 public 전환 뒤에는 `pip install "openarchive-server[local] @ git+https://github.com/jeongeundev/OpenArchive#subdirectory=backend"`가 clone 없이 동작한다 — 1번이 선행돼야 한다 |
-| 3 | 앱 컨테이너 이미지 (API·워커·UI) | **DB는 넣지 않는다.** 앱은 OpenSQL에 붙는 클라이언트라 컨테이너에 넣어도 실제 대상을 우회하지 않는다 — 8/9에 반려된 "컨테이너로 복구 데모"와는 다른 문제다 |
+| 2 | PyPI 배포 — 배포 이름 `openarchive-server` 확정(#95-e1), 게시는 머지 뒤 별도 승인 | 이름 `openarchive-server` 확보를 먼저 확인한다. 그 전 단계로, 저장소 public 전환 뒤에는 `pip install "openarchive-server[local] @ git+https://github.com/jeongeundev/OpenArchive#subdirectory=backend"`가 clone 없이 동작한다 — 1번이 선행돼야 한다 |
+| 3 ✅ | 앱 컨테이너 이미지 (API·워커·UI) — #95-e2에서 `backend/Dockerfile`, 기동마다 `init --yes` 뒤 `serve`(ADR-039 개정). 레지스트리 게시는 머지 뒤 별도 승인 | **DB는 넣지 않는다.** 앱은 OpenSQL에 붙는 클라이언트라 컨테이너에 넣어도 실제 대상을 우회하지 않는다 — 8/9에 반려된 "컨테이너로 복구 데모"와는 다른 문제다 |
 | 4 ✅ | `init`이 최초 관리자 계정까지 만든다 — #95에서 완료, 셸의 계정 추가는 `openarchive create-user` | `scripts/create_admin.py`를 흡수한다. 첫 가입자가 관리자가 되는 방식은 두지 않는다 — 자체 가입이 없는 것은 결정이다 (ADR-028) |
 
 **여기서 하지 않는 것** — sqlite 같은 무설정 DB 기본값. 트리거 아웃박스가 제품이라 DB를

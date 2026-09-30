@@ -129,6 +129,31 @@ openarchive serve --host 0.0.0.0 --port 9000
 - **죽은 프로세스를 되살리지는 않습니다.** 배포 호스트에서는 systemd가 그 역할을 합니다
   (ADR-038 · `scripts/openarchive-worker.service`).
 
+### 앱 이미지
+
+`backend/Dockerfile`로 만드는 이미지입니다. 안에는 API·워커·웹 화면과 tesseract 한국어 모델이 있고
+**DB는 없습니다** (ADR-039 개정 #95-e2). 실행 명령은 [README 「컨테이너로 실행」](../README.md#컨테이너로-실행)에 있습니다.
+
+```bash
+docker build -t openarchive backend/
+```
+
+| 항목 | 값 |
+|---|---|
+| 진입점 | 인자가 없으면 `openarchive init --yes --dsn "$DATABASE_URL"`을 실행하고, 이어서 `exec openarchive serve --host 0.0.0.0 --port 8000`. init이 실패하면 serve를 띄우지 않습니다. 인자를 주면 그 명령만 실행합니다 |
+| 필수 환경변수 | `DATABASE_URL` — 없으면 아무것도 실행하지 않고 멈춥니다. 첫 기동에는 `ADMIN_PASSWORD`도 줍니다 |
+| 볼륨 `/data` | `OPENARCHIVE_HOME`(설정)과 `HF_HOME`(BGE-M3 가중치 약 2.3GB). 볼륨이 없으면 컨테이너를 다시 만들 때마다 가중치를 다시 받습니다 |
+| 기본값 | `EMBEDDING_PROVIDER=local` · 사용자 uid 1000 · 포트 8000 |
+| 자원 | 메모리 5GB 이상 — API와 워커가 모델을 각자 올립니다(실측 약 4.2GB) |
+
+전용 스키마(`--schema`)로 설치하려면 첫 기동 전에 한 번 명령으로 실행합니다. 그 뒤 진입점의 init은
+롤 이름 스키마의 설치를 보고 그냥 지나갑니다(실측).
+
+```bash
+docker run --rm -e ADMIN_PASSWORD='change-me' ghcr.io/jeongeundev/openarchive \
+  openarchive init --schema --yes --dsn "postgresql://…"
+```
+
 ### `openarchive import` · `export` · `search`
 
 셸에서 문서를 넣고, 빼고, 찾습니다. 셋 다 `--user`로 준 계정의 권한으로 동작합니다 — 넣은 문서의
