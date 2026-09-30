@@ -70,6 +70,26 @@ describe("useDocumentProgress", () => {
     expect(result.current.progress).toEqual(progress);
   });
 
+  it("조회에 실패하면 오류를 알리고, 다시 성공하면 지운다", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ detail: "집계 실패" }, 500))
+      .mockResolvedValueOnce(jsonResponse(progress));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { result } = renderHook(() => useDocumentProgress());
+    await flushRequest();
+
+    expect(result.current.progress).toBeNull();
+    expect(result.current.error).toBe("집계 실패");
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_000);
+    });
+    expect(result.current.progress).toEqual(progress);
+    expect(result.current.error).toBeNull();
+  });
+
   it("언마운트하면 진행 중인 조회를 취소한다", () => {
     const fetchMock = vi.fn(
       (_input: RequestInfo | URL, _init?: RequestInit) => new Promise<Response>(() => {}),

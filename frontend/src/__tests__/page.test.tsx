@@ -63,4 +63,30 @@ describe("루트 페이지", () => {
     );
     expect(screen.queryByRole("button", { name: "업로드" })).not.toBeInTheDocument();
   });
+
+  it("처리 현황만 불러오지 못하면 전체 수와 페이지를 모른다고 알린다", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL) =>
+        Promise.resolve(
+          String(input).startsWith("/api/documents/progress")
+            ? new Response(JSON.stringify({ detail: "집계 실패" }), {
+                status: 500,
+                headers: { "Content-Type": "application/json" },
+              })
+            : new Response(JSON.stringify(documents), {
+                status: 200,
+                headers: { "Content-Type": "application/json" },
+              }),
+        ),
+      ),
+    );
+
+    render(<Home />);
+
+    expect(await screen.findByRole("link", { name: "OpenSQL 운영 가이드" })).toBeInTheDocument();
+    expect(
+      await screen.findByText(/처리 현황을 불러오지 못했습니다/),
+    ).toBeInTheDocument();
+  });
 });

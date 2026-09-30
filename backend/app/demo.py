@@ -104,7 +104,7 @@ def load_seed_documents(root: Path = CORPUS_ROOT) -> list[SeedDocument]:
 async def seed_documents(
     conn: psycopg.AsyncConnection,
     documents: list[SeedDocument],
-    owner: str = "seed",
+    owner: str,
 ) -> int:
     """없는 문서만 서비스 계층을 통해 적재하고 생성 건수를 반환한다.
 
@@ -140,7 +140,7 @@ async def wait_until_ready(
     conn: psycopg.AsyncConnection,
     titles: list[str],
     timeout: float,
-    owner: str = "seed",
+    owner: str,
 ) -> tuple[int, float]:
     started = time.monotonic()
     expected = len(titles)
@@ -165,9 +165,10 @@ async def wait_until_ready(
     raise TimeoutError("임베딩 대기 시간이 초과되었습니다. 워커가 떠 있는지 확인하세요.")
 
 
-async def summarize(conn: psycopg.AsyncConnection, owner: str = "seed") -> tuple[int, int]:
+async def summarize(conn: psycopg.AsyncConnection, owner: str) -> tuple[int, int]:
     """적재 결과로 만들어진 청크 수와 관계 문서쌍 수를 센다.
 
+    관계는 그 계정 문서가 한쪽이라도 걸린 것만 센다 — 기존 문서끼리의 관계는 예제 결과가 아니다.
     저장은 단방향이지만 양쪽이 서로를 발견하면 두 행이 남으므로(ADR-029 개정) 문서쌍으로 접어 센다.
     """
     return await (
@@ -177,11 +178,14 @@ async def summarize(conn: psycopg.AsyncConnection, owner: str = "seed") -> tuple
                       JOIN documents d ON d.id = c.document_id
                      WHERE d.owner_id = %s),
                    (SELECT count(*) FROM (
-                        SELECT DISTINCT least(src_document_id, dst_document_id),
-                                        greatest(src_document_id, dst_document_id)
-                        FROM document_edges) pairs)
+                        SELECT DISTINCT least(e.src_document_id, e.dst_document_id),
+                                        greatest(e.src_document_id, e.dst_document_id)
+                        FROM document_edges e
+                        JOIN documents s ON s.id = e.src_document_id
+                        JOIN documents t ON t.id = e.dst_document_id
+                        WHERE %s IN (s.owner_id, t.owner_id)) pairs)
             """,
-            (owner,),
+            (owner, owner),
         )
     ).fetchone()
 

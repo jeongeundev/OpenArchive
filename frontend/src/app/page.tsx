@@ -19,7 +19,7 @@ export default function Home(): React.ReactElement {
     limit: PAGE_SIZE,
     offset: page * PAGE_SIZE,
   });
-  const { progress, refresh: refreshProgress } = useDocumentProgress();
+  const { progress, error: progressError, refresh: refreshProgress } = useDocumentProgress();
   const { auth } = useAuth();
   const total =
     progress === null ? null : Object.values(progress).reduce((sum, count) => sum + count, 0);
@@ -48,6 +48,12 @@ export default function Home(): React.ReactElement {
         <div className="space-y-4">
           {progress !== null ? <PipelineProgress progress={progress} /> : null}
           <DocumentTable documents={documents} />
+          {total === null && progressError !== null ? (
+            <p className="text-sm text-neutral-500" role="status">
+              처리 현황을 불러오지 못했습니다 — 전체 문서 수와 페이지를 표시할 수 없습니다.
+              ({progressError})
+            </p>
+          ) : null}
           {total !== null ? (
             <DocumentPager
               onChange={setPage}

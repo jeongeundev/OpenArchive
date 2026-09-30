@@ -20,6 +20,7 @@ from app.demo import (
     load_seed_documents,
     parse_seed_document,
     seed_documents,
+    summarize,
 )
 from app.services.auth import hash_password
 from app.services.chunking import chunk_text
@@ -169,8 +170,8 @@ async def test_seeding_is_idempotent_and_keeps_private_documents(migrated_db: st
     ]
 
     async with await psycopg.AsyncConnection.connect(migrated_db, autocommit=True) as conn:
-        first = await seed_documents(conn, documents)
-        second = await seed_documents(conn, documents)
+        first = await seed_documents(conn, documents, "seed")
+        second = await seed_documents(conn, documents, "seed")
         rows = await (
             await conn.execute(
                 "SELECT title, visibility FROM documents WHERE owner_id = 'seed' ORDER BY title"
@@ -215,7 +216,7 @@ async def test_corpus_loads_as_text_documents_with_resolved_wikilinks(migrated_d
     documents = load_seed_documents()
 
     async with await psycopg.AsyncConnection.connect(migrated_db, autocommit=True) as conn:
-        created = await seed_documents(conn, documents)
+        created = await seed_documents(conn, documents, "seed")
         metadata = await (
             await conn.execute(
                 """
@@ -244,6 +245,36 @@ async def test_corpus_loads_as_text_documents_with_resolved_wikilinks(migrated_d
     assert resolved >= 30
     assert unresolved == 1
 
+
+
+
+async def test_summary_counts_only_edges_touching_the_owners_documents(migrated_db: str):
+    """이미 문서가 있는 DB에 넣어도 요약은 그 계정의 예제 결과만 센다.
+
+    다른 계정 문서끼리의 관계를 세면 "관계 N쌍"이 예제가 만든 수치가 아니게 된다.
+    예제 문서와 기존 문서 사이의 관계는 예제가 만든 것이므로 센다.
+    """
+    async with await psycopg.AsyncConnection.connect(migrated_db, autocommit=True) as conn:
+        await seed_documents(
+            conn,
+            [SeedDocument("기존 1", "# 기존 1\n내용", ["문서"]), SeedDocument("기존 2", "# 기존 2\n내용", ["문서"])],
+            "bob",
+        )
+        await seed_documents(conn, [SeedDocument("예제", "# 예제\n내용", ["문서"])], "alice")
+        ids = dict(await (await conn.execute("SELECT title, id FROM documents")).fetchall())
+        # 판정 결과를 흉내 내려고 관계를 직접 넣는다 — 세는 범위만 본다.
+        await conn.execute(
+            """
+            INSERT INTO document_edges (src_document_id, dst_document_id, kind, score)
+            VALUES (%(a)s, %(b)s, 'related', 0.9), (%(b)s, %(a)s, 'related', 0.9),
+                   (%(c)s, %(a)s, 'related', 0.9)
+            """,
+            {"a": ids["기존 1"], "b": ids["기존 2"], "c": ids["예제"]},
+        )
+
+        _, edge_pairs = await summarize(conn, "alice")
+
+    assert edge_pairs == 1
 
 
 

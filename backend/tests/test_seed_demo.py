@@ -22,7 +22,7 @@ from scripts.seed_demo import run
 async def test_seed_run_rebuilds_edges_after_embedding(migrated_db: str, monkeypatch, capsys):
     documents = load_seed_documents()
     async with await psycopg.AsyncConnection.connect(migrated_db, autocommit=True) as conn:
-        assert await seed_documents(conn, documents) == len(documents)
+        assert await seed_documents(conn, documents, "seed") == len(documents)
         assert await process_all_embedding_jobs(conn, FakeProvider()) == len(documents) * 2
         first_id, = await (
             await conn.execute(
