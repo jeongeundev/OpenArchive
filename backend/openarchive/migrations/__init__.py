@@ -53,6 +53,20 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 """
 
 
+async def _load_vector_library(conn: psycopg.AsyncConnection) -> None:
+    """pgvector가 설치돼 있으면 이 트랜잭션의 백엔드에 라이브러리를 로드한다.
+
+    함수 정의의 `SET hnsw.ef_search`(014·024)는 라이브러리가 로드돼야 정의된 설정이 된다.
+    로드 전에는 자리표시자라 비슈퍼유저에게 거부된다. 새 설치는 앞 파일이 벡터를 다뤄 이미
+    로드돼 있지만, 업그레이드는 새 파일만 적용하므로 로드된 적 없는 세션에서 시작한다(실
+    OpenSQL 023 → 024 실측). 비슈퍼유저는 `LOAD`를 못 쓰므로 벡터 값 하나를 만들어 로드한다.
+    파일마다 부르는 이유: OpenProxy transaction 모드에서는 트랜잭션마다 백엔드가 바뀔 수 있다.
+    """
+    cur = await conn.execute("SELECT to_regtype('vector') IS NOT NULL")
+    if (await cur.fetchone())[0]:
+        await conn.execute("SELECT '[0]'::vector")
+
+
 async def run_migrations(dsn: str, migrations_dir: Path = MIGRATIONS_DIR) -> list[str]:
     """아직 적용되지 않은 마이그레이션을 파일명 순으로 적용하고, 적용한 파일명을 반환한다.
 
@@ -76,6 +90,7 @@ async def run_migrations(dsn: str, migrations_dir: Path = MIGRATIONS_DIR) -> lis
 
             # 파일 하나 = 트랜잭션 하나. SQL 적용과 이력 기록이 갈라지면 다음 실행이
             # 같은 파일을 다시 적용하거나 영영 건너뛴다.
+            await _load_vector_library(conn)
             await conn.execute(path.read_text(encoding="utf-8"))
             await conn.execute(
                 "INSERT INTO schema_migrations (filename) VALUES (%s)", (path.name,)
