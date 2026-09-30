@@ -1132,6 +1132,49 @@ async def test_sweep_isolates_an_exhausted_edge_zombie_without_flagging_the_docu
     assert (await document_state(conn, doc_id))[1] == "ready"
 
 
+async def test_an_edge_job_does_not_block_relation_inserts_pointing_at_its_document(
+    conn, other_conn, migrated_db
+):
+    """관계 잡이 쥔 문서 잠금은 그 문서를 가리키는 관계 INSERT의 FK 검사를 막지 않는다 (024).
+
+    `FOR UPDATE`는 FK 검사의 `FOR KEY SHARE`와 충돌한다. 서로의 이웃인 두 문서를 두 워커
+    (또는 워커와 `rebuild-edges`)가 동시에 판정하면, 각자 자기 문서를 쥔 채 상대 문서를 가리키는
+    관계를 넣으려다 교착한다. `FOR NO KEY UPDATE`는 FK 검사와 함께 걸리면서, 청크 교체
+    (finalize_job의 `FOR UPDATE`)와 다른 재계산(함수의 `FOR NO KEY UPDATE`)은 그대로 막는다.
+
+    잡 행을 다른 트랜잭션이 쥐고 있게 해 finalize_edge_job을 문서 잠금 직후(lock_owned_job)에
+    세운 뒤, 세 번째 커넥션이 FK 검사와 같은 잠금을 건다.
+    """
+    doc_id = await insert_document(conn)
+    assert await process_once(conn, FakeProvider()) is True  # 임베딩 잡 → 관계 잡 pending
+    job = await claim_job(conn)
+    assert job is not None and job.kind == "edges"
+
+    async with (
+        await psycopg.AsyncConnection.connect(migrated_db, autocommit=True) as third,
+        other_conn.transaction(),
+    ):
+        await other_conn.execute(
+            "SELECT 1 FROM embedding_jobs WHERE id = %s FOR UPDATE", (job.job_id,)
+        )
+        task = asyncio.create_task(finalize_edge_job(conn, job))
+
+        async def waiting_on_the_job_row() -> bool:
+            # autocommit 커넥션으로 본다 — pg_stat_activity는 트랜잭션 안에서 첫 조회 값에 고정된다.
+            cur = await third.execute(
+                "SELECT wait_event_type = 'Lock' FROM pg_stat_activity WHERE pid = %s",
+                (conn.info.backend_pid,),
+            )
+            return await cur.fetchone() == (True,)
+
+        await wait_until(waiting_on_the_job_row, "관계 잡이 잡 행 잠금 대기에 들어가지 않았다")
+        async with third.transaction():
+            await third.execute("SET LOCAL lock_timeout = '300ms'")
+            await third.execute("SELECT 1 FROM documents WHERE id = %s FOR KEY SHARE", (doc_id,))
+
+    assert await task is True
+
+
 async def test_drain_processes_the_edge_job_after_the_embedding_job(conn):
     """drain 한 번이 임베딩 잡과 그것이 만든 관계 잡을 **잡 id 순서대로** 모두 비운다.
 
