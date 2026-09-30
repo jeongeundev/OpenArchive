@@ -514,11 +514,15 @@ psql -U postgres -d <기존 DB> -c "CREATE EXTENSION IF NOT EXISTS vector;"
 
 - 스키마 이름은 **접속 롤 이름**이다. 앱은 따로 설정하지 않는다 — 기본 search_path `"$user", public`이
   그 스키마를 먼저 찾는다. `ALTER ROLE … SET search_path`나 DSN `options`로 스키마를 고르는 방식은
-  OpenProxy를 거치면 동작하지 않는다(`OPENSQL_RESEARCH.md` §12-25). 같은 이유로 그 롤에 search_path를
-  따로 설정해 두면 `init`이 거부한다.
+  OpenProxy를 거치면 동작하지 않는다(`OPENSQL_RESEARCH.md` §12-25). 같은 이유로 그 롤이나 DB에 search_path를
+  따로 설정해 두면 `init`이 거부한다 — 판정은 접속한 백엔드의 값이 아니라 새 연결이 받을 롤·DB 설정으로 한다.
+- 같은 롤로 **public에 이미 설치했다면** `--schema`는 거부한다. 스키마가 생기는 순간 모든 연결이 빈 전용
+  스키마를 봐, 기존 문서가 에러 없이 보이지 않게 되기 때문이다.
 - 롤에 DB CREATE를 줄 수 없으면 DBA가 스키마를 먼저 만든다(`CREATE SCHEMA openarchive AUTHORIZATION openarchive`).
   다만 `pg_trgm`이 그 DB에 없다면 만들 권한(DB CREATE)이 필요하므로 DBA가 `pg_trgm`도 미리 만든다.
-- `vector`가 DB에 없고 앱 롤이 슈퍼유저라 직접 만들면, 확장은 public이 아니라 그 스키마에 생긴다.
+- 확장이 DB에 없어 앱 롤이 직접 만들면 확장은 public이 아니라 그 스키마에 생긴다 — `vector`(슈퍼유저일 때)뿐
+  아니라 `pg_trgm`(trusted라 DB CREATE만으로 만든다)도 그렇다. 확장은 DB에 하나뿐이라, 다른 롤이 쓰려면 그
+  스키마의 USAGE가 필요해진다. 조직 DB라면 DBA가 둘 다 public에 미리 만들어 두는 편이 낫다.
 - ⚠️ **HA 구성(동기 복제)에서는 풀 사용자를 추가할 수 없었다(2026-09-30).** OpenProxy 1.1.3이 Patroni
   `/cluster`의 `sync_standby` 역할을 해석하지 못해, 설정 재로드도 재기동도 실패한다(로그 `unknown variant
   sync_standby`). 떠 있던 프로세스는 옛 설정으로 계속 서비스한다.
