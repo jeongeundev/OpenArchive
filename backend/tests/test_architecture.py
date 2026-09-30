@@ -16,7 +16,7 @@ APPLICATION_SOURCE_ROOTS = (
 # 셸도 검사한다 — scripts/ 는 psql 힙독으로 SQL을 담는다.
 SOURCE_SUFFIXES = {".py", ".sh"}
 HTTP_MODULES = {"fastapi", "starlette"}
-FORBIDDEN_EXAMPLE_MODULES = {"app", "backend", "mcp_server"}
+FORBIDDEN_EXAMPLE_MODULES = {"app", "backend", "mcp_server", "openarchive"}
 
 
 def _example_imports() -> dict[Path, set[str]]:
