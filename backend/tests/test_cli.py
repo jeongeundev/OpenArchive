@@ -323,6 +323,168 @@ def test_init_proceeds_when_a_dba_preinstalled_the_untrusted_extension(
     assert applied_migrations(non_superuser_dsn) == [path.name for path in migration_files()]
 
 
+SCHEMA_ROLE = "cli_schema_role"
+
+
+def tables_in(dsn: str, schema: str) -> set[str]:
+    with psycopg.connect(dsn) as conn:
+        rows = conn.execute(
+            "SELECT tablename FROM pg_tables WHERE schemaname = %s", (schema,)
+        ).fetchall()
+    return {row[0] for row in rows}
+
+
+@pytest.fixture
+def org_db(clean_db: str):
+    """조직이 이미 쓰는 DB — `--schema`가 겨냥하는 도입 형태다 (#95 C, #84).
+
+    public에 OpenArchive와 같은 이름의 남의 테이블(`documents`·`users`)이 있고, DBA는
+    `vector`를 public에 미리 깔아 두었다. 앱 전용 롤은 슈퍼유저가 아니며 DB에 스키마를
+    만들 권한(DB CREATE)만 받았다. public에는 CREATE 권한이 없다.
+    """
+    params = conninfo_to_dict(clean_db)
+    dbname = params["dbname"]
+    with psycopg.connect(clean_db, autocommit=True) as conn:
+        conn.execute("CREATE EXTENSION vector")
+        conn.execute("CREATE TABLE documents (id int PRIMARY KEY, note text)")
+        conn.execute("INSERT INTO documents VALUES (1, '조직 문서')")
+        conn.execute("CREATE TABLE users (id int PRIMARY KEY, name text)")
+        conn.execute(f"DROP ROLE IF EXISTS {SCHEMA_ROLE}")
+        conn.execute(f"CREATE ROLE {SCHEMA_ROLE} LOGIN PASSWORD 'schema-role'")
+        conn.execute(f'GRANT CONNECT, CREATE ON DATABASE "{dbname}" TO {SCHEMA_ROLE}')
+        # vector 타입은 public에 있다. 실제 DB에는 PUBLIC 롤의 기본 USAGE가 있다.
+        conn.execute(f"GRANT USAGE ON SCHEMA public TO {SCHEMA_ROLE}")
+    try:
+        yield make_conninfo(**{**params, "user": SCHEMA_ROLE, "password": "schema-role"})
+    finally:
+        with psycopg.connect(clean_db, autocommit=True) as conn:
+            conn.execute(f"REVOKE ALL ON DATABASE \"{dbname}\" FROM {SCHEMA_ROLE}")
+            conn.execute(f"DROP OWNED BY {SCHEMA_ROLE} CASCADE")
+            conn.execute(f"DROP ROLE IF EXISTS {SCHEMA_ROLE}")
+
+
+def test_init_with_schema_installs_beside_existing_tables_without_touching_public(
+    org_db: str, clean_db: str, tmp_path
+):
+    """#95 C — `\\dt public.*`가 그대로여야 한다. 스키마 이름은 접속 롤 이름이다."""
+    public_before = tables_in(clean_db, "public")
+
+    exit_code = main(
+        ["init", "--dsn", org_db, "--schema", "--yes", "--env-file", str(tmp_path / ".env")]
+    )
+
+    assert exit_code == 0
+    assert tables_in(clean_db, "public") == public_before
+    assert OWNED_TABLES | {"schema_migrations"} <= tables_in(clean_db, SCHEMA_ROLE)
+    with psycopg.connect(clean_db) as conn:
+        assert conn.execute("SELECT note FROM public.documents").fetchall() == [("조직 문서",)]
+        (applied,) = conn.execute(
+            f"SELECT count(*) FROM {SCHEMA_ROLE}.schema_migrations"
+        ).fetchone()
+    assert applied == len(migration_files())
+
+
+def test_a_schema_install_is_what_the_role_sees_without_any_connection_option(
+    org_db: str, clean_db: str, tmp_path
+):
+    """런타임 설정 없이 그 롤의 연결이 곧 전용 스키마를 본다 — 기본 search_path의 `"$user"`.
+
+    GUC(`ALTER ROLE … SET search_path`·DSN `options`)에 기대지 않는 이유는 OpenProxy 실측이다:
+    `options`는 조용히 버려졌고, 역할 설정은 풀에 이미 떠 있던 백엔드가 받지 않아 남의
+    public 테이블을 읽었다 (`OPENSQL_RESEARCH.md` §12-26).
+    """
+    main(["init", "--dsn", org_db, "--schema", "--yes", "--env-file", str(tmp_path / ".env")])
+
+    document = asyncio.run(_create_as(org_db))
+
+    with psycopg.connect(clean_db) as conn:
+        (count,) = conn.execute(
+            f"SELECT count(*) FROM {SCHEMA_ROLE}.documents WHERE id = %s", (document["id"],)
+        ).fetchone()
+        assert conn.execute("SELECT count(*) FROM public.documents").fetchone() == (1,)
+    assert count == 1
+
+
+async def _create_as(dsn: str) -> dict:
+    async with await psycopg.AsyncConnection.connect(dsn) as conn:
+        return await create_document(
+            conn, filename="note.md", data="전용 스키마".encode(), owner_id="alice"
+        )
+
+
+def test_init_with_schema_is_idempotent(org_db: str, capsys, tmp_path):
+    """두 번째 실행은 자기 스키마의 이력을 봐야 한다. public의 이력을 보면 겹치는 이름을
+    남의 테이블로 오인해 거부한다."""
+    argv = ["init", "--dsn", org_db, "--schema", "--yes", "--env-file", str(tmp_path / ".env")]
+    main(argv)
+    capsys.readouterr()
+
+    exit_code = main(argv)
+
+    assert exit_code == 0
+    assert "이미 최신" in capsys.readouterr().out
+
+
+def test_init_with_schema_refuses_a_search_path_without_the_role_schema(
+    org_db: str, clean_db: str, capsys, tmp_path
+):
+    """DBA가 롤의 search_path를 `"$user"` 없이 고정해 두면 만든 스키마를 아무도 보지 않는다.
+
+    그대로 진행하면 마이그레이션이 public에 테이블을 만들려 들거나, 적용은 스키마에 하고
+    런타임은 public을 읽는 상태가 된다.
+    """
+    with psycopg.connect(clean_db, autocommit=True) as conn:
+        conn.execute(f"ALTER ROLE {SCHEMA_ROLE} SET search_path = public")
+
+    exit_code = main(
+        ["init", "--dsn", org_db, "--schema", "--yes", "--env-file", str(tmp_path / ".env")]
+    )
+
+    assert exit_code == 1
+    assert "search_path" in capsys.readouterr().out
+    with psycopg.connect(clean_db) as conn:
+        assert conn.execute(
+            "SELECT count(*) FROM pg_namespace WHERE nspname = %s", (SCHEMA_ROLE,)
+        ).fetchone() == (0,)
+
+
+def test_init_with_schema_refuses_a_role_that_cannot_create_the_schema(
+    org_db: str, clean_db: str, capsys, tmp_path
+):
+    params = conninfo_to_dict(clean_db)
+    with psycopg.connect(clean_db, autocommit=True) as conn:
+        conn.execute(f'REVOKE CREATE ON DATABASE "{params["dbname"]}" FROM {SCHEMA_ROLE}')
+
+    exit_code = main(
+        ["init", "--dsn", org_db, "--schema", "--yes", "--env-file", str(tmp_path / ".env")]
+    )
+
+    assert exit_code == 1
+    output = capsys.readouterr().out
+    assert f"CREATE SCHEMA {SCHEMA_ROLE}" in output
+    assert "Traceback" not in output
+
+
+def test_init_checks_the_schema_it_will_write_into(org_db: str, clean_db: str, capsys, tmp_path):
+    """`--schema` 없이도 마이그레이션은 search_path의 첫 스키마에 테이블을 만든다.
+
+    롤 이름의 스키마가 이미 있으면 그곳이다. 충돌 검사가 public만 보면 그 스키마의 남의
+    `documents` 위에 009의 ALTER TABLE이 돈다.
+    """
+    with psycopg.connect(clean_db, autocommit=True) as conn:
+        conn.execute(f"CREATE SCHEMA {SCHEMA_ROLE} AUTHORIZATION {SCHEMA_ROLE}")
+        conn.execute(f"CREATE TABLE {SCHEMA_ROLE}.documents (id int PRIMARY KEY)")
+        conn.execute(f"ALTER TABLE {SCHEMA_ROLE}.documents OWNER TO {SCHEMA_ROLE}")
+        # public의 남의 테이블은 치워 둔다 — 이 테스트는 롤 스키마 쪽 판정만 본다.
+        conn.execute("DROP TABLE public.documents, public.users")
+
+    exit_code = main(["init", "--dsn", org_db, "--yes", "--env-file", str(tmp_path / ".env")])
+
+    assert exit_code == 1
+    assert "documents" in capsys.readouterr().out
+    assert "schema_migrations" not in tables_in(clean_db, SCHEMA_ROLE)
+
+
 def test_init_asks_for_the_dsn_when_it_is_not_given(clean_db: str, monkeypatch, tmp_path):
     """대화형 경로 — 프롬프트 응답만 바꿔 끼운다."""
     answers = iter([clean_db, "y", "y"])
