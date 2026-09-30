@@ -5,7 +5,7 @@ from uuid import uuid4
 
 import psycopg
 import pytest
-from conftest import seed_extraction_states
+from conftest import insert_test_document, seed_extraction_states
 from test_parsing import minimal_pdf
 
 from app.services.documents import (
@@ -20,6 +20,7 @@ from app.services.documents import (
     apply_extracted_text,
     create_document,
     create_text_document,
+    document_progress,
     find_same_original,
     find_same_text,
     get_document_version,
@@ -848,6 +849,87 @@ async def test_embedding_status_filter_keeps_its_column_meaning(documents_conn):
         documents_conn, embedding_status="pending", extraction_status="done"
     )
     assert [d["id"] for d in will_embed] == [ids["done"]]
+
+
+# ── 첫 화면 — 목록 페이지와 파이프라인 단계별 집계 (#95-d) ────
+
+
+async def test_list_pages_partition_the_full_order(documents_conn):
+    """limit·offset으로 나눈 페이지를 이으면 전체 목록과 같다 — 빠지거나 겹치는 문서가 없다."""
+    for index in range(5):
+        await insert_test_document(documents_conn, title=f"문서 {index}", content=f"본문 {index}")
+
+    everything = [d["id"] for d in await list_documents(documents_conn, user_id="alice")]
+    pages = [
+        [
+            d["id"]
+            for d in await list_documents(
+                documents_conn, user_id="alice", limit=2, offset=offset
+            )
+        ]
+        for offset in (0, 2, 4)
+    ]
+
+    assert len(everything) == 5
+    assert pages[0] + pages[1] + pages[2] == everything
+    assert [len(page) for page in pages] == [2, 2, 1]
+
+
+async def test_list_page_applies_visibility_before_limit(documents_conn):
+    """남의 비공개 문서가 페이지 자리를 차지하면 보이는 문서가 페이지에서 밀려난다."""
+    visible = await insert_test_document(documents_conn, title="공개", content="공개 본문")
+    await insert_test_document(
+        documents_conn,
+        title="남의 비공개",
+        content="비공개 본문",
+        owner_id="bob",
+        visibility="private",
+    )
+
+    page = await list_documents(documents_conn, user_id="alice", limit=1)
+
+    assert [d["id"] for d in page] == [visible]
+
+
+async def test_progress_counts_each_pipeline_stage_within_visibility(documents_conn):
+    await seed_extraction_states(documents_conn)
+    for status in ("processing", "ready", "error"):
+        document_id = await insert_test_document(
+            documents_conn, title=f"임베딩 {status}", content=f"임베딩 본문 {status}"
+        )
+        await documents_conn.execute(
+            "UPDATE documents SET embedding_status = %s WHERE id = %s", (status, document_id)
+        )
+    await insert_test_document(
+        documents_conn,
+        title="남의 비공개",
+        content="보이면 안 되는 본문",
+        owner_id="bob",
+        visibility="private",
+    )
+
+    progress = await document_progress(documents_conn, user_id="alice")
+
+    # 인식 실패 문서는 embedding_status='pending'이지만 임베딩 대기로 세지 않는다(#139).
+    assert progress == {
+        "extracting": 1,
+        "extraction_failed": 1,
+        "pending": 1,
+        "processing": 1,
+        "ready": 1,
+        "error": 1,
+    }
+
+
+async def test_progress_of_an_empty_scope_is_all_zero(documents_conn):
+    await insert_test_document(
+        documents_conn, title="남의 비공개", content="본문", owner_id="bob", visibility="private"
+    )
+
+    progress = await document_progress(documents_conn, user_id="alice")
+
+    assert len(progress) == 6
+    assert set(progress.values()) == {0}
 
 
 # ── import 재실행이 두 벌을 만들지 않게 — 같은 소유자·같은 내용을 찾는다 (#95-b) ────

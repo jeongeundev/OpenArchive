@@ -600,6 +600,51 @@ def test_list_filters_by_tag_and_status(db_client: TestClient):
     assert "content" not in response.json()[0]
 
 
+def test_list_pages_with_limit_and_offset(db_client: TestClient):
+    ids = [
+        upload(db_client, filename=f"page-{index}.txt", content=f"본문 {index}".encode()).json()["id"]
+        for index in range(3)
+    ]
+
+    first = db_client.get("/api/documents", params={"limit": 2})
+    second = db_client.get("/api/documents", params={"limit": 2, "offset": 2})
+
+    assert first.status_code == 200
+    assert [item["id"] for item in first.json() + second.json()] == ids[::-1]
+    assert len(first.json()) == 2
+
+
+@pytest.mark.parametrize("params", [{"limit": 0}, {"limit": 101}, {"offset": -1}])
+def test_list_rejects_out_of_range_page(db_client: TestClient, params: dict):
+    login_as(db_client, "alice")
+
+    assert db_client.get("/api/documents", params=params).status_code == 422
+
+
+def test_progress_counts_visible_documents_by_stage(db_client: TestClient):
+    upload(db_client, data={"visibility": "public"})
+    upload(db_client, filename="private.txt", content=b"secret", data={"visibility": "private"})
+
+    login_as(db_client, "bob")
+    response = db_client.get("/api/documents/progress")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "extracting": 0,
+        "extraction_failed": 0,
+        "pending": 1,
+        "processing": 0,
+        "ready": 0,
+        "error": 0,
+    }
+
+
+def test_progress_requires_login(db_client: TestClient):
+    db_client.post("/api/auth/logout")
+
+    assert db_client.get("/api/documents/progress").status_code == 401
+
+
 def test_detail_reports_versions_and_chunk_state_before_and_after_embedding(
     db_client: TestClient, migrated_db: str
 ):

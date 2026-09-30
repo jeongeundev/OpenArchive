@@ -9,6 +9,8 @@ const DEFAULT_INTERVAL_MS = 2_000;
 
 export function useDocuments(params?: {
   status?: EmbeddingStatus;
+  limit?: number;
+  offset?: number;
   intervalMs?: number;
 }): {
   documents: DocumentSummary[];
@@ -17,6 +19,8 @@ export function useDocuments(params?: {
   refresh: () => void;
 } {
   const status = params?.status;
+  const limit = params?.limit;
+  const offset = params?.offset;
   const intervalMs = params?.intervalMs ?? DEFAULT_INTERVAL_MS;
   const [documents, setDocuments] = useState<DocumentSummary[]>([]);
   const [loading, setLoading] = useState(true);
@@ -30,7 +34,7 @@ export function useDocuments(params?: {
     if (controller === null || inFlightRef.current) return;
 
     inFlightRef.current = true;
-    void listDocuments(status === undefined ? undefined : { status }, controller.signal)
+    void listDocuments({ status, limit, offset }, controller.signal)
       .then((nextDocuments) => {
         if (controller.signal.aborted) return;
         setDocuments(nextDocuments);
@@ -45,7 +49,7 @@ export function useDocuments(params?: {
         inFlightRef.current = false;
         setLoading(false);
       });
-  }, [status]);
+  }, [status, limit, offset]);
 
   useEffect(() => {
     const controller = new AbortController();

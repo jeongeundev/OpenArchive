@@ -21,6 +21,7 @@ from app.api.schemas import (
     BacklinkItem,
     CreateTextDocumentRequest,
     DocumentDetail,
+    DocumentProgress,
     DocumentSummary,
     EditDocumentRequest,
     EditDocumentResponse,
@@ -123,6 +124,8 @@ async def list_documents(
     status_filter: Annotated[str | None, Query(alias="status")] = None,
     extraction_status: service.ExtractionStatus | None = None,
     tag: str | None = None,
+    limit: Annotated[int | None, Query(ge=1, le=100)] = None,
+    offset: Annotated[int, Query(ge=0)] = 0,
 ) -> list[DocumentSummary]:
     documents = await service.list_documents(
         conn,
@@ -130,8 +133,21 @@ async def list_documents(
         embedding_status=status_filter,
         extraction_status=extraction_status,
         tag=tag,
+        limit=limit,
+        offset=offset,
     )
     return [DocumentSummary.model_validate(document) for document in documents]
+
+
+# `/{document_id}`보다 먼저 등록해야 한다 — 뒤에 두면 'progress'가 UUID 검증에 걸린다.
+@router.get("/progress", response_model=DocumentProgress)
+async def get_document_progress(
+    conn: Connection,
+    user_id: Annotated[str, Depends(require_user_id)],
+) -> DocumentProgress:
+    return DocumentProgress.model_validate(
+        await service.document_progress(conn, user_id=user_id)
+    )
 
 
 @router.get("/{document_id}", response_model=DocumentDetail)

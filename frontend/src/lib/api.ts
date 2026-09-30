@@ -4,6 +4,7 @@ import type {
   Backlink,
   ClustersResponse,
   DocumentDetail,
+  DocumentProgress,
   DocumentSummary,
   DiagnosticsResponse,
   EmbeddingStatus,
@@ -270,14 +271,22 @@ export function listDocuments(
   params?: {
     status?: EmbeddingStatus;
     tag?: string;
+    limit?: number;
+    offset?: number;
   },
   signal?: AbortSignal,
 ): Promise<DocumentSummary[]> {
   const query = new URLSearchParams();
   if (params?.status !== undefined) query.set("status", params.status);
   if (params?.tag !== undefined) query.set("tag", params.tag);
+  if (params?.limit !== undefined) query.set("limit", String(params.limit));
+  if (params?.offset !== undefined) query.set("offset", String(params.offset));
   const suffix = query.size > 0 ? `?${query}` : "";
   return request<DocumentSummary[]>(`/api/documents${suffix}`, { signal });
+}
+
+export function getDocumentProgress(signal?: AbortSignal): Promise<DocumentProgress> {
+  return request<DocumentProgress>("/api/documents/progress", { signal });
 }
 
 export function getDocument(id: string, signal?: AbortSignal): Promise<DocumentDetail> {

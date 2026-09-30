@@ -584,11 +584,14 @@ async def list_documents(
     embedding_status: str | None = None,
     extraction_status: ExtractionStatus | None = None,
     tag: str | None = None,
+    limit: int | None = None,
+    offset: int = 0,
 ) -> list[dict]:
     """권한 술어와 선택적 필터를 한 쿼리로 적용한다.
 
     `embedding_status`는 컬럼 그대로다 — 인식 실패 문서는 임베딩 잡이 생기지 않아 'pending'에
     남는다. 곧 임베딩될 문서만 보려면 `extraction_status='done'`을 함께 준다 (#139, ADR-052).
+    `limit`이 없으면 전부 반환한다 — 페이지는 화면이 쓰고, export·MCP는 전체를 본다 (#95-d).
     """
     cur = conn.cursor(row_factory=dict_row)
     await cur.execute(
@@ -600,15 +603,47 @@ async def list_documents(
           AND (%(extraction)s::text IS NULL OR extraction_status = %(extraction)s)
           AND (%(tag)s::text IS NULL OR %(tag)s = ANY(tags))
         ORDER BY created_at DESC, id
+        LIMIT %(limit)s OFFSET %(offset)s
         """,
         {
             "user": user_id,
             "status": embedding_status,
             "extraction": extraction_status,
             "tag": tag,
+            "limit": limit,
+            "offset": offset,
         },
     )
     return await cur.fetchall()
+
+
+async def document_progress(
+    conn: psycopg.AsyncConnection, *, user_id: str | None = None
+) -> dict[str, int]:
+    """열람 범위 안 문서를 파이프라인 단계별로 센다. 합이 곧 보이는 문서 수다.
+
+    인식이 끝나지 않은 문서는 임베딩 상태가 의미 없으므로 인식 단계로 센다 — 인식 실패 문서의
+    embedding_status='pending'은 오지 않을 임베딩이다 (#139, ADR-052).
+    """
+    cur = conn.cursor(row_factory=dict_row)
+    await cur.execute(
+        f"""
+        SELECT count(*) FILTER (WHERE extraction_status = 'pending') AS extracting,
+               count(*) FILTER (WHERE extraction_status = 'failed') AS extraction_failed,
+               count(*) FILTER (WHERE extraction_status = 'done'
+                                  AND embedding_status = 'pending') AS pending,
+               count(*) FILTER (WHERE extraction_status = 'done'
+                                  AND embedding_status = 'processing') AS processing,
+               count(*) FILTER (WHERE extraction_status = 'done'
+                                  AND embedding_status = 'ready') AS ready,
+               count(*) FILTER (WHERE extraction_status = 'done'
+                                  AND embedding_status = 'error') AS error
+        FROM documents d
+        WHERE {VISIBLE_TO_USER}
+        """,
+        {"user": user_id},
+    )
+    return await cur.fetchone()
 
 
 async def get_document(

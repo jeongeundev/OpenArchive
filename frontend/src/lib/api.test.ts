@@ -8,6 +8,7 @@ import {
   editDocument,
   getAuthStatus,
   getDocument,
+  getDocumentProgress,
   isRetrying,
   listDocuments,
   listTokens,
@@ -110,6 +111,31 @@ describe("API responses", () => {
     await listDocuments({ status: "error" });
 
     expect(fetchMock.mock.calls[0][0]).toBe("/api/documents?status=error");
+  });
+
+  it("adds the page window to the document list query", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response("[]"));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await listDocuments({ limit: 50, offset: 100 });
+
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/documents?limit=50&offset=100");
+  });
+
+  it("reads pipeline progress from its own path", async () => {
+    const progress = {
+      extracting: 0,
+      extraction_failed: 0,
+      pending: 1,
+      processing: 0,
+      ready: 2,
+      error: 0,
+    };
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify(progress)));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(getDocumentProgress()).resolves.toEqual(progress);
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/documents/progress");
   });
 
   it("omits the tag filter from the search body when no tag is entered", async () => {

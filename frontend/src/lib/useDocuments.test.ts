@@ -62,6 +62,33 @@ describe("useDocuments", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  it("페이지 창을 주면 그 구간만 조회한다", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse([document]));
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderHook(() => useDocuments({ limit: 50, offset: 50 }));
+    await flushRequest();
+
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/documents?limit=50&offset=50");
+  });
+
+  it("페이지를 바꾸면 새 구간을 바로 조회한다", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse([document]));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { rerender } = renderHook(({ offset }) => useDocuments({ limit: 50, offset }), {
+      initialProps: { offset: 0 },
+    });
+    await flushRequest();
+    rerender({ offset: 50 });
+    await flushRequest();
+
+    expect(fetchMock.mock.calls.map((call) => call[0])).toEqual([
+      "/api/documents?limit=50&offset=0",
+      "/api/documents?limit=50&offset=50",
+    ]);
+  });
+
   it("언마운트하면 폴링 타이머를 정리한다", async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse([document]));
     vi.stubGlobal("fetch", fetchMock);

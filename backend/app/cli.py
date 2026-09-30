@@ -40,6 +40,7 @@ import psycopg
 import yaml
 
 from app.config import ENV_FILE, get_settings
+from app.demo import converge, load_seed_documents, seed_documents
 from app.embeddings import get_provider
 from app.migrations import (
     APPLIED_SQL,
@@ -984,6 +985,57 @@ def run_import(
     return 1 if summary.failed else 0
 
 
+async def _demo(dsn: str, *, username: str, wait: bool, timeout: float) -> int:
+    async with await _connect(dsn, autocommit=True) as conn:
+        await _require_user(conn, username)
+        documents = load_seed_documents()
+        created = await seed_documents(conn, documents, username)
+        private = sum(document.visibility == "private" for document in documents)
+        print(
+            f"예제 {len(documents)}건 중 새로 넣은 문서 {created}건"
+            f" — '{username}' 소유, 비공개 {private}건은 이 계정에만 보입니다."
+        )
+        if not wait:
+            print("임베딩과 관계 판정은 워커가 합니다 — openarchive serve가 돌고 있어야 검색에 나타납니다.")
+            print("워커가 다 처리한 뒤 openarchive rebuild-edges로 관계를 전체 기준으로 맞추세요.")
+            return 0
+        print(
+            f"워커가 임베딩하기를 기다립니다(최대 {timeout:g}초)"
+            " — 다른 터미널에서 openarchive serve가 돌고 있어야 합니다."
+        )
+        try:
+            result = await converge(
+                conn, documents, username, timeout=timeout, on_progress=_rebuild_progress
+            )
+        except TimeoutError:
+            print(
+                f"{timeout:g}초 안에 임베딩이 끝나지 않았습니다. 문서는 들어가 있습니다"
+                " — openarchive serve로 워커를 띄워 처리한 뒤 openarchive rebuild-edges를 실행하세요."
+            )
+            return 1
+        except RuntimeError as error:
+            print(error)
+            return 1
+    print(
+        f"\n완료: 문서 {result.ready}건 · 청크 {result.chunks}개 · 관계 {result.edge_pairs}쌍"
+        f" · 관계 재계산 {result.rebuilt}건 · {result.elapsed:.1f}초"
+    )
+    return 0
+
+
+def run_demo(*, dsn: str | None, username: str, wait: bool, timeout: float) -> int:
+    """예제 코퍼스를 `username` 소유로 넣는다. 같은 제목이 이미 있으면 건너뛴다."""
+    dsn = dsn or get_settings().database_url
+    try:
+        return asyncio.run(_demo(dsn, username=username, wait=wait, timeout=timeout))
+    except _ConnectionFailed as error:
+        print(f"연결하지 못했습니다: {error}")
+        return 1
+    except UserNotFound:
+        print(f"'{username}' 계정이 없습니다. 아무것도 넣지 않았습니다.")
+        return 1
+
+
 # 파일 이름에 쓸 수 없거나(`/`, NUL) 운영체제마다 막히는(`:`, `?` 등) 문자.
 _UNSAFE_FILENAME_RE = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
 
@@ -1207,7 +1259,24 @@ def main(argv: list[str] | None = None) -> int:
     searcher.add_argument("--type", choices=SUPPORTED_CONTENT_TYPES, help="이 형식의 문서만")
     searcher.add_argument("-k", type=int, default=10, help=f"결과 수 (1~{MAX_K}, 기본: 10)")
     searcher.add_argument("--dsn", help="DB 연결 문자열. 생략하면 DATABASE_URL을 씁니다.")
+    demo = subcommands.add_parser(
+        "demo", help="예제 문서(가상 회사의 사내 규정)를 넣어 봅니다. 이미 있는 제목은 건너뜁니다."
+    )
+    demo.add_argument("--user", required=True, help=f"{user_help} 예제 문서의 소유자가 됩니다.")
+    demo.add_argument(
+        "--no-wait",
+        action="store_true",
+        help="넣기만 하고 임베딩·관계 재계산을 기다리지 않습니다.",
+    )
+    demo.add_argument(
+        "--timeout", type=float, default=600, help="임베딩 완료 대기 시간(초, 기본: 600)"
+    )
+    demo.add_argument("--dsn", help="DB 연결 문자열. 생략하면 DATABASE_URL을 씁니다.")
     args = parser.parse_args(argv)
+    if args.command == "demo":
+        return run_demo(
+            dsn=args.dsn, username=args.user, wait=not args.no_wait, timeout=args.timeout
+        )
     if args.command == "import":
         return run_import(
             dsn=args.dsn,
