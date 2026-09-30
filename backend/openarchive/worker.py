@@ -356,9 +356,11 @@ async def finalize_edge_job(conn: psycopg.AsyncConnection, job: ClaimedJob) -> b
     async with conn.transaction():
         await bound_lock_wait(conn)
         # fail_job·sweep_zombies와 같은 잠금 순서다. 판정과 결과 기록 사이에 청크가
-        # 교체되면 방금 계산한 관계가 사라진 청크 번호를 가리킨다.
+        # 교체되면 방금 계산한 관계가 사라진 청크 번호를 가리킨다. `FOR NO KEY UPDATE`인
+        # 이유는 함수와 같다(024) — 청크 교체는 막고, 이 문서를 가리키는 관계 INSERT의
+        # FK 검사는 막지 않는다. `FOR UPDATE`면 서로의 이웃을 동시에 판정할 때 교착한다.
         cur = await conn.execute(
-            "SELECT 1 FROM documents WHERE id = %s FOR UPDATE", (job.document_id,)
+            "SELECT 1 FROM documents WHERE id = %s FOR NO KEY UPDATE", (job.document_id,)
         )
         if await cur.fetchone() is None:
             # 문서가 삭제됐다 — 잡·관계도 CASCADE로 이미 사라졌다. 쓸 곳이 없다.

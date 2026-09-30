@@ -1122,6 +1122,75 @@ def test_rebuild_produces_the_same_rows_on_repeated_calls(conn: psycopg.Connecti
     assert set(conn.execute(query, (second_id,)).fetchall()) == before
 
 
+def test_concurrent_rebuilds_of_one_document_take_turns(conn: psycopg.Connection, migrated_db):
+    """같은 문서를 두 곳이 동시에 다시 계산해도 둘 다 끝나고, 결과는 한 번 계산한 것과 같다 (024).
+
+    워커의 관계 잡과 `rebuild-edges`(demo가 부른다)가 한 문서에서 겹치면 교착했다 — 한쪽은
+    옛 관계 DELETE에서, 다른 쪽은 새 관계 INSERT의 FK 검사에서 서로를 기다렸다(#95-e2 실측).
+    잠금이 없던 쪽에 워커와 같은 문서 잠금만 더하면 교착 대신 UniqueViolation이 난다 —
+    두 번째 DELETE가 첫 호출이 넣은 행을 보지 못한 채 같은 행을 다시 넣는다. 잠금이
+    함수의 첫 문장이어야 두 번째 호출이 처음부터 줄을 서고, 첫 커밋 뒤의 DELETE가 그 결과를
+    보고 교체한다.
+    """
+    first_id = insert_document(conn, "first", "sha256:turns-first")
+    mark_document_ready(conn, first_id, ["zero", "one"], vectors=[unit_vector(0), unit_vector(1)])
+    second_id = insert_document(conn, "second", "sha256:turns-second")
+    mark_document_ready(conn, second_id, ["zero", "one"], vectors=[unit_vector(0), unit_vector(1)])
+    conn.execute("SELECT rebuild_document_edges(%s)", (second_id,))
+    before = edges_for(conn, second_id)
+    assert before
+
+    with psycopg.connect(migrated_db) as holder:  # autocommit 아님 — 커밋 전까지 쥐고 있는다
+        holder.execute("SELECT rebuild_document_edges(%s)", (second_id,))
+        waiter_pid = None
+
+        async def rebuild_while_holder_is_open() -> None:
+            async with await psycopg.AsyncConnection.connect(
+                migrated_db, autocommit=True
+            ) as waiter:
+                nonlocal waiter_pid
+                waiter_pid = waiter.info.backend_pid
+                await waiter.execute("SET lock_timeout = '10s'")
+                await waiter.execute("SELECT rebuild_document_edges(%s)", (second_id,))
+
+        async def scenario() -> None:
+            task = asyncio.create_task(rebuild_while_holder_is_open())
+            for _ in range(200):  # 두 번째 호출이 잠금 대기에 들어간 것을 확인하고 커밋한다
+                await asyncio.sleep(0.02)
+                if waiter_pid is not None and conn.execute(
+                    "SELECT wait_event_type = 'Lock' FROM pg_stat_activity WHERE pid = %s",
+                    (waiter_pid,),
+                ).fetchone() == (True,):
+                    break
+            else:
+                task.cancel()
+                raise AssertionError("두 번째 재계산이 잠금 대기에 들어가지 않았다")
+            holder.commit()
+            await task
+
+        asyncio.run(scenario())
+
+    assert edges_for(conn, second_id) == before
+
+
+def test_a_rebuild_in_progress_does_not_block_relations_pointing_at_its_document(
+    conn: psycopg.Connection, migrated_db
+):
+    """재계산이 쥔 문서 잠금은 그 문서를 가리키는 관계 INSERT의 FK 검사를 막지 않는다 (024).
+
+    `FOR UPDATE`였다면 서로의 이웃인 두 문서를 동시에 계산할 때 각자 자기 문서를 쥔 채 상대를
+    가리키는 관계를 넣으려다 교착한다. 세 번째 커넥션이 FK 검사와 같은 잠금을 걸어 본다.
+    """
+    doc_id = insert_document(conn)
+    mark_document_ready(conn, doc_id, ["text"])
+
+    with psycopg.connect(migrated_db) as holder:  # autocommit 아님 — 잠금을 쥔 채 멈춘다
+        holder.execute("SELECT rebuild_document_edges(%s)", (doc_id,))
+        with conn.transaction():
+            conn.execute("SET LOCAL lock_timeout = '300ms'")
+            conn.execute("SELECT 1 FROM documents WHERE id = %s FOR KEY SHARE", (doc_id,))
+
+
 # --- 추출 잡 (022, ADR-052) ----------------------------------------------------------
 
 
