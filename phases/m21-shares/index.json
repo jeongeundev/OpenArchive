@@ -19,7 +19,10 @@
       "type": "feat",
       "scope": "db",
       "desc": "공유 테이블과 공유 부여·공유 토큰 칼럼을 둔다",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-10-02T04:22:06+0900",
+      "summary": "026_shares_tables.sql: shares(소유자별 이름 UNIQUE·CASCADE), document_grants.share_id + document_grants_one_grantee 3칸·uq/idx_document_grants_share, api_tokens.share_id + api_tokens_one_principal·api_tokens_share_read_only(user_id NULL 허용), users_reserved_share_prefix; test_tables 공유 테스트 + test_cli OWNED_TABLES에 shares; mutant 3종(scope CHECK·username CHECK·num_nonnulls>=1) 모두 실패로 잡힘; backend 1244 통과(test_serve 1건은 동시 부하 플레이크, 단독 6/6 통과)",
+      "completed_at": "2026-10-02T04:52:53+0900"
     },
     {
       "step": 2,
