@@ -198,6 +198,27 @@ class GroupSummary(BaseModel):
     members: list[str]
 
 
+class CreateShareRequest(BaseModel):
+    name: str = Field(min_length=1)
+
+
+class ShareDocument(BaseModel):
+    id: UUID
+    title: str
+
+
+class ShareSummary(BaseModel):
+    id: UUID
+    name: str
+    created_at: datetime
+    documents: list[ShareDocument]
+    tokens: list[TokenSummary]
+
+
+class CreateShareTokenRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+
+
 class Principals(BaseModel):
     users: list[str]
     groups: list[str]
