@@ -30,7 +30,10 @@
       "type": "feat",
       "scope": "api",
       "desc": "문서 열람 범위 조회·교체와 생성 시 부여 대상을 서비스에 둔다",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-10-01T21:48:37+0900",
+      "summary": "services/documents.py — get_access·set_access(소유자 전용: _load_for_write로 403/404, 익명 404, FOR NO KEY UPDATE 잠금 뒤 이름 해석→visibility UPDATE→부여 DELETE/INSERT 원자 교체)·GrantsOnPublicDocument; create_document·create_text_document에 grant_users·grant_groups(문서와 같은 트랜잭션, _insert_document에서 해석·삽입), 멱등 지문에 정렬·중복 제거한 대상(비어 있으면 생략해 기존 지문 유지); test_document_access.py 26건, mutant 3종 잡힘, backend 1167 passed",
+      "completed_at": "2026-10-01T21:59:42+0900"
     },
     {
       "step": 3,
