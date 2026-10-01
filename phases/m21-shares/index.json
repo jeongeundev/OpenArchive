@@ -85,7 +85,10 @@
       "type": "feat",
       "scope": "frontend",
       "desc": "설정 화면에 외부 공유 관리 절을 둔다",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-10-02T06:10:58+0900",
+      "summary": "components/SharesSection.tsx: /settings 「외부 공유」 절(공유 생성·목록[포함 문서 상세 링크·토큰 이름]·문서 빼기·공유 토큰 발급(원문 1회, 다음 동작에 사라짐)·폐기·확인 뒤 공유 삭제, 목록 조회 실패는 오류 표시, 안내=읽기 전용·공유 문서만·조직 공개도 열림·문서 상세에서 넣기, AbortController 취소); settings/page.tsx에 로그인 시 렌더, page.test는 SharesSection을 mock해 기존 fetch 순서 유지. SharesSection.test 11건. mutant ①삭제 확인 생략 ②원문 유지 각각 1 fail. lint 경고 증가 0·test 337 통과·build:static 통과(settings 변경으로 static 갱신)",
+      "completed_at": "2026-10-02T06:18:00+0900"
     },
     {
       "step": 8,
