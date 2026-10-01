@@ -163,15 +163,18 @@ async def _load_for_write(
     """
     row = await (
         await conn.execute(
-            "SELECT owner_id, visibility, version, filename FROM documents WHERE id = %s",
-            (document_id,),
+            f"""
+            SELECT owner_id, version, filename FROM documents d
+            WHERE id = %(id)s AND {VISIBLE_TO_USER}
+            """,
+            {"id": document_id, "user": user_id},
         )
     ).fetchone()
-    if row is None or (row[1] == "private" and row[0] != user_id):
+    if row is None:
         raise DocumentNotFound
     if row[0] != user_id:
         raise DocumentAccessDenied
-    return row[2], row[3]
+    return row[1], row[2]
 
 
 async def _lock_for_text_change(
