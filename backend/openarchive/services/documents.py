@@ -1263,7 +1263,12 @@ async def set_access(
             "UPDATE documents SET visibility = %s, updated_at = now() WHERE id = %s",
             (visibility, document_id),
         )
-        await conn.execute("DELETE FROM document_grants WHERE document_id = %s", (document_id,))
+        # 공유 부여는 남긴다 — 공유는 열람 범위와 별개 축이라 공유 화면에서만 바뀐다
+        # (ADR-044 「공유」 결정 2). 지우면 열람 범위를 고칠 때마다 외부 공유가 조용히 끊긴다.
+        await conn.execute(
+            "DELETE FROM document_grants WHERE document_id = %s AND share_id IS NULL",
+            (document_id,),
+        )
         await insert_grants(conn, document_id, user_ids, group_ids)
         return await _read_access(conn, document_id)
 

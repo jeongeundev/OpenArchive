@@ -24,6 +24,7 @@ from openarchive.services.grants import (
     insert_grants,
     resolve_grantees,
 )
+from openarchive.services.shares import add_document, create_share
 
 
 @pytest.fixture
@@ -342,3 +343,41 @@ async def test_create_without_grantees_inserts_no_grants(conn):
     await create_document(conn, filename="f.txt", data="본문".encode(), owner_id="alice")
     cur = await conn.execute("SELECT count(*) FROM document_grants")
     assert await cur.fetchone() == (0,)
+
+
+async def share_grant_count(conn, document_id):
+    cur = await conn.execute(
+        "SELECT count(*) FROM document_grants WHERE document_id = %s AND share_id IS NOT NULL",
+        (document_id,),
+    )
+    return (await cur.fetchone())[0]
+
+
+@pytest.mark.parametrize(
+    ("start", "visibility", "users"),
+    [("private", "public", []), ("public", "private", ["bob"])],
+)
+async def test_set_access_keeps_share_grants(conn, start, visibility, users):
+    """공유 부여는 열람 범위와 별개 축이다 (ADR-044 「공유」 결정 2)."""
+    doc = await insert_test_document(conn, title="d", content="본문", visibility=start)
+    share = await create_share(conn, owner="alice", name="B사")
+    await add_document(conn, share["id"], doc, owner="alice")
+
+    result = await set_access(
+        conn, doc, user_id="alice", visibility=visibility, users=users, groups=[]
+    )
+
+    assert result == {"visibility": visibility, "users": users, "groups": []}
+    assert await share_grant_count(conn, doc) == 1
+    assert await get_access(conn, doc, user_id="alice") == result
+
+
+async def test_set_public_without_grantees_succeeds_with_share_grant(conn):
+    doc = await insert_test_document(conn, title="d", content="본문")
+    share = await create_share(conn, owner="alice", name="B사")
+    await add_document(conn, share["id"], doc, owner="alice")
+
+    result = await set_access(conn, doc, user_id="alice", visibility="public", users=[], groups=[])
+
+    assert result == {"visibility": "public", "users": [], "groups": []}
+    assert await share_grant_count(conn, doc) == 1

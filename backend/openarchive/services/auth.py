@@ -259,15 +259,27 @@ async def create_token(
     scope: TokenScope = SCOPE_READ,
 ) -> dict:
     """토큰을 발급하고 원문을 포함해 반환한다. DB에는 해시만 남는다."""
+    return await insert_token(conn, user_id=user_id, share_id=None, name=name, scope=scope)
+
+
+async def insert_token(
+    conn: psycopg.AsyncConnection,
+    *,
+    user_id: UUID | None,
+    share_id: UUID | None,
+    name: str,
+    scope: TokenScope,
+) -> dict:
+    """사용자 토큰과 공유 토큰의 공통 발급부. 주체는 정확히 하나다(026 CHECK)."""
     token = secrets.token_urlsafe(32)
     cur = conn.cursor(row_factory=dict_row)
     await cur.execute(
         """
-        INSERT INTO api_tokens (user_id, name, token_hash, scope)
-        VALUES (%s, %s, %s, %s)
+        INSERT INTO api_tokens (user_id, share_id, name, token_hash, scope)
+        VALUES (%s, %s, %s, %s, %s)
         RETURNING id, name, scope, created_at
         """,
-        (user_id, name, hash_token(token), scope),
+        (user_id, share_id, name, hash_token(token), scope),
     )
     issued = await cur.fetchone()
     issued["token"] = token
