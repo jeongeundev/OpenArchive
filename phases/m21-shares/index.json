@@ -96,7 +96,10 @@
       "type": "feat",
       "scope": "frontend",
       "desc": "문서 열람 범위 패널에 내 공유 포함 체크를 둔다",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-10-02T06:18:45+0900",
+      "summary": "AccessPanel 「내 공유에 포함」(ShareToggles): 열람 범위 조회와 같은 AbortController로 listShares, 조직 공개·제한 모두 체크박스 표시·즉시 add/removeShareDocument(열람 범위 저장과 분리, 실패 시 체크 되돌림·detail 표시), 공유 없으면 /settings 링크 안내, 조직 공개+공유 포함 시 외부 공개 안내, 공유 조회 실패는 공유 영역만 오류·편집/저장 중 체크 막힘, 조직 공개 전환 안내에 \"외부 공유 포함은 유지\" 추가. AccessPanel.test 11건 추가·page.test 비소유자 /api/shares 미호출 단언. mutant ①되돌리기 제거 1 fail ②조직 공개에서 숨김 3 fail. check.sh 통과 — backend 1355·frontend 347, static 재빌드",
+      "completed_at": "2026-10-02T06:35:00+0900"
     }
   ],
   "created_at": "2026-10-02T04:18:05+0900"
