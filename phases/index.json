@@ -113,7 +113,8 @@
     },
     {
       "dir": "m21-shares",
-      "status": "pending"
+      "status": "completed",
+      "completed_at": "2026-10-02T06:35:00+0900"
     }
   ]
 }
