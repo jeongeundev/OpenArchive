@@ -740,4 +740,5 @@ async def test_explain_contains_structured_filters_and_vector_ordering(worker_co
     # 실 VM 6000행 실측이 판정했다 (ADR-011 보강 5). 여기서 확인하는 것은
     # 정형 필터와 벡터 정렬이 **하나의 계획**에 결합된다는 사실뿐이다.
     assert "visibility" in plan and "owner_id" in plan, plan
+    assert "document_grants" in plan and "group_members" in plan, plan
     assert "tags" in plan and "<=>" in plan, plan

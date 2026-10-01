@@ -29,6 +29,9 @@ CORE_TABLES = {
     "api_tokens",
     "document_files",
     "idempotency_keys",
+    "groups",
+    "group_members",
+    "document_grants",
 }
 
 # 임베딩 차원은 vector(1024) 고정이다 (ADR-003).
@@ -1008,3 +1011,113 @@ def test_extract_is_a_known_job_kind_and_coalesces_per_document(conn: psycopg.Co
         )
 
     assert "uq_pending_job_per_doc_kind" in str(exc.value)
+
+
+# ── 열람 부여 (ADR-044, #97) ─────────────────────────────────────────────
+
+
+def insert_user(conn: psycopg.Connection, username: str) -> str:
+    (user_id,) = conn.execute(
+        "INSERT INTO users (username, password_hash) VALUES (%s, 'scrypt-hash') RETURNING id",
+        (username,),
+    ).fetchone()
+    return user_id
+
+
+def insert_group(conn: psycopg.Connection, name: str = "인사팀") -> str:
+    (group_id,) = conn.execute(
+        "INSERT INTO groups (name) VALUES (%s) RETURNING id", (name,)
+    ).fetchone()
+    return group_id
+
+
+def grant_count(conn: psycopg.Connection) -> int:
+    (count,) = conn.execute("SELECT count(*) FROM document_grants").fetchone()
+    return count
+
+
+def test_group_name_is_unique(conn: psycopg.Connection):
+    insert_group(conn, "인사팀")
+
+    with pytest.raises(psycopg.errors.UniqueViolation):
+        insert_group(conn, "인사팀")
+
+
+def test_a_user_is_a_member_of_a_group_at_most_once(conn: psycopg.Connection):
+    group_id = insert_group(conn)
+    user_id = insert_user(conn, "carol")
+    add = "INSERT INTO group_members (group_id, user_id) VALUES (%s, %s)"
+    conn.execute(add, (group_id, user_id))
+
+    with pytest.raises(psycopg.errors.UniqueViolation):
+        conn.execute(add, (group_id, user_id))
+
+
+@pytest.mark.parametrize("deleted", ["group", "user"])
+def test_deleting_a_group_or_a_user_removes_the_membership(
+    conn: psycopg.Connection, deleted: str
+):
+    group_id = insert_group(conn)
+    user_id = insert_user(conn, "carol")
+    conn.execute(
+        "INSERT INTO group_members (group_id, user_id) VALUES (%s, %s)", (group_id, user_id)
+    )
+
+    if deleted == "group":
+        conn.execute("DELETE FROM groups WHERE id = %s", (group_id,))
+    else:
+        conn.execute("DELETE FROM users WHERE id = %s", (user_id,))
+
+    (remaining,) = conn.execute("SELECT count(*) FROM group_members").fetchone()
+    assert remaining == 0
+
+
+@pytest.mark.parametrize("grantees", ["none", "both"])
+def test_a_grant_names_exactly_one_grantee(conn: psycopg.Connection, grantees: str):
+    """대상이 없으면 아무도 가리키지 않는 행이, 둘이면 뜻이 갈리는 행이 된다."""
+    doc_id = insert_document(conn)
+    user_id = insert_user(conn, "carol") if grantees == "both" else None
+    group_id = insert_group(conn) if grantees == "both" else None
+
+    with pytest.raises(psycopg.errors.CheckViolation):
+        conn.execute(
+            "INSERT INTO document_grants (document_id, user_id, group_id) VALUES (%s, %s, %s)",
+            (doc_id, user_id, group_id),
+        )
+
+
+@pytest.mark.parametrize("grantee", ["user_id", "group_id"])
+def test_the_same_grant_cannot_be_stored_twice(conn: psycopg.Connection, grantee: str):
+    doc_id = insert_document(conn)
+    target = insert_user(conn, "carol") if grantee == "user_id" else insert_group(conn)
+    grant = f"INSERT INTO document_grants (document_id, {grantee}) VALUES (%s, %s)"
+    conn.execute(grant, (doc_id, target))
+
+    with pytest.raises(psycopg.errors.UniqueViolation):
+        conn.execute(grant, (doc_id, target))
+
+
+@pytest.mark.parametrize("deleted", ["document", "user", "group"])
+def test_deleting_the_document_or_the_grantee_removes_the_grant(
+    conn: psycopg.Connection, deleted: str
+):
+    """부여는 문서와 대상 양쪽에 매달린다 — 어느 쪽이 사라져도 고아 부여가 남지 않는다."""
+    doc_id = insert_document(conn)
+    user_id = insert_user(conn, "carol")
+    group_id = insert_group(conn)
+    conn.execute(
+        "INSERT INTO document_grants (document_id, user_id) VALUES (%s, %s)", (doc_id, user_id)
+    )
+    conn.execute(
+        "INSERT INTO document_grants (document_id, group_id) VALUES (%s, %s)", (doc_id, group_id)
+    )
+
+    if deleted == "document":
+        conn.execute("DELETE FROM documents WHERE id = %s", (doc_id,))
+        assert grant_count(conn) == 0
+    elif deleted == "user":
+        conn.execute("DELETE FROM users WHERE id = %s", (user_id,))
+        assert grant_count(conn) == 1
+    else:
+        conn.execute("DELETE FROM groups WHERE id = %s", (group_id,))
+        assert grant_count(conn) == 1

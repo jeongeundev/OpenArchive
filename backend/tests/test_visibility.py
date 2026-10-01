@@ -8,7 +8,13 @@ from openarchive.embeddings import FakeProvider
 from openarchive.services.auth import hash_password
 from openarchive.services.clusters import get_clusters
 from openarchive.services.diagnostics import get_diagnostics
-from openarchive.services.documents import DocumentNotFound
+from openarchive.services.documents import (
+    DocumentAccessDenied,
+    DocumentNotFound,
+    get_document,
+    list_documents,
+    update_tags,
+)
 from openarchive.services.links import find_backlinks, resolve_links
 from openarchive.services.related import find_related, suggest_tags
 from openarchive.services.search import search_documents
@@ -634,3 +640,153 @@ async def test_cluster_sizes_follow_anonymous_other_and_owner_visibility(
     assert anonymous.connections == []
     assert other.connections == []
     assert owner.connections == []
+
+
+# ── 부여 (ADR-044 결정 2, #97) ───────────────────────────────────────────
+# private 문서는 소유자와 부여 대상이 본다. carol은 직접 부여, dave는 부여된 그룹의
+# 구성원, erin은 부여 없는 다른 그룹의 구성원이다. 익명은 어떤 부여에도 해당하지 않는다.
+
+VIEWERS = [("carol", True), ("dave", True), ("erin", False), (None, False)]
+
+
+async def add_user(conn, username: str):
+    cur = await conn.execute(
+        "INSERT INTO users (username, password_hash) VALUES (%s, 'scrypt-hash') RETURNING id",
+        (username,),
+    )
+    return (await cur.fetchone())[0]
+
+
+@pytest.fixture
+async def granted(worker_conn):
+    """앨리스의 private 문서 하나를 carol과 인사팀에 부여한다."""
+    provider = FakeProvider()
+    content = "OpenSQL 부여 경계와 문서 관계"
+    public_id = await insert_test_document(
+        worker_conn, title="공개 출발", content=content + " [[부여 대상]]"
+    )
+    granted_id = await insert_test_document(
+        worker_conn,
+        title="부여 대상",
+        content=content + " [[공개 출발]]",
+        owner_id="alice",
+        visibility="private",
+        tags=["granted-secret"],
+    )
+    carol, dave, erin = [await add_user(worker_conn, u) for u in ("carol", "dave", "erin")]
+    cur = await worker_conn.execute(
+        "INSERT INTO groups (name) VALUES ('인사팀'), ('재무팀') RETURNING id"
+    )
+    hr, finance = [row[0] for row in await cur.fetchall()]
+    await worker_conn.execute(
+        "INSERT INTO group_members (group_id, user_id) VALUES (%s, %s), (%s, %s)",
+        (hr, dave, finance, erin),
+    )
+    await worker_conn.execute(
+        "INSERT INTO document_grants (document_id, user_id) VALUES (%s, %s)",
+        (granted_id, carol),
+    )
+    await worker_conn.execute(
+        "INSERT INTO document_grants (document_id, group_id) VALUES (%s, %s)",
+        (granted_id, hr),
+    )
+    await process_all_embedding_jobs(worker_conn, provider)
+    return provider, public_id, granted_id
+
+
+@pytest.mark.parametrize(("user_id", "sees"), VIEWERS)
+async def test_search_follows_grants(visibility_conn, granted, user_id, sees):
+    provider, public_id, granted_id = granted
+
+    hits = await search_documents(
+        visibility_conn, provider, query="OpenSQL 부여 경계", user_id=user_id
+    )
+
+    assert public_id in {hit.document_id for hit in hits}
+    assert (granted_id in {hit.document_id for hit in hits}) is sees
+
+
+@pytest.mark.parametrize(("user_id", "sees"), VIEWERS)
+async def test_document_reads_follow_grants(visibility_conn, granted, user_id, sees):
+    _, _, granted_id = granted
+
+    listed = await list_documents(visibility_conn, user_id=user_id)
+    assert (granted_id in {row["id"] for row in listed}) is sees
+
+    if sees:
+        document = await get_document(visibility_conn, granted_id, user_id=user_id)
+        assert document["id"] == granted_id
+    else:
+        with pytest.raises(DocumentNotFound):
+            await get_document(visibility_conn, granted_id, user_id=user_id)
+
+
+@pytest.mark.parametrize(("user_id", "sees"), VIEWERS)
+async def test_related_and_tag_suggestions_follow_grants(
+    visibility_conn, granted, user_id, sees
+):
+    _, public_id, granted_id = granted
+
+    related = await find_related(visibility_conn, document_id=public_id, user_id=user_id)
+    tags = await suggest_tags(visibility_conn, document_id=public_id, user_id=user_id)
+
+    assert (granted_id in {item.document_id for item in related.items}) is sees
+    assert ("granted-secret" in {item.tag for item in tags.items}) is sees
+    if not sees:
+        with pytest.raises(DocumentNotFound):
+            await find_related(visibility_conn, document_id=granted_id, user_id=user_id)
+
+
+@pytest.mark.parametrize(("user_id", "sees"), VIEWERS)
+async def test_wikilinks_follow_grants(visibility_conn, granted, user_id, sees):
+    _, public_id, granted_id = granted
+
+    links = await resolve_links(visibility_conn, document_id=public_id, user_id=user_id)
+    backlinks = await find_backlinks(visibility_conn, document_id=public_id, user_id=user_id)
+
+    assert [link.document_id for link in links] == [granted_id if sees else None]
+    assert [link.document_id for link in backlinks] == ([granted_id] if sees else [])
+
+
+@pytest.mark.parametrize(("user_id", "sees"), VIEWERS)
+async def test_aggregates_follow_grants(visibility_conn, granted, user_id, sees):
+    diagnostics = await get_diagnostics(visibility_conn, user_id=user_id)
+    clusters = await get_clusters(visibility_conn, user_id=user_id)
+
+    # 공개 출발 문서는 태그가 없다. 부여 대상은 태그가 있어 미분류에 들지 않는다.
+    assert diagnostics.uncategorized.count == 1
+    # 부여 대상이 안 보이면 공개 출발의 [[부여 대상]]은 깨진 링크로 보인다.
+    assert diagnostics.broken_links.count == (0 if sees else 1)
+    assert sum(cluster.size for cluster in clusters.clusters) == (2 if sees else 1)
+
+
+async def test_removing_a_member_hides_the_group_grant_at_once(
+    worker_conn, visibility_conn, granted
+):
+    provider, _, granted_id = granted
+    before = await search_documents(
+        visibility_conn, provider, query="OpenSQL 부여 경계", user_id="dave"
+    )
+    assert granted_id in {hit.document_id for hit in before}
+
+    await worker_conn.execute(
+        "DELETE FROM group_members WHERE user_id = (SELECT id FROM users WHERE username = 'dave')"
+    )
+
+    after = await search_documents(
+        visibility_conn, provider, query="OpenSQL 부여 경계", user_id="dave"
+    )
+
+    assert granted_id not in {hit.document_id for hit in after}
+
+
+@pytest.mark.parametrize(
+    ("user_id", "error"),
+    [("carol", DocumentAccessDenied), ("dave", DocumentAccessDenied), ("erin", DocumentNotFound)],
+)
+async def test_a_grant_is_read_only(visibility_conn, granted, user_id, error):
+    """부여는 읽기다 — 보이는 사람은 쓰기를 403으로, 안 보이는 사람은 404로 거절받는다."""
+    _, _, granted_id = granted
+
+    with pytest.raises(error):
+        await update_tags(visibility_conn, granted_id, user_id=user_id, tags=["x"])

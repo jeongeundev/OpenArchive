@@ -87,7 +87,7 @@ OpenArchive/
         └── lib/                  # API 클라이언트 (fetch 래퍼)
 ```
 
-`services/visibility.py`의 `VISIBLE_TO_USER`는 **모든 조회 경로가 공유하는 단일 열람 술어**다. 검색·관련 문서·그래프 순회·집계·위키링크 해석이 각자 조건을 쓰면 한 곳만 빠져도 비공개 문서가 새어 나간다 (ADR-018, ADR-027).
+`services/visibility.py`의 `VISIBLE_TO_USER`는 **모든 조회 경로가 공유하는 단일 열람 술어**다. 검색·관련 문서·그래프 순회·집계·위키링크 해석이 각자 조건을 쓰면 한 곳만 빠져도 비공개 문서가 새어 나간다 (ADR-018, ADR-027). 규칙은 "public이거나, 소유자이거나, 본인·본인 그룹에 부여가 있다"이며(ADR-044), 테이블과 주체 값 하나만 참조하는 순수 SQL이라 바인딩을 `current_setting('app.principal')`로 바꾸면 그대로 RLS 정책이 된다. 쓰기 경로의 존재 판정(`_load_for_write`)도 이 술어를 쓴다 — 보이는 사람의 쓰기는 403, 안 보이는 사람은 404.
 
 MCP 서버는 `openarchive.services`를 직접 재사용한다. `search_documents`는 발췌(`excerpt`)·출처(`document_id`, `title`, `filename`)·기준 버전(`based_on_version`)을 반환하고, `get_document`는 문서 텍스트와 텍스트 버전·청크 상태를, `list_documents`는 접근 가능한 문서 메타데이터를 반환한다. `create_document`는 `title`·`content`·`content_type`(`txt`·`md`)·`tags`·`visibility`를 받아 기존 텍스트 진입점으로 공급한다. 사용자 컨텍스트는 툴 인자가 아니라 `MCP_USER_ID` 환경변수로 고정한다. 미설정 시 public 문서 읽기는 허용하지만 소유자를 확정할 수 없어 쓰기는 거부한다 (ADR-025, ADR-036).
 
@@ -162,6 +162,23 @@ CREATE TABLE idempotency_keys (
   document_id  uuid NOT NULL REFERENCES documents(id) ON DELETE CASCADE,  -- 키와 문서는 함께 있거나 함께 없다
   created_at   timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (owner_id, key)                  -- 같은 키의 동시 요청을 직렬화한다
+);
+
+-- groups·group_members·document_grants: 열람 부여 (025, ADR-044). private = 소유자 + 부여 대상
+CREATE TABLE groups (
+  id   uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  name text NOT NULL UNIQUE                    -- 부서·팀. 관리자가 만든다
+);
+CREATE TABLE group_members (
+  group_id uuid NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+  user_id  uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  PRIMARY KEY (group_id, user_id)
+);
+CREATE TABLE document_grants (                 -- 문서 → 대상의 읽기. 편집은 소유자만
+  document_id uuid NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+  user_id     uuid REFERENCES users(id) ON DELETE CASCADE,
+  group_id    uuid REFERENCES groups(id) ON DELETE CASCADE,
+  CHECK (num_nonnulls(user_id, group_id) = 1)  -- 다형 칼럼 대신 종류별 칼럼: FK가 고아 부여를 막는다
 );
 
 -- document_chunks: 현재 버전의 청크만 유지 (인덱스 소형화 + 정합성 단순화)
