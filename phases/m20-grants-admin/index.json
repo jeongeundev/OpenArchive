@@ -41,7 +41,10 @@
       "type": "feat",
       "scope": "api",
       "desc": "관리자 그룹 API와 부여 대상 목록 API를 둔다",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-10-01T21:59:42+0900",
+      "summary": "api/groups.py — router(/api/admin/groups, require_admin 세션 전용: POST 201·409·422, GET 목록+구성원, DELETE 204/404, PUT·DELETE /{id}/members/{username} 멱등 204/404)·principals_router(GET /api/principals, require_user_id → {users, groups} 이름만); schemas CreateGroupRequest·GroupSummary·Principals; main.py 등록; test_groups_api.py 29건(관리자 토큰 403 포함), mutant(require_user_id) 10건 실패로 잡힘, backend 1196 passed",
+      "completed_at": "2026-10-01T22:13:39+0900"
     },
     {
       "step": 4,
