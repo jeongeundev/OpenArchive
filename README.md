@@ -80,14 +80,17 @@ EMBEDDING_PROVIDER=local openarchive serve
 
 ### 컨테이너로 실행
 
-Python 없이 한 줄로도 띄울 수 있습니다. 이미지에는 API·워커·웹 화면과 tesseract가 들어 있고
-**DB는 들어 있지 않습니다** — 위와 같은 DSN을 줍니다.
+Python 없이 컨테이너로도 띄울 수 있습니다. 이미지에는 API·워커·웹 화면과 tesseract가 들어 있고
+**DB는 들어 있지 않습니다** — 위와 같은 DSN을 줍니다. 이미지는 아직 레지스트리에 게시하지 않아
+저장소에서 빌드합니다.
 
 ```bash
+git clone https://github.com/jeongeundev/OpenArchive && cd OpenArchive
+docker build -t openarchive backend/
 docker run -d --name openarchive -p 8000:8000 -v openarchive:/data \
   -e DATABASE_URL="postgresql://app:secret@<OpenProxy 호스트>:6432/<풀 이름>" \
   -e ADMIN_PASSWORD='change-me' \
-  ghcr.io/jeongeundev/openarchive
+  openarchive
 ```
 
 기동할 때마다 `init`을 먼저 실행한 뒤 `serve`로 넘어갑니다. 첫 기동에는 스키마를 적용하고
