@@ -89,6 +89,8 @@ OpenArchive/
 
 `services/visibility.py`의 `VISIBLE_TO_USER`는 **모든 조회 경로가 공유하는 단일 열람 술어**다. 검색·관련 문서·그래프 순회·집계·위키링크 해석이 각자 조건을 쓰면 한 곳만 빠져도 비공개 문서가 새어 나간다 (ADR-018, ADR-027). 규칙은 "public이거나, 소유자이거나, 본인·본인 그룹에 부여가 있다"이며(ADR-044), 테이블과 주체 값 하나만 참조하는 순수 SQL이라 바인딩을 `current_setting('app.principal')`로 바꾸면 그대로 RLS 정책이 된다. 쓰기 경로의 존재 판정(`_load_for_write`)도 이 술어를 쓴다 — 보이는 사람의 쓰기는 403, 안 보이는 사람은 404.
 
+`services/grants.py`는 그룹·구성원 관리와 부여 대상 이름 해석을 맡는다(#97 b 후속 step에서 구현). 문서 열람 범위 조회·교체는 문서 서비스가 소유자 경계를 지키며 이 서비스를 재사용한다(ADR-044 「관리 경로」).
+
 MCP 서버는 `openarchive.services`를 직접 재사용한다. `search_documents`는 발췌(`excerpt`)·출처(`document_id`, `title`, `filename`)·기준 버전(`based_on_version`)을 반환하고, `get_document`는 문서 텍스트와 텍스트 버전·청크 상태를, `list_documents`는 접근 가능한 문서 메타데이터를 반환한다. `create_document`는 `title`·`content`·`content_type`(`txt`·`md`)·`tags`·`visibility`를 받아 기존 텍스트 진입점으로 공급한다. 사용자 컨텍스트는 툴 인자가 아니라 `MCP_USER_ID` 환경변수로 고정한다. 미설정 시 public 문서 읽기는 허용하지만 소유자를 확정할 수 없어 쓰기는 거부한다 (ADR-025, ADR-036).
 
 `POST /api/search`도 같은 근거 필드(`filename`·`based_on_version`)를 함께 내려준다. 서비스가 하나여도 두 경로의 응답 스키마가 갈라지면 "REST와 MCP의 결과가 같다"가 깨진다 — `tests/test_mcp_server.py`가 두 응답을 직접 비교해 이를 지킨다.
@@ -674,15 +676,25 @@ OpenSQL `patroni.yml`의 PostgreSQL 파라미터는 `max_connections: 100`이다
 | `GET /api/diagnostics` | **진단.** 고아 문서·깨진 링크·중복 후보 등을 **열람 범위 기준**으로 집계 (ADR-027) |
 | `GET /api/clusters` | **관계 지도.** 관계 그래프의 Louvain 군집. 조회 시점 계산, 열람 범위 기준. 이름은 (군집 안 빈도 − 밖 빈도)가 양수인 태그 중 최대, 없으면 중심 문서 제목 (ADR-042 개정) |
 | `GET /api/admin/users` 등 | 관리자 전용 |
+| `POST /api/admin/groups` · `GET /api/admin/groups` · `DELETE /api/admin/groups/{id}` | **관리자·세션 전용**. 그룹 생성·목록·삭제. 이름 변경 없음 (#97 b) |
+| `PUT /api/admin/groups/{id}/members/{username}` · `DELETE /api/admin/groups/{id}/members/{username}` | **관리자·세션 전용**. 구성원 추가·제거 (#97 b) |
+| `GET /api/principals` | **로그인**. 부여 대상 사용자명·그룹명 목록. 익명은 401 (#97 b) |
+| `GET /api/documents/{id}/access` | **로그인·소유자 전용**. 열람 범위 설정 조회. 보이는 비소유자는 403, 안 보이면 404 (#97 b) |
+| `PUT /api/documents/{id}/access` | **소유자·세션 전용**. `{visibility, users, groups}`로 전체 교체. 보이는 비소유자는 403, 안 보이면 404. 조직 공개로 바꾸면 부여도 삭제 (#97 b) |
 | `GET /api/system/status` | **로그인 필요 · 운영/데모 전용**: `inet_server_addr()`(현재 접속 노드), pending/processing/error **임베딩** 잡 수(`kind='embed'`), 임베딩 프로바이더명, **정합성 검증 쿼리 결과**(`c.version <> d.version` 건수), **관계 미반영 문서 수**(`kind='edges'` 잡이 `done`이 아닌 문서), **텍스트 인식 대기·실패 문서 수**(`extraction_status`가 `pending`·`failed`). `/admin/status`가 소비하며 사용자 화면은 호출하지 않는다. SQL과 결과 모델은 `services/system.py`에 있고 라우터는 인증과 응답 변환만 맡는다 |
 
-> **구현 현황 (M11-c 기준)**: 위 표 전체가 구현되어 있다. 파일 업로드와 JSON 텍스트 공급은 같은 INSERT 헬퍼와 DB 트리거 파생 계약을 공유한다. 프로그램은 사람이 발급한 `read_write` 위임 API 토큰으로 세션 쿠키 없이 텍스트를 공급할 수 있다 (ADR-034·035).
+> **구현 현황 (M11-c 기준)**: 위 표에서 #97 b로 표시한 관리 API를 제외한 경로가 구현되어 있다. #97 b API는 후속 step의 구현 계약이다. 파일 업로드와 JSON 텍스트 공급은 같은 INSERT 헬퍼와 DB 트리거 파생 계약을 공유한다. 프로그램은 사람이 발급한 `read_write` 위임 API 토큰으로 세션 쿠키 없이 텍스트를 공급할 수 있다 (ADR-034·035).
 >
 > **모든 조회에 열람 범위가 걸린다.** 검색·관련 문서·링크·백링크·진단 집계·클러스터가 같은 `VISIBLE_TO_USER` 술어를 쓴다. 볼 수 없는 문서는 자리 표시조차 남기지 않는다 — 표시 자체가 존재와 개수를 누출한다 (ADR-027).
 >
 > 새 파일로 교체해도 문서의 id·제목·태그·공개범위·관계는 그대로이고 파일명·유형만 바뀐다 (`PUT /api/documents/{id}/file`, ADR-046).
 >
 > 라우터는 얇다. 요청 검증과 상태 코드 변환만 하고 실제 로직은 `services/documents.py`·`services/search.py`·`services/system.py` 등에 있으며, MCP 서버가 문서·검색 서비스를 재사용한다. 도메인 예외를 상태 코드로 옮기는 매핑은 `main.py`의 exception handler 한 곳에 있다.
+
+**생성 시 부여 대상 (#97 b 구현 계약)**: 업로드 Form·텍스트 JSON·MCP `create_document`에
+`grant_users`·`grant_groups`(사용자명·그룹명)를 추가한다. 쓰기 토큰·MCP도 생성 시 지정할 수 있다.
+모르는 이름은 해당 이름을 짚어 400으로 거부한다. `public`에 대상을 보내면 400이며
+`visibility=private`로 보내도록 안내한다. 아래 멱등키 지문에도 파일·텍스트 양쪽의 부여 대상을 포함한다.
 
 ### 일시 불가용 응답 (모든 엔드포인트)
 
@@ -696,7 +708,7 @@ DB가 잠시 응답할 수 없으면(연결 끊김·페일오버·switchover 중
 |---|---|
 | 처음 보는 키 | 평소처럼 문서를 만든다(201). 키는 문서와 **같은 트랜잭션**에 기록된다 |
 | 같은 키 + 같은 요청 | 새로 만들지 않고 처음 문서를 **201**로 돌려준다. 본문은 그 문서의 **현재** 요약이다(처음 응답을 저장해 두지 않는다 — 그새 `embedding_status`가 바뀌었을 수 있다) |
-| 같은 키 + 다른 요청 | **422**. 요청 비교는 본문 지문(파일은 파일명·바이트 해시·제목·태그·공개범위, 텍스트는 제목·본문·유형·태그·공개범위)으로 하며, 업로드에 쓴 키를 텍스트 공급에 쓰는 것도 다른 요청이다 |
+| 같은 키 + 다른 요청 | **422**. 요청 비교는 본문 지문(파일은 파일명·바이트 해시·제목·태그·공개범위·부여 대상, 텍스트는 제목·본문·유형·태그·공개범위·부여 대상)으로 하며, 업로드에 쓴 키를 텍스트 공급에 쓰는 것도 다른 요청이다 |
 | 같은 키의 동시 요청 | 기본키가 직렬화한다. 뒤 요청은 앞 트랜잭션이 끝나기를 기다렸다가, 앞이 커밋했으면 그 문서를, 롤백했으면 자기가 만든 문서를 받는다 |
 | 키 없음 | 지금처럼 동작한다 — 재시도하면 문서가 두 번 생길 수 있다 |
 
