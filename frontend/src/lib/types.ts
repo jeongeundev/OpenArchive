@@ -25,6 +25,31 @@ export interface TokenCreated extends TokenSummary {
   token: string;
 }
 
+export interface ShareDocument {
+  id: string;
+  title: string;
+}
+
+/** 공유 토큰은 읽기 전용이다 (ADR-044 결정 3). */
+export interface ShareTokenSummary {
+  id: string;
+  name: string;
+  scope: "read";
+  created_at: string;
+}
+
+/** 원문 `token`은 발급 응답에만 있다. 공유 목록의 토큰에는 없다. */
+export type ShareTokenCreated = ShareTokenSummary & { token: string };
+
+/** 외부 협업 주체. 소유자 자신만 보고 관리한다 (ADR-044 「공유」). */
+export interface ShareSummary {
+  id: string;
+  name: string;
+  created_at: string;
+  documents: ShareDocument[];
+  tokens: ShareTokenSummary[];
+}
+
 export interface DocumentSummary {
   id: string;
   title: string;

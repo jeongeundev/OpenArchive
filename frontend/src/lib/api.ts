@@ -14,6 +14,8 @@ import type {
   RelatedResponse,
   ResolvedLink,
   SearchResponse,
+  ShareSummary,
+  ShareTokenCreated,
   SystemStatus,
   TagSuggestionsResponse,
   TextVersionDetail,
@@ -304,6 +306,59 @@ export function removeGroupMember(groupId: string, username: string): Promise<vo
 
 export function listPrincipals(signal?: AbortSignal): Promise<Principals> {
   return request<Principals>("/api/principals", { signal });
+}
+
+export function listShares(signal?: AbortSignal): Promise<ShareSummary[]> {
+  return request<ShareSummary[]>("/api/shares", { signal });
+}
+
+export function createShare(name: string): Promise<ShareSummary> {
+  return request<ShareSummary>("/api/shares", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+}
+
+function sharePath(shareId: string): string {
+  return `/api/shares/${encodeURIComponent(shareId)}`;
+}
+
+export function deleteShare(id: string): Promise<void> {
+  return request<void>(sharePath(id), { method: "DELETE" }, { parse: false });
+}
+
+function shareDocumentPath(shareId: string, documentId: string): string {
+  return `${sharePath(shareId)}/documents/${encodeURIComponent(documentId)}`;
+}
+
+export function addShareDocument(shareId: string, documentId: string): Promise<void> {
+  return request<void>(shareDocumentPath(shareId, documentId), { method: "PUT" }, { parse: false });
+}
+
+export function removeShareDocument(shareId: string, documentId: string): Promise<void> {
+  return request<void>(
+    shareDocumentPath(shareId, documentId),
+    { method: "DELETE" },
+    { parse: false },
+  );
+}
+
+/** 원문 토큰은 이 응답에서만 보인다 — 저장하지 않는다 (ADR-034). */
+export function createShareToken(shareId: string, name: string): Promise<ShareTokenCreated> {
+  return request<ShareTokenCreated>(`${sharePath(shareId)}/tokens`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+}
+
+export function revokeShareToken(shareId: string, tokenId: string): Promise<void> {
+  return request<void>(
+    `${sharePath(shareId)}/tokens/${encodeURIComponent(tokenId)}`,
+    { method: "DELETE" },
+    { parse: false },
+  );
 }
 
 export function listDocuments(

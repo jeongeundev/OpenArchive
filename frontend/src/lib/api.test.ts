@@ -3,11 +3,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ApiError,
   addGroupMember,
+  addShareDocument,
   changePassword,
   createGroup,
+  createShare,
+  createShareToken,
   createToken,
   deleteDocument,
   deleteGroup,
+  deleteShare,
   editDocument,
   getAuthStatus,
   getDocument,
@@ -17,8 +21,11 @@ import {
   listDocuments,
   listGroups,
   listPrincipals,
+  listShares,
   listTokens,
   removeGroupMember,
+  removeShareDocument,
+  revokeShareToken,
   revokeToken,
   search,
   setDocumentAccess,
@@ -605,6 +612,123 @@ describe("groups and document access", () => {
     await setDocumentAccess("doc-1", { visibility: "public", users: [], groups: [] }).catch(
       () => undefined,
     );
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("shares", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  function stubFetch(body: string | null, status = 200) {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(body, { status }));
+    vi.stubGlobal("fetch", fetchMock);
+    return fetchMock;
+  }
+
+  it("lists own shares and passes the abort signal", async () => {
+    const shares = [
+      {
+        id: "s1",
+        name: "B사",
+        created_at: "2026-10-02T00:00:00Z",
+        documents: [{ id: "d1", title: "제품 설명서" }],
+        tokens: [{ id: "t1", name: "B사 연동", scope: "read", created_at: "2026-10-02T00:00:00Z" }],
+      },
+    ];
+    const fetchMock = stubFetch(JSON.stringify(shares));
+    const controller = new AbortController();
+
+    await expect(listShares(controller.signal)).resolves.toEqual(shares);
+
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/shares");
+    expect(fetchMock.mock.calls[0][1]?.method ?? "GET").toBe("GET");
+    expect(fetchMock.mock.calls[0][1]?.signal).toBe(controller.signal);
+  });
+
+  it("creates a share with its name in a JSON body", async () => {
+    const fetchMock = stubFetch(
+      JSON.stringify({ id: "s1", name: "B사", created_at: "x", documents: [], tokens: [] }),
+      201,
+    );
+
+    await createShare("B사");
+
+    const [path, init] = fetchMock.mock.calls[0];
+    expect(path).toBe("/api/shares");
+    expect(init?.method).toBe("POST");
+    expect(JSON.parse(init?.body as string)).toEqual({ name: "B사" });
+  });
+
+  it("deletes a share by id", async () => {
+    const fetchMock = stubFetch(null, 204);
+
+    await expect(deleteShare("s/1")).resolves.toBeUndefined();
+
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/shares/s%2F1");
+    expect(fetchMock.mock.calls[0][1]?.method).toBe("DELETE");
+  });
+
+  it("adds and removes a document with encoded path segments", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await addShareDocument("s/1", "d 1");
+    await removeShareDocument("s/1", "d 1");
+
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/shares/s%2F1/documents/d%201");
+    expect(fetchMock.mock.calls[0][1]?.method).toBe("PUT");
+    expect(fetchMock.mock.calls[1][0]).toBe("/api/shares/s%2F1/documents/d%201");
+    expect(fetchMock.mock.calls[1][1]?.method).toBe("DELETE");
+  });
+
+  it("issues a share token and returns the raw token once", async () => {
+    const issued = {
+      id: "t1",
+      name: "B사 연동",
+      scope: "read",
+      created_at: "2026-10-02T00:00:00Z",
+      token: "raw-secret",
+    };
+    const fetchMock = stubFetch(JSON.stringify(issued), 201);
+
+    await expect(createShareToken("s1", "B사 연동")).resolves.toEqual(issued);
+
+    const [path, init] = fetchMock.mock.calls[0];
+    expect(path).toBe("/api/shares/s1/tokens");
+    expect(init?.method).toBe("POST");
+    expect(JSON.parse(init?.body as string)).toEqual({ name: "B사 연동" });
+  });
+
+  it("revokes a share token", async () => {
+    const fetchMock = stubFetch(null, 204);
+
+    await expect(revokeShareToken("s1", "t/1")).resolves.toBeUndefined();
+
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/shares/s1/tokens/t%2F1");
+    expect(fetchMock.mock.calls[0][1]?.method).toBe("DELETE");
+  });
+
+  it("surfaces the server detail as ApiError", async () => {
+    stubFetch(JSON.stringify({ detail: "이미 존재하는 공유 이름입니다." }), 409);
+
+    const error = await createShare("B사").catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(ApiError);
+    expect((error as ApiError).status).toBe(409);
+    expect((error as ApiError).message).toBe("이미 존재하는 공유 이름입니다.");
+  });
+
+  it("does not retry a share change on 503", async () => {
+    const fetchMock = stubFetch(JSON.stringify({ detail: "잠시 후" }), 503);
+
+    await addShareDocument("s1", "d1").catch(() => undefined);
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
