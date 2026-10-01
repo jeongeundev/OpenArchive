@@ -19,7 +19,10 @@
       "type": "feat",
       "scope": "api",
       "desc": "그룹·구성원 관리와 부여 대상 이름 해석 서비스를 둔다",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-10-01T21:35:14+0900",
+      "summary": "services/grants.py — create_group·list_groups·delete_group·add_member·remove_member(멱등)·list_principals·resolve_grantees(모르는 이름 전부 담은 UnknownGrantee)·insert_grants(ON CONFLICT DO NOTHING)와 GroupAlreadyExists·GroupNotFound·UnknownGrantee(UserNotFound는 auth 재사용); test_grants.py 14건, mutant 2종 잡힘",
+      "completed_at": "2026-10-01T21:48:37+0900"
     },
     {
       "step": 2,
