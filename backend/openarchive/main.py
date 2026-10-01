@@ -8,6 +8,8 @@ from openarchive.api.auth import router as auth_router
 from openarchive.api.clusters import router as clusters_router
 from openarchive.api.diagnostics import router as diagnostics_router
 from openarchive.api.documents import router as documents_router
+from openarchive.api.groups import principals_router
+from openarchive.api.groups import router as groups_router
 from openarchive.api.retry import RetryOnUnavailable
 from openarchive.api.search import router as search_router
 from openarchive.api.system import router as system_router
@@ -39,6 +41,8 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="OpenArchive API", lifespan=lifespan)
 app.add_middleware(RetryOnUnavailable)
 app.include_router(admin_router)
+app.include_router(groups_router)
+app.include_router(principals_router)
 app.include_router(auth_router)
 app.include_router(documents_router)
 app.include_router(clusters_router)

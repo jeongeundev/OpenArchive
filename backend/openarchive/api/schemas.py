@@ -171,6 +171,22 @@ class UserSummary(BaseModel):
     created_at: datetime
 
 
+class CreateGroupRequest(BaseModel):
+    name: str = Field(min_length=1)
+
+
+class GroupSummary(BaseModel):
+    id: UUID
+    name: str
+    created_at: datetime
+    members: list[str]
+
+
+class Principals(BaseModel):
+    users: list[str]
+    groups: list[str]
+
+
 class SearchRequest(BaseModel):
     query: str
     tags: list[str] | None = None
