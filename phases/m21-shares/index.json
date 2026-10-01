@@ -2,23 +2,81 @@
   "project": "OpenArchive",
   "phase": "m21-shares",
   "steps": [
-    { "step": 0, "name": "shares-docs", "type": "docs", "scope": "adr",
-      "desc": "ADR-044에 공유 주체 결정(단일 주체 값·공개 문서와 별개 축·소유자 자기 문서·허용 목록)을 기록한다", "status": "pending" },
-    { "step": 1, "name": "shares-schema", "type": "feat", "scope": "db",
-      "desc": "공유 테이블과 공유 부여·공유 토큰 칼럼을 둔다", "status": "pending" },
-    { "step": 2, "name": "shares-predicate", "type": "feat", "scope": "db",
-      "desc": "열람 술어가 공유 주체에게 공유 부여만 보이게 한다", "status": "pending" },
-    { "step": 3, "name": "shares-service", "type": "feat", "scope": "api",
-      "desc": "공유 생성·문서 지정·토큰 발급 서비스를 두고 열람 범위 교체가 공유 부여를 남기게 한다", "status": "pending" },
-    { "step": 4, "name": "shares-api", "type": "feat", "scope": "api",
-      "desc": "세션 전용 공유 관리 API를 둔다", "status": "pending" },
-    { "step": 5, "name": "share-auth", "type": "feat", "scope": "api",
-      "desc": "공유 토큰을 주체로 해석하고 허용 목록 읽기 경로만 연다", "status": "pending" },
-    { "step": 6, "name": "frontend-client", "type": "feat", "scope": "frontend",
-      "desc": "공유 타입과 API 클라이언트 함수를 둔다", "status": "pending" },
-    { "step": 7, "name": "settings-shares", "type": "feat", "scope": "frontend",
-      "desc": "설정 화면에 외부 공유 관리 절을 둔다", "status": "pending" },
-    { "step": 8, "name": "access-panel-shares", "type": "feat", "scope": "frontend",
-      "desc": "문서 열람 범위 패널에 내 공유 포함 체크를 둔다", "status": "pending" }
-  ]
+    {
+      "step": 0,
+      "name": "shares-docs",
+      "type": "docs",
+      "scope": "adr",
+      "desc": "ADR-044에 공유 주체 결정(단일 주체 값·공개 문서와 별개 축·소유자 자기 문서·허용 목록)을 기록한다",
+      "status": "completed",
+      "started_at": "2026-10-02T04:18:05+0900",
+      "summary": "ADR-044 공유 주체·토큰 계약과 스키마·API·UI·PRD 반영; 문서 AC 통과, backend/frontend 및 ADR-045 이후 변경 없음.",
+      "completed_at": "2026-10-02T04:22:06+0900"
+    },
+    {
+      "step": 1,
+      "name": "shares-schema",
+      "type": "feat",
+      "scope": "db",
+      "desc": "공유 테이블과 공유 부여·공유 토큰 칼럼을 둔다",
+      "status": "pending"
+    },
+    {
+      "step": 2,
+      "name": "shares-predicate",
+      "type": "feat",
+      "scope": "db",
+      "desc": "열람 술어가 공유 주체에게 공유 부여만 보이게 한다",
+      "status": "pending"
+    },
+    {
+      "step": 3,
+      "name": "shares-service",
+      "type": "feat",
+      "scope": "api",
+      "desc": "공유 생성·문서 지정·토큰 발급 서비스를 두고 열람 범위 교체가 공유 부여를 남기게 한다",
+      "status": "pending"
+    },
+    {
+      "step": 4,
+      "name": "shares-api",
+      "type": "feat",
+      "scope": "api",
+      "desc": "세션 전용 공유 관리 API를 둔다",
+      "status": "pending"
+    },
+    {
+      "step": 5,
+      "name": "share-auth",
+      "type": "feat",
+      "scope": "api",
+      "desc": "공유 토큰을 주체로 해석하고 허용 목록 읽기 경로만 연다",
+      "status": "pending"
+    },
+    {
+      "step": 6,
+      "name": "frontend-client",
+      "type": "feat",
+      "scope": "frontend",
+      "desc": "공유 타입과 API 클라이언트 함수를 둔다",
+      "status": "pending"
+    },
+    {
+      "step": 7,
+      "name": "settings-shares",
+      "type": "feat",
+      "scope": "frontend",
+      "desc": "설정 화면에 외부 공유 관리 절을 둔다",
+      "status": "pending"
+    },
+    {
+      "step": 8,
+      "name": "access-panel-shares",
+      "type": "feat",
+      "scope": "frontend",
+      "desc": "문서 열람 범위 패널에 내 공유 포함 체크를 둔다",
+      "status": "pending"
+    }
+  ],
+  "created_at": "2026-10-02T04:18:05+0900"
 }
