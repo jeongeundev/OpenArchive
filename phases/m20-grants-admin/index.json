@@ -74,7 +74,10 @@
       "type": "feat",
       "scope": "frontend",
       "desc": "그룹·열람 범위 API 클라이언트를 두고 공개범위 문구를 조직 공개/제한으로 바꾼다",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-10-01T22:43:54+0900",
+      "summary": "lib/types.ts에 GroupSummary·Principals·DocumentAccess 타입과 공개범위 문구 상수 VISIBILITY_LABEL(public→「조직 공개」, private→「제한」, 값은 그대로); lib/api.ts에 listGroups·createGroup·deleteGroup·addGroupMember·removeGroupMember(PUT/DELETE …/members/{username}, encodeURIComponent)·listPrincipals·getDocumentAccess·setDocumentAccess(PUT, 재시도 안 함)와 uploadDocument의 grantUsers·grantGroups(FormData grant_users·grant_groups 반복 append, 없으면 키 없음); DocumentMeta·DocumentTable·UploadDropzone이 VISIBILITY_LABEL을 쓰고 레이블·legend를 「열람 범위」로(라디오에 value 추가); 테스트 11건 추가, frontend 293 passed, static 재빌드",
+      "completed_at": "2026-10-01T22:50:37+0900"
     },
     {
       "step": 7,
