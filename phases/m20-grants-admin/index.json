@@ -63,7 +63,10 @@
       "type": "feat",
       "scope": "mcp",
       "desc": "MCP create_document에 부여 대상 인자를 둔다",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-10-01T22:26:12+0900",
+      "summary": "MCP create_document에 grant_users·grant_groups 인자(create_text_document로 그대로 전달, 검증은 코어)와 private 전용·열람 범위 변경 불가 설명을 두었다; test_mcp_server.py 6건 추가(부여·그룹 구성원 열람, public+대상·모르는 이름 거부 시 미저장, ToolError 문구 전달, 무인자 부여 0, 입력 스키마), backend 1226 passed",
+      "completed_at": "2026-10-01T22:43:54+0900"
     },
     {
       "step": 6,
