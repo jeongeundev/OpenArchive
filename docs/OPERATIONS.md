@@ -150,7 +150,7 @@ docker build -t openarchive backend/
 롤 이름 스키마의 설치를 보고 그냥 지나갑니다(실측).
 
 ```bash
-docker run --rm -e ADMIN_PASSWORD='change-me' ghcr.io/jeongeundev/openarchive \
+docker run --rm -e ADMIN_PASSWORD='change-me' openarchive \
   openarchive init --schema --yes --dsn "postgresql://…"
 ```
 
