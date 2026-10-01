@@ -74,7 +74,10 @@
       "type": "feat",
       "scope": "frontend",
       "desc": "공유 타입과 API 클라이언트 함수를 둔다",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-10-02T06:02:54+0900",
+      "summary": "types.ts: ShareDocument·ShareTokenSummary(scope 'read')·ShareTokenCreated·ShareSummary(백엔드 ShareSummary/TokenCreated 필드 일치); api.ts: listShares(signal)·createShare·deleteShare·addShareDocument·removeShareDocument·createShareToken(원문 반환, 저장 안 함)·revokeShareToken — 경로 조각 encodeURIComponent, 쓰기는 멱등 경로 목록에 없어 재시도 안 함; api.test.ts 공유 8건(503 비재시도·ApiError detail 포함), 구현 전 8 fail 확인. frontend lint(경고 0 증가)·test 326 통과·build:static 통과(static drift 0)",
+      "completed_at": "2026-10-02T06:10:57+0900"
     },
     {
       "step": 7,
