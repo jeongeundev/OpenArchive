@@ -63,7 +63,10 @@
       "type": "feat",
       "scope": "api",
       "desc": "공유 토큰을 주체로 해석하고 허용 목록 읽기 경로만 연다",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-10-02T05:41:47+0900",
+      "summary": "auth.validate_token: LEFT JOIN users로 공유 토큰을 {kind:'share',share_id,principal:'share:<uuid>',username:None,scope:'read',credential:'token',is_admin:False}로 해석, 사용자 토큰·세션 dict에 kind:'user'·principal:<사용자명> 추가. deps: require_reader(익명 401, 사용자·공유 통과, principal 반환) 신설, require_user_id·require_write_user_id·require_session_user(→require_admin)는 공유를 403 '공유 토큰으로는 열 수 없는 경로입니다.'; /api/auth/me도 공유 403. require_reader는 ADR-044 결정 5 허용 목록 12경로(search·documents 목록/progress/상세/file/files/links/backlinks/related/versions·clusters·diagnostics)에만 — access·tag-suggestions·principals·system/status는 그대로 막힘. test_share_access.py 43건: 100문서·alice 공유 5건(원본 파일 1건 포함, 관계·위키링크 안팎 연결) REST 시나리오, 밖 문서 7경로×4건 404, 허용 목록 밖 22요청 403·DB 스냅샷 불변, 폐기 토큰·지운 공유·지운 소유자 401, 라우터 전수 단언(FastAPI 0.141 _IncludedRouter.effective_route_contexts로 펼침). test_auth·test_deps 보강. mutant ①require_user_id 공유 거부 제거 3 fail ②tag-suggestions→require_reader 2 fail ③공유 principal=None 21 fail. backend 1355 통과·ruff 통과",
+      "completed_at": "2026-10-02T06:02:53+0900"
     },
     {
       "step": 6,
