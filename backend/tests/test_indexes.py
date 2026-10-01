@@ -245,3 +245,28 @@ def test_planner_can_use_each_document_edge_traversal_index(
 
     assert index_name in plan, f"순회 인덱스를 타지 않았다:\n{plan}"
     assert "Index" in plan, f"인덱스 계획이 아니다:\n{plan}"
+
+
+@pytest.mark.parametrize(
+    ("index_name", "sql"),
+    [
+        # 부분 유니크 인덱스(uq_document_grants_*)는 WHERE user_id/group_id IS NOT NULL이 붙어
+        # 열람 술어의 "이 문서의 부여" 조회에 못 쓴다 — 그 조회를 받는 인덱스가 따로 있어야 한다.
+        ("idx_document_grants_document", "SELECT 1 FROM document_grants WHERE document_id = %s"),
+        ("idx_group_members_user", "SELECT group_id FROM group_members WHERE user_id = %s"),
+    ],
+)
+def test_planner_can_use_the_visibility_predicate_lookup_indexes(
+    conn: psycopg.Connection, index_name: str, sql: str
+):
+    """열람 술어(ADR-044)는 검색 후보 행마다 부여를 찾는다. 부여가 쌓여도 전체를 훑지 않게."""
+    with conn.transaction():
+        conn.execute("SET LOCAL enable_seqscan = off")
+        plan = "\n".join(
+            row[0]
+            for row in conn.execute(
+                "EXPLAIN " + sql, ("00000000-0000-0000-0000-000000000001",)
+            ).fetchall()
+        )
+
+    assert index_name in plan, f"술어 조회 인덱스를 타지 않았다:\n{plan}"
