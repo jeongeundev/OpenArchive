@@ -665,13 +665,13 @@ def test_candidate_limit_stays_below_ef_search():
     assert MAX_K * CANDIDATE_MULTIPLIER < EF_SEARCH
 
 
-async def test_search_issues_both_tunings_inside_the_query_transaction(
+async def test_search_issues_all_tunings_inside_the_query_transaction(
     worker_conn, search_conn
 ):
-    """search_documents가 실제로 두 SET LOCAL을 검색 쿼리와 같은 트랜잭션에 건다.
+    """search_documents가 실제로 세 SET LOCAL을 검색 쿼리와 같은 트랜잭션에 건다.
 
-    두 값을 테스트 안에서 재현하면 search.py에서 지워도 통과한다. 실행된 문장을
-    받아 적어, ADR-011 보강 4·5 준수를 구현 쪽에서 검증한다.
+    값을 테스트 안에서 재현하면 search.py에서 지워도 통과한다. 실행된 문장을
+    받아 적어, ADR-011 보강 4·5와 JIT 끄기(ADR-044) 준수를 구현 쪽에서 검증한다.
     """
     provider = FakeProvider()
     await insert_test_document(worker_conn, title="튜닝", content="검색 튜닝 확인")
@@ -683,7 +683,8 @@ async def test_search_issues_both_tunings_inside_the_query_transaction(
     assert recorder.statements[0] == "BEGIN"
     assert recorder.statements[1] == f"SET LOCAL hnsw.ef_search = {EF_SEARCH}"
     assert recorder.statements[2] == "SET LOCAL random_page_cost = 1.1"
-    assert recorder.statements[3] == SEARCH_SQL
+    assert recorder.statements[3] == "SET LOCAL jit = off"
+    assert recorder.statements[4] == SEARCH_SQL
 
 
 async def test_search_tuning_does_not_leak_past_the_transaction(worker_conn):
@@ -699,13 +700,16 @@ async def test_search_tuning_does_not_leak_past_the_transaction(worker_conn):
     await process_all_embedding_jobs(worker_conn, provider)
     before_ef = (await (await worker_conn.execute("SHOW hnsw.ef_search")).fetchone())[0]
     before_rpc = (await (await worker_conn.execute("SHOW random_page_cost")).fetchone())[0]
+    before_jit = (await (await worker_conn.execute("SHOW jit")).fetchone())[0]
 
     await search_documents(worker_conn, provider, query="검색 튜닝 확인")
 
     after_ef = (await (await worker_conn.execute("SHOW hnsw.ef_search")).fetchone())[0]
     after_rpc = (await (await worker_conn.execute("SHOW random_page_cost")).fetchone())[0]
+    after_jit = (await (await worker_conn.execute("SHOW jit")).fetchone())[0]
     assert after_ef == before_ef != str(EF_SEARCH)
     assert after_rpc == before_rpc != "1.1"
+    assert after_jit == before_jit != "off"
 
 
 async def test_explain_contains_structured_filters_and_vector_ordering(worker_conn, migrated_db):

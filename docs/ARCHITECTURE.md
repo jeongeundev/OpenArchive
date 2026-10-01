@@ -764,6 +764,7 @@ BEGIN;  -- ★ plain BEGIN. READ ONLY 금지 (아래 설명)
 
 SET LOCAL hnsw.ef_search = 200;      -- 필터 통과 후보를 충분히 확보 (기본 40)
 SET LOCAL random_page_cost = 1.1;    -- 무필터 검색이 HNSW를 타게 한다 (ADR-011 보강 5)
+SET LOCAL jit = off;                 -- 부여 서브플랜이 JIT 임계를 넘겨 컴파일이 붙는다 (ADR-044)
 
 WITH RECURSIVE candidates AS (       -- ① 벡터 후보 (k * 5). 필터를 여기 안에 둔다
     SELECT c.document_id, c.chunk_index,
@@ -845,11 +846,13 @@ OpenProxy는 `query_parser_read_write_splitting` 활성 시 **트랜잭션 밖�
 
 > ⚠️ **`BEGIN READ ONLY`를 쓰면 안 된다.** OpenProxy 1.1.3부터 `BEGIN READ ONLY`와 `START TRANSACTION READ ONLY`는 **의도적으로 Replica로 라우팅**된다. "읽기 전용이니 READ ONLY로 선언하는 게 맞다"는 직관을 따르면 정확히 반대 결과가 나온다.
 
-**2. 두 개의 `SET LOCAL` — `hnsw.ef_search`와 `random_page_cost` (ADR-011 보강 4·5)**
+**2. 세 개의 `SET LOCAL` — `hnsw.ef_search`·`random_page_cost`·`jit` (ADR-011 보강 4·5, ADR-044)**
 
 `ef_search = 200`: HNSW 인덱스는 `document_chunks`에 있는데 필터는 JOIN 상대인 `documents`에 있다. 기본 `ef_search = 40`으로는 태그 필터가 조금만 좁아도 `LIMIT k`를 채우지 못한다. 후보 풀을 키워 이를 완화한다. `SET LOCAL`이므로 트랜잭션이 끝나면 자동 복원된다 — ①의 명시적 트랜잭션이 여기서 한 번 더 쓸모가 있다.
 
 `random_page_cost = 1.1`: VM 기본값 4에서는 플래너가 HNSW를 아예 고르지 않는다. 힙이 3MB인데 인덱스가 47MB라, 임의 접근을 4배로 계산하면 통째로 읽는 쪽이 싸다고 나온다. **태그·유형 필터는 선택적**(`%(tags)s IS NULL OR …`)이므로 이 쿼리에는 필터 없는 경로가 항상 존재하며, 그 경로가 인덱스를 타느냐가 여기 달려 있다. 전역이 아니라 `SET LOCAL`로 거는 이유는 OpenProxy가 백엔드 반납 시 `RESET ALL`만 하고 `DISCARD ALL`은 하지 않아(§5-2) 세션 GUC에 의존하지 않는 편이 안전하기 때문이다.
+
+`jit = off`: 열람 술어의 부여 서브플랜(ADR-044)이 추정 비용을 `jit_above_cost`(100,000) 위로 올리면 JIT가 있는 PostgreSQL에서 몇 ms짜리 검색에 컴파일 수십 ms가 붙는다. 비용은 데이터 규모에 비례해, 작은 설치에서는 안 보이다가 조직이 커지면 나타난다. 실 OpenSQL 17.8은 LLVM 모듈이 없어(`pg_jit_available() = false`) 해당하지 않지만 설치 대상인 표준 PostgreSQL에는 있다.
 
 > **무필터 검색 경로는 아직 직접 측정하지 않았다.** 같은 형태·같은 규모의 관련 문서 쿼리가
 > `rpc=4`에서 Seq Scan 624ms, `rpc=1.1`에서 HNSW 33.8ms인 것에 근거한 적용이다
