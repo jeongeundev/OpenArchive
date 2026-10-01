@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 
+import { AccessPanel } from "@/components/AccessPanel";
 import { DocumentActions } from "@/components/DocumentActions";
 import { DocumentMeta } from "@/components/DocumentMeta";
 import { OriginalFiles } from "@/components/OriginalFiles";
@@ -34,6 +35,8 @@ export function DocumentDetailView(): React.ReactElement {
   const [linksError, setLinksError] = useState<string | null>(null);
   const { auth } = useAuth();
   const anonymous = !auth.authenticated;
+  // 열람 범위는 소유자만 본다. 비소유자에게는 조회도 하지 않는다 — 패널 자리가 제한의 존재를 드러낸다.
+  const isOwner = auth.authenticated && document !== null && auth.username === document.owner_id;
 
   useEffect(() => {
     const controller = new AbortController();
@@ -98,6 +101,9 @@ export function DocumentDetailView(): React.ReactElement {
       {!anonymous ? (
         <>
           <DocumentActions disabled={editing} document={document} onChanged={refresh} />
+          {isOwner ? (
+            <AccessPanel disabled={editing} documentId={document.id} onSaved={refresh} />
+          ) : null}
           <TagEditor disabled={editing} error={tagError} onChange={setDraftTags} onSave={() => void saveTags(tags)} saving={savingTags} tags={tags} />
         </>
       ) : null}

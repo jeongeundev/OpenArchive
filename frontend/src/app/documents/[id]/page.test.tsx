@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { DocumentDetail } from "@/lib/types";
+import type { DocumentAccess, DocumentDetail } from "@/lib/types";
 import { AuthProvider } from "@/components/AuthProvider";
 import { DocumentDetailView } from "./DocumentDetailView";
 
@@ -52,6 +52,8 @@ function stubFetch(tagsResponse: () => Response) {
     if (url.endsWith("/links") || url.endsWith("/backlinks")) return Promise.resolve(jsonResponse([]));
     if (url.endsWith("/related")) return Promise.resolve(jsonResponse(related));
     if (url.endsWith("/tag-suggestions")) return Promise.resolve(jsonResponse(suggestions));
+    if (url === "/api/principals") return Promise.resolve(jsonResponse({ users: ["alice", "bob"], groups: [] }));
+    if (url.endsWith("/access")) return Promise.resolve(jsonResponse({ visibility: "public", users: [], groups: [] }));
     if (url.endsWith("/tags") && init?.method === "PUT") {
       return Promise.resolve(tagsResponse());
     }
@@ -269,5 +271,62 @@ describe("텍스트 인식에 실패한 문서", () => {
       await screen.findAllByText("텍스트를 인식하지 못해 표시할 수 없습니다."),
     ).toHaveLength(2);
     expect(screen.queryByText("임베딩이 완료되면 표시됩니다.")).not.toBeInTheDocument();
+  });
+});
+
+describe("문서 상세의 열람 범위 패널", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function stubAccessFetch(username: string) {
+    let current: DocumentDetail = detail;
+    const fetchMock = vi.fn((url: string, init?: RequestInit) => {
+      if (url === "/api/auth/me") {
+        return Promise.resolve(jsonResponse({ authenticated: true, username, is_admin: false }));
+      }
+      if (url.endsWith("/links") || url.endsWith("/backlinks")) return Promise.resolve(jsonResponse([]));
+      if (url.endsWith("/related")) return Promise.resolve(jsonResponse(related));
+      if (url.endsWith("/tag-suggestions")) return Promise.resolve(jsonResponse(suggestions));
+      if (url === "/api/principals") {
+        return Promise.resolve(jsonResponse({ users: ["alice", "bob"], groups: ["인사팀"] }));
+      }
+      if (url.endsWith("/access") && init?.method === "PUT") {
+        const body = JSON.parse(String(init.body)) as DocumentAccess;
+        current = { ...current, visibility: body.visibility };
+        return Promise.resolve(jsonResponse(body));
+      }
+      if (url.endsWith("/access")) {
+        return Promise.resolve(jsonResponse({ visibility: "public", users: [], groups: [] }));
+      }
+      return Promise.resolve(jsonResponse(current));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    return fetchMock;
+  }
+
+  it("소유자에게 패널을 보이고, 저장하면 문서 메타의 열람 범위가 갱신된다", async () => {
+    stubAccessFetch("alice");
+    await renderPage();
+
+    expect(await screen.findByRole("heading", { name: "열람 범위" })).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole("radio", { name: "제한" }));
+    fireEvent.click(screen.getByRole("button", { name: "열람 범위 저장" }));
+
+    await waitFor(() =>
+      expect(screen.getByText("열람 범위", { selector: "dt" }).nextElementSibling).toHaveTextContent(
+        "제한",
+      ),
+    );
+  });
+
+  it("소유자가 아니면 패널을 보이지 않고 열람 범위를 조회하지도 않는다", async () => {
+    const fetchMock = stubAccessFetch("bob");
+    await renderPage();
+
+    expect(screen.queryByRole("heading", { name: "열람 범위" })).not.toBeInTheDocument();
+    const urls = fetchMock.mock.calls.map(([url]) => String(url));
+    expect(urls.some((url) => url.endsWith("/access"))).toBe(false);
+    expect(urls).not.toContain("/api/principals");
   });
 });
