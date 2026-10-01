@@ -30,7 +30,10 @@
       "type": "feat",
       "scope": "db",
       "desc": "열람 술어가 공유 주체에게 공유 부여만 보이게 한다",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-10-02T04:52:53+0900",
+      "summary": "visibility.py: VISIBLE_TO_USER를 CASE WHEN %(user)s LIKE 'share:%%' → 공유 부여 EXISTS(shares JOIN, 'share:'||s.id::text 비교로 uuid 캐스트 회피, 형식 틀린 값은 0건) ELSE 기존 술어로; NULL은 ELSE(public만); share_principal()·SHARE_PRINCIPAL_PREFIX 추가. test_share_visibility.py 18건(101문서·공유 5건, 관계·위키링크 안팎 고정, 검색·목록·진행·관련·태그·진단·군집·링크·상세/버전 은닉·공유 간 격리·사용자 무영향·삭제 즉시 반영·EXPLAIN에서 공유/사용자 모두 idx_chunks_embedding). mutant ①공유 분기+public 11 fail ②공유 분기 제거 11 fail ③NULL→공유 분기 15 fail. backend 1263 통과·ruff 통과. 관찰: FakeProvider 희소 벡터에선 HNSW가 101청크 중 36개만 닿아 공유 결과가 비었다 — 픽스처 외부 문서 텍스트를 질의와 겹치지 않게 바꿈. 선택적 범위의 recall은 #98 스파이크 항목(ADR-044 결정 5 ④)",
+      "completed_at": "2026-10-02T05:10:08+0900"
     },
     {
       "step": 3,
