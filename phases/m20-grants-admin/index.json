@@ -85,7 +85,10 @@
       "type": "feat",
       "scope": "frontend",
       "desc": "관리자 그룹 관리 화면을 둔다",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-10-01T22:50:37+0900",
+      "summary": "/admin/groups 그룹 관리 화면(/admin/users와 같은 관리자 가드·형식: 그룹 목록과 구성원, 생성·409 detail 표시, 아직 구성원이 아닌 사용자만 골라 추가, 구성원 제거, 부여 문서가 구성원에게 안 보이게 됨을 알리는 확인 뒤 삭제, 구성원 변경이 열람을 바꾸고 관리자도 못 볼 문서는 사용자 직접 부여하라는 안내)과 SiteHeader 관리자 전용 「그룹」 링크; 테스트 9건+헤더 단언 2건, frontend 302 passed, static 재빌드",
+      "completed_at": "2026-10-01T22:56:57+0900"
     },
     {
       "step": 8,
