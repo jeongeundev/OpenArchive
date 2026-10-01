@@ -50,6 +50,14 @@ describe("DocumentMeta", () => {
     );
   });
 
+  it("열람 범위를 조직 공개·제한으로 표시한다", () => {
+    const { rerender } = render(<DocumentMeta document={document} />);
+    expect(screen.getByText("조직 공개")).toBeInTheDocument();
+
+    rerender(<DocumentMeta document={{ ...document, visibility: "private" }} />);
+    expect(screen.getByText("제한")).toBeInTheDocument();
+  });
+
   it("편집기와 중복되지 않도록 태그를 표시하지 않는다", () => {
     render(<DocumentMeta document={document} />);
 

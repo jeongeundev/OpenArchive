@@ -9,7 +9,8 @@ from openarchive.config import get_settings
 from openarchive.db import close_pool, get_pool
 from openarchive.embeddings import FakeProvider
 from openarchive.main import app
-from openarchive.services.documents import InvalidVisibility
+from openarchive.services.documents import GrantsOnPublicDocument, InvalidVisibility
+from openarchive.services.grants import UnknownGrantee, add_member, create_group
 from openarchive.services.parsing import UnsupportedFileType
 
 
@@ -631,7 +632,7 @@ async def test_wrapped_read_tools_keep_their_argument_schema():
     assert "사내 문서 구절" in tools["search_documents"].description
     # 멱등키는 서버가 호출마다 만든다 — 에이전트가 고르는 인자가 아니다.
     assert set(tools["create_document"].inputSchema["properties"]) == {
-        "title", "content", "content_type", "tags", "visibility"
+        "title", "content", "content_type", "tags", "visibility", "grant_users", "grant_groups"
     }
 
 
@@ -646,3 +647,124 @@ async def test_list_documents_filters_by_extraction_status(mcp_database):
     assert [item["document_id"] for item in failed["items"]] == [str(ids["failed"])]
     will_embed = await list_documents(status="pending", extraction_status="done")
     assert [item["document_id"] for item in will_embed["items"]] == [str(ids["done"])]
+
+
+async def _seed_grantees(dsn: str) -> None:
+    async with await psycopg.AsyncConnection.connect(dsn, autocommit=True) as conn:
+        for username in ["alice", "bob", "carol", "dave"]:
+            await conn.execute(
+                "INSERT INTO users (username, password_hash) VALUES (%s, 'unused')", (username,)
+            )
+        group = await create_group(conn, "인사팀")
+        await add_member(conn, group["id"], "dave")
+
+
+async def _grant_count(dsn: str, document_id: str) -> int:
+    async with await psycopg.AsyncConnection.connect(dsn) as conn:
+        row = await (
+            await conn.execute(
+                "SELECT count(*) FROM document_grants WHERE document_id = %s", (document_id,)
+            )
+        ).fetchone()
+    return row[0]
+
+
+async def _visible_ids(monkeypatch, user: str) -> set[str]:
+    from openarchive.mcp_server.server import list_documents
+
+    monkeypatch.setenv("MCP_USER_ID", user)
+    get_settings.cache_clear()
+    return {item["document_id"] for item in (await list_documents())["items"]}
+
+
+async def test_create_with_grantees_opens_the_document_to_them_only(monkeypatch, mcp_database):
+    """ADR-044 관리 경로 — 생성 시 부여 대상은 문서와 같은 트랜잭션에 들어간다."""
+    from openarchive.mcp_server.server import create_document
+
+    await _seed_grantees(mcp_database)
+    monkeypatch.setenv("MCP_USER_ID", "alice")
+    get_settings.cache_clear()
+    created = await create_document(
+        "부여 문서",
+        "부여 대상만 보는 텍스트",
+        visibility="private",
+        grant_users=["bob"],
+        grant_groups=["인사팀"],
+    )
+    document_id = created["document_id"]
+
+    assert await _grant_count(mcp_database, document_id) == 2
+    assert document_id in await _visible_ids(monkeypatch, "bob")
+    assert document_id in await _visible_ids(monkeypatch, "dave")  # 인사팀 구성원
+    assert document_id not in await _visible_ids(monkeypatch, "carol")
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "expected_exception", "message"),
+    [
+        (
+            {"visibility": "public", "grant_users": ["bob"]},
+            GrantsOnPublicDocument,
+            "visibility=private",
+        ),
+        (
+            {"visibility": "private", "grant_users": ["bob", "nobody"]},
+            UnknownGrantee,
+            "nobody",
+        ),
+        (
+            {"visibility": "private", "grant_groups": ["없는팀"]},
+            UnknownGrantee,
+            "없는팀",
+        ),
+    ],
+)
+async def test_create_rejects_invalid_grantees_without_saving(
+    monkeypatch, mcp_database, kwargs, expected_exception, message
+):
+    from openarchive.mcp_server.server import create_document
+
+    await _seed_grantees(mcp_database)
+    monkeypatch.setenv("MCP_USER_ID", "alice")
+    get_settings.cache_clear()
+
+    with pytest.raises(expected_exception, match=message):
+        await create_document("부여 거부", "저장되면 안 되는 텍스트", **kwargs)
+
+    assert await _document_count_by_title(mcp_database, "부여 거부") == 0
+
+
+async def test_invalid_grantee_reaches_the_agent_as_a_tool_error(monkeypatch, mcp_database):
+    """서비스 문구가 그대로 도구 오류로 나간다 — MCP가 다른 말로 바꾸지 않는다."""
+    from mcp.server.fastmcp.exceptions import ToolError
+
+    from openarchive.mcp_server.server import mcp
+
+    await _seed_grantees(mcp_database)
+    monkeypatch.setenv("MCP_USER_ID", "alice")
+    get_settings.cache_clear()
+
+    with pytest.raises(ToolError, match="nobody"):
+        await mcp.call_tool(
+            "create_document",
+            {
+                "title": "부여 거부",
+                "content": "저장되면 안 되는 텍스트",
+                "visibility": "private",
+                "grant_users": ["nobody"],
+            },
+        )
+
+    assert await _document_count_by_title(mcp_database, "부여 거부") == 0
+
+
+async def test_create_without_grantees_makes_no_grants(monkeypatch, mcp_database):
+    from openarchive.mcp_server.server import create_document
+
+    await _seed_grantees(mcp_database)
+    monkeypatch.setenv("MCP_USER_ID", "alice")
+    get_settings.cache_clear()
+    created = await create_document("부여 없음", "소유자만 보는 텍스트", visibility="private")
+
+    assert await _grant_count(mcp_database, created["document_id"]) == 0
+    assert created["document_id"] not in await _visible_ids(monkeypatch, "bob")

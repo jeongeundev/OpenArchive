@@ -3,11 +3,14 @@ import type {
   AuthStatus,
   Backlink,
   ClustersResponse,
+  DocumentAccess,
   DocumentDetail,
   DocumentProgress,
   DocumentSummary,
   DiagnosticsResponse,
   EmbeddingStatus,
+  GroupSummary,
+  Principals,
   RelatedResponse,
   ResolvedLink,
   SearchResponse,
@@ -267,6 +270,42 @@ export function deleteUser(id: string): Promise<void> {
   );
 }
 
+export function listGroups(signal?: AbortSignal): Promise<GroupSummary[]> {
+  return request<GroupSummary[]>("/api/admin/groups", { signal });
+}
+
+export function createGroup(name: string): Promise<GroupSummary> {
+  return request<GroupSummary>("/api/admin/groups", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+}
+
+export function deleteGroup(id: string): Promise<void> {
+  return request<void>(
+    `/api/admin/groups/${encodeURIComponent(id)}`,
+    { method: "DELETE" },
+    { parse: false },
+  );
+}
+
+function groupMemberPath(groupId: string, username: string): string {
+  return `/api/admin/groups/${encodeURIComponent(groupId)}/members/${encodeURIComponent(username)}`;
+}
+
+export function addGroupMember(groupId: string, username: string): Promise<void> {
+  return request<void>(groupMemberPath(groupId, username), { method: "PUT" }, { parse: false });
+}
+
+export function removeGroupMember(groupId: string, username: string): Promise<void> {
+  return request<void>(groupMemberPath(groupId, username), { method: "DELETE" }, { parse: false });
+}
+
+export function listPrincipals(signal?: AbortSignal): Promise<Principals> {
+  return request<Principals>("/api/principals", { signal });
+}
+
 export function listDocuments(
   params?: {
     status?: EmbeddingStatus;
@@ -320,12 +359,16 @@ export function uploadDocument(input: {
   title?: string;
   tags: string[];
   visibility: Visibility;
+  grantUsers?: string[];
+  grantGroups?: string[];
 }): Promise<DocumentSummary> {
   const body = new FormData();
   body.append("file", input.file);
   if (input.title !== undefined) body.append("title", input.title);
   for (const tag of input.tags) body.append("tags", tag);
   body.append("visibility", input.visibility);
+  for (const user of input.grantUsers ?? []) body.append("grant_users", user);
+  for (const group of input.grantGroups ?? []) body.append("grant_groups", group);
 
   return request<DocumentSummary>("/api/documents", {
     method: "POST",
@@ -416,6 +459,18 @@ export function updateTags(id: string, tags: string[]): Promise<DocumentSummary>
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ tags }),
+  });
+}
+
+export function getDocumentAccess(id: string, signal?: AbortSignal): Promise<DocumentAccess> {
+  return request<DocumentAccess>(`/api/documents/${encodeURIComponent(id)}/access`, { signal });
+}
+
+export function setDocumentAccess(id: string, access: DocumentAccess): Promise<DocumentAccess> {
+  return request<DocumentAccess>(`/api/documents/${encodeURIComponent(id)}/access`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(access),
   });
 }
 

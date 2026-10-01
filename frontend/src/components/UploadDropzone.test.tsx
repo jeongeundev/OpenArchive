@@ -346,15 +346,26 @@ describe("UploadDropzone", () => {
     fireEvent.change(screen.getByLabelText("태그 (쉼표로 구분)"), {
       target: { value: "규정, 운영" },
     });
-    fireEvent.click(screen.getByLabelText("비공개"));
+    fireEvent.click(screen.getByLabelText("제한"));
     fireEvent.click(screen.getByRole("button", { name: "업로드" }));
 
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
-    for (const call of fetchMock.mock.calls) {
+    // 「제한」을 고르면 부여 대상 목록(/api/principals)도 조회한다 — 업로드 요청만 센다.
+    const uploads = () =>
+      fetchMock.mock.calls.filter((call) => call[0] === "/api/documents");
+    await waitFor(() => expect(uploads()).toHaveLength(2));
+    for (const call of uploads()) {
       const body = call[1]?.body as FormData;
       expect(body.getAll("tags")).toEqual(["규정", "운영"]);
       expect(body.get("visibility")).toBe("private");
     }
+  });
+
+  it("열람 범위 라디오는 조직 공개·제한이고 값은 public·private다", () => {
+    render(<UploadDropzone onUploaded={vi.fn()} />);
+
+    expect(screen.getByRole("group", { name: "열람 범위" })).toBeInTheDocument();
+    expect(screen.getByLabelText("조직 공개")).toHaveAttribute("value", "public");
+    expect(screen.getByLabelText("제한")).toHaveAttribute("value", "private");
   });
 
   it("ZIP에서 지원 문서가 두 개 이상 나오면 제목 입력을 숨긴다", async () => {
@@ -437,5 +448,105 @@ describe("UploadDropzone", () => {
 
     const accept = document.querySelector('input[type="file"]')?.getAttribute("accept") ?? "";
     expect(accept.split(",")).toEqual(expect.arrayContaining([".png", ".jpg", ".jpeg", ".zip"]));
+  });
+
+  describe("제한 문서의 부여 대상", () => {
+    function stubUploadFetch() {
+      const fetchMock = vi.fn((url: string) => {
+        if (url === "/api/principals") {
+          return Promise.resolve(
+            jsonResponse(JSON.stringify({ users: ["alice", "bob"], groups: ["인사팀"] }), 200),
+          );
+        }
+        return Promise.resolve(jsonResponse());
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      return fetchMock;
+    }
+
+    function uploadBody(fetchMock: ReturnType<typeof stubUploadFetch>): FormData {
+      const call = fetchMock.mock.calls.find(([url]) => url === "/api/documents");
+      return (call as unknown as [string, RequestInit])[1].body as FormData;
+    }
+
+    it("제한을 고르면 대상 선택이 나타나고 고른 대상을 함께 보낸다", async () => {
+      const fetchMock = stubUploadFetch();
+      render(<UploadDropzone onUploaded={vi.fn()} />);
+      expect(screen.queryByLabelText("사용자 선택")).not.toBeInTheDocument();
+
+      fireEvent.change(screen.getByLabelText("업로드할 파일"), {
+        target: { files: [new File(["text"], "guide.txt")] },
+      });
+      fireEvent.click(screen.getByRole("radio", { name: "제한" }));
+      await screen.findByRole("option", { name: "bob" });
+      fireEvent.change(screen.getByLabelText("사용자 선택"), { target: { value: "bob" } });
+      fireEvent.click(screen.getByRole("button", { name: "사용자 추가" }));
+      fireEvent.change(screen.getByLabelText("그룹 선택"), { target: { value: "인사팀" } });
+      fireEvent.click(screen.getByRole("button", { name: "그룹 추가" }));
+      fireEvent.click(screen.getByRole("button", { name: "업로드" }));
+
+      await waitFor(() =>
+        expect(fetchMock.mock.calls.some(([url]) => url === "/api/documents")).toBe(true),
+      );
+      const body = uploadBody(fetchMock);
+      expect(body.get("visibility")).toBe("private");
+      expect(body.getAll("grant_users")).toEqual(["bob"]);
+      expect(body.getAll("grant_groups")).toEqual(["인사팀"]);
+    });
+
+    it("조직 공개로 되돌리면 선택을 비우고 대상을 보내지 않는다", async () => {
+      const fetchMock = stubUploadFetch();
+      render(<UploadDropzone onUploaded={vi.fn()} />);
+
+      fireEvent.change(screen.getByLabelText("업로드할 파일"), {
+        target: { files: [new File(["text"], "guide.txt")] },
+      });
+      fireEvent.click(screen.getByRole("radio", { name: "제한" }));
+      await screen.findByRole("option", { name: "bob" });
+      fireEvent.change(screen.getByLabelText("사용자 선택"), { target: { value: "bob" } });
+      fireEvent.click(screen.getByRole("button", { name: "사용자 추가" }));
+      fireEvent.click(screen.getByRole("radio", { name: "조직 공개" }));
+      expect(screen.queryByLabelText("사용자 선택")).not.toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole("radio", { name: "제한" }));
+      expect(screen.queryByRole("button", { name: "사용자 bob 제거" })).not.toBeInTheDocument();
+      fireEvent.click(screen.getByRole("radio", { name: "조직 공개" }));
+      fireEvent.click(screen.getByRole("button", { name: "업로드" }));
+
+      await waitFor(() =>
+        expect(fetchMock.mock.calls.some(([url]) => url === "/api/documents")).toBe(true),
+      );
+      const body = uploadBody(fetchMock);
+      expect(body.get("visibility")).toBe("public");
+      expect(body.has("grant_users")).toBe(false);
+      expect(body.has("grant_groups")).toBe(false);
+    });
+
+    it("대상 목록을 불러오지 못하면 빈 선택지 대신 실패를 알리고, 다시 고르면 재시도한다", async () => {
+      let principalsCalls = 0;
+      const fetchMock = vi.fn((url: string) => {
+        if (url === "/api/principals") {
+          principalsCalls += 1;
+          return Promise.resolve(
+            principalsCalls === 1
+              ? jsonResponse(JSON.stringify({ detail: "서버 오류" }), 500)
+              : jsonResponse(JSON.stringify({ users: ["bob"], groups: [] }), 200),
+          );
+        }
+        return Promise.resolve(jsonResponse());
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      render(<UploadDropzone onUploaded={vi.fn()} />);
+
+      fireEvent.click(screen.getByRole("radio", { name: "제한" }));
+
+      expect(await screen.findByRole("alert")).toHaveTextContent("대상 목록을 불러오지 못했습니다");
+      expect(screen.queryByLabelText("사용자 선택")).not.toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole("radio", { name: "조직 공개" }));
+      fireEvent.click(screen.getByRole("radio", { name: "제한" }));
+      expect(await screen.findByRole("option", { name: "bob" })).toBeInTheDocument();
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    });
   });
 });

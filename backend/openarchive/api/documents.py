@@ -16,10 +16,16 @@ from fastapi import (
     status,
 )
 
-from openarchive.api.deps import Connection, require_user_id, require_write_user_id
+from openarchive.api.deps import (
+    Connection,
+    require_session_user,
+    require_user_id,
+    require_write_user_id,
+)
 from openarchive.api.schemas import (
     BacklinkItem,
     CreateTextDocumentRequest,
+    DocumentAccess,
     DocumentDetail,
     DocumentProgress,
     DocumentSummary,
@@ -32,6 +38,7 @@ from openarchive.api.schemas import (
     RestoreVersionRequest,
     TagSuggestionsResponse,
     TextVersionDetail,
+    UpdateAccessRequest,
     UpdateTagsRequest,
 )
 from openarchive.config import get_settings
@@ -73,6 +80,8 @@ async def upload_document(
     title: Annotated[str | None, Form()] = None,
     tags: Annotated[list[str] | None, Form()] = None,
     visibility: Annotated[Literal["public", "private"], Form()] = "public",
+    grant_users: Annotated[list[str] | None, Form()] = None,
+    grant_groups: Annotated[list[str] | None, Form()] = None,
     idempotency_key: IdempotencyKey = None,
 ) -> DocumentSummary:
     data = await _read_upload(file)
@@ -85,6 +94,8 @@ async def upload_document(
             title=title,
             tags=tags,
             visibility=visibility,
+            grant_users=grant_users,
+            grant_groups=grant_groups,
             idempotency_key=idempotency_key,
         )
     except UnsupportedFileType as error:
@@ -112,6 +123,8 @@ async def create_text_document(
         owner_id=user_id,
         tags=body.tags,
         visibility=body.visibility,
+        grant_users=body.grant_users,
+        grant_groups=body.grant_groups,
         idempotency_key=idempotency_key,
     )
     return DocumentSummary.model_validate(document)
@@ -158,6 +171,38 @@ async def get_document(
 ) -> DocumentDetail:
     document = await service.get_document(conn, document_id, user_id=user_id)
     return DocumentDetail.model_validate(document)
+
+
+@router.get("/{document_id}/access", response_model=DocumentAccess)
+async def get_document_access(
+    document_id: UUID,
+    conn: Connection,
+    user_id: Annotated[str, Depends(require_user_id)],
+) -> DocumentAccess:
+    return DocumentAccess.model_validate(
+        await service.get_access(conn, document_id, user_id=user_id)
+    )
+
+
+# 세션 전용: 기존 제한 문서의 열람자를 넓히는 관리 행위라 쓰기 토큰에 열지 않는다
+# (ADR-044 관리 경로 결정 2). 생성 시 대상 지정은 쓰기 토큰에도 허용한다.
+@router.put("/{document_id}/access", response_model=DocumentAccess)
+async def update_document_access(
+    document_id: UUID,
+    body: UpdateAccessRequest,
+    conn: Connection,
+    user: Annotated[dict, Depends(require_session_user)],
+) -> DocumentAccess:
+    return DocumentAccess.model_validate(
+        await service.set_access(
+            conn,
+            document_id,
+            user_id=user["username"],
+            visibility=body.visibility,
+            users=body.users,
+            groups=body.groups,
+        )
+    )
 
 
 def _original_file_response(original: dict) -> Response:

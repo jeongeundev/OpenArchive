@@ -105,6 +105,11 @@
       "dir": "m19-ocr",
       "status": "completed",
       "completed_at": "2026-09-29T15:18:13+0900"
+    },
+    {
+      "dir": "m20-grants-admin",
+      "status": "completed",
+      "completed_at": "2026-10-01T23:09:08+0900"
     }
   ]
 }

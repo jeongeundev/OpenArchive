@@ -2,18 +2,26 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   ApiError,
+  addGroupMember,
   changePassword,
+  createGroup,
   createToken,
   deleteDocument,
+  deleteGroup,
   editDocument,
   getAuthStatus,
   getDocument,
+  getDocumentAccess,
   getDocumentProgress,
   isRetrying,
   listDocuments,
+  listGroups,
+  listPrincipals,
   listTokens,
+  removeGroupMember,
   revokeToken,
   search,
+  setDocumentAccess,
   subscribeRetrying,
   updateTags,
   uploadDocument,
@@ -102,6 +110,34 @@ describe("API responses", () => {
     expect((body as FormData).getAll("tags")).toEqual(["OpenSQL", "검색"]);
     expect((body as FormData).get("file")).toBe(file);
     expect(new Headers(fetchMock.mock.calls[0][1]?.headers).has("Content-Type")).toBe(false);
+  });
+
+  it("appends each grantee as a repeated field when uploading", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response("{}", { status: 201 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await uploadDocument({
+      file: new File(["text"], "notes.txt"),
+      tags: [],
+      visibility: "private",
+      grantUsers: ["bob", "carol"],
+      grantGroups: ["인사팀"],
+    });
+
+    const body = fetchMock.mock.calls[0][1]?.body as FormData;
+    expect(body.getAll("grant_users")).toEqual(["bob", "carol"]);
+    expect(body.getAll("grant_groups")).toEqual(["인사팀"]);
+  });
+
+  it("omits grantee fields when none are given", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response("{}", { status: 201 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await uploadDocument({ file: new File(["text"], "notes.txt"), tags: [], visibility: "public" });
+
+    const body = fetchMock.mock.calls[0][1]?.body as FormData;
+    expect(body.has("grant_users")).toBe(false);
+    expect(body.has("grant_groups")).toBe(false);
   });
 
   it("adds the embedding status filter to the document list query", async () => {
@@ -470,5 +506,106 @@ describe("API retry on temporary unavailability", () => {
     expect(isRetrying()).toBe(false);
     expect(changes).toEqual([true, false]);
     unsubscribe();
+  });
+});
+
+describe("groups and document access", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  function stubFetch(body: string | null, status = 200) {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(body, { status }));
+    vi.stubGlobal("fetch", fetchMock);
+    return fetchMock;
+  }
+
+  it("lists groups from the admin path", async () => {
+    const fetchMock = stubFetch("[]");
+
+    await listGroups();
+
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/admin/groups");
+    expect(fetchMock.mock.calls[0][1]?.method ?? "GET").toBe("GET");
+  });
+
+  it("creates a group with its name in a JSON body", async () => {
+    const fetchMock = stubFetch(
+      JSON.stringify({ id: "g1", name: "인사팀", created_at: "2026-10-01T00:00:00Z", members: [] }),
+      201,
+    );
+
+    await createGroup("인사팀");
+
+    const [path, init] = fetchMock.mock.calls[0];
+    expect(path).toBe("/api/admin/groups");
+    expect(init?.method).toBe("POST");
+    expect(JSON.parse(init?.body as string)).toEqual({ name: "인사팀" });
+  });
+
+  it("deletes a group by id", async () => {
+    const fetchMock = stubFetch(null, 204);
+
+    await deleteGroup("g/1");
+
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/admin/groups/g%2F1");
+    expect(fetchMock.mock.calls[0][1]?.method).toBe("DELETE");
+  });
+
+  it("adds and removes a member with the username in the path", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await addGroupMember("g1", "김 철수");
+    await removeGroupMember("g1", "김 철수");
+
+    const encoded = encodeURIComponent("김 철수");
+    expect(fetchMock.mock.calls[0][0]).toBe(`/api/admin/groups/g1/members/${encoded}`);
+    expect(fetchMock.mock.calls[0][1]?.method).toBe("PUT");
+    expect(fetchMock.mock.calls[1][0]).toBe(`/api/admin/groups/g1/members/${encoded}`);
+    expect(fetchMock.mock.calls[1][1]?.method).toBe("DELETE");
+  });
+
+  it("lists principals names", async () => {
+    const fetchMock = stubFetch(JSON.stringify({ users: ["bob"], groups: ["인사팀"] }));
+
+    await expect(listPrincipals()).resolves.toEqual({ users: ["bob"], groups: ["인사팀"] });
+
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/principals");
+  });
+
+  it("reads a document's access settings", async () => {
+    const access = { visibility: "private", users: ["bob"], groups: [] };
+    const fetchMock = stubFetch(JSON.stringify(access));
+
+    await expect(getDocumentAccess("doc-1")).resolves.toEqual(access);
+
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/documents/doc-1/access");
+  });
+
+  it("replaces a document's access settings with PUT", async () => {
+    const access = { visibility: "private" as const, users: ["bob"], groups: ["인사팀"] };
+    const fetchMock = stubFetch(JSON.stringify(access));
+
+    await setDocumentAccess("doc-1", access);
+
+    const [path, init] = fetchMock.mock.calls[0];
+    expect(path).toBe("/api/documents/doc-1/access");
+    expect(init?.method).toBe("PUT");
+    expect(JSON.parse(init?.body as string)).toEqual(access);
+  });
+
+  it("does not retry an access change on 503", async () => {
+    const fetchMock = stubFetch(JSON.stringify({ detail: "잠시 후" }), 503);
+
+    await setDocumentAccess("doc-1", { visibility: "public", users: [], groups: [] }).catch(
+      () => undefined,
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

@@ -1,4 +1,4 @@
-import type { DocumentDetail } from "@/lib/types";
+import { VISIBILITY_LABEL, type DocumentDetail } from "@/lib/types";
 import { DocumentStatusBadge } from "./StatusBadge";
 
 function formatDate(value: string): string {
@@ -38,9 +38,9 @@ export function DocumentMeta({
           <dd className="mt-1 uppercase text-neutral-300">{document.content_type}</dd>
         </div>
         <div>
-          <dt className="text-neutral-500">공개범위</dt>
+          <dt className="text-neutral-500">열람 범위</dt>
           <dd className="mt-1 text-neutral-300">
-            {document.visibility === "public" ? "공개" : "비공개"}
+            {VISIBILITY_LABEL[document.visibility]}
           </dd>
         </div>
         <div>

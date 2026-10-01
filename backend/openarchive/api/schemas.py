@@ -76,6 +76,22 @@ class CreateTextDocumentRequest(BaseModel):
     content_type: Literal["txt", "md"] = "md"
     tags: list[str] | None = None
     visibility: Literal["public", "private"] = "public"
+    grant_users: list[str] | None = None
+    grant_groups: list[str] | None = None
+
+
+class DocumentAccess(BaseModel):
+    """열람 범위 설정. 소유자에게만 보인다 — 목록·검색 응답에는 싣지 않는다 (ADR-044)."""
+
+    visibility: Literal["public", "private"]
+    users: list[str]
+    groups: list[str]
+
+
+class UpdateAccessRequest(BaseModel):
+    visibility: Literal["public", "private"]
+    users: list[str] = []
+    groups: list[str] = []
 
 
 class EditDocumentRequest(BaseModel):
@@ -169,6 +185,22 @@ class UserSummary(BaseModel):
     username: str
     is_admin: bool
     created_at: datetime
+
+
+class CreateGroupRequest(BaseModel):
+    name: str = Field(min_length=1)
+
+
+class GroupSummary(BaseModel):
+    id: UUID
+    name: str
+    created_at: datetime
+    members: list[str]
+
+
+class Principals(BaseModel):
+    users: list[str]
+    groups: list[str]
 
 
 class SearchRequest(BaseModel):

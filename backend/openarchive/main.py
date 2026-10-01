@@ -8,6 +8,8 @@ from openarchive.api.auth import router as auth_router
 from openarchive.api.clusters import router as clusters_router
 from openarchive.api.diagnostics import router as diagnostics_router
 from openarchive.api.documents import router as documents_router
+from openarchive.api.groups import principals_router
+from openarchive.api.groups import router as groups_router
 from openarchive.api.retry import RetryOnUnavailable
 from openarchive.api.search import router as search_router
 from openarchive.api.system import router as system_router
@@ -17,6 +19,7 @@ from openarchive.embeddings import get_provider, warm_up
 from openarchive.frontend import mount_frontend
 from openarchive.migrations import run_migrations
 from openarchive.services import documents as documents_service
+from openarchive.services import grants as grants_service
 
 
 @asynccontextmanager
@@ -39,6 +42,8 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="OpenArchive API", lifespan=lifespan)
 app.add_middleware(RetryOnUnavailable)
 app.include_router(admin_router)
+app.include_router(groups_router)
+app.include_router(principals_router)
 app.include_router(auth_router)
 app.include_router(documents_router)
 app.include_router(clusters_router)
@@ -79,6 +84,13 @@ async def _empty_extracted_text(request: Request, error: Exception) -> JSONRespo
 
 @app.exception_handler(documents_service.ExtractedTextTooLarge)
 async def _extracted_text_too_large(request: Request, error: Exception) -> JSONResponse:
+    return JSONResponse(status_code=400, content={"detail": str(error)})
+
+
+@app.exception_handler(documents_service.GrantsOnPublicDocument)
+@app.exception_handler(documents_service.GrantToOwner)
+@app.exception_handler(grants_service.UnknownGrantee)
+async def _invalid_grantees(request: Request, error: Exception) -> JSONResponse:
     return JSONResponse(status_code=400, content={"detail": str(error)})
 
 

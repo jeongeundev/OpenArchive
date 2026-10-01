@@ -207,11 +207,18 @@ async def create_document(
     content_type: Literal["txt", "md"] = "md",
     tags: list[str] | None = None,
     visibility: Literal["public", "private"] = "public",
+    grant_users: list[str] | None = None,
+    grant_groups: list[str] | None = None,
 ) -> dict:
     """문서 텍스트를 저장하고 임베딩 파이프라인을 기동합니다.
 
-    기본 공개범위는 public입니다. 소유자는 서버의 MCP_USER_ID 환경이 정하며 인자로
-    지정할 수 없습니다. 임베딩은 비동기이므로 응답의 embedding_status가 pending일 수 있습니다.
+    기본 공개범위는 public(조직 공개)입니다. private는 소유자와 부여 대상만 봅니다.
+    부여 대상은 grant_users(사용자명)·grant_groups(그룹명)로 주며 visibility="private"일 때만
+    줄 수 있습니다. 모르는 이름이나 소유자 자신이 있으면 문서를 만들지 않습니다. 이미 있는 문서의 열람 범위는
+    이 도구로 바꿀 수 없습니다(웹 로그인 세션 전용).
+
+    소유자는 서버의 MCP_USER_ID 환경이 정하며 인자로 지정할 수 없습니다. 임베딩은
+    비동기이므로 응답의 embedding_status가 pending일 수 있습니다.
     """
     user_id = get_settings().mcp_user_id
     # 빈 값·공백도 주체가 없는 상태다. `MCP_USER_ID=""`는 None이 아니라 빈 문자열로 들어오고,
@@ -233,6 +240,8 @@ async def create_document(
                 tags=tags,
                 visibility=visibility,
                 idempotency_key=idempotency_key,
+                grant_users=grant_users,
+                grant_groups=grant_groups,
             )
         return _document_payload(document)
 

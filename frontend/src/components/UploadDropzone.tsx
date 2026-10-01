@@ -1,9 +1,15 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
-import { ApiError, uploadDocument } from "@/lib/api";
-import { SUPPORTED_CONTENT_TYPES, type Visibility } from "@/lib/types";
+import { GranteePicker } from "./GranteePicker";
+import { ApiError, listPrincipals, uploadDocument } from "@/lib/api";
+import {
+  SUPPORTED_CONTENT_TYPES,
+  VISIBILITY_LABEL,
+  type Principals,
+  type Visibility,
+} from "@/lib/types";
 import { MAX_UPLOAD_BYTES, UPLOAD_TOO_LARGE } from "@/lib/limits";
 import { expandZip } from "@/lib/zip";
 
@@ -26,10 +32,41 @@ export function UploadDropzone({
   const [title, setTitle] = useState("");
   const [tags, setTags] = useState("");
   const [visibility, setVisibility] = useState<Visibility>("public");
+  const [grantees, setGrantees] = useState<{ users: string[]; groups: string[] }>({
+    users: [],
+    groups: [],
+  });
+  const [principals, setPrincipals] = useState<Principals | null>(null);
+  const [principalsError, setPrincipalsError] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  // 대상 목록은 「제한」을 고를 때 불러온다. 성공하면 다시 부르지 않고, 실패하면 「제한」을
+  // 다시 고를 때 재시도한다. 실패를 빈 목록으로 바꾸면 대상이 없다고 오해한 채 소유자만 보는
+  // 문서를 올리게 된다.
+  useEffect(() => {
+    if (visibility !== "private" || principals !== null) return;
+    const controller = new AbortController();
+    listPrincipals(controller.signal)
+      .then((directory) => {
+        if (!controller.signal.aborted) setPrincipals(directory);
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) {
+          setPrincipalsError("대상 목록을 불러오지 못했습니다. 지금 올리면 소유자만 봅니다.");
+        }
+      });
+    return () => controller.abort();
+  }, [visibility, principals]);
+
+  function chooseVisibility(next: Visibility): void {
+    setVisibility(next);
+    setPrincipalsError(null);
+    // 조직 공개에는 부여 대상을 둘 수 없다 — 서버도 400으로 거부한다.
+    if (next === "public") setGrantees({ users: [], groups: [] });
+  }
 
   const fileCount = items.filter((item) => item.file !== undefined).length;
   const pendingCount = items.filter((item) => item.status === "대기").length;
@@ -98,6 +135,9 @@ export function UploadDropzone({
           title: fileCount === 1 && cleanTitle !== "" ? cleanTitle : undefined,
           tags: cleanTags,
           visibility,
+          ...(visibility === "private"
+            ? { grantUsers: grantees.users, grantGroups: grantees.groups }
+            : {}),
         });
         patchItem(index, { status: "완료" });
         succeeded += 1;
@@ -112,7 +152,7 @@ export function UploadDropzone({
     if (failed === 0) {
       setTitle("");
       setTags("");
-      setVisibility("public");
+      chooseVisibility("public");
       setMessage("업로드했습니다. 텍스트 인식(스캔 문서)과 임베딩이 끝나면 상태가 완료로 바뀝니다.");
     } else {
       setError(succeeded > 0 ? "일부 파일을 업로드하지 못했습니다." : "업로드에 실패했습니다.");
@@ -211,27 +251,46 @@ export function UploadDropzone({
       </div>
 
       <fieldset disabled={disabled}>
-        <legend className="text-sm text-neutral-400">공개범위</legend>
+        <legend className="text-sm text-neutral-400">열람 범위</legend>
         <div className="mt-2 flex gap-4 text-sm text-neutral-300">
           <label className="flex items-center gap-2">
             <input
               checked={visibility === "public"}
               name="visibility"
-              onChange={() => setVisibility("public")}
+              onChange={() => chooseVisibility("public")}
               type="radio"
+              value="public"
             />
-            공개
+            {VISIBILITY_LABEL.public}
           </label>
           <label className="flex items-center gap-2">
             <input
               checked={visibility === "private"}
               name="visibility"
-              onChange={() => setVisibility("private")}
+              onChange={() => chooseVisibility("private")}
               type="radio"
+              value="private"
             />
-            비공개
+            {VISIBILITY_LABEL.private}
           </label>
         </div>
+        {visibility === "private" ? (
+          <div className="mt-4">
+            {principalsError !== null ? (
+              <p className="text-sm text-[#ef4444]" role="alert">{principalsError}</p>
+            ) : principals === null ? (
+              <p className="text-sm text-neutral-500">대상 목록을 불러오는 중…</p>
+            ) : (
+              <GranteePicker
+                disabled={disabled}
+                groups={grantees.groups}
+                onChange={setGrantees}
+                principals={principals}
+                users={grantees.users}
+              />
+            )}
+          </div>
+        ) : null}
       </fieldset>
 
       {error !== null ? <p className="text-sm text-[#ef4444]">{error}</p> : null}

@@ -1,6 +1,6 @@
 import Link from "next/link";
 
-import type { DocumentSummary } from "@/lib/types";
+import { VISIBILITY_LABEL, type DocumentSummary } from "@/lib/types";
 import { DocumentStatusBadge } from "./StatusBadge";
 
 const DATE_FORMATTER = new Intl.DateTimeFormat("ko-KR", {
@@ -24,7 +24,7 @@ export function DocumentTable({
             <th className="px-4 py-3 font-medium" scope="col">제목</th>
             <th className="px-4 py-3 font-medium" scope="col">유형</th>
             <th className="px-4 py-3 font-medium" scope="col">태그</th>
-            <th className="px-4 py-3 font-medium" scope="col">공개범위</th>
+            <th className="px-4 py-3 font-medium" scope="col">열람 범위</th>
             <th className="px-4 py-3 font-medium" scope="col">상태</th>
             <th className="px-4 py-3 font-medium" scope="col">수정일</th>
           </tr>
@@ -54,7 +54,7 @@ export function DocumentTable({
                   {document.tags.length > 0 ? document.tags.join(", ") : "—"}
                 </td>
                 <td className="px-4 py-3">
-                  {document.visibility === "public" ? "공개" : "비공개"}
+                  {VISIBILITY_LABEL[document.visibility]}
                 </td>
                 <td className="px-4 py-3">
                   <DocumentStatusBadge document={document} />
