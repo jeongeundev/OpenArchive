@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
 import { useAuth } from "@/components/AuthProvider";
+import { SharesSection } from "@/components/SharesSection";
 import {
   ApiError,
   changePassword,
@@ -121,7 +122,7 @@ export default function SettingsPage(): React.ReactElement {
       <div>
         <h1 className="text-4xl font-semibold text-white">계정 설정</h1>
         <p className="mt-3 text-sm text-neutral-400">
-          {auth.username} 계정의 API 토큰과 비밀번호를 관리합니다.
+          {auth.username} 계정의 API 토큰·외부 공유·비밀번호를 관리합니다.
         </p>
       </div>
 
@@ -223,6 +224,8 @@ export default function SettingsPage(): React.ReactElement {
         </div>
         {tokenError !== null ? <p className="text-sm text-[#ef4444]" role="alert">{tokenError}</p> : null}
       </div>
+
+      {!authLoading && auth.authenticated ? <SharesSection /> : null}
 
       <div className="space-y-4">
         <div>
