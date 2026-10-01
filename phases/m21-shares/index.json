@@ -41,7 +41,10 @@
       "type": "feat",
       "scope": "api",
       "desc": "공유 생성·문서 지정·토큰 발급 서비스를 두고 열람 범위 교체가 공유 부여를 남기게 한다",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-10-02T05:10:08+0900",
+      "summary": "services/shares.py: create_share(conn,*,owner,name)·list_shares(conn,*,owner)·delete_share(conn,share_id,*,owner)·add_document/remove_document(conn,share_id,document_id,*,owner)·issue_share_token(conn,share_id,*,owner,name)·revoke_share_token(conn,share_id,token_id,*,owner); 예외 ShareAlreadyExists·ShareNotFound(남의 공유=없는 공유), 문서 판정은 documents._load_for_write 재사용(안 보이면 DocumentNotFound, 남의 것이면 DocumentAccessDenied, 관리자도 동일); auth.insert_token 공통부 추출(create_token 계약 유지, 공유 토큰은 read·user_id NULL·sha256만); set_access DELETE를 share_id IS NULL로 한정. test_shares.py 20건 + test_document_access 3건. mutant ①share_id IS NULL 제거 3 fail ②소유자 판정→ensure_visible 2 fail ③_own_share 소유 조건 제거 4 fail. backend 1286 통과·ruff 통과",
+      "completed_at": "2026-10-02T05:26:25+0900"
     },
     {
       "step": 4,
