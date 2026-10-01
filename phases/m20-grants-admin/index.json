@@ -1,0 +1,24 @@
+{
+  "project": "OpenArchive",
+  "phase": "m20-grants-admin",
+  "steps": [
+    { "step": 0, "name": "grants-docs", "type": "docs", "scope": "adr",
+      "desc": "ADR-044에 그룹·부여 관리 결정(관리자 신뢰·세션 전용 변경·이름 지정·public 부여 거부)을 기록한다", "status": "pending" },
+    { "step": 1, "name": "groups-service", "type": "feat", "scope": "api",
+      "desc": "그룹·구성원 관리와 부여 대상 이름 해석 서비스를 둔다", "status": "pending" },
+    { "step": 2, "name": "document-access", "type": "feat", "scope": "api",
+      "desc": "문서 열람 범위 조회·교체와 생성 시 부여 대상을 서비스에 둔다", "status": "pending" },
+    { "step": 3, "name": "groups-api", "type": "feat", "scope": "api",
+      "desc": "관리자 그룹 API와 부여 대상 목록 API를 둔다", "status": "pending" },
+    { "step": 4, "name": "access-api", "type": "feat", "scope": "api",
+      "desc": "문서 열람 범위 API(변경은 세션 전용)와 업로드·텍스트 API의 부여 대상 인자를 둔다", "status": "pending" },
+    { "step": 5, "name": "mcp-grants", "type": "feat", "scope": "mcp",
+      "desc": "MCP create_document에 부여 대상 인자를 둔다", "status": "pending" },
+    { "step": 6, "name": "frontend-client", "type": "feat", "scope": "frontend",
+      "desc": "그룹·열람 범위 API 클라이언트를 두고 공개범위 문구를 조직 공개/제한으로 바꾼다", "status": "pending" },
+    { "step": 7, "name": "admin-groups-page", "type": "feat", "scope": "frontend",
+      "desc": "관리자 그룹 관리 화면을 둔다", "status": "pending" },
+    { "step": 8, "name": "access-panel", "type": "feat", "scope": "frontend",
+      "desc": "문서 상세의 열람 범위 패널과 업로드의 부여 대상 선택을 둔다", "status": "pending" }
+  ]
+}
