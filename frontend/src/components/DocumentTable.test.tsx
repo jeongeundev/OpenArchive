@@ -43,8 +43,8 @@ describe("DocumentTable", () => {
       "href",
       "/documents/document-1",
     );
-    expect(screen.getByText("공개")).toBeInTheDocument();
-    expect(screen.getByText("비공개")).toBeInTheDocument();
+    expect(screen.getByText("조직 공개")).toBeInTheDocument();
+    expect(screen.getByText("제한")).toBeInTheDocument();
   });
 
   it("문서마다 상태 배지를 하나씩 표시한다", () => {

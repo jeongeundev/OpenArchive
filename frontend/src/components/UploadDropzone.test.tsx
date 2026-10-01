@@ -346,7 +346,7 @@ describe("UploadDropzone", () => {
     fireEvent.change(screen.getByLabelText("태그 (쉼표로 구분)"), {
       target: { value: "규정, 운영" },
     });
-    fireEvent.click(screen.getByLabelText("비공개"));
+    fireEvent.click(screen.getByLabelText("제한"));
     fireEvent.click(screen.getByRole("button", { name: "업로드" }));
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
@@ -355,6 +355,14 @@ describe("UploadDropzone", () => {
       expect(body.getAll("tags")).toEqual(["규정", "운영"]);
       expect(body.get("visibility")).toBe("private");
     }
+  });
+
+  it("열람 범위 라디오는 조직 공개·제한이고 값은 public·private다", () => {
+    render(<UploadDropzone onUploaded={vi.fn()} />);
+
+    expect(screen.getByRole("group", { name: "열람 범위" })).toBeInTheDocument();
+    expect(screen.getByLabelText("조직 공개")).toHaveAttribute("value", "public");
+    expect(screen.getByLabelText("제한")).toHaveAttribute("value", "private");
   });
 
   it("ZIP에서 지원 문서가 두 개 이상 나오면 제목 입력을 숨긴다", async () => {

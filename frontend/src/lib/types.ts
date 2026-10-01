@@ -5,6 +5,12 @@ export type ContentType =
 export type ExtractionStatus = "pending" | "failed" | "done";
 export type Visibility = "public" | "private";
 
+/** 값은 서버 계약(PyPI 0.1.0)이라 그대로 두고 화면 문구만 바꾼다 — private은 소유자 + 부여 대상이다 (ADR-044). */
+export const VISIBILITY_LABEL: Record<Visibility, string> = {
+  public: "조직 공개",
+  private: "제한",
+};
+
 export type TokenScope = "read" | "read_write";
 
 export interface TokenSummary {
@@ -169,6 +175,26 @@ export interface UserSummary {
   username: string;
   is_admin: boolean;
   created_at: string;
+}
+
+export interface GroupSummary {
+  id: string;
+  name: string;
+  created_at: string;
+  members: string[];
+}
+
+/** 열람 부여 대상으로 고를 수 있는 이름들. 로그인한 사용자 누구나 받는다 (ADR-044). */
+export interface Principals {
+  users: string[];
+  groups: string[];
+}
+
+/** 문서의 열람 범위. 소유자만 읽고 바꾼다. public에는 부여 대상을 둘 수 없다. */
+export interface DocumentAccess {
+  visibility: Visibility;
+  users: string[];
+  groups: string[];
 }
 
 export interface DiagnosticDocument {

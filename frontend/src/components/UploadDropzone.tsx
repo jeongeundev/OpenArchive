@@ -3,7 +3,7 @@
 import { useRef, useState } from "react";
 
 import { ApiError, uploadDocument } from "@/lib/api";
-import { SUPPORTED_CONTENT_TYPES, type Visibility } from "@/lib/types";
+import { SUPPORTED_CONTENT_TYPES, VISIBILITY_LABEL, type Visibility } from "@/lib/types";
 import { MAX_UPLOAD_BYTES, UPLOAD_TOO_LARGE } from "@/lib/limits";
 import { expandZip } from "@/lib/zip";
 
@@ -211,7 +211,7 @@ export function UploadDropzone({
       </div>
 
       <fieldset disabled={disabled}>
-        <legend className="text-sm text-neutral-400">공개범위</legend>
+        <legend className="text-sm text-neutral-400">열람 범위</legend>
         <div className="mt-2 flex gap-4 text-sm text-neutral-300">
           <label className="flex items-center gap-2">
             <input
@@ -219,8 +219,9 @@ export function UploadDropzone({
               name="visibility"
               onChange={() => setVisibility("public")}
               type="radio"
+              value="public"
             />
-            공개
+            {VISIBILITY_LABEL.public}
           </label>
           <label className="flex items-center gap-2">
             <input
@@ -228,8 +229,9 @@ export function UploadDropzone({
               name="visibility"
               onChange={() => setVisibility("private")}
               type="radio"
+              value="private"
             />
-            비공개
+            {VISIBILITY_LABEL.private}
           </label>
         </div>
       </fieldset>
