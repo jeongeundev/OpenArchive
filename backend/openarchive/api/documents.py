@@ -18,6 +18,7 @@ from fastapi import (
 
 from openarchive.api.deps import (
     Connection,
+    require_reader,
     require_session_user,
     require_user_id,
     require_write_user_id,
@@ -133,7 +134,7 @@ async def create_text_document(
 @router.get("", response_model=list[DocumentSummary])
 async def list_documents(
     conn: Connection,
-    user_id: Annotated[str, Depends(require_user_id)],
+    user_id: Annotated[str, Depends(require_reader)],
     status_filter: Annotated[str | None, Query(alias="status")] = None,
     extraction_status: service.ExtractionStatus | None = None,
     tag: str | None = None,
@@ -156,7 +157,7 @@ async def list_documents(
 @router.get("/progress", response_model=DocumentProgress)
 async def get_document_progress(
     conn: Connection,
-    user_id: Annotated[str, Depends(require_user_id)],
+    user_id: Annotated[str, Depends(require_reader)],
 ) -> DocumentProgress:
     return DocumentProgress.model_validate(
         await service.document_progress(conn, user_id=user_id)
@@ -167,7 +168,7 @@ async def get_document_progress(
 async def get_document(
     document_id: UUID,
     conn: Connection,
-    user_id: Annotated[str, Depends(require_user_id)],
+    user_id: Annotated[str, Depends(require_reader)],
 ) -> DocumentDetail:
     document = await service.get_document(conn, document_id, user_id=user_id)
     return DocumentDetail.model_validate(document)
@@ -230,7 +231,7 @@ def _original_file_response(original: dict) -> Response:
 async def download_latest_original(
     document_id: UUID,
     conn: Connection,
-    user_id: Annotated[str, Depends(require_user_id)],
+    user_id: Annotated[str, Depends(require_reader)],
 ) -> Response:
     original = await service.get_original_file(conn, document_id, user_id=user_id)
     return _original_file_response(original)
@@ -241,7 +242,7 @@ async def download_original(
     document_id: UUID,
     file_version: Annotated[int, Path(ge=1)],
     conn: Connection,
-    user_id: Annotated[str, Depends(require_user_id)],
+    user_id: Annotated[str, Depends(require_reader)],
 ) -> Response:
     original = await service.get_original_file(
         conn, document_id, user_id=user_id, file_version=file_version
@@ -253,7 +254,7 @@ async def download_original(
 async def get_document_links(
     document_id: UUID,
     conn: Connection,
-    user_id: Annotated[str, Depends(require_user_id)],
+    user_id: Annotated[str, Depends(require_reader)],
 ) -> list[ResolvedLinkItem]:
     return [
         ResolvedLinkItem.model_validate(item)
@@ -265,7 +266,7 @@ async def get_document_links(
 async def get_document_backlinks(
     document_id: UUID,
     conn: Connection,
-    user_id: Annotated[str, Depends(require_user_id)],
+    user_id: Annotated[str, Depends(require_reader)],
 ) -> list[BacklinkItem]:
     return [
         BacklinkItem.model_validate(item)
@@ -277,7 +278,7 @@ async def get_document_backlinks(
 async def get_related(
     document_id: UUID,
     conn: Connection,
-    user_id: Annotated[str, Depends(require_user_id)],
+    user_id: Annotated[str, Depends(require_reader)],
     k: Annotated[int, Query(ge=1, le=MAX_K)] = 10,
 ) -> RelatedResponse:
     result = await find_related(conn, document_id=document_id, user_id=user_id, k=k)
@@ -302,7 +303,7 @@ async def get_document_version(
     document_id: UUID,
     version: Annotated[int, Path(ge=1)],
     conn: Connection,
-    user_id: Annotated[str, Depends(require_user_id)],
+    user_id: Annotated[str, Depends(require_reader)],
 ) -> TextVersionDetail:
     document_version = await service.get_document_version(
         conn, document_id, version=version, user_id=user_id

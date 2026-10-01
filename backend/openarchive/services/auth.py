@@ -12,6 +12,7 @@ import psycopg
 from psycopg.rows import dict_row
 
 from openarchive.config import get_settings
+from openarchive.services.visibility import share_principal
 
 # 대화형 로그인에 충분히 비싸면서 테스트·데모 호스트의 메모리를 과도하게 쓰지 않는 16MiB 비용이다.
 SCRYPT_N = 2**14
@@ -26,6 +27,9 @@ TokenScope = Literal["read", "read_write"]
 
 CREDENTIAL_SESSION = "session"
 CREDENTIAL_TOKEN = "token"
+
+PRINCIPAL_USER = "user"
+PRINCIPAL_SHARE = "share"
 
 
 class UserAlreadyExists(Exception):
@@ -242,6 +246,8 @@ async def validate_session(conn: psycopg.AsyncConnection, token: str) -> dict:
         raise AuthenticationFailed
     user["scope"] = SCOPE_READ_WRITE
     user["credential"] = CREDENTIAL_SESSION
+    user["kind"] = PRINCIPAL_USER
+    user["principal"] = user["username"]
     return user
 
 
@@ -287,24 +293,41 @@ async def insert_token(
 
 
 async def validate_token(conn: psycopg.AsyncConnection, token: str) -> dict:
-    """유효한 토큰의 주체를 반환한다. 실패는 AuthenticationFailed 하나로 표현한다."""
+    """유효한 토큰의 주체를 반환한다. 실패는 AuthenticationFailed 하나로 표현한다.
+
+    사용자 토큰은 그 사용자, 공유 토큰은 공유 주체(share:<uuid>)로 해석한다 (ADR-044 「공유」).
+    공유 주체에는 사용자명이 없다 — 사용자 전용 경로는 kind로 막는다(api/deps.py).
+    """
     if not token:
         raise AuthenticationFailed
     cur = conn.cursor(row_factory=dict_row)
     await cur.execute(
         """
-        SELECT u.id, u.username, u.is_admin, t.scope
+        SELECT u.id, u.username, u.is_admin, t.share_id, t.scope
         FROM api_tokens t
-        JOIN users u ON u.id = t.user_id
+        LEFT JOIN users u ON u.id = t.user_id
         WHERE t.token_hash = %s
         """,
         (hash_token(token),),
     )
-    user = await cur.fetchone()
-    if user is None:
+    row = await cur.fetchone()
+    if row is None:
         raise AuthenticationFailed
-    user["credential"] = CREDENTIAL_TOKEN
-    return user
+    if row["share_id"] is not None:
+        return {
+            "kind": PRINCIPAL_SHARE,
+            "share_id": row["share_id"],
+            "principal": share_principal(row["share_id"]),
+            "username": None,
+            "is_admin": False,
+            "scope": row["scope"],
+            "credential": CREDENTIAL_TOKEN,
+        }
+    del row["share_id"]
+    row["credential"] = CREDENTIAL_TOKEN
+    row["kind"] = PRINCIPAL_USER
+    row["principal"] = row["username"]
+    return row
 
 
 async def list_tokens(conn: psycopg.AsyncConnection, user_id: UUID) -> list[dict]:

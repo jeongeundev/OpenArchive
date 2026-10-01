@@ -16,6 +16,7 @@ from openarchive.services.auth import (
     create_token,
     create_user,
     hash_password,
+    insert_token,
     list_tokens,
     logout,
     reset_password,
@@ -174,6 +175,33 @@ async def test_valid_api_token_returns_its_user_scope_and_credential(conn, scope
         "is_admin": False,
         "scope": scope,
         "credential": "token",
+        "kind": "user",
+        "principal": "alice",
+    }
+
+
+async def test_a_share_token_resolves_to_the_share_principal(conn):
+    owner_id = await _create_user(conn)
+    share_id = (
+        await (
+            await conn.execute(
+                "INSERT INTO shares (owner_user_id, name) VALUES (%s, 'B사') RETURNING id",
+                (owner_id,),
+            )
+        ).fetchone()
+    )[0]
+    issued = await insert_token(conn, user_id=None, share_id=share_id, name="B사", scope="read")
+
+    principal = await validate_token(conn, issued["token"])
+
+    assert principal == {
+        "kind": "share",
+        "share_id": share_id,
+        "principal": f"share:{share_id}",
+        "username": None,
+        "is_admin": False,
+        "scope": "read",
+        "credential": "token",
     }
 
 
@@ -189,6 +217,8 @@ async def test_valid_session_returns_the_common_credential_shape(conn):
         "is_admin": False,
         "scope": "read_write",
         "credential": "session",
+        "kind": "user",
+        "principal": "alice",
     }
 
 
