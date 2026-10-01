@@ -52,7 +52,10 @@
       "type": "feat",
       "scope": "api",
       "desc": "세션 전용 공유 관리 API를 둔다",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-10-02T05:26:25+0900",
+      "summary": "api/shares.py(/api/shares, 전 경로 require_session_user): POST 201·중복 409·빈 이름 422 / GET 자기 공유+문서·토큰(원문 없음) / DELETE 204·재삭제 404 / PUT·DELETE documents/{id} 204 멱등, 남의·없는 공유 404, 안 보이는 문서 404, 보이는 남의 문서 403, 잘못된 uuid 422 / POST tokens 201(read, 원문 1회)·DELETE 204·재폐기 404. schemas: CreateShareRequest·ShareDocument·ShareSummary·CreateShareTokenRequest, 발급 응답은 TokenCreated 재사용. 사용자 read_write 토큰 → 7경로 전부 403·DB 무변화, 익명 401, /api/auth/tokens에 공유 토큰 안 섞임. test_shares_api.py 19건. mutant ①list를 require_write_user_id로 1 fail ②ShareNotFound→403 4 fail. backend 1305 통과·ruff 통과",
+      "completed_at": "2026-10-02T05:41:47+0900"
     },
     {
       "step": 5,
