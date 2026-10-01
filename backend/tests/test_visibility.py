@@ -764,15 +764,20 @@ async def test_removing_a_member_hides_the_group_grant_at_once(
     worker_conn, visibility_conn, granted
 ):
     provider, _, granted_id = granted
+    before = await search_documents(
+        visibility_conn, provider, query="OpenSQL 부여 경계", user_id="dave"
+    )
+    assert granted_id in {hit.document_id for hit in before}
+
     await worker_conn.execute(
         "DELETE FROM group_members WHERE user_id = (SELECT id FROM users WHERE username = 'dave')"
     )
 
-    hits = await search_documents(
+    after = await search_documents(
         visibility_conn, provider, query="OpenSQL 부여 경계", user_id="dave"
     )
 
-    assert granted_id not in {hit.document_id for hit in hits}
+    assert granted_id not in {hit.document_id for hit in after}
 
 
 @pytest.mark.parametrize(
