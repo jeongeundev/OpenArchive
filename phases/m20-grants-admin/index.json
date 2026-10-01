@@ -96,7 +96,10 @@
       "type": "feat",
       "scope": "frontend",
       "desc": "문서 상세의 열람 범위 패널과 업로드의 부여 대상 선택을 둔다",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-10-01T22:56:57+0900",
+      "summary": "GranteePicker(사용자·그룹 select로 추가, 고른 대상은 후보에서 제외, 종류 구분 칩·제거, 그룹 구성원 관리자 변경 안내)와 AccessPanel(소유자 전용 — 상세가 auth.username===owner_id일 때만 렌더해 비소유자는 /access·/principals를 호출하지 않음, 조회 AbortController 취소, 조직 공개 저장 시 users·groups 비워 보내며 부여 삭제 안내, 400·403 detail 표시 시 선택 유지, 저장 뒤 refresh로 메타 갱신); UploadDropzone은 「제한」 선택 시 listPrincipals로 GranteePicker를 보이고 grantUsers·grantGroups 전달, 조직 공개로 돌리면 선택 비움·미전송(기존 ZIP 테스트는 업로드 호출만 세도록 조정); 테스트 15건 추가, 소유자 판정 mutant 잡힘; check.sh 통과 — backend 1226 passed · frontend 317 passed, static 재빌드",
+      "completed_at": "2026-10-01T23:09:08+0900"
     }
   ],
   "created_at": "2026-10-01T21:31:20+0900"
