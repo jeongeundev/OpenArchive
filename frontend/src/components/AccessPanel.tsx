@@ -34,16 +34,11 @@ export function AccessPanel({
     ])
       .then(([access, directory]) => {
         if (controller.signal.aborted) return;
-        const current: DocumentAccess = {
-          visibility: access.visibility,
-          users: access.users ?? [],
-          groups: access.groups ?? [],
-        };
-        setLoaded(current);
-        setVisibility(current.visibility);
-        setUsers(current.users);
-        setGroups(current.groups);
-        setPrincipals({ users: directory.users ?? [], groups: directory.groups ?? [] });
+        setLoaded(access);
+        setVisibility(access.visibility);
+        setUsers(access.users);
+        setGroups(access.groups);
+        setPrincipals(directory);
         setLoadError(null);
       })
       .catch((reason: unknown) => {
@@ -139,7 +134,7 @@ export function AccessPanel({
           </button>
         </>
       )}
-      {error !== null ? <p className="text-sm text-[#ef4444]">{error}</p> : null}
+      {error !== null ? <p className="text-sm text-[#ef4444]" role="alert">{error}</p> : null}
       {message !== null ? <p className="text-sm text-neutral-400">{message}</p> : null}
     </section>
   );

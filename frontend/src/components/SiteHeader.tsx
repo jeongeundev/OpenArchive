@@ -36,7 +36,7 @@ export function SiteHeader(): React.ReactElement {
                   사용자 관리
                 </Link>
                 <Link className="text-neutral-400 hover:text-[#0ea5e9]" href="/admin/groups">
-                  그룹
+                  그룹 관리
                 </Link>
               </>
             ) : null}
