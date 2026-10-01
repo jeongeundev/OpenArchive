@@ -52,7 +52,10 @@
       "type": "feat",
       "scope": "api",
       "desc": "문서 열람 범위 API(변경은 세션 전용)와 업로드·텍스트 API의 부여 대상 인자를 둔다",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-10-01T22:13:39+0900",
+      "summary": "api/documents.py — GET /api/documents/{id}/access(require_user_id, 소유자 전용: 비소유자 403·안 보이면 404·익명 401)·PUT …/access(require_session_user — 쓰기 토큰 403, UpdateAccessRequest로 통째 교체); 업로드 Form grant_users·grant_groups(반복)와 텍스트 JSON grant_users·grant_groups를 서비스로 전달(쓰기 토큰 허용); schemas DocumentAccess·UpdateAccessRequest(DocumentSummary엔 부여 목록 없음); main.py GrantsOnPublicDocument·UnknownGrantee→400; test_access_api.py 24건, mutant 3종(require_write_user_id·public 검사 삭제·ensure_visible만) 모두 잡힘, backend 1220 passed",
+      "completed_at": "2026-10-01T22:26:12+0900"
     },
     {
       "step": 5,
