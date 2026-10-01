@@ -188,14 +188,17 @@ ORDER BY CASE WHEN hit.depth = 0 THEN 0 ELSE 1 END,
 
 
 async def apply_vector_search_settings(conn: psycopg.AsyncConnection) -> None:
-    """벡터 정렬 트랜잭션에 필요한 두 설정을 건다 (ADR-011 보강 4·5).
+    """벡터 정렬 트랜잭션에 필요한 설정을 건다 (ADR-011 보강 4·5, ADR-044).
 
-    항상 짝으로 걸어야 한다 — `random_page_cost`만 빠져도 플래너가 HNSW를 아예 고르지
-    않는다. 호출부마다 두 줄을 반복하면 한쪽을 빠뜨려도 에러 없이 느려질 뿐이라
-    한 곳에 모은다. SET LOCAL은 바인딩할 수 없고, 두 값은 사용자 입력이 아닌 모듈 상수다.
+    `ef_search`와 `random_page_cost`는 항상 짝으로 걸어야 한다 — `random_page_cost`만
+    빠져도 플래너가 HNSW를 아예 고르지 않는다. JIT는 끈다 — 열람 술어의 부여 서브플랜이
+    추정 비용을 `jit_above_cost` 위로 올려, JIT가 있는 PostgreSQL에서는 몇 ms짜리 검색에
+    컴파일 수십 ms가 붙는다. 호출부마다 반복하면 하나를 빠뜨려도 에러 없이 느려질 뿐이라
+    한 곳에 모은다. SET LOCAL은 바인딩할 수 없고, 값은 사용자 입력이 아닌 모듈 상수다.
     """
     await conn.execute(f"SET LOCAL hnsw.ef_search = {EF_SEARCH}")
     await conn.execute("SET LOCAL random_page_cost = 1.1")
+    await conn.execute("SET LOCAL jit = off")
 
 
 @dataclass(frozen=True)
