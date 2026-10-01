@@ -72,6 +72,7 @@ def test_owned_tables_match_the_migration_files():
         "groups",
         "idempotency_keys",
         "sessions",
+        "shares",
         "users",
     }
 

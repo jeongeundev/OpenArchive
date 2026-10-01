@@ -27,6 +27,7 @@ CORE_TABLES = {
     "users",
     "sessions",
     "api_tokens",
+    "shares",
     "document_files",
     "idempotency_keys",
     "groups",
@@ -384,11 +385,12 @@ def test_api_token_columns_and_constraints_match_the_delegated_token_model(
 
     assert rows == [
         ("id", "uuid", "NO", "gen_random_uuid()"),
-        ("user_id", "uuid", "NO", None),
+        ("user_id", "uuid", "YES", None),
         ("name", "text", "NO", None),
         ("token_hash", "text", "NO", None),
         ("scope", "text", "NO", None),
         ("created_at", "timestamp with time zone", "NO", "now()"),
+        ("share_id", "uuid", "YES", None),
     ]
 
     constraints = conn.execute(
@@ -408,6 +410,7 @@ def test_api_token_columns_and_constraints_match_the_delegated_token_model(
     ).fetchall()
 
     assert constraints == [
+        ("FOREIGN KEY", ["share_id"]),
         ("FOREIGN KEY", ["user_id"]),
         ("PRIMARY KEY", ["id"]),
         ("UNIQUE", ["token_hash"]),
@@ -1072,18 +1075,22 @@ def test_deleting_a_group_or_a_user_removes_the_membership(
     assert remaining == 0
 
 
-@pytest.mark.parametrize("grantees", ["none", "both"])
-def test_a_grant_names_exactly_one_grantee(conn: psycopg.Connection, grantees: str):
-    """대상이 없으면 아무도 가리키지 않는 행이, 둘이면 뜻이 갈리는 행이 된다."""
+@pytest.mark.parametrize("grantees", [(), ("user", "group"), ("user", "share"),
+                                      ("group", "share"), ("user", "group", "share")])
+def test_a_grant_names_exactly_one_grantee(conn: psycopg.Connection, grantees: tuple):
+    """세 종류 중 정확히 하나만 부여 대상이어야 한다."""
     doc_id = insert_document(conn)
-    user_id = insert_user(conn, "carol") if grantees == "both" else None
-    group_id = insert_group(conn) if grantees == "both" else None
+    user_id = insert_user(conn, "carol") if "user" in grantees else None
+    group_id = insert_group(conn) if "group" in grantees else None
+    share_id = insert_share(conn, insert_user(conn, "owner")) if "share" in grantees else None
 
-    with pytest.raises(psycopg.errors.CheckViolation):
+    with pytest.raises(psycopg.errors.CheckViolation) as error:
         conn.execute(
-            "INSERT INTO document_grants (document_id, user_id, group_id) VALUES (%s, %s, %s)",
-            (doc_id, user_id, group_id),
+            "INSERT INTO document_grants (document_id, user_id, group_id, share_id) "
+            "VALUES (%s, %s, %s, %s)",
+            (doc_id, user_id, group_id, share_id),
         )
+    assert error.value.diag.constraint_name == "document_grants_one_grantee"
 
 
 @pytest.mark.parametrize("grantee", ["user_id", "group_id"])
@@ -1121,3 +1128,93 @@ def test_deleting_the_document_or_the_grantee_removes_the_grant(
     else:
         conn.execute("DELETE FROM groups WHERE id = %s", (group_id,))
         assert grant_count(conn) == 1
+
+
+def insert_share(conn: psycopg.Connection, owner_id: str, name: str = "협업") -> str:
+    (share_id,) = conn.execute(
+        "INSERT INTO shares (owner_user_id, name) VALUES (%s, %s) RETURNING id",
+        (owner_id, name),
+    ).fetchone()
+    return share_id
+
+
+def test_share_name_is_unique_within_its_owner(conn: psycopg.Connection):
+    owner = insert_user(conn, "owner")
+    first = insert_share(conn, owner)
+    other = insert_share(conn, insert_user(conn, "other"))
+    assert first != other
+    with pytest.raises(psycopg.errors.UniqueViolation):
+        insert_share(conn, owner)
+
+
+def test_deleting_the_owner_removes_the_share(conn: psycopg.Connection):
+    owner = insert_user(conn, "owner")
+    insert_share(conn, owner)
+    conn.execute("DELETE FROM users WHERE id = %s", (owner,))
+    assert conn.execute("SELECT count(*) FROM shares").fetchone()[0] == 0
+
+
+def test_the_same_share_grant_cannot_be_stored_twice(conn: psycopg.Connection):
+    doc = insert_document(conn)
+    share = insert_share(conn, insert_user(conn, "owner"))
+    sql = "INSERT INTO document_grants (document_id, share_id) VALUES (%s, %s)"
+    conn.execute(sql, (doc, share))
+    assert grant_count(conn) == 1
+    with pytest.raises(psycopg.errors.UniqueViolation):
+        conn.execute(sql, (doc, share))
+
+
+@pytest.mark.parametrize("deleted", ["document", "share"])
+def test_deleting_document_or_share_removes_share_grant(conn: psycopg.Connection, deleted: str):
+    doc = insert_document(conn)
+    share = insert_share(conn, insert_user(conn, "owner"))
+    conn.execute("INSERT INTO document_grants (document_id, share_id) VALUES (%s, %s)",
+                 (doc, share))
+    if deleted == "document":
+        conn.execute("DELETE FROM documents WHERE id = %s", (doc,))
+    else:
+        conn.execute("DELETE FROM shares WHERE id = %s", (share,))
+    assert grant_count(conn) == 0
+
+
+def test_share_read_token_is_removed_with_the_share(conn: psycopg.Connection):
+    share = insert_share(conn, insert_user(conn, "owner"))
+    conn.execute("INSERT INTO api_tokens (share_id, name, token_hash, scope) "
+                 "VALUES (%s, 'partner', 'share-token', 'read')", (share,))
+    assert conn.execute("SELECT user_id, share_id, scope FROM api_tokens").fetchone() == (
+        None, share, "read"
+    )
+    conn.execute("DELETE FROM shares WHERE id = %s", (share,))
+    assert conn.execute("SELECT count(*) FROM api_tokens").fetchone()[0] == 0
+
+
+@pytest.mark.parametrize("principal", ["none", "both"])
+def test_api_token_names_exactly_one_principal(conn: psycopg.Connection, principal: str):
+    owner = insert_user(conn, "owner")
+    share = insert_share(conn, owner)
+    with pytest.raises(psycopg.errors.CheckViolation) as error:
+        conn.execute("INSERT INTO api_tokens (user_id, share_id, name, token_hash, scope) "
+                     "VALUES (%s, %s, 'partner', 'share-token', 'read')",
+                     (owner if principal == "both" else None,
+                      share if principal == "both" else None))
+    assert error.value.diag.constraint_name == "api_tokens_one_principal"
+
+
+def test_share_token_cannot_have_write_scope(conn: psycopg.Connection):
+    share = insert_share(conn, insert_user(conn, "owner"))
+    with pytest.raises(psycopg.errors.CheckViolation) as error:
+        conn.execute("INSERT INTO api_tokens (share_id, name, token_hash, scope) "
+                     "VALUES (%s, 'partner', 'share-token', 'read_write')", (share,))
+    assert error.value.diag.constraint_name == "api_tokens_share_read_only"
+
+
+def test_username_cannot_start_with_share_principal_prefix(conn: psycopg.Connection):
+    with pytest.raises(psycopg.errors.CheckViolation) as error:
+        insert_user(conn, "share:x")
+    assert error.value.diag.constraint_name == "users_reserved_share_prefix"
+
+
+@pytest.mark.parametrize("username", ["shared", "myshare:x"])
+def test_username_allows_share_text_outside_reserved_prefix(conn: psycopg.Connection, username: str):
+    user = insert_user(conn, username)
+    assert conn.execute("SELECT username FROM users WHERE id = %s", (user,)).fetchone() == (username,)
