@@ -211,7 +211,8 @@ def test_principals_lists_user_and_group_names_for_a_session(
     response = db_client.get("/api/principals")
 
     assert response.status_code == 200
-    assert response.json() == {"users": ["alice", "boss", "carol"], "groups": ["인사팀"]}
+    # 요청자 자신은 부여 대상이 될 수 없어 빠진다
+    assert response.json() == {"users": ["boss", "carol"], "groups": ["인사팀"]}
 
 
 def test_principals_accepts_an_api_token(db_client: TestClient, migrated_db: str):
@@ -224,7 +225,7 @@ def test_principals_accepts_an_api_token(db_client: TestClient, migrated_db: str
     )
 
     assert response.status_code == 200
-    assert response.json() == {"users": ["boss"], "groups": []}
+    assert response.json() == {"users": [], "groups": []}
 
 
 def test_principals_rejects_anonymous(db_client: TestClient, migrated_db: str):

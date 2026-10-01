@@ -104,7 +104,7 @@ describe("AccessPanel", () => {
     fireEvent.click(screen.getByRole("button", { name: "사용자 추가" }));
     fireEvent.click(screen.getByRole("button", { name: "열람 범위 저장" }));
 
-    expect(await screen.findByText(detail)).toBeInTheDocument();
+    expect(await screen.findByRole("alert")).toHaveTextContent(detail);
     expect(screen.getByRole("button", { name: "사용자 bob 제거" })).toBeInTheDocument();
     expect(screen.getByRole("radio", { name: "제한" })).toBeChecked();
   });

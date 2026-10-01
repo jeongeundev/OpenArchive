@@ -8,6 +8,7 @@ from openarchive.services.documents import (
     DocumentAccessDenied,
     DocumentNotFound,
     GrantsOnPublicDocument,
+    GrantToOwner,
     IdempotencyKeyReused,
     InvalidVisibility,
     create_document,
@@ -174,6 +175,18 @@ async def test_set_access_with_unknown_name_changes_nothing(conn, users, groups,
     assert await snapshot(conn, doc) == before
 
 
+async def test_set_access_rejects_owner_as_grantee(conn):
+    """소유자는 이미 본다 — 효력 없는 부여 행을 남기지 않는다 (ADR-044 관리 경로 결정 4)."""
+    doc = await insert_test_document(conn, title="d", content="본문", visibility="private")
+    await grant(conn, doc, users=["carol"])
+    before = await snapshot(conn, doc)
+    with pytest.raises(GrantToOwner, match="소유자"):
+        await set_access(
+            conn, doc, user_id="alice", visibility="private", users=["bob", "alice"], groups=[]
+        )
+    assert await snapshot(conn, doc) == before
+
+
 async def test_set_access_rejects_unknown_visibility(conn):
     doc = await insert_test_document(conn, title="d", content="본문")
     with pytest.raises(InvalidVisibility):
@@ -246,6 +259,7 @@ async def upload_both(conn, **kwargs):
         ({"visibility": "public", "grant_groups": ["인사팀"]}, GrantsOnPublicDocument),
         ({"visibility": "private", "grant_users": ["ghost"]}, UnknownGrantee),
         ({"visibility": "private", "grant_groups": ["유령팀"]}, UnknownGrantee),
+        ({"visibility": "private", "grant_users": ["bob", "alice"]}, GrantToOwner),
     ],
 )
 async def test_create_with_invalid_grantees_creates_nothing(conn, create, kwargs, error):

@@ -105,14 +105,14 @@ async def test_delete_group_cascades_only_its_grants_and_members(conn):
         await delete_group(conn, group["id"])
 
 
-async def test_list_principals_returns_sorted_names(conn):
-    assert await list_principals(conn) == {"users": [], "groups": []}
-    for name in ["zoe", "amy"]:
+async def test_list_principals_returns_sorted_names_except_viewer(conn):
+    assert await list_principals(conn, viewer="amy") == {"users": [], "groups": []}
+    for name in ["zoe", "amy", "bob"]:
         await add_user(conn, name)
     for name in ["z-team", "a-team"]:
         await create_group(conn, name)
-    assert await list_principals(conn) == {
-        "users": ["amy", "zoe"], "groups": ["a-team", "z-team"]
+    assert await list_principals(conn, viewer="amy") == {
+        "users": ["bob", "zoe"], "groups": ["a-team", "z-team"]
     }
 
 

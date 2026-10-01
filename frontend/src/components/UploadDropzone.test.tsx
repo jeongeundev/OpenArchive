@@ -521,5 +521,32 @@ describe("UploadDropzone", () => {
       expect(body.has("grant_users")).toBe(false);
       expect(body.has("grant_groups")).toBe(false);
     });
+
+    it("대상 목록을 불러오지 못하면 빈 선택지 대신 실패를 알리고, 다시 고르면 재시도한다", async () => {
+      let principalsCalls = 0;
+      const fetchMock = vi.fn((url: string) => {
+        if (url === "/api/principals") {
+          principalsCalls += 1;
+          return Promise.resolve(
+            principalsCalls === 1
+              ? jsonResponse(JSON.stringify({ detail: "서버 오류" }), 500)
+              : jsonResponse(JSON.stringify({ users: ["bob"], groups: [] }), 200),
+          );
+        }
+        return Promise.resolve(jsonResponse());
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      render(<UploadDropzone onUploaded={vi.fn()} />);
+
+      fireEvent.click(screen.getByRole("radio", { name: "제한" }));
+
+      expect(await screen.findByRole("alert")).toHaveTextContent("대상 목록을 불러오지 못했습니다");
+      expect(screen.queryByLabelText("사용자 선택")).not.toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole("radio", { name: "조직 공개" }));
+      fireEvent.click(screen.getByRole("radio", { name: "제한" }));
+      expect(await screen.findByRole("option", { name: "bob" })).toBeInTheDocument();
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    });
   });
 });

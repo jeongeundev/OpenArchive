@@ -230,6 +230,7 @@ def test_text_api_with_grantees_creates_grants(db_client: TestClient, migrated_d
         ({"visibility": "public", "grant_users": ["bob"]}, "visibility=private"),
         ({"visibility": "private", "grant_users": ["ghost"]}, "ghost"),
         ({"visibility": "private", "grant_groups": ["없는팀"]}, "없는팀"),
+        ({"visibility": "private", "grant_users": ["alice"]}, "소유자"),
     ],
 )
 def test_text_api_invalid_grantees_is_400_and_creates_nothing(
