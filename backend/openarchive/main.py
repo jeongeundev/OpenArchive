@@ -19,6 +19,7 @@ from openarchive.embeddings import get_provider, warm_up
 from openarchive.frontend import mount_frontend
 from openarchive.migrations import run_migrations
 from openarchive.services import documents as documents_service
+from openarchive.services import grants as grants_service
 
 
 @asynccontextmanager
@@ -83,6 +84,12 @@ async def _empty_extracted_text(request: Request, error: Exception) -> JSONRespo
 
 @app.exception_handler(documents_service.ExtractedTextTooLarge)
 async def _extracted_text_too_large(request: Request, error: Exception) -> JSONResponse:
+    return JSONResponse(status_code=400, content={"detail": str(error)})
+
+
+@app.exception_handler(documents_service.GrantsOnPublicDocument)
+@app.exception_handler(grants_service.UnknownGrantee)
+async def _invalid_grantees(request: Request, error: Exception) -> JSONResponse:
     return JSONResponse(status_code=400, content={"detail": str(error)})
 
 
