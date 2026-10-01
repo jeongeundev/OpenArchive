@@ -87,6 +87,16 @@ class GrantsOnPublicDocument(Exception):
         )
 
 
+class GrantToOwner(Exception):
+    """소유자 자신을 부여 대상으로 보낸 경우 (ADR-044 관리 경로 결정 4).
+
+    소유자는 부여 없이도 본다. 효력 없는 부여 행이라는 숨은 상태를 남기지 않는다.
+    """
+
+    def __init__(self) -> None:
+        super().__init__("소유자는 부여 없이도 이 문서를 봅니다. 부여 대상에서 소유자를 빼세요.")
+
+
 class OriginalFileMissing(Exception):
     """볼 수 있는 문서에 원본이 없어 다시 추출할 대상이 없는 경우."""
 
@@ -274,7 +284,7 @@ async def create_document(
 
     부여 대상(`grant_users`·`grant_groups`)은 문서와 같은 트랜잭션에 들어간다 (ADR-044).
     """
-    grant_users, grant_groups = _check_grantees(visibility, grant_users, grant_groups)
+    grant_users, grant_groups = _check_grantees(visibility, owner_id, grant_users, grant_groups)
     content_type = detect_content_type(filename)
     content = extract_text(data, content_type)
     extraction_status = "pending" if needs_ocr(content_type, content) else "done"
@@ -325,13 +335,16 @@ async def create_document(
 
 
 def _check_grantees(
-    visibility: str, users: list[str] | None, groups: list[str] | None
+    visibility: str, owner_id: str | None, users: list[str] | None, groups: list[str] | None
 ) -> tuple[list[str], list[str]]:
-    """부여 대상을 순서를 보존한 채 중복 제거하고, 조직 공개 문서의 대상은 거부한다."""
+    """부여 대상을 순서를 보존한 채 중복 제거하고, 효력 없는 대상(조직 공개 문서의 대상,
+    소유자 자신)은 거부한다."""
     users = list(dict.fromkeys(users or []))
     groups = list(dict.fromkeys(groups or []))
     if visibility == "public" and (users or groups):
         raise GrantsOnPublicDocument
+    if owner_id in users:
+        raise GrantToOwner
     return users, groups
 
 
@@ -343,9 +356,9 @@ def _grantee_fingerprint(users: list[str], groups: list[str]) -> dict:
     """
     fields: dict = {}
     if users:
-        fields["grant_users"] = sorted(set(users))
+        fields["grant_users"] = sorted(users)
     if groups:
-        fields["grant_groups"] = sorted(set(groups))
+        fields["grant_groups"] = sorted(groups)
     return fields
 
 
@@ -467,7 +480,7 @@ async def create_text_document(
     # 자기 계약을 스스로 지킨다.
     if content_type not in TEXT_CONTENT_TYPES:
         raise UnsupportedFileType("텍스트로 공급할 수 있는 유형은 txt, md입니다.")
-    grant_users, grant_groups = _check_grantees(visibility, grant_users, grant_groups)
+    grant_users, grant_groups = _check_grantees(visibility, owner_id, grant_users, grant_groups)
 
     async def insert() -> dict:
         return await _insert_document(
@@ -1234,7 +1247,7 @@ async def set_access(
     """
     if visibility not in VISIBILITY_VALUES:
         raise InvalidVisibility("공개범위는 public, private 중 하나여야 합니다.")
-    users, groups = _check_grantees(visibility, users, groups)
+    users, groups = _check_grantees(visibility, user_id, users, groups)
     async with conn.transaction():
         await _load_owner_document(conn, document_id, user_id)
         # 동시 교체가 DELETE와 INSERT 사이에 끼면 부여 유니크 충돌이 난다. 워커·024와 같은

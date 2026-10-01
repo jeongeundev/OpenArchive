@@ -88,6 +88,7 @@ async def _extracted_text_too_large(request: Request, error: Exception) -> JSONR
 
 
 @app.exception_handler(documents_service.GrantsOnPublicDocument)
+@app.exception_handler(documents_service.GrantToOwner)
 @app.exception_handler(grants_service.UnknownGrantee)
 async def _invalid_grantees(request: Request, error: Exception) -> JSONResponse:
     return JSONResponse(status_code=400, content={"detail": str(error)})

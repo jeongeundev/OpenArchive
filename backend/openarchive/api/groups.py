@@ -18,12 +18,6 @@ router = APIRouter(
 principals_router = APIRouter(prefix="/api/principals", tags=["principals"])
 
 
-def _not_found(error: Exception) -> HTTPException:
-    if isinstance(error, service.GroupNotFound):
-        return HTTPException(status_code=404, detail="그룹을 찾을 수 없습니다.")
-    return HTTPException(status_code=404, detail="사용자를 찾을 수 없습니다.")
-
-
 @router.post("", response_model=GroupSummary, status_code=status.HTTP_201_CREATED)
 async def create_group(body: CreateGroupRequest, conn: Connection) -> GroupSummary:
     try:
@@ -45,7 +39,7 @@ async def delete_group(group_id: UUID, conn: Connection) -> Response:
     try:
         await service.delete_group(conn, group_id)
     except service.GroupNotFound as error:
-        raise _not_found(error) from error
+        raise HTTPException(status_code=404, detail="그룹을 찾을 수 없습니다.") from error
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -53,8 +47,10 @@ async def delete_group(group_id: UUID, conn: Connection) -> Response:
 async def add_member(group_id: UUID, username: str, conn: Connection) -> Response:
     try:
         await service.add_member(conn, group_id, username)
-    except (service.GroupNotFound, UserNotFound) as error:
-        raise _not_found(error) from error
+    except service.GroupNotFound as error:
+        raise HTTPException(status_code=404, detail="그룹을 찾을 수 없습니다.") from error
+    except UserNotFound as error:
+        raise HTTPException(status_code=404, detail="사용자를 찾을 수 없습니다.") from error
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -62,13 +58,15 @@ async def add_member(group_id: UUID, username: str, conn: Connection) -> Respons
 async def remove_member(group_id: UUID, username: str, conn: Connection) -> Response:
     try:
         await service.remove_member(conn, group_id, username)
-    except (service.GroupNotFound, UserNotFound) as error:
-        raise _not_found(error) from error
+    except service.GroupNotFound as error:
+        raise HTTPException(status_code=404, detail="그룹을 찾을 수 없습니다.") from error
+    except UserNotFound as error:
+        raise HTTPException(status_code=404, detail="사용자를 찾을 수 없습니다.") from error
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @principals_router.get("", response_model=Principals)
 async def list_principals(
-    conn: Connection, _user_id: Annotated[str, Depends(require_user_id)]
+    conn: Connection, user_id: Annotated[str, Depends(require_user_id)]
 ) -> Principals:
-    return Principals.model_validate(await service.list_principals(conn))
+    return Principals.model_validate(await service.list_principals(conn, viewer=user_id))

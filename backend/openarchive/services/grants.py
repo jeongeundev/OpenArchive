@@ -99,9 +99,12 @@ async def remove_member(conn: psycopg.AsyncConnection, group_id: UUID, username:
     )
 
 
-async def list_principals(conn: psycopg.AsyncConnection) -> dict:
+async def list_principals(conn: psycopg.AsyncConnection, *, viewer: str) -> dict:
+    """부여 대상으로 고를 수 있는 이름. 보는 사람 자신은 소유자로서 이미 보므로 뺀다."""
     cur = conn.cursor(row_factory=dict_row)
-    await cur.execute("SELECT username FROM users ORDER BY username")
+    await cur.execute(
+        "SELECT username FROM users WHERE username <> %s ORDER BY username", (viewer,)
+    )
     users = [row["username"] for row in await cur.fetchall()]
     await cur.execute("SELECT name FROM groups ORDER BY name")
     groups = [row["name"] for row in await cur.fetchall()]
