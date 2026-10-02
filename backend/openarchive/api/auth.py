@@ -5,9 +5,9 @@ from fastapi import APIRouter, Cookie, Depends, HTTPException, Response, status
 
 from openarchive.api.deps import (
     SESSION_COOKIE,
-    SHARE_FORBIDDEN_DETAIL,
     Connection,
     current_user,
+    reject_share,
     require_session_user,
 )
 from openarchive.api.schemas import (
@@ -68,8 +68,7 @@ async def me(user: Annotated[dict | None, Depends(current_user)]) -> AuthStatus:
     if user is None:
         return AuthStatus(authenticated=False, username=None, is_admin=False)
     # 공유 주체는 사람 계정이 아니다 (ADR-044 「공유」 결정 5).
-    if user["kind"] == service.PRINCIPAL_SHARE:
-        raise HTTPException(status_code=403, detail=SHARE_FORBIDDEN_DETAIL)
+    reject_share(user)
     return AuthStatus(authenticated=True, username=user["username"], is_admin=user["is_admin"])
 
 

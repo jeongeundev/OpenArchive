@@ -57,7 +57,7 @@ async def current_user(
         return None
 
 
-def _reject_share(user: dict) -> None:
+def reject_share(user: dict) -> None:
     """공유 주체는 허용 목록(require_reader) 밖의 경로를 열지 못한다 (ADR-044 「공유」 결정 5)."""
     if user.get("kind") == PRINCIPAL_SHARE:
         raise HTTPException(status_code=403, detail=SHARE_FORBIDDEN_DETAIL)
@@ -78,7 +78,7 @@ async def require_user_id(user: Annotated[dict | None, Depends(current_user)]) -
     """로그인을 요구하는 요청의 인증된 사용자명을 반환한다. 공유 주체는 거부한다."""
     if user is None:
         raise HTTPException(status_code=401, detail="로그인이 필요합니다.")
-    _reject_share(user)
+    reject_share(user)
     return user["username"]
 
 
@@ -88,7 +88,7 @@ async def require_write_user_id(
     """쓰기를 요구하는 요청의 인증된 사용자명을 반환한다. read scope 토큰은 거부한다."""
     if user is None:
         raise HTTPException(status_code=401, detail="로그인이 필요합니다.")
-    _reject_share(user)
+    reject_share(user)
     if user["scope"] != SCOPE_READ_WRITE:
         raise HTTPException(status_code=403, detail="쓰기 권한이 필요합니다.")
     return user["username"]
@@ -100,7 +100,7 @@ async def require_session_user(
     """토큰으로는 열 수 없는 경계. 로그인 세션으로만 통과한다."""
     if user is None:
         raise HTTPException(status_code=401, detail="로그인이 필요합니다.")
-    _reject_share(user)
+    reject_share(user)
     if user["credential"] != CREDENTIAL_SESSION:
         raise HTTPException(status_code=403, detail="로그인 세션이 필요합니다.")
     return user
