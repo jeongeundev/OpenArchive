@@ -1,6 +1,7 @@
 """정형 필터와 벡터 유사도를 한 SQL로 결합하는 검색 서비스."""
 
 import asyncio
+import re
 from dataclasses import dataclass
 from uuid import UUID
 
@@ -32,6 +33,21 @@ VIA_KIND_PRIORITY = """CASE {alias}via_kind
         WHEN 'overlaps' THEN 0 WHEN 'related' THEN 1
         WHEN 'refers' THEN 2 WHEN 'revision' THEN 3 ELSE 4
     END"""
+
+# 제목 우선순위는 이미 권한·필터를 통과한 직접 벡터 후보에만 적용한다.
+# 발행 판본을 내부 텍스트 버전이나 날짜 없는 제목으로 추정하지 않는다.
+TITLE_PRIORITY = """CASE WHEN
+    (%(query)s = d.title OR (
+        %(edition)s::text IS NOT NULL
+        AND strpos(%(query)s, regexp_replace(d.title, ' [(][0-9]{4}판[)]$', '')) > 0
+    ))
+    AND (%(edition)s::text IS NULL OR
+         substring(d.title FROM ' [(]([0-9]{4})판[)]$') = %(edition)s)
+    THEN 0 ELSE 1 END"""
+
+NUMBER_TITLE_PRIORITY = """CASE WHEN %(identifier)s::text IS NOT NULL
+    AND strpos(%(query)s, regexp_replace(d.title, ' [(][0-9]{4}판[)]$', '')) > 0
+    THEN 0 ELSE 1 END"""
 
 SEARCH_SQL = f"""
 WITH RECURSIVE candidates AS (
@@ -162,7 +178,11 @@ deduplicated AS (
 selected AS (
     (SELECT * FROM deduplicated
      WHERE depth = 0
-     ORDER BY dist, document_id, chunk_index
+     ORDER BY (SELECT {TITLE_PRIORITY} FROM documents d
+                      WHERE d.id = deduplicated.document_id),
+              (SELECT {NUMBER_TITLE_PRIORITY} FROM documents d
+               WHERE d.id = deduplicated.document_id),
+              dist, document_id, chunk_index
      LIMIT %(k)s)
 
     UNION ALL
@@ -175,11 +195,28 @@ selected AS (
      LIMIT %(k)s)
 )
 SELECT d.id, d.title, d.filename, d.tags, d.content_type,
-       hit.chunk_index, hit.content, 1 - hit.dist AS score, hit.version,
+       COALESCE(excerpt.chunk_index, hit.chunk_index),
+       COALESCE(excerpt.content, hit.content), 1 - hit.dist AS score, hit.version,
        hit.via_document_id, hit.via_kind, hit.depth
 FROM selected hit
 JOIN documents d ON d.id = hit.document_id
+LEFT JOIN LATERAL (
+    SELECT matched.chunk_index,
+           (SELECT string_agg(context.content, E'\n\n' ORDER BY context.chunk_index)
+            FROM document_chunks context
+            WHERE context.document_id = hit.document_id AND context.version = hit.version
+              AND context.chunk_index BETWEEN matched.chunk_index - 1 AND matched.chunk_index + 1
+           ) AS content
+    FROM document_chunks matched
+    WHERE hit.depth = 0 AND %(identifier)s::text IS NOT NULL
+      AND matched.document_id = hit.document_id AND matched.version = hit.version
+      AND matched.content ~ %(identifier)s
+    ORDER BY matched.embedding <=> %(qvec)s::vector, matched.chunk_index
+    LIMIT 1
+) excerpt ON true
 ORDER BY CASE WHEN hit.depth = 0 THEN 0 ELSE 1 END,
+         CASE WHEN hit.depth = 0 THEN {TITLE_PRIORITY} ELSE 1 END,
+         CASE WHEN hit.depth = 0 THEN {NUMBER_TITLE_PRIORITY} ELSE 1 END,
          hit.dist,
          {VIA_KIND_PRIORITY.format(alias='hit.')},
          hit.depth,
@@ -222,6 +259,25 @@ class SearchHit:
     via: SearchVia | None
 
 
+def _identifier_pattern(query: str) -> str | None:
+    """명시한 번호 하나만 발췌에 반영한다. 비교 질문은 기존 선택을 유지한다."""
+    identifiers = set(re.findall(
+        r"(?<![\w-])ADR-[0-9]+(?![0-9])|제\s*[0-9]+\s*조(?:\s*의\s*[0-9]+)?",
+        query, re.IGNORECASE,
+    ))
+    identifiers = {re.sub(r"\s+", "", value).upper() for value in identifiers}
+    if len(identifiers) != 1:
+        return None
+    identifier = next(iter(identifiers))
+    if identifier.startswith("ADR-"):
+        return rf"(?i)(?<![[:alnum:]_-]){identifier}(?![0-9])"
+    # 조의 하위 번호는 별도 설계 전까지 일반 조항으로 해석하지 않는다.
+    if "의" in identifier:
+        return None
+    number = identifier[1:-1]
+    return rf"제[[:space:]]*{number}[[:space:]]*조(?![[:space:]]*의[[:space:]]*[0-9])"
+
+
 async def search_documents(
     conn: psycopg.AsyncConnection,
     provider: EmbeddingProvider,
@@ -237,7 +293,11 @@ async def search_documents(
         raise ValueError(f"k는 1 이상 {MAX_K} 이하여야 한다: {k}")
 
     query_vector = (await asyncio.to_thread(provider.embed, [query]))[0]
+    editions = set(re.findall(r"(?<!\d)(?:19|20)\d{2}(?=\s*(?:판|년판))", query))
     params = {
+        "query": query,
+        "identifier": _identifier_pattern(query),
+        "edition": next(iter(editions)) if len(editions) == 1 else None,
         "qvec": to_pgvector_literal(query_vector),
         # 빈 배열은 "태그를 고르지 않았다"이므로 NULL로 정규화한다. 그대로 넘기면
         # `d.tags && '{}'`가 어느 행에서도 참이 아니라 에러 없이 결과가 0건이 된다.
