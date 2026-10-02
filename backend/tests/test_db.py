@@ -289,3 +289,23 @@ async def test_code_defects_are_not_unavailable(test_dsn):
 
     assert not openarchive.db.is_unavailable(error)
     assert not openarchive.db.is_unavailable(RuntimeError("버그"))
+
+
+async def test_pool_query_survives_server_prepared_statement_reset(monkeypatch, migrated_db):
+    """OpenProxy에서 서버 명령문 캐시가 사라져도 정상 요청이 26000으로 실패하지 않는다."""
+    monkeypatch.setenv("DATABASE_URL", migrated_db)
+    get_settings.cache_clear()
+    pool = openarchive.db.get_pool()
+    await pool.open()
+    try:
+        async with pool.connection() as conn:
+            for _ in range(7):
+                async with conn.transaction():
+                    row = await (await conn.execute("SELECT %s::int + 1", (41,))).fetchone()
+                    assert row[0] == 42
+            async with conn.transaction():
+                await conn.execute("DEALLOCATE ALL", prepare=False)
+                row = await (await conn.execute("SELECT %s::int + 1", (41,))).fetchone()
+                assert row[0] == 42
+    finally:
+        await openarchive.db.close_pool()
