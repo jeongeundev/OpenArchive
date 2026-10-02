@@ -1,0 +1,198 @@
+{
+  "corpus": "a",
+  "description": "추가 진단용 수작업 평가. 판본 지정 질문은 지정 판본만 정답; 2025판은 기존 코퍼스의 기본 제목 문서. category별로 따로 집계. evidence는 원문 확인 표식이며 발췌 정답 전체를 뜻하지 않는다.",
+  "queries": [
+    {
+      "category": "exact_name",
+      "query": "CSS 스니펫",
+      "relevant": [
+        "CSS 스니펫"
+      ],
+      "evidence": "CSS 스니펫",
+      "evidence_field": "title"
+    },
+    {
+      "category": "exact_name",
+      "query": "심볼릭 링크와 정션",
+      "relevant": [
+        "심볼릭 링크와 정션"
+      ],
+      "evidence": "심볼릭 링크와 정션",
+      "evidence_field": "title"
+    },
+    {
+      "category": "exact_name",
+      "query": "Canvas",
+      "relevant": [
+        "Canvas"
+      ],
+      "evidence": "Canvas",
+      "evidence_field": "title"
+    },
+    {
+      "category": "exact_name",
+      "query": "Evernote에서 들여오기",
+      "relevant": [
+        "Evernote에서 들여오기"
+      ],
+      "evidence": "Evernote에서 들여오기",
+      "evidence_field": "title"
+    },
+    {
+      "category": "identifier",
+      "query": "ADR-001 결정 내용을 찾아줘",
+      "relevant": [
+        "Architecture Decision Records"
+      ],
+      "evidence": "ADR-001:",
+      "evidence_field": "content"
+    },
+    {
+      "category": "identifier",
+      "query": "ADR-003 결정 내용을 찾아줘",
+      "relevant": [
+        "Architecture Decision Records"
+      ],
+      "evidence": "ADR-003:",
+      "evidence_field": "content"
+    },
+    {
+      "category": "identifier",
+      "query": "ADR-006 결정 내용을 찾아줘",
+      "relevant": [
+        "Architecture Decision Records"
+      ],
+      "evidence": "ADR-006:",
+      "evidence_field": "content"
+    },
+    {
+      "category": "identifier",
+      "query": "ADR-010 결정 내용을 찾아줘",
+      "relevant": [
+        "Architecture Decision Records"
+      ],
+      "evidence": "ADR-010:",
+      "evidence_field": "content"
+    },
+    {
+      "category": "typo",
+      "query": "CSS 스니팻 설정 방법",
+      "relevant": [
+        "CSS 스니펫"
+      ],
+      "evidence": "CSS",
+      "evidence_field": "content",
+      "control_query": "CSS 스니펫 설정 방법"
+    },
+    {
+      "category": "typo",
+      "query": "심볼릭 링그와 정션의 제한 사항",
+      "relevant": [
+        "심볼릭 링크와 정션"
+      ],
+      "evidence": "심볼릭 링크",
+      "evidence_field": "content",
+      "control_query": "심볼릭 링크와 정션의 제한 사항"
+    },
+    {
+      "category": "typo",
+      "query": "에버노트 노트를 옵시디언으로 가저오기",
+      "relevant": [
+        "Evernote에서 들여오기"
+      ],
+      "evidence": "Evernote",
+      "evidence_field": "content",
+      "control_query": "에버노트 노트를 옵시디언으로 가져오기"
+    },
+    {
+      "category": "typo",
+      "query": "옵시디언 싱크 서비스 소개",
+      "relevant": [
+        "Obsidian Sync 소개"
+      ],
+      "evidence": "Obsidian Sync",
+      "evidence_field": "content",
+      "control_query": "옵시디언 Sync 서비스 소개"
+    },
+    {
+      "category": "alias",
+      "query": "CSS snippets로 앱 외관 일부 바꾸기",
+      "relevant": [
+        "CSS 스니펫"
+      ],
+      "evidence": "CSS",
+      "evidence_field": "content"
+    },
+    {
+      "category": "alias",
+      "query": "symlinks와 junctions 사용 시 제한",
+      "relevant": [
+        "심볼릭 링크와 정션"
+      ],
+      "evidence": "symlinks",
+      "evidence_field": "content"
+    },
+    {
+      "category": "alias",
+      "query": "JSON Canvas 파일 형식과 확장자",
+      "relevant": [
+        "Canvas"
+      ],
+      "evidence": "JSON Canvas",
+      "evidence_field": "content"
+    },
+    {
+      "category": "alias",
+      "query": "Markdown 기본 문법",
+      "relevant": [
+        "기본 서식 구문"
+      ],
+      "evidence": "Markdown",
+      "evidence_field": "content"
+    },
+    {
+      "category": "typo_control",
+      "query": "CSS 스니펫 설정 방법",
+      "relevant": [
+        "CSS 스니펫"
+      ],
+      "evidence": "CSS",
+      "evidence_field": "content",
+      "control_query": "CSS 스니펫 설정 방법",
+      "paired_query": "CSS 스니팻 설정 방법"
+    },
+    {
+      "category": "typo_control",
+      "query": "심볼릭 링크와 정션의 제한 사항",
+      "relevant": [
+        "심볼릭 링크와 정션"
+      ],
+      "evidence": "심볼릭 링크",
+      "evidence_field": "content",
+      "control_query": "심볼릭 링크와 정션의 제한 사항",
+      "paired_query": "심볼릭 링그와 정션의 제한 사항"
+    },
+    {
+      "category": "typo_control",
+      "query": "에버노트 노트를 옵시디언으로 가져오기",
+      "relevant": [
+        "Evernote에서 들여오기"
+      ],
+      "evidence": "Evernote",
+      "evidence_field": "content",
+      "control_query": "에버노트 노트를 옵시디언으로 가져오기",
+      "paired_query": "에버노트 노트를 옵시디언으로 가저오기"
+    },
+    {
+      "category": "typo_control",
+      "query": "옵시디언 Sync 서비스 소개",
+      "relevant": [
+        "Obsidian Sync 소개"
+      ],
+      "evidence": "Obsidian Sync",
+      "evidence_field": "content",
+      "control_query": "옵시디언 Sync 서비스 소개",
+      "paired_query": "옵시디언 싱크 서비스 소개"
+    }
+  ]
+}

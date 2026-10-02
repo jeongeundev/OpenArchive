@@ -723,6 +723,9 @@ async def test_explain_contains_structured_filters_and_vector_ordering(worker_co
         )
     await process_all_embedding_jobs(worker_conn, provider)
     params = {
+        "query": "OpenSQL 정합성",
+        "edition": None,
+        "identifier": None,
         "qvec": to_pgvector_literal(provider.embed(["OpenSQL 정합성"])[0]),
         "tags": ["규정"],
         "ctype": None,
@@ -746,3 +749,100 @@ async def test_explain_contains_structured_filters_and_vector_ordering(worker_co
     assert "visibility" in plan and "owner_id" in plan, plan
     assert "document_grants" in plan and "group_members" in plan, plan
     assert "tags" in plan and "<=>" in plan, plan
+
+
+@pytest.mark.parametrize(
+    ('query', 'title', 'promoted'),
+    [
+        ('여비지급규칙', '여비지급규칙', True),
+        ('채용관리지침 제10조 내용을 찾아줘', '채용관리지침', True),
+        ('2022판 여비지급규칙 문서를 찾아줘', '여비지급규칙 (2022판)', True),
+        ('2022년판 여비지급규칙 문서를 찾아줘', '여비지급규칙 (2022판)', True),
+        ('여비지급규칙 내용을 찾아줘', '여비지급규칙', False),
+        ('2025판 여비지급규칙 문서를 찾아줘', '여비지급규칙', False),
+        ('2022판 2025판 여비지급규칙 비교', '여비지급규칙 (2022판)', False),
+    ],
+)
+async def test_title_priority_preserves_cosine_score(worker_conn, search_conn, query, title, promoted):
+    provider = FakeProvider()
+    target = await insert_test_document(worker_conn, title=title, content='다른 내용')
+    closest = await insert_test_document(worker_conn, title='본문 일치', content=query)
+    await process_all_embedding_jobs(worker_conn, provider)
+
+    hits = await search_documents(search_conn, provider, query=query, k=1)
+    direct = [hit for hit in hits if hit.via is None]
+    assert direct[0].document_id == (target if promoted else closest)
+    assert direct[0].score == pytest.approx(0 if promoted else 1, abs=1e-6)
+    assert all(hit.via is None for hit in hits[:len(direct)])
+
+
+@pytest.mark.parametrize('excluded_by', ['visibility', 'tags', 'content_type'])
+async def test_title_priority_cannot_bypass_filters(worker_conn, search_conn, excluded_by):
+    provider = FakeProvider()
+    query = '여비지급규칙'
+    hidden = await insert_test_document(
+        worker_conn, title=query, content='다른 내용',
+        visibility='private' if excluded_by == 'visibility' else 'public',
+        tags=['다른 태그'], content_type='txt',
+    )
+    allowed = await insert_test_document(
+        worker_conn, title='본문 일치', content=query, tags=['규정'], content_type='md',
+    )
+    await process_all_embedding_jobs(worker_conn, provider)
+    hits = await search_documents(
+        search_conn, provider, query=query, user_id='bob',
+        tags=['규정'] if excluded_by == 'tags' else None,
+        content_type='md' if excluded_by == 'content_type' else None,
+    )
+    assert hits[0].document_id == allowed
+    assert hidden not in [hit.document_id for hit in hits]
+
+
+@pytest.mark.parametrize(
+    ('query', 'marker', 'expected'),
+    [
+        ('ADR-006 결정 내용', 'ADR-006:', True),
+        ('제9조 채용 내용', '제9조(채용공고)', True),
+        ('제 9 조 채용 내용', '제9조(채용공고)', True),
+        ('ADR-006 결정 내용', 'ADR-0061:', False),
+        ('ADR-006 ADR-010 비교', 'ADR-006:', False),
+        ('제9조 제10조 비교', '제9조(채용공고)', False),
+    ],
+)
+async def test_identifier_selects_excerpt_without_changing_rank_or_score(
+    worker_conn, search_conn, query, marker, expected
+):
+    provider = FakeProvider()
+    did = await insert_test_document(
+        worker_conn, title='번호 문서',
+        content='일반 설명 문장 ' * 1500 + '\n\n' + marker + ' 별도 근거 내용',
+    )
+    await process_all_embedding_jobs(worker_conn, provider)
+    params = {'qvec': to_pgvector_literal(provider.embed([query])[0]), 'id': did}
+    # SQL 발췌 선택을 검증하므로 첫 청크가 확실히 가장 가까운 합성 벡터를 둔다.
+    await worker_conn.execute(
+        "UPDATE document_chunks SET embedding = CASE WHEN chunk_index = 0 "
+        "THEN %(qvec)s::vector ELSE %(other)s::vector END WHERE document_id = %(id)s",
+        {**params, 'other': to_pgvector_literal(provider.embed(['무관한 벡터'])[0])},
+    )
+    nearest = await (await worker_conn.execute(
+        'SELECT chunk_index, 1 - (embedding <=> %(qvec)s::vector) '
+        'FROM document_chunks WHERE document_id = %(id)s ORDER BY embedding <=> %(qvec)s::vector, chunk_index LIMIT 1',
+        params,
+    )).fetchone()
+    assert nearest[0] == 0
+    hits = await search_documents(search_conn, provider, query=query)
+    hit = next(h for h in hits if h.document_id == did and h.via is None)
+    assert hit.score == pytest.approx(nearest[1], abs=1e-6)
+    if expected:
+        assert marker in hit.content
+        assert hit.chunk_index > 1
+        chunk = await (await worker_conn.execute(
+            'SELECT content, version FROM document_chunks WHERE document_id = %s AND chunk_index = %s',
+            (did, hit.chunk_index),
+        )).fetchone()
+        assert marker in chunk[0]
+        assert hit.based_on_version == chunk[1]
+    else:
+        assert hit.chunk_index == 0
+        assert marker not in hit.content

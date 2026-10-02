@@ -301,6 +301,9 @@ async def test_search_candidates_can_use_hnsw_with_the_share_predicate(
     provider, share_id, _, _, _ = shared
     principal = share_principal(share_id) if principal_kind == "share" else "alice"
     params = {
+        "query": QUERY,
+        "edition": None,
+        "identifier": None,
         "qvec": to_pgvector_literal(provider.embed([QUERY])[0]),
         "tags": None,
         "ctype": None,
