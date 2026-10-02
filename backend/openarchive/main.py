@@ -12,6 +12,7 @@ from openarchive.api.groups import principals_router
 from openarchive.api.groups import router as groups_router
 from openarchive.api.retry import RetryOnUnavailable
 from openarchive.api.search import router as search_router
+from openarchive.api.shares import router as shares_router
 from openarchive.api.system import router as system_router
 from openarchive.config import get_settings
 from openarchive.db import close_pool, get_pool
@@ -44,6 +45,7 @@ app.add_middleware(RetryOnUnavailable)
 app.include_router(admin_router)
 app.include_router(groups_router)
 app.include_router(principals_router)
+app.include_router(shares_router)
 app.include_router(auth_router)
 app.include_router(documents_router)
 app.include_router(clusters_router)

@@ -1,10 +1,31 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
 
 import { GranteePicker } from "./GranteePicker";
-import { ApiError, getDocumentAccess, listPrincipals, setDocumentAccess } from "@/lib/api";
-import { VISIBILITY_LABEL, type DocumentAccess, type Principals, type Visibility } from "@/lib/types";
+import {
+  ApiError,
+  addShareDocument,
+  getDocumentAccess,
+  listPrincipals,
+  listShares,
+  removeShareDocument,
+  setDocumentAccess,
+} from "@/lib/api";
+import {
+  VISIBILITY_LABEL,
+  type DocumentAccess,
+  type Principals,
+  type ShareSummary,
+  type Visibility,
+} from "@/lib/types";
+
+interface ShareChoice {
+  id: string;
+  name: string;
+  included: boolean;
+}
 
 /** 문서의 열람 범위를 보고 바꾼다. 부모가 소유자에게만 렌더한다 — 비소유자에게는 조회도 하지 않는다. */
 export function AccessPanel({
@@ -25,9 +46,28 @@ export function AccessPanel({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [shares, setShares] = useState<ShareChoice[] | null>(null);
+  const [sharesError, setSharesError] = useState<string | null>(null);
 
   useEffect(() => {
     const controller = new AbortController();
+    // 공유는 열람 범위와 별개 축이다 — 실패해도 열람 범위 편집을 막지 않는다 (ADR-044 「공유」 결정 2).
+    void listShares(controller.signal)
+      .then((list: ShareSummary[]) => {
+        if (controller.signal.aborted) return;
+        setShares(
+          list.map((share) => ({
+            id: share.id,
+            name: share.name,
+            included: share.documents.some((document) => document.id === documentId),
+          })),
+        );
+        setSharesError(null);
+      })
+      .catch((reason: unknown) => {
+        if (controller.signal.aborted) return;
+        setSharesError(reason instanceof ApiError ? reason.detail : "공유 목록을 불러오지 못했습니다.");
+      });
     void Promise.all([
       getDocumentAccess(documentId, controller.signal),
       listPrincipals(controller.signal),
@@ -76,6 +116,8 @@ export function AccessPanel({
   }
 
   const controlsDisabled = disabled || saving || loaded === null;
+  const sharedOutside = visibility === "public" && (shares ?? []).some((share) => share.included);
+
   const clearsGrants =
     visibility === "public" &&
     loaded !== null &&
@@ -121,7 +163,7 @@ export function AccessPanel({
           ) : (
             <p className="text-sm text-neutral-500">
               조직 공개 문서는 로그인한 모든 사용자가 봅니다.
-              {clearsGrants ? " 저장하면 지정한 부여 대상도 함께 지워집니다." : ""}
+              {clearsGrants ? " 저장하면 지정한 부여 대상도 함께 지워집니다. 외부 공유 포함은 유지됩니다." : ""}
             </p>
           )}
           <button
@@ -134,8 +176,92 @@ export function AccessPanel({
           </button>
         </>
       )}
+      <ShareToggles
+        disabled={disabled || saving}
+        documentId={documentId}
+        error={sharesError}
+        onChange={setShares}
+        sharedOutside={sharedOutside}
+        shares={shares}
+      />
       {error !== null ? <p className="text-sm text-[#ef4444]" role="alert">{error}</p> : null}
       {message !== null ? <p className="text-sm text-neutral-400">{message}</p> : null}
     </section>
+  );
+}
+
+/** 「내 공유에 포함」. 열람 범위 저장과 따로, 체크하는 즉시 반영한다. 실패하면 체크를 되돌린다. */
+function ShareToggles({
+  documentId,
+  shares,
+  error,
+  disabled,
+  sharedOutside,
+  onChange,
+}: {
+  documentId: string;
+  shares: ShareChoice[] | null;
+  error: string | null;
+  disabled: boolean;
+  sharedOutside: boolean;
+  onChange: (next: ShareChoice[]) => void;
+}): React.ReactElement {
+  const [pending, setPending] = useState<string | null>(null);
+  const [toggleError, setToggleError] = useState<string | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
+
+  async function toggle(share: ShareChoice): Promise<void> {
+    if (shares === null || pending !== null) return;
+    const include = !share.included;
+    const withState = (included: boolean) =>
+      shares.map((item) => (item.id === share.id ? { ...item, included } : item));
+    setPending(share.id);
+    setToggleError(null);
+    setMessage(null);
+    onChange(withState(include));
+    try {
+      if (include) await addShareDocument(share.id, documentId);
+      else await removeShareDocument(share.id, documentId);
+      setMessage(include ? `「${share.name}」 공유에 넣었습니다.` : `「${share.name}」 공유에서 뺐습니다.`);
+    } catch (reason: unknown) {
+      onChange(withState(share.included));
+      setToggleError(reason instanceof ApiError ? reason.detail : "공유를 바꾸지 못했습니다.");
+    } finally {
+      setPending(null);
+    }
+  }
+
+  return (
+    <div className="space-y-2">
+      <h3 className="text-sm font-medium text-neutral-400">내 공유에 포함</h3>
+      {error !== null ? (
+        <p className="text-sm text-neutral-500">{error}</p>
+      ) : shares === null ? (
+        <p className="text-sm text-neutral-500">불러오는 중…</p>
+      ) : shares.length === 0 ? (
+        <p className="text-sm text-neutral-500">
+          외부 공유가 없습니다. <Link className="text-[#0ea5e9] hover:underline" href="/settings">설정 화면</Link>에서 공유를 만드세요.
+        </p>
+      ) : (
+        <fieldset disabled={disabled || pending !== null}>
+          <legend className="sr-only">내 공유에 포함</legend>
+          <div className="flex flex-wrap gap-4 text-sm text-neutral-300">
+            {shares.map((share) => (
+              <label className="flex items-center gap-2" key={share.id}>
+                <input checked={share.included} onChange={() => void toggle(share)} type="checkbox" />
+                {share.name}
+              </label>
+            ))}
+          </div>
+        </fieldset>
+      )}
+      {sharedOutside ? (
+        <p className="text-sm text-neutral-500">
+          이 문서는 조직 공개와 별개로 외부 공유에 열려 있습니다. 공유 토큰을 가진 외부 주체도 읽습니다.
+        </p>
+      ) : null}
+      {toggleError !== null ? <p className="text-sm text-[#ef4444]" role="alert">{toggleError}</p> : null}
+      {message !== null ? <p className="text-sm text-neutral-400">{message}</p> : null}
+    </div>
   );
 }

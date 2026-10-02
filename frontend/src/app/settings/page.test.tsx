@@ -7,6 +7,9 @@ import SettingsPage from "./page";
 
 const replace = vi.fn();
 vi.mock("next/navigation", () => ({ useRouter: () => ({ replace }) }));
+// 외부 공유 절은 자기 테스트(SharesSection.test.tsx)가 있다. 여기서는 토큰·비밀번호 절의
+// fetch 순서를 지키도록 빼 둔다.
+vi.mock("@/components/SharesSection", () => ({ SharesSection: () => null }));
 
 function response(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {

@@ -4,6 +4,7 @@ from fastapi import FastAPI, HTTPException, Request
 from openarchive.api.deps import (
     get_embedding_provider,
     require_admin,
+    require_reader,
     require_session_user,
     require_user_id,
     require_write_user_id,
@@ -85,6 +86,39 @@ async def test_require_admin_requires_an_admin_session(user, status_code):
         await require_admin(user)
 
     assert error.value.status_code == status_code
+
+
+SHARE_USER = {
+    "kind": "share",
+    "principal": "share:00000000-0000-0000-0000-000000000001",
+    "username": None,
+    "scope": "read",
+    "credential": "token",
+    "is_admin": False,
+}
+
+
+async def test_require_reader_returns_the_principal_of_users_and_shares():
+    assert await require_reader({"kind": "user", "principal": "alice", "username": "alice"}) == "alice"
+    assert await require_reader(SHARE_USER) == SHARE_USER["principal"]
+
+
+async def test_require_reader_rejects_anonymous():
+    with pytest.raises(HTTPException) as error:
+        await require_reader(None)
+
+    assert error.value.status_code == 401
+
+
+@pytest.mark.parametrize(
+    "dependency", [require_user_id, require_write_user_id, require_session_user, require_admin]
+)
+async def test_user_only_dependencies_reject_a_share_principal(dependency):
+    with pytest.raises(HTTPException) as error:
+        await dependency(SHARE_USER)
+
+    assert error.value.status_code == 403
+    assert error.value.detail == "공유 토큰으로는 열 수 없는 경로입니다."
 
 
 def test_get_embedding_provider_returns_the_provider_the_lifespan_stored():

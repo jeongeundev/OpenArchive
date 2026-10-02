@@ -12,12 +12,23 @@ function jsonResponse(body: unknown, status = 200): Response {
 
 const principals = { users: ["alice", "bob"], groups: ["인사팀"] };
 
+type ShareStub = { id: string; name: string; documents: { id: string; title: string }[] };
+
+function shareSummary(share: ShareStub) {
+  return { ...share, created_at: "2026-10-02T00:00:00Z", tokens: [] };
+}
+
 function stubFetch(
   access: { visibility: "public" | "private"; users: string[]; groups: string[] },
   save: () => Response = () => jsonResponse(access),
+  shares: () => Response = () => jsonResponse([]),
+  shareWrite: () => Response = () => new Response(null, { status: 204 }),
 ) {
   const fetchMock = vi.fn((url: string, init?: RequestInit) => {
     if (url === "/api/principals") return Promise.resolve(jsonResponse(principals));
+    if (url === "/api/shares") return Promise.resolve(shares());
+    if (url.startsWith("/api/shares/") && url.includes("/documents/"))
+      return Promise.resolve(shareWrite());
     if (url.endsWith("/access") && init?.method === "PUT") return Promise.resolve(save());
     if (url.endsWith("/access")) return Promise.resolve(jsonResponse(access));
     return Promise.reject(new Error(`unexpected ${url}`));
@@ -109,6 +120,137 @@ describe("AccessPanel", () => {
     expect(screen.getByRole("radio", { name: "제한" })).toBeChecked();
   });
 
+  const partners: ShareStub = {
+    id: "share-1",
+    name: "협력사 B",
+    documents: [{ id: "document-1", title: "제품 문서" }],
+  };
+  const auditors: ShareStub = { id: "share-2", name: "감사인", documents: [] };
+
+  function shareWrites(fetchMock: ReturnType<typeof stubFetch>): [string, string | undefined][] {
+    return fetchMock.mock.calls
+      .filter(([url]) => url.startsWith("/api/shares/"))
+      .map(([url, init]) => [url, init?.method]);
+  }
+
+  it.each(["public", "private"] as const)(
+    "%s 문서에서도 내 공유를 체크박스로 보이고 포함된 공유는 체크되어 있다",
+    async (visibility) => {
+      stubFetch({ visibility, users: [], groups: [] }, undefined, () =>
+        jsonResponse([shareSummary(partners), shareSummary(auditors)]),
+      );
+      await renderPanel();
+
+      expect(await screen.findByRole("checkbox", { name: "협력사 B" })).toBeChecked();
+      expect(screen.getByRole("checkbox", { name: "감사인" })).not.toBeChecked();
+    },
+  );
+
+  it("체크하면 공유에 넣고 해제하면 빼며, 열람 범위 저장과 따로 즉시 반영한다", async () => {
+    const fetchMock = stubFetch({ visibility: "private", users: [], groups: [] }, undefined, () =>
+      jsonResponse([shareSummary(partners), shareSummary(auditors)]),
+    );
+    await renderPanel();
+
+    fireEvent.click(await screen.findByRole("checkbox", { name: "감사인" }));
+    expect(await screen.findByText("「감사인」 공유에 넣었습니다.")).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: "감사인" })).toBeChecked();
+
+    fireEvent.click(screen.getByRole("checkbox", { name: "협력사 B" }));
+    expect(await screen.findByText("「협력사 B」 공유에서 뺐습니다.")).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: "협력사 B" })).not.toBeChecked();
+
+    expect(shareWrites(fetchMock)).toEqual([
+      ["/api/shares/share-2/documents/document-1", "PUT"],
+      ["/api/shares/share-1/documents/document-1", "DELETE"],
+    ]);
+    expect(savedBodies(fetchMock)).toEqual([]);
+  });
+
+  it("공유 반영이 실패하면 체크 상태를 되돌리고 오류를 보인다", async () => {
+    stubFetch(
+      { visibility: "private", users: [], groups: [] },
+      undefined,
+      () => jsonResponse([shareSummary(partners)]),
+      () => jsonResponse({ detail: "공유를 찾을 수 없습니다." }, 404),
+    );
+    await renderPanel();
+
+    const box = await screen.findByRole("checkbox", { name: "협력사 B" });
+    fireEvent.click(box);
+
+    expect(await screen.findByText("공유를 찾을 수 없습니다.")).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: "협력사 B" })).toBeChecked();
+  });
+
+  it("공유가 없으면 설정 화면에서 만들라고 안내한다", async () => {
+    stubFetch({ visibility: "private", users: [], groups: [] });
+    await renderPanel();
+
+    const link = await screen.findByRole("link", { name: "설정 화면" });
+    expect(link).toHaveAttribute("href", "/settings");
+    expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
+  });
+
+  it("조직 공개 문서가 공유에 포함되어 있으면 외부에도 열려 있음을 안내한다", async () => {
+    stubFetch({ visibility: "public", users: [], groups: [] }, undefined, () =>
+      jsonResponse([shareSummary(partners)]),
+    );
+    await renderPanel();
+
+    expect(await screen.findByText(/조직 공개와 별개로 외부 공유에 열려 있습니다/)).toBeInTheDocument();
+  });
+
+  it("공유에 포함되지 않았으면 외부 공개 안내를 보이지 않는다", async () => {
+    stubFetch({ visibility: "public", users: [], groups: [] }, undefined, () =>
+      jsonResponse([shareSummary(auditors)]),
+    );
+    await renderPanel();
+
+    await screen.findByRole("checkbox", { name: "감사인" });
+    expect(screen.queryByText(/외부 공유에 열려 있습니다/)).not.toBeInTheDocument();
+  });
+
+  it("열람 범위를 저장해도 공유 체크는 그대로다", async () => {
+    const fetchMock = stubFetch(
+      { visibility: "private", users: ["bob"], groups: [] },
+      () => jsonResponse({ visibility: "public", users: [], groups: [] }),
+      () => jsonResponse([shareSummary(partners), shareSummary(auditors)]),
+    );
+    await renderPanel();
+
+    await screen.findByRole("checkbox", { name: "협력사 B" });
+    fireEvent.click(screen.getByRole("radio", { name: "조직 공개" }));
+    fireEvent.click(screen.getByRole("button", { name: "열람 범위 저장" }));
+
+    expect(await screen.findByText("열람 범위를 저장했습니다.")).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: "협력사 B" })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "감사인" })).not.toBeChecked();
+    expect(shareWrites(fetchMock)).toEqual([]);
+  });
+
+  it("공유 목록을 못 불러와도 열람 범위는 편집할 수 있다", async () => {
+    stubFetch({ visibility: "private", users: [], groups: [] }, undefined, () =>
+      jsonResponse({ detail: "일시적으로 요청을 처리할 수 없습니다." }, 500),
+    );
+    await renderPanel();
+
+    expect(await screen.findByText("일시적으로 요청을 처리할 수 없습니다.")).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: "제한" })).not.toBeDisabled();
+    expect(screen.getByRole("button", { name: "열람 범위 저장" })).not.toBeDisabled();
+  });
+
+  it("편집 중에는 공유 체크를 막는다", async () => {
+    stubFetch({ visibility: "private", users: [], groups: [] }, undefined, () =>
+      jsonResponse([shareSummary(partners)]),
+    );
+    await act(async () => {
+      render(<AccessPanel disabled documentId="document-1" onSaved={vi.fn()} />);
+    });
+
+    expect(await screen.findByRole("checkbox", { name: "협력사 B" })).toBeDisabled();
+  });
+
   it("화면을 떠나면 조회를 취소한다", () => {
     const fetchMock = vi.fn(
       (_input: RequestInfo | URL, _init?: RequestInit) => new Promise<Response>(() => {}),
@@ -117,7 +259,7 @@ describe("AccessPanel", () => {
     const { unmount } = render(<AccessPanel documentId="document-1" onSaved={vi.fn()} />);
     unmount();
 
-    expect(fetchMock).toHaveBeenCalled();
+    expect(fetchMock.mock.calls.map(([url]) => url)).toContain("/api/shares");
     for (const [, init] of fetchMock.mock.calls) expect(init?.signal?.aborted).toBe(true);
   });
 });

@@ -52,6 +52,7 @@ function stubFetch(tagsResponse: () => Response) {
     if (url.endsWith("/links") || url.endsWith("/backlinks")) return Promise.resolve(jsonResponse([]));
     if (url.endsWith("/related")) return Promise.resolve(jsonResponse(related));
     if (url.endsWith("/tag-suggestions")) return Promise.resolve(jsonResponse(suggestions));
+    if (url === "/api/shares") return Promise.resolve(jsonResponse([]));
     if (url === "/api/principals") return Promise.resolve(jsonResponse({ users: ["alice", "bob"], groups: [] }));
     if (url.endsWith("/access")) return Promise.resolve(jsonResponse({ visibility: "public", users: [], groups: [] }));
     if (url.endsWith("/tags") && init?.method === "PUT") {
@@ -142,6 +143,7 @@ describe("문서 상세 페이지의 위키링크", () => {
       if (url === "/api/auth/me") return Promise.resolve(jsonResponse({ authenticated: true, username: "alice", is_admin: false }));
       if (url.endsWith("/links")) return Promise.resolve(jsonResponse([{ title: "대상 문서", document_id: "target-1" }]));
       if (url.endsWith("/backlinks")) return Promise.resolve(jsonResponse([{ document_id: "source-1", title: "출발 문서" }]));
+      if (url === "/api/shares") return Promise.resolve(jsonResponse([]));
       if (url === "/api/principals") return Promise.resolve(jsonResponse({ users: [], groups: [] }));
       if (url.endsWith("/access")) return Promise.resolve(jsonResponse({ visibility: "public", users: [], groups: [] }));
       if (url.endsWith("/related")) return Promise.resolve(jsonResponse(related));
@@ -171,6 +173,7 @@ describe("문서 상세 페이지의 위키링크", () => {
       if (url.endsWith("/links") || url.endsWith("/backlinks")) {
         return Promise.resolve(jsonResponse({ detail: "링크를 불러오지 못했습니다." }, 500));
       }
+      if (url === "/api/shares") return Promise.resolve(jsonResponse([]));
       if (url === "/api/principals") return Promise.resolve(jsonResponse({ users: [], groups: [] }));
       if (url.endsWith("/access")) return Promise.resolve(jsonResponse({ visibility: "public", users: [], groups: [] }));
       if (url.endsWith("/related")) return Promise.resolve(jsonResponse(related));
@@ -191,6 +194,7 @@ describe("문서 상세 페이지의 위키링크", () => {
     vi.stubGlobal("fetch", vi.fn((url: string) => {
       if (url === "/api/auth/me") return Promise.resolve(jsonResponse({ authenticated: true, username: "alice", is_admin: false }));
       if (url.endsWith("/links") || url.endsWith("/backlinks")) return Promise.resolve(jsonResponse([]));
+      if (url === "/api/shares") return Promise.resolve(jsonResponse([]));
       if (url === "/api/principals") return Promise.resolve(jsonResponse({ users: [], groups: [] }));
       if (url.endsWith("/access")) return Promise.resolve(jsonResponse({ visibility: "public", users: [], groups: [] }));
       if (url.endsWith("/related")) return Promise.resolve(jsonResponse(related));
@@ -258,6 +262,7 @@ describe("텍스트 인식에 실패한 문서", () => {
         if (url.endsWith("/links") || url.endsWith("/backlinks")) {
           return Promise.resolve(jsonResponse([]));
         }
+        if (url === "/api/shares") return Promise.resolve(jsonResponse([]));
         if (url === "/api/principals") {
           return Promise.resolve(jsonResponse({ users: [], groups: [] }));
         }
@@ -300,6 +305,7 @@ describe("문서 상세의 열람 범위 패널", () => {
       if (url.endsWith("/links") || url.endsWith("/backlinks")) return Promise.resolve(jsonResponse([]));
       if (url.endsWith("/related")) return Promise.resolve(jsonResponse(related));
       if (url.endsWith("/tag-suggestions")) return Promise.resolve(jsonResponse(suggestions));
+      if (url === "/api/shares") return Promise.resolve(jsonResponse([]));
       if (url === "/api/principals") {
         return Promise.resolve(jsonResponse({ users: ["alice", "bob"], groups: ["인사팀"] }));
       }
@@ -340,5 +346,6 @@ describe("문서 상세의 열람 범위 패널", () => {
     const urls = fetchMock.mock.calls.map(([url]) => String(url));
     expect(urls.some((url) => url.endsWith("/access"))).toBe(false);
     expect(urls).not.toContain("/api/principals");
+    expect(urls).not.toContain("/api/shares");
   });
 });

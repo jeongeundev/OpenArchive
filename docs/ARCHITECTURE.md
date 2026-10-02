@@ -87,7 +87,7 @@ OpenArchive/
         └── lib/                  # API 클라이언트 (fetch 래퍼)
 ```
 
-`services/visibility.py`의 `VISIBLE_TO_USER`는 **모든 조회 경로가 공유하는 단일 열람 술어**다. 검색·관련 문서·그래프 순회·집계·위키링크 해석이 각자 조건을 쓰면 한 곳만 빠져도 비공개 문서가 새어 나간다 (ADR-018, ADR-027). 규칙은 "public이거나, 소유자이거나, 본인·본인 그룹에 부여가 있다"이며(ADR-044), 테이블과 주체 값 하나만 참조하는 순수 SQL이라 바인딩을 `current_setting('app.principal')`로 바꾸면 그대로 RLS 정책이 된다. 쓰기 경로의 존재 판정(`_load_for_write`)도 이 술어를 쓴다 — 보이는 사람의 쓰기는 403, 안 보이는 사람은 404.
+`services/visibility.py`의 `VISIBLE_TO_USER`는 **모든 조회 경로가 공유하는 단일 열람 술어**다. 검색·관련 문서·그래프 순회·집계·위키링크 해석이 각자 조건을 쓰면 한 곳만 빠져도 비공개 문서가 새어 나간다 (ADR-018, ADR-027). 규칙은 사용자에게 "public이거나, 소유자이거나, 본인·본인 그룹에 부여가 있다"이고, `share:<공유 uuid>` 주체에게는 "그 공유에 부여가 있다"뿐이며(ADR-044), 테이블과 주체 값 하나만 참조하는 순수 SQL이라 바인딩을 `current_setting('app.principal')`로 바꾸면 그대로 RLS 정책이 된다. 쓰기 경로의 존재 판정(`_load_for_write`)도 이 술어를 쓴다 — 보이는 사람의 쓰기는 403, 안 보이는 사람은 404.
 
 `services/grants.py`는 그룹·구성원 관리와 부여 대상 이름 해석을 맡는다(#97 b 후속 step에서 구현). 문서 열람 범위 조회·교체는 문서 서비스가 소유자 경계를 지키며 이 서비스를 재사용한다(ADR-044 「관리 경로」).
 
@@ -176,11 +176,20 @@ CREATE TABLE group_members (
   user_id  uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   PRIMARY KEY (group_id, user_id)
 );
+-- 공유 스키마의 구현 계약: 026_shares_tables.sql (ADR-044 #97 c)
+CREATE TABLE shares (
+  id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  owner_user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name          text NOT NULL,
+  created_at    timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (owner_user_id, name)
+);
 CREATE TABLE document_grants (                 -- 문서 → 대상의 읽기. 편집은 소유자만
   document_id uuid NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
   user_id     uuid REFERENCES users(id) ON DELETE CASCADE,
   group_id    uuid REFERENCES groups(id) ON DELETE CASCADE,
-  CHECK (num_nonnulls(user_id, group_id) = 1)  -- 다형 칼럼 대신 종류별 칼럼: FK가 고아 부여를 막는다
+  share_id    uuid REFERENCES shares(id) ON DELETE CASCADE, -- 026: public/private 모두 허용
+  CHECK (num_nonnulls(user_id, group_id, share_id) = 1)  -- 다형 칼럼 대신 종류별 칼럼: FK가 고아 부여를 막는다
 );
 
 -- document_chunks: 현재 버전의 청크만 유지 (인덱스 소형화 + 정합성 단순화)
@@ -239,7 +248,7 @@ CREATE TABLE document_links (
 -- users·sessions: 최소 로그인 (009)
 CREATE TABLE users (
   id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  username      text NOT NULL UNIQUE,
+  username      text NOT NULL UNIQUE CHECK (username NOT LIKE 'share:%'), -- 026: 공유 주체 접두사 예약
   password_hash text NOT NULL,     -- hashlib.scrypt 결과만 저장한다
   is_admin      boolean NOT NULL DEFAULT false,
   created_at    timestamptz NOT NULL DEFAULT now()
@@ -254,13 +263,21 @@ CREATE TABLE sessions (
 -- api_tokens: 프로그램용 장수명 위임 자격증명 (013, ADR-034)
 CREATE TABLE api_tokens (
   id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id    uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  user_id    uuid REFERENCES users(id) ON DELETE CASCADE,
+  share_id   uuid REFERENCES shares(id) ON DELETE CASCADE, -- 026
   name       text NOT NULL,
   token_hash text NOT NULL UNIQUE,   -- sha256(원문). 원문은 발급 응답에만 반환
   scope      text NOT NULL CHECK (scope IN ('read', 'read_write')),
-  created_at timestamptz NOT NULL DEFAULT now()
+  created_at timestamptz NOT NULL DEFAULT now(),
+  CHECK (num_nonnulls(user_id, share_id) = 1), -- 026: 사용자 또는 공유 하나
+  CHECK (share_id IS NULL OR scope = 'read')
 );
 ```
+
+`026_shares_tables.sql`은 기존 마이그레이션을 수정하지 않고 위 공유 스키마를 추가한다.
+`document_grants`의 대상 CHECK는 세 칸으로 교체하고, `(document_id, share_id)` 부분 유니크
+인덱스와 `share_id` 조회 인덱스를 각각 `WHERE share_id IS NOT NULL`로 둔다. 공유 삭제는
+토큰·부여를 함께 지우며, 열람 범위 교체는 사용자·그룹 부여만 바꾸고 공유 부여는 유지한다.
 
 설계 근거: 잡은 콘텐츠 페이로드 없이 "이 문서는 재임베딩이 필요하다"는 신호만 담는다. 워커가 처리 시점에 `documents`의 최신 content를 읽으므로 (a) 연속 수정이 자연스럽게 코얼레싱되고 (b) 재처리가 최신 상태로 수렴하는 멱등 구조가 된다.
 
@@ -680,10 +697,15 @@ OpenSQL `patroni.yml`의 PostgreSQL 파라미터는 `max_connections: 100`이다
 | `PUT /api/admin/groups/{id}/members/{username}` · `DELETE /api/admin/groups/{id}/members/{username}` | **관리자·세션 전용**. 구성원 추가·제거 (#97 b) |
 | `GET /api/principals` | **로그인**. 부여 대상 사용자명·그룹명 목록. 익명은 401 (#97 b) |
 | `GET /api/documents/{id}/access` | **로그인·소유자 전용**. 열람 범위 설정 조회. 보이는 비소유자는 403, 안 보이면 404 (#97 b) |
-| `PUT /api/documents/{id}/access` | **소유자·세션 전용**. `{visibility, users, groups}`로 전체 교체. 보이는 비소유자는 403, 안 보이면 404. 조직 공개로 바꾸면 부여도 삭제 (#97 b) |
+| `PUT /api/documents/{id}/access` | **소유자·세션 전용**. `{visibility, users, groups}`로 전체 교체. 보이는 비소유자는 403, 안 보이면 404. 조직 공개로 바꾸면 사용자·그룹 부여만 삭제하고 공유 부여는 유지 (#97 b·c) |
+| `POST /api/shares` `{name}` · `GET /api/shares` · `DELETE /api/shares/{id}` | 내 공유 생성·목록(포함 문서 id·제목, 토큰 메타)·삭제. 세션 전용 |
+| `PUT /api/shares/{id}/documents/{document_id}` · `DELETE /api/shares/{id}/documents/{document_id}` | 공유에 내 문서 넣기·빼기(멱등 204). 세션 전용 |
+| `POST /api/shares/{id}/tokens` `{name}` · `DELETE /api/shares/{id}/tokens/{token_id}` | 공유 토큰 발급(원문 1회)·폐기. 세션 전용 |
 | `GET /api/system/status` | **로그인 필요 · 운영/데모 전용**: `inet_server_addr()`(현재 접속 노드), pending/processing/error **임베딩** 잡 수(`kind='embed'`), 임베딩 프로바이더명, **정합성 검증 쿼리 결과**(`c.version <> d.version` 건수), **관계 미반영 문서 수**(`kind='edges'` 잡이 `done`이 아닌 문서), **텍스트 인식 대기·실패 문서 수**(`extraction_status`가 `pending`·`failed`). `/admin/status`가 소비하며 사용자 화면은 호출하지 않는다. SQL과 결과 모델은 `services/system.py`에 있고 라우터는 인증과 응답 변환만 맡는다 |
 
-> **구현 현황 (M11-c 기준)**: 위 표에서 #97 b로 표시한 관리 API를 제외한 경로가 구현되어 있다. #97 b API는 후속 step의 구현 계약이다. 파일 업로드와 JSON 텍스트 공급은 같은 INSERT 헬퍼와 DB 트리거 파생 계약을 공유한다. 프로그램은 사람이 발급한 `read_write` 위임 API 토큰으로 세션 쿠키 없이 텍스트를 공급할 수 있다 (ADR-034·035).
+> **공유 API(#97 c)는 후속 step의 구현 계약이다.** 남의 공유 id는 404, 추가할 문서가 안 보이면 404, 보이는 남의 문서면 403이다. 공유 토큰은 ADR-044 「공유」 결정 5의 읽기 허용 목록만 통과하며 나머지는 403이다. MCP는 바꾸지 않는다.
+
+> **구현 현황 (M11-c 기준, #97 c 공유 API 제외)**: 위 표에서 #97 b로 표시한 관리 API를 제외한 경로가 구현되어 있다. #97 b API는 후속 step의 구현 계약이다. 파일 업로드와 JSON 텍스트 공급은 같은 INSERT 헬퍼와 DB 트리거 파생 계약을 공유한다. 프로그램은 사람이 발급한 `read_write` 위임 API 토큰으로 세션 쿠키 없이 텍스트를 공급할 수 있다 (ADR-034·035).
 >
 > **모든 조회에 열람 범위가 걸린다.** 검색·관련 문서·링크·백링크·진단 집계·클러스터가 같은 `VISIBLE_TO_USER` 술어를 쓴다. 볼 수 없는 문서는 자리 표시조차 남기지 않는다 — 표시 자체가 존재와 개수를 누출한다 (ADR-027).
 >
