@@ -44,7 +44,9 @@ def get_pool() -> AsyncConnectionPool:
         # 호출부가 통제할 수 없다.
         _pool = AsyncConnectionPool(
             dsn,
-            kwargs=keepalive_kwargs(dsn),
+            # OpenProxy 경유 지속 부하에서 서버 준비 명령문이 사라져 26000이 발생했다.
+            # 자동 준비를 끄면 매 실행에 Parse를 보내 서버 캐시와의 불일치를 피한다.
+            kwargs={**keepalive_kwargs(dsn), "prepare_threshold": None},
             open=False,
             check=AsyncConnectionPool.check_connection,
         )
