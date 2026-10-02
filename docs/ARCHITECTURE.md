@@ -44,7 +44,7 @@
 
 **관계는 두 갈래로 만들어지고 시점이 다르다.** `document_links`는 본문이 바뀌는 즉시 트리거가 만들고(벡터 불필요), `document_edges`는 임베딩이 끝난 뒤 트리거가 기록한 **관계 잡**(`embedding_jobs.kind = 'edges'`)을 워커가 **별도 트랜잭션**에서 처리해 만든다. 둘 다 잡 생성도 판정도 **DB 계층**에 있고 애플리케이션은 읽기만 한다 — 관련 문서·태그 추천이 조회 시점 벡터 계산을 그만둔 근거다 (ADR-029 결정 3 개정·결정 5, ADR-030).
 
-핵심 프레이밍: **잡 생성·코얼레싱·삭제 정합성은 전부 DB 안**(트리거 함수, 파셜 유니크 인덱스, FK CASCADE)에서 보장된다. 워커는 "DB가 만들어 둔 잡을 집어가는 무상태 실행기"이며, DB 밖 연산은 임베딩 모델 추론뿐이다.
+핵심 프레이밍: **잡 생성·코얼레싱·삭제 정합성은 전부 DB 안**(트리거 함수, 파셜 유니크 인덱스, FK CASCADE)에서 보장된다. 워커는 "DB가 만들어 둔 잡을 집어가는 무상태 실행기"이며, 텍스트 추출·OCR·청킹·임베딩은 DB 밖에서 실행한다. 관계 판정 규칙은 DB 함수가 소유한다.
 
 > **기동(전달) 방식은 정합성의 일부가 아니다.** 워커가 잡을 언제 집어가든 — NOTIFY로 즉시든 폴링으로 5초 뒤든 — 잡이 유실되거나 중복 처리되지 않는 것은 아웃박스 테이블과 `SKIP LOCKED`가 보장한다. 그래서 `LISTEN`/`NOTIFY`가 OpenProxy를 통과하지 못해도 이 설계의 핵심 주장은 무너지지 않는다 (ADR-009).
 
@@ -456,7 +456,7 @@ UPDATE documents SET embedding_status='processing'
    **문서 행이 잠긴 잡도 건너뛴다** (#128). 임베딩 잡의 claim은 문서 행을 UPDATE하는데, 그 행을 죽은 OpenProxy 노드 너머의 고아 트랜잭션이 쥐고 있으면 기다리는 동안 워커가 서고, 상한을 걸어 실패시켜도 다음 주기에 같은 잡을 또 집어 뒤의 잡이 영영 오지 않는다. 문서 행을 잡 행과 함께 `SKIP LOCKED`로 잠가 두면 아래 UPDATE도 기다리지 않는다. 관계 잡도 종류를 가리지 않고 함께 건너뛴다 — 판정 트랜잭션이 그 문서 행을 먼저 잠그므로 집어 봐야 기다린다.
 
 2. (`kind='embed'`) 문서의 최신 `content`와 **`content_hash`를 함께 읽기** → 청킹 → 임베딩
-   *DB 밖 연산은 이 단계뿐이며, 시간이 오래 걸린다.*
+   *임베딩 잡의 DB 밖 연산이며, 추출 잡의 텍스트 추출·OCR도 DB 밖에서 실행한다.*
    `version`은 여기서 읽지 않는다 — 3번에서 잠금을 잡은 뒤 읽는다 (아래 설명).
 
 3. (`kind='embed'`) **단일 트랜잭션**으로 결과 반영 — 단, **읽었던 `content_hash`를 재확인**한다:
@@ -807,7 +807,7 @@ WITH RECURSIVE candidates AS (       -- ① 벡터 후보 (k * 5). 필터를 여
     FROM document_chunks c JOIN documents d ON d.id = c.document_id
     WHERE (%(tags)s::text[] IS NULL OR d.tags && %(tags)s)
       AND (%(ctype)s::text IS NULL OR d.content_type = %(ctype)s)
-      AND (d.visibility = 'public' OR d.owner_id = %(user)s)
+      AND ( … services/visibility.py의 VISIBLE_TO_USER … )
     ORDER BY c.embedding <=> %(qvec)s::vector
     LIMIT %(k)s * 5
 ),
@@ -815,7 +815,7 @@ resolved_links AS (                  -- ② 위키링크를 열람 범위에서 
     SELECT l.src_document_id, d.id AS dst_document_id, 'refers'::text AS kind, …
     FROM document_links l
     JOIN documents d ON d.title = l.target_title
-                    AND (d.visibility = 'public' OR d.owner_id = %(user)s)
+                    AND ( … services/visibility.py의 VISIBLE_TO_USER … )
 ),
 traversal_edges AS (                 -- ③ 저장된 관계(양방향) ∪ 해석된 링크
     SELECT e.src_document_id, e.dst_document_id, e.kind, e.dst_chunk_index FROM document_edges e
@@ -849,13 +849,13 @@ expanded AS (                        -- ⑤ 직전 텍스트 버전을 revision�
 ),
 deduplicated AS ( … ),               -- ⑥ 문서·버전·청크 단위로 1건
 selected AS (                        -- ⑦ 직접 결과와 확장 결과를 각각 LIMIT k
-    (SELECT * FROM deduplicated WHERE depth = 0 ORDER BY dist, … LIMIT %(k)s)
+    (SELECT * FROM deduplicated WHERE depth = 0 ORDER BY <제목 우선순위>, dist, … LIMIT %(k)s)
     UNION ALL
     (SELECT * FROM deduplicated WHERE depth > 0 ORDER BY dist, <kind 순서>, … LIMIT %(k)s)
 )
 SELECT … FROM selected hit JOIN documents d ON d.id = hit.document_id
 ORDER BY CASE WHEN hit.depth = 0 THEN 0 ELSE 1 END,   -- 직접 결과가 항상 먼저
-         hit.dist, <kind 순서>, hit.depth, …;
+         <직접 결과만 제목 우선순위 적용>, hit.dist, <kind 순서>, hit.depth, …;
 
 COMMIT;
 ```
@@ -863,6 +863,10 @@ COMMIT;
 > 실제 쿼리는 `services/search.py`의 `SEARCH_SQL` **한 곳에만** 존재하며 REST API와 MCP 서버가 공유한다. 위는 단계 구조만 옮긴 것이다 — 컬럼 목록과 순환 방지 `path` 배열은 코드를 보라. **문서에 전체 SQL을 복사해 두지 않는다**: 쿼리가 길어진 뒤로는 복사본이 조용히 낡아 잘못된 근거가 된다.
 
 정형 필터·권한 술어·벡터 정렬·관계 순회가 한 쿼리에 결합된다(가산점 포인트).
+
+**직접 결과의 제목 우선순위:** 질문 전체가 제목과 같거나, 질문에 단일 발행 판본(`2022판`·`2022년판`)과 문서명이 있고 제목 끝에도 같은 `(2022판)`이 있으면 기존 벡터 후보 안에서 먼저 표시한다. 날짜 없는 제목을 최신판으로 추정하지 않으며, 여러 판본을 비교하는 질문에는 판본 우선순위를 적용하지 않는다. 유사도 점수·발췌 선택·관계 결과 정렬은 그대로다. 그다음 우선순위로, 단일 ADR·조항 번호와 정확한 문서명을 함께 지정한 질문은 해당 문서명을 제목에 가진 직접 후보를 먼저 표시한다. 번호 제목만으로 ADR 원문을 무조건 우선하지 않는다 — 실측·근거 변경을 요청한 질문에서 조사 문서를 밀어내는 문제가 확인됐다. 후보 밖 문서를 새로 가져오지 않고, 권한·태그·유형 필터를 통과한 직접 후보의 순서만 바꾼다.
+
+**번호 질문의 발췌:** 단일 `ADR-006` 또는 `제9조`를 명시한 질문은, 이미 선택된 직접 결과 문서의 같은 텍스트 버전에서 번호가 있는 청크를 찾아 앞뒤 청크와 함께 표시한다. 일치하는 청크가 여러 개면 질의 벡터에 가장 가까운 것을 선택한다. 문서 순위와 유사도 점수는 기존 벡터 검색 기준이며, 발췌 중심 청크 번호만 실제 선택한 청크로 바뀐다. 번호가 없거나 여러 번호를 비교하면 기존 발췌를 유지한다. 관계 결과·직전 텍스트 버전의 발췌는 바꾸지 않는다. 번호 언급을 찾는 규칙이며 해당 조항의 전체 내용이나 답변 정확도를 보장하지 않는다.
 
 **③에서 `document_edges`를 두 번 읽는다.** 저장이 단방향(`src` = 계산 주체)이라 역방향은 저장돼 있지 않다. 뒤집을 때 `src_chunk_index`가 대상 청크가 된다 — `related`의 위치 정보는 계산 주체 쪽 대목이 `src_chunk_index`이므로, 반대편에서 볼 때는 그것이 "닿은 대목"이다. 관계가 무방향이라는 뜻은 저장이 아니라 이 CTE가 지킨다 (ADR-029 개정).
 
@@ -945,9 +949,9 @@ OpenProxy는 `query_parser_read_write_splitting` 활성 시 **트랜잭션 밖�
 
 **1. 권한 필터를 검색과 동일하게 적용한다**
 
-```sql
-(d.visibility = 'public' OR d.owner_id = %(user)s)
-```
+`services/visibility.py`의 `VISIBLE_TO_USER`를 재사용한다. 사용자에게는 공개·소유자·사용자/그룹
+열람 부여를, 공유 주체에게는 해당 공유에 지정된 문서만 허용한다. 공개/소유자 조건만 복사하면
+열람 부여와 공유 경로의 정책이 검색과 달라진다.
 
 빠뜨리면 관련 문서가 private 문서를 노출하고, 태그 추천이 private 문서의 태그를 흘린다. 대상 문서 자체도 서비스가 `ensure_visible`로 검증한다. 현재 이 검증은 `find_related`·`suggest_tags`·`resolve_links`·`find_backlinks` 네 함수에 걸려 있어 HTTP를 거치지 않는 호출에도 같은 404 의미의 `DocumentNotFound`가 적용된다.
 
@@ -963,7 +967,8 @@ ORDER BY b.kind, b.score DESC, d.id     -- kind로 묶은 뒤 그 안에서 점�
 
 **3. 청크가 없는 문서는 관계를 조회하지 않는다**
 
-관계 edge는 청크가 만들어질 때 함께 생긴다. 청크가 0행이면 edge도 없으므로, 빈 결과를 관계 없음으로 보고하는 대신 **아직 색인 전**임을 구분해 알린다.
+관계 edge는 청크가 준비된 뒤 별도 관계 잡에서 생성된다. 청크가 0행이면 **아직 색인 전**임을
+구분해 알린다. 청크가 있어도 관계 잡이 끝나기 전에는 관계가 비어 있거나 이전 판정일 수 있다.
 
 > ⚠️ 이 분기의 **원래 이유는 달랐다.** `avg(embedding)`이 청크 0행에서 NULL을 반환해 `embedding <=> NULL`이 정렬을 무의미하게 만들고 **에러 없이 무작위 문서 목록을 반환**하는 것을 막는 방어였다. 지금 이 절에는 `avg`가 없지만, **규칙은 재도입 대비로 `CLAUDE.md`에 남아 있다.** 벡터 정렬을 이 경로에 다시 넣는다면 그 함정이 함께 돌아온다.
 
@@ -999,7 +1004,7 @@ SELECT d.id, d.title
 FROM documents me
 JOIN documents d ON d.content_hash = me.content_hash AND d.id <> me.id
 WHERE me.id = %(id)s
-  AND (d.visibility = 'public' OR d.owner_id = %(user)s)
+  AND ( … services/visibility.py의 VISIBLE_TO_USER … )
 ORDER BY d.created_at, d.id;
 
 -- 3) 저장된 관계 — 벡터 정렬 없이 edge를 읽기만 한다. 저장이 단방향이라 양쪽에서 읽는다
@@ -1020,7 +1025,7 @@ best AS (                                      -- 같은 이웃이 양쪽에 있
 SELECT d.id, d.title, d.tags, b.kind, b.score
 FROM best b
 JOIN documents d ON d.id = b.document_id
-WHERE (d.visibility = 'public' OR d.owner_id = %(user)s)   -- ★ 열람 범위는 조회 시점에
+WHERE ( … services/visibility.py의 VISIBLE_TO_USER … )   -- ★ 열람 범위는 조회 시점에
 ORDER BY b.kind, b.score DESC, d.id
 LIMIT %(k)s;
 
@@ -1066,7 +1071,7 @@ selected_neighbors AS (        -- 저장된 관계에서 이웃 10건 (NEIGHBOR_
   SELECT b.document_id
   FROM best b
   JOIN documents d ON d.id = b.document_id
-  WHERE (d.visibility = 'public' OR d.owner_id = %(user)s)
+  WHERE ( … services/visibility.py의 VISIBLE_TO_USER … )
   ORDER BY b.kind, b.score DESC, d.id      -- 관련 문서와 같은 정렬 (공통 규칙 2)
   LIMIT 10
 )
