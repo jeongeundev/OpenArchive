@@ -86,6 +86,15 @@ def test_blank_share_name_is_422(db_client: TestClient, migrated_db: str, name: 
     assert table_counts(migrated_db)[0] == 0
 
 
+def test_share_name_longer_than_a_token_name_is_422(db_client: TestClient, migrated_db: str):
+    """공유 이름도 토큰 이름과 같은 100자 상한을 둔다."""
+    login_as(db_client, "alice")
+
+    assert db_client.post("/api/shares", json={"name": "가" * 101}).status_code == 422
+    assert table_counts(migrated_db)[0] == 0
+    assert db_client.post("/api/shares", json={"name": "가" * 100}).status_code == 201
+
+
 def test_list_shows_only_own_shares(db_client: TestClient, migrated_db: str):
     login_as(db_client, "bob")
     create_share(db_client, "bob의 공유")

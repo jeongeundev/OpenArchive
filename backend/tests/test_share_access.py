@@ -14,7 +14,7 @@ from conftest import login_as, run_embedding_worker
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 
-from openarchive.api.deps import require_reader
+from openarchive.api.deps import current_user, require_reader
 from openarchive.main import app
 
 QUERY = "OpenSQL 공유 경계 문서"
@@ -391,3 +391,19 @@ def test_only_the_allow_list_accepts_a_share_principal():
     # 펼치기가 실제로 경로를 찾았는지 — 빈 집합끼리 같아지는 공허한 통과를 막는다.
     assert ("GET", "/api/principals") in {(m, p) for p, ms, _ in routes for m in ms}
     assert readable == SHARE_READABLE_ROUTES
+
+
+def test_only_auth_me_reads_the_principal_without_a_guard():
+    """current_user를 직접 받는 경로는 공유 주체를 그대로 통과시킨다 — 스스로 막는 /me 하나뿐이다.
+
+    위 허용 목록 단언은 require_reader 쪽만 본다. 이 단언이 없으면 current_user를 직접 쓰는
+    새 경로가 허용 목록 밖에서 공유를 여는데도 테스트가 초록으로 남는다.
+    """
+    direct = {
+        (method, path)
+        for path, methods, dependant in api_routes()
+        if any(dependency.call is current_user for dependency in dependant.dependencies)
+        for method in methods
+    }
+
+    assert direct == {("GET", "/api/auth/me")}
