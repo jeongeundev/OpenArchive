@@ -1,0 +1,232 @@
+{
+  "corpus": "c",
+  "description": "추가 진단용 수작업 평가. 판본 지정 질문은 지정 판본만 정답; 2025판은 기존 코퍼스의 기본 제목 문서. category별로 따로 집계. evidence는 원문 확인 표식이며 발췌 정답 전체를 뜻하지 않는다.",
+  "queries": [
+    {
+      "category": "exact_name",
+      "query": "채용관리지침",
+      "relevant": [
+        "채용관리지침",
+        "채용관리지침 (2022판)"
+      ],
+      "evidence": "채용관리지침",
+      "evidence_field": "title"
+    },
+    {
+      "category": "exact_name",
+      "query": "여비지급규칙",
+      "relevant": [
+        "여비지급규칙",
+        "여비지급규칙 (2022판)"
+      ],
+      "evidence": "여비지급규칙",
+      "evidence_field": "title"
+    },
+    {
+      "category": "exact_name",
+      "query": "위임전결규칙",
+      "relevant": [
+        "위임전결규칙",
+        "위임전결규칙 (2022판)"
+      ],
+      "evidence": "위임전결규칙",
+      "evidence_field": "title"
+    },
+    {
+      "category": "exact_name",
+      "query": "정보보안기본지침",
+      "relevant": [
+        "정보보안기본지침",
+        "정보보안기본지침 (2022판)"
+      ],
+      "evidence": "정보보안기본지침",
+      "evidence_field": "title"
+    },
+    {
+      "category": "identifier",
+      "query": "채용관리지침 제9조(채용공고) 내용을 찾아줘",
+      "relevant": [
+        "채용관리지침",
+        "채용관리지침 (2022판)"
+      ],
+      "evidence": "제9조(채용공고)",
+      "evidence_field": "content"
+    },
+    {
+      "category": "identifier",
+      "query": "채용관리지침 제10조(원서접수) 내용을 찾아줘",
+      "relevant": [
+        "채용관리지침",
+        "채용관리지침 (2022판)"
+      ],
+      "evidence": "제10조(원서접수)",
+      "evidence_field": "content"
+    },
+    {
+      "category": "identifier",
+      "query": "여비지급규칙 제8조(여비계산) 내용을 찾아줘",
+      "relevant": [
+        "여비지급규칙",
+        "여비지급규칙 (2022판)"
+      ],
+      "evidence": "제8조(여비계산)",
+      "evidence_field": "content"
+    },
+    {
+      "category": "identifier",
+      "query": "위임전결규칙 제4조(전결사항) 내용을 찾아줘",
+      "relevant": [
+        "위임전결규칙",
+        "위임전결규칙 (2022판)"
+      ],
+      "evidence": "제4조(전결사항)",
+      "evidence_field": "content"
+    },
+    {
+      "category": "edition",
+      "query": "2022판 채용관리지침 문서를 찾아줘",
+      "relevant": [
+        "채용관리지침 (2022판)"
+      ],
+      "evidence": "채용관리지침 (2022판)",
+      "evidence_field": "title"
+    },
+    {
+      "category": "edition",
+      "query": "2025판 채용관리지침 문서를 찾아줘",
+      "relevant": [
+        "채용관리지침"
+      ],
+      "evidence": "채용관리지침",
+      "evidence_field": "title"
+    },
+    {
+      "category": "edition",
+      "query": "2022판 여비지급규칙 문서를 찾아줘",
+      "relevant": [
+        "여비지급규칙 (2022판)"
+      ],
+      "evidence": "여비지급규칙 (2022판)",
+      "evidence_field": "title"
+    },
+    {
+      "category": "edition",
+      "query": "2025판 여비지급규칙 문서를 찾아줘",
+      "relevant": [
+        "여비지급규칙"
+      ],
+      "evidence": "여비지급규칙",
+      "evidence_field": "title"
+    },
+    {
+      "category": "edition",
+      "query": "2022판 위임전결규칙 문서를 찾아줘",
+      "relevant": [
+        "위임전결규칙 (2022판)"
+      ],
+      "evidence": "위임전결규칙 (2022판)",
+      "evidence_field": "title"
+    },
+    {
+      "category": "edition",
+      "query": "2025판 위임전결규칙 문서를 찾아줘",
+      "relevant": [
+        "위임전결규칙"
+      ],
+      "evidence": "위임전결규칙",
+      "evidence_field": "title"
+    },
+    {
+      "category": "typo",
+      "query": "채용관리지찜 채용공고 절차",
+      "relevant": [
+        "채용관리지침",
+        "채용관리지침 (2022판)"
+      ],
+      "evidence": "채용관리지침",
+      "evidence_field": "title",
+      "control_query": "채용관리지침 채용공고 절차"
+    },
+    {
+      "category": "typo",
+      "query": "여비지급규직 출장비 계산",
+      "relevant": [
+        "여비지급규칙",
+        "여비지급규칙 (2022판)"
+      ],
+      "evidence": "여비지급규칙",
+      "evidence_field": "title",
+      "control_query": "여비지급규칙 출장비 계산"
+    },
+    {
+      "category": "typo",
+      "query": "위임전결규직 결재권한 기준",
+      "relevant": [
+        "위임전결규칙",
+        "위임전결규칙 (2022판)"
+      ],
+      "evidence": "위임전결규칙",
+      "evidence_field": "title",
+      "control_query": "위임전결규칙 결재권한 기준"
+    },
+    {
+      "category": "typo",
+      "query": "정보보안기본지찜 보안관리",
+      "relevant": [
+        "정보보안기본지침",
+        "정보보안기본지침 (2022판)"
+      ],
+      "evidence": "정보보안기본지침",
+      "evidence_field": "title",
+      "control_query": "정보보안기본지침 보안관리"
+    },
+    {
+      "category": "typo_control",
+      "query": "채용관리지침 채용공고 절차",
+      "relevant": [
+        "채용관리지침",
+        "채용관리지침 (2022판)"
+      ],
+      "evidence": "채용관리지침",
+      "evidence_field": "title",
+      "control_query": "채용관리지침 채용공고 절차",
+      "paired_query": "채용관리지찜 채용공고 절차"
+    },
+    {
+      "category": "typo_control",
+      "query": "여비지급규칙 출장비 계산",
+      "relevant": [
+        "여비지급규칙",
+        "여비지급규칙 (2022판)"
+      ],
+      "evidence": "여비지급규칙",
+      "evidence_field": "title",
+      "control_query": "여비지급규칙 출장비 계산",
+      "paired_query": "여비지급규직 출장비 계산"
+    },
+    {
+      "category": "typo_control",
+      "query": "위임전결규칙 결재권한 기준",
+      "relevant": [
+        "위임전결규칙",
+        "위임전결규칙 (2022판)"
+      ],
+      "evidence": "위임전결규칙",
+      "evidence_field": "title",
+      "control_query": "위임전결규칙 결재권한 기준",
+      "paired_query": "위임전결규직 결재권한 기준"
+    },
+    {
+      "category": "typo_control",
+      "query": "정보보안기본지침 보안관리",
+      "relevant": [
+        "정보보안기본지침",
+        "정보보안기본지침 (2022판)"
+      ],
+      "evidence": "정보보안기본지침",
+      "evidence_field": "title",
+      "control_query": "정보보안기본지침 보안관리",
+      "paired_query": "정보보안기본지찜 보안관리"
+    }
+  ]
+}
