@@ -35,6 +35,21 @@ export function SearchResults({
     response.items.map((item) => [item.document_id, item.title]),
   );
 
+  const direct = response.items.filter((item) => item.via === null);
+  const directIds = new Set(direct.map((item) => item.document_id));
+  const seenRelated = new Set<string>();
+  const related = response.items.filter((item) => {
+    if (item.via === null || directIds.has(item.document_id) || seenRelated.has(item.document_id)) {
+      return false;
+    }
+    seenRelated.add(item.document_id);
+    return true;
+  });
+  const groups = [
+    { id: "direct-search-results", title: "검색 결과", items: direct },
+    { id: "related-search-results", title: "함께 볼 문서", items: related },
+  ];
+
   return (
     <section className="space-y-4">
       {loading ? <p className="text-sm text-neutral-500">검색 중…</p> : null}
@@ -43,47 +58,53 @@ export function SearchResults({
       {response.items.length === 0 ? (
         <p className="text-sm text-neutral-500">검색 결과가 없습니다.</p>
       ) : (
-        <div className="space-y-3">
-          {response.items.map((item) => {
-            const excerpt = item.content.length > EXCERPT_LENGTH
-              ? `${item.content.slice(0, EXCERPT_LENGTH)}…`
-              : item.content;
-            const sourceTitle = item.via === null
-              ? null
-              : titlesById.get(item.via.from_document_id) ?? "연결된 문서";
-            return (
-              <article
-                key={`${item.document_id}:${item.based_on_version}:${item.chunk_index}`}
-                className="rounded-lg border border-neutral-800 bg-[#141414] p-6"
-              >
-                <div className="flex items-start justify-between gap-4">
-                  <div>
-                    <Link href={`/documents/${item.document_id}`} className="font-medium text-white hover:text-[#0ea5e9]">
-                      {item.title}
-                    </Link>
-                    <p className="mt-2 text-xs text-neutral-500">
-                      {item.content_type.toUpperCase()}
-                      {item.tags.length > 0 ? ` · ${item.tags.join(", ")}` : ""}
-                    </p>
+        groups.filter((group) => group.items.length > 0).map((group) => (
+          <section key={group.id} aria-labelledby={group.id} className="space-y-3">
+            <h2 id={group.id} className="font-medium text-white">{group.title}</h2>
+            {group.id === "related-search-results" ? (
+              <p className="text-sm text-neutral-400">검색 결과와 연결된 문서입니다. 각 문서의 연결 이유를 확인하세요.</p>
+            ) : null}
+            {group.items.map((item) => {
+              const excerpt = item.content.length > EXCERPT_LENGTH
+                ? `${item.content.slice(0, EXCERPT_LENGTH)}…`
+                : item.content;
+              const sourceTitle = item.via === null
+                ? null
+                : titlesById.get(item.via.from_document_id) ?? "연결된 문서";
+              return (
+                <article
+                  key={`${item.document_id}:${item.based_on_version}:${item.chunk_index}`}
+                  className="rounded-lg border border-neutral-800 bg-[#141414] p-6"
+                >
+                  <div className="flex items-start justify-between gap-4">
+                    <div>
+                      <Link href={`/documents/${item.document_id}`} className="font-medium text-white hover:text-[#0ea5e9]">
+                        {item.title}
+                      </Link>
+                      <p className="mt-2 text-xs text-neutral-500">
+                        {item.content_type.toUpperCase()}
+                        {item.tags.length > 0 ? ` · ${item.tags.join(", ")}` : ""}
+                      </p>
+                    </div>
+                    {/* 확장 결과의 score는 진입점까지의 거리에 단계 페널티를 더한 값이라
+                        질의와의 유사도가 아니다. 직접 매칭과 같은 축에 세우면 안 된다. */}
+                    {item.via === null ? (
+                      <span className="shrink-0 text-sm font-medium text-[#0ea5e9]">
+                        유사도 {item.score.toFixed(3)}
+                      </span>
+                    ) : null}
                   </div>
-                  {/* 확장 결과의 score는 진입점까지의 거리에 단계 페널티를 더한 값이라
-                      질의와의 유사도가 아니다. 직접 매칭과 같은 축에 세우면 안 된다. */}
-                  {item.via === null ? (
-                    <span className="shrink-0 text-sm font-medium text-[#0ea5e9]">
-                      유사도 {item.score.toFixed(3)}
-                    </span>
+                  {item.via !== null ? (
+                    <p className="mt-3 text-xs text-neutral-400">
+                      {sourceTitle}에서 「{relationLabel(item.via.kind)}」로 이어짐
+                    </p>
                   ) : null}
-                </div>
-                {item.via !== null ? (
-                  <p className="mt-3 text-xs text-neutral-400">
-                    {sourceTitle}에서 「{relationLabel(item.via.kind)}」로 이어짐
-                  </p>
-                ) : null}
-                <p className="mt-4 text-sm leading-relaxed text-neutral-300">{excerpt}</p>
-              </article>
-            );
-          })}
-        </div>
+                  <p className="mt-4 text-sm leading-relaxed text-neutral-300">{excerpt}</p>
+                </article>
+              );
+            })}
+          </section>
+        ))
       )}
 
       <button
