@@ -170,3 +170,41 @@ it("서버가 고른 대목을 미리보기로 쓰고 전체 문맥은 펼쳐서
   fireEvent.click(screen.getByRole("button", { name: "발췌 더보기" }));
   expect(screen.getByText(/설정 안내/)).toBeInTheDocument();
 });
+
+it("첫 발췌 밖의 검색된 본문 대목을 펼쳐 출처와 텍스트 버전을 확인한다", () => {
+  const passage = "새 청크가 준비되기 전에는 이전 버전 청크로 검색됩니다.";
+  render(<SearchResults response={{ ...response, items: [{ ...response.items[0],
+    passages: [{ chunk_index: 12, content: passage, based_on_version: 2, score: 0.7 }],
+  }] }} loading={false} error={null} />);
+  const summary = screen.getByText("검색된 본문 대목 1개");
+  const details = summary.closest("details");
+  expect(details).not.toHaveAttribute("open");
+  expect(screen.getByText(passage)).not.toBeVisible();
+  fireEvent.click(summary);
+  expect(details).toHaveAttribute("open");
+  expect(screen.getByText(passage)).toBeVisible();
+  expect(screen.getByText("본문 대목 1 · 텍스트 버전 2")).toBeVisible();
+  expect(screen.getByRole("link", { name: "OpenSQL 운영 가이드" })).toHaveAttribute("href", "/documents/document-1");
+  fireEvent.click(summary);
+  expect(screen.getByText(passage)).not.toBeVisible();
+});
+
+it("대목을 임의로 자르거나 HTML로 해석하지 않고 서버의 문맥 순서대로 보여준다", () => {
+  const first = "상황 설명 ".repeat(100) + "끝의 근거입니다.";
+  const second = "<img src=x onerror=alert(1)> 별도 근거";
+  render(<SearchResults response={{ ...response, items: [{ ...response.items[0], passages: [
+    { chunk_index: 12, content: first, based_on_version: 2, score: 0.7 },
+    { chunk_index: 30, content: second, based_on_version: 2, score: 0.6 },
+  ] }] }} loading={false} error={null} />);
+  fireEvent.click(screen.getByText("검색된 본문 대목 2개"));
+  const details = screen.getByText("검색된 본문 대목 2개").closest("details");
+  expect(details).toHaveTextContent("끝의 근거입니다.");
+  expect(screen.getByText(second)).toBeVisible();
+  expect(screen.queryByRole("img")).not.toBeInTheDocument();
+  expect(details?.querySelectorAll("section p:first-child")[0]).toHaveTextContent("본문 대목 1 · 텍스트 버전 2");
+});
+
+it("추가 대목이 비었으면 불필요한 펼치기를 표시하지 않는다", () => {
+  render(<SearchResults response={{ ...response, items: [{ ...response.items[0], passages: [] }] }} loading={false} error={null} />);
+  expect(screen.queryByText(/검색된 본문 대목/)).not.toBeInTheDocument();
+});

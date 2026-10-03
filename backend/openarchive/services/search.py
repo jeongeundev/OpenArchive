@@ -2,7 +2,6 @@
 
 import asyncio
 import re
-from collections import Counter
 from dataclasses import dataclass
 from uuid import UUID
 
@@ -24,6 +23,9 @@ CANDIDATE_MULTIPLIER = 5
 # test_search.py·test_related.py가 지킨다.
 MAX_K = 20
 EXCERPT_LENGTH = 300
+# 문서당 한 청크로 접을 때 버리던 후보를 제한된 수로 함께 반환한다.
+# 전체 벡터 후보 LIMIT은 그대로다. 대체 대목에만 같은 버전의 주변 ±2 청크를 붙인다.
+MAX_PASSAGES = 8
 GRAPH_MAX_DEPTH = 2
 # 코사인 거리는 최대 2다. 한 단계마다 그 범위만큼 벌려 직접 결과가 관계 확장보다
 # 항상 앞서게 하고, 동시에 기존 `score = 1 - dist` 정렬 의미를 유지한다.
@@ -200,7 +202,7 @@ selected AS (
 SELECT d.id, d.title, d.filename, d.tags, d.content_type,
        COALESCE(excerpt.chunk_index, hit.chunk_index),
        COALESCE(excerpt.content, hit.content), 1 - hit.dist AS score, hit.version,
-       hit.via_document_id, hit.via_kind, hit.depth, preview_chunks.items
+       hit.via_document_id, hit.via_kind, hit.depth, preview_chunks.items, passages.items
 FROM selected hit
 JOIN documents d ON d.id = hit.document_id
 LEFT JOIN LATERAL (
@@ -226,6 +228,24 @@ LEFT JOIN LATERAL (
       AND c.chunk_index BETWEEN COALESCE(excerpt.chunk_index, hit.chunk_index) - 1
                             AND COALESCE(excerpt.chunk_index, hit.chunk_index) + 1
 ) preview_chunks ON true
+LEFT JOIN LATERAL (
+    SELECT jsonb_agg(jsonb_build_array(p.chunk_index, p.content, p.version, 1 - p.dist)
+                     ORDER BY p.dist, p.chunk_index) AS items
+    FROM (
+        SELECT c.chunk_index,
+               (SELECT jsonb_agg(jsonb_build_array(context.chunk_index, context.content)
+                                  ORDER BY context.chunk_index)
+                FROM document_chunks context
+                WHERE context.document_id = c.document_id AND context.version = c.version
+                  AND context.chunk_index BETWEEN c.chunk_index - 2 AND c.chunk_index + 2
+               ) AS content,
+               c.version, c.dist
+        FROM candidates c
+        WHERE hit.depth = 0 AND c.document_id = hit.document_id AND c.version = hit.version
+        ORDER BY c.dist, c.chunk_index
+        LIMIT {MAX_PASSAGES}
+    ) p
+) passages ON true
 ORDER BY CASE WHEN hit.depth = 0 THEN 0 ELSE 1 END,
          CASE WHEN hit.depth = 0 THEN {TITLE_PRIORITY} ELSE 1 END,
          CASE WHEN hit.depth = 0 THEN {NUMBER_TITLE_PRIORITY} ELSE 1 END,
@@ -258,6 +278,14 @@ class SearchVia:
 
 
 @dataclass(frozen=True)
+class SearchPassage:
+    chunk_index: int
+    content: str
+    based_on_version: int
+    score: float
+
+
+@dataclass(frozen=True)
 class SearchHit:
     document_id: UUID
     title: str
@@ -270,6 +298,25 @@ class SearchHit:
     based_on_version: int
     via: SearchVia | None
     preview: str | None = None
+    passages: tuple[SearchPassage, ...] = ()
+
+
+def _merge_passages(items: list) -> tuple[SearchPassage, ...]:
+    """같은 문서·버전의 겹치거나 이어진 후보 문맥을 원래 청크 순서로 합친다."""
+    groups = []
+    for item in sorted(items, key=lambda item: item[1][0][0]):
+        if not groups or item[1][0][0] > max(item[1][-1][0] for item in groups[-1]) + 1:
+            groups.append([])
+        groups[-1].append(item)
+    passages = []
+    for group in groups:
+        center, _, version, score = min(group, key=lambda item: (-float(item[3]), item[0]))
+        chunks = {index: content for _, context, _, _ in group for index, content in context}
+        passages.append(SearchPassage(
+            chunk_index=center, content="\n\n".join(chunks[index] for index in sorted(chunks)),
+            based_on_version=version, score=float(score),
+        ))
+    return tuple(sorted(passages, key=lambda passage: (-passage.score, passage.chunk_index)))
 
 
 def _identifier_pattern(query: str) -> str | None:
@@ -291,33 +338,61 @@ def _identifier_pattern(query: str) -> str | None:
     return rf"제[[:space:]]*{number}[[:space:]]*조(?![[:space:]]*의[[:space:]]*[0-9])"
 
 
+def _preview_options(content: str) -> list[str]:
+    """기존 분할에 행 시작의 창을 더해 표 행·문단부터 미리보기를 고를 수 있게 한다."""
+    options = chunk_text(content, max_chars=EXCERPT_LENGTH, overlap=0)
+    options.extend(
+        content[match.start():match.start() + EXCERPT_LENGTH].strip()
+        for match in re.finditer(r"(?m)^\s*\S", content)
+    )
+    return list(dict.fromkeys(options))
+
+
 def _preview_index(query: str, passages: list[str]) -> int | None:
-    """질의의 문자 쌍이 드러난 대목을 고른다. 일치가 없으면 벡터 발췌를 유지한다.
+    """질의 단어 내부의 문자 쌍으로 미리보기를 고른다. 의미 정확도 점수는 아니다.
 
-    한국어 조사 차이도 일부 허용하도록 단어 안의 두 글자를 비교한다. 여러 대목에
-    반복되는 문자 쌍은 덜 반영하고, 길이가 긴 대목의 우연한 일치를 보정한다.
-    의미 이해나 답변 정확도 점수는 아니며 문서 순위·유사도에는 쓰지 않는다.
+    조사 차이를 허용하면서 단어 뒷부분도 보존한다(교체하면 ↔ 교체할수록).
+    모든 후보를 300자 이하로 제한한다. 포함 수가 같으면 첫 행이 질의에 맞는
+    대목을 우선하고, 그다음 동점은 기존 후보 순서를 유지한다.
+    문서 순위·벡터 점수·대체 본문 후보에는 사용하지 않는다.
     """
-    def grams(text: str) -> set[str]:
-        return {
-            word[i:i + 2]
-            for word in re.findall(r"[가-힣]+", text)
-            for i in range(len(word) - 1)
-        } | set(re.findall(r"[a-z0-9]+", text.casefold()))
-
-    # 조사·어미가 질의어로 가중되지 않게 한국어 질의 단어의 첫 두 글자만 쓴다.
-    # 본문에서는 단어 안 어디든 비교한다 (예: 재수정 ↔ 수정하면).
     query_grams = {
-        word[:2] for word in re.findall(r"[가-힣]+", query) if len(word) >= 2
-    } | set(re.findall(r"[a-z0-9]+", query.casefold()))
-    passage_grams = [grams(p) for p in passages]
-    frequency = Counter(g for gs in passage_grams for g in gs)
+        word[i:i + 2]
+        for word in re.findall(r"[가-힣]+", query)
+        for i in range(len(word) - 1)
+    } | set(re.findall(r"[a-z0-9_]+", query.casefold()))
     scores = [
-        sum(1 / frequency[g] for g in gs & query_grams) / max(1, len(gs)) ** 0.5
-        for gs in passage_grams
+        (
+            sum(gram in passage.casefold() for gram in query_grams),
+            sum(gram in passage.splitlines()[0].casefold() for gram in query_grams),
+        )
+        for passage in passages
     ]
+    if not scores:
+        return None
     winner = max(range(len(scores)), key=scores.__getitem__)
-    return winner if scores[winner] > 0 else None
+    return winner if scores[winner][0] > 0 else None
+
+
+def _table_preview_context(content: str, preview: str) -> str:
+    """선택한 표 행과 바로 앞 비교 행을 함께 표시한다. 두 행이 300자를 넘으면 유지한다."""
+    start = content.find(preview)
+    if start <= 0:
+        return preview
+    line_start = content.rfind("\n", 0, start) + 1
+    if line_start == 0 or content[line_start:start].strip():
+        return preview
+    previous_end = line_start - 1
+    previous_start = content.rfind("\n", 0, previous_end) + 1
+    line_end = content.find("\n", start)
+    if line_end < 0:
+        line_end = len(content)
+    rows = [content[previous_start:previous_end], content[line_start:line_end]]
+    if any(not re.fullmatch(r"\s*\|.+\|\s*", row) or
+           re.fullmatch(r"\s*\|(?:\s*:?-+:?\s*\|)+\s*", row) for row in rows):
+        return preview
+    context = content[previous_start:line_end].strip()
+    return context if len(context) <= EXCERPT_LENGTH else preview
 
 
 async def search_documents(
@@ -369,13 +444,24 @@ async def search_documents(
                     break
             continue
         options = []
-        for chunk_index, content in row[12] or []:
-            options.extend((chunk_index, passage) for passage in
-                           chunk_text(content, max_chars=EXCERPT_LENGTH, overlap=0))
+        chunks = row[12] or []
+        context = "\n\n".join(content for _, content in chunks)
+        offsets = []
+        offset = 0
+        for chunk_index, content in chunks:
+            offsets.append((offset, chunk_index))
+            offset += len(content) + 2
+        for passage in _preview_options(context):
+            start = context.find(passage)
+            chunk_index = next(index for offset, index in reversed(offsets) if offset <= start)
+            options.append((chunk_index, passage))
         if options:
             winner = _preview_index(query, [p for _, p in options])
             if winner is not None:
                 chunk_index, passage = options[winner]
+                passage = _table_preview_context(context, passage)
+                start = context.find(passage)
+                chunk_index = next(index for offset, index in reversed(offsets) if offset <= start)
                 excerpts[index] = (chunk_index, passage)
 
     return [
@@ -388,6 +474,7 @@ async def search_documents(
             chunk_index=excerpts[index][0] if index in excerpts else row[5],
             content=row[6],
             preview=excerpts[index][1] if index in excerpts else None,
+            passages=_merge_passages(row[13] or []),
             score=float(row[7]),
             based_on_version=row[8],
             via=(

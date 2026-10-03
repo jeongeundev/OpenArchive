@@ -909,3 +909,223 @@ async def test_preview_selection_only_embeds_the_query(worker_conn, search_conn)
     assert provider.calls == [['문서 수정 처리']]
     assert len(hits[0].preview) <= 300
     assert hits[0].preview in hits[0].content
+
+
+async def test_search_keeps_alternative_passages_from_filtered_vector_candidates(
+    worker_conn, search_conn
+):
+    """문서당 최고 청크 밖의 답을 보존하되 새 본문·권한 밖 후보를 섞지 않는다."""
+    import math
+
+    from openarchive.services.search import MAX_PASSAGES
+
+    class AxisProvider:
+        def __init__(self):
+            self.calls = []
+
+        def embed(self, texts):
+            self.calls.append(texts)
+            return [[1.0] + [0.0] * 1023 for _ in texts]
+
+    provider = AxisProvider()
+    parts = [f"운영 설정 {i}." for i in range(12)]
+    parts[7] = "답변 표식: 새 임베딩 완료 전에는 이전 청크로 검색한다."
+    did = await insert_test_document(
+        worker_conn, title="운영", content="\n\n".join(parts),
+        owner_id="alice", visibility="private", tags=["candidate-test"],
+    )
+    for i, part in enumerate(parts):
+        similarity = 0.99 - i * 0.01
+        vector = [similarity, math.sqrt(1 - similarity ** 2)] + [0.0] * 1022
+        await worker_conn.execute(
+            "INSERT INTO document_chunks(document_id,version,chunk_index,content,embedding) "
+            "VALUES(%s,1,%s,%s,%s::vector)",
+            (did, i * 5, part, to_pgvector_literal(vector)),
+        )
+    hidden = await insert_test_document(
+        worker_conn, title="숨김", content="비공개 표식", owner_id="bob",
+        visibility="private", tags=["candidate-test"],
+    )
+    filtered = await insert_test_document(
+        worker_conn, title="다른 태그", content="다른 태그 표식", tags=["other"],
+    )
+    wrong_type = await insert_test_document(
+        worker_conn, title="다른 유형", content="다른 유형 표식", content_type="pdf",
+        tags=["candidate-test"],
+    )
+    for other in [hidden, filtered, wrong_type]:
+        await worker_conn.execute(
+            "INSERT INTO document_chunks(document_id,version,chunk_index,content,embedding) "
+            "VALUES(%s,1,0,'노출 금지 표식',%s::vector)",
+            (other, to_pgvector_literal([1.0] + [0.0] * 1023)),
+        )
+    await worker_conn.execute(
+        "UPDATE documents SET content='새판 표식', content_hash='new-candidate-version' WHERE id=%s",
+        (did,),
+    )
+
+    hits = await search_documents(
+        search_conn, provider, query="본문 동작 질문", user_id="alice",
+        tags=["candidate-test"], content_type="md", k=3,
+    )
+    direct = [hit for hit in hits if hit.via is None]
+    assert [hit.document_id for hit in direct] == [did]
+    hit = direct[0]
+    assert "답변 표식" not in hit.content
+    assert len(hit.passages) == MAX_PASSAGES == 8
+    assert [p.chunk_index for p in hit.passages] == [i * 5 for i in range(8)]
+    assert any("답변 표식" in p.content for p in hit.passages)
+    assert all(p.based_on_version == hit.based_on_version == 1 for p in hit.passages)
+    assert all("새판 표식" not in p.content and "노출 금지" not in p.content for p in hit.passages)
+    assert all(a.score > b.score for a, b in zip(hit.passages, hit.passages[1:]))
+    assert all(not h.passages for h in hits if h.via is not None)
+    narrow = await search_documents(
+        search_conn, provider, query="본문 동작 질문", user_id="alice",
+        tags=["candidate-test"], content_type="md", k=1,
+    )
+    assert [p.chunk_index for p in narrow[0].passages] == [i * 5 for i in range(CANDIDATE_MULTIPLIER)]
+    assert all("답변 표식" not in p.content for p in narrow[0].passages)
+    assert provider.calls == [["본문 동작 질문"], ["본문 동작 질문"]]
+
+
+async def test_alternative_context_recovers_a_gap_outside_vector_candidates(worker_conn, search_conn):
+    """순위·기본 발췌는 유지하면서 가까운 청크 사이의 근거도 반환한다."""
+    class AxisProvider:
+        def embed(self, texts):
+            return [[1.0] + [0.0] * 1023 for _ in texts]
+
+    provider = AxisProvider()
+    did = await insert_test_document(worker_conn, title="전달 보장", content="이전 판", tags=["gap"])
+    for index, text in enumerate(["작업 소개", "처리 절차", "전달이 유실돼도 다음 폴링이 처리한다"]):
+        vector = [1.0, 0.0] if index == 0 else [0.0, 1.0]
+        await worker_conn.execute(
+            "INSERT INTO document_chunks(document_id,version,chunk_index,content,embedding) "
+            "VALUES(%s,1,%s,%s,%s::vector)",
+            (did, index, text, to_pgvector_literal(vector + [0.0] * 1022)),
+        )
+    for index in range(CANDIDATE_MULTIPLIER):
+        other = await insert_test_document(worker_conn, title=f"다른 문서 {index}", content="소개", tags=["gap"])
+        await worker_conn.execute(
+            "INSERT INTO document_chunks(document_id,version,chunk_index,content,embedding) "
+            "VALUES(%s,1,0,'다른 설명',%s::vector)",
+            (other, to_pgvector_literal([0.9, 0.1] + [0.0] * 1022)),
+        )
+    await worker_conn.execute("UPDATE documents SET content='새판 비밀',content_hash='new-gap' WHERE id=%s", (did,))
+    hit = (await search_documents(search_conn, provider, query="전달 보장", tags=["gap"], k=1))[0]
+    assert hit.document_id == did and hit.score == pytest.approx(1.0)
+    assert "폴링" not in hit.content
+    assert len(hit.passages) == 1 and hit.passages[0].chunk_index == 0
+    assert "다음 폴링이 처리한다" in hit.passages[0].content
+    assert "새판 비밀" not in hit.passages[0].content
+    assert hit.passages[0].based_on_version == 1
+
+
+def test_preview_can_start_at_answer_paragraph_without_losing_word_suffixes():
+    from openarchive.services.search import _preview_index, _preview_options
+
+    body = "파일 설정 안내. " * 18 + "\n\n원본 파일은 교체할 때마다 보관합니다. 이전 판 삭제 정책이 없어 교체할수록 용량이 누적됩니다."
+    options = _preview_options(body)
+    winner = _preview_index("파일을 교체하면 이전 파일과 저장 용량은 어떻게 돼?", options)
+    assert winner is not None
+    assert "이전 판 삭제 정책이 없어" in options[winner]
+    assert "용량이 누적됩니다" in options[winner]
+    assert all(len(option) <= 300 and option in body for option in options)
+
+
+async def test_preview_preserves_an_answer_crossing_neighbor_chunk_boundary(worker_conn, search_conn):
+    provider = FakeProvider()
+    did = await insert_test_document(worker_conn, title="원본 보관", content="원본 보관")
+    texts = ["원본 파일 교체마다 이전 판을 보관합니다.", "삭제 정책이 없어 저장 용량은 누적됩니다."]
+    for index, text in enumerate(texts):
+        await worker_conn.execute(
+            "INSERT INTO document_chunks(document_id,version,chunk_index,content,embedding) "
+            "VALUES(%s,1,%s,%s,%s::vector)",
+            (did, index, text, to_pgvector_literal(provider.embed(["원본 파일 교체 저장 용량"])[0])),
+        )
+    hit = (await search_documents(search_conn, provider, query="원본 파일 교체 저장 용량", k=1))[0]
+    assert "이전 판을 보관합니다" in hit.preview
+    assert "저장 용량은 누적됩니다" in hit.preview
+    assert hit.preview in hit.content
+    assert hit.chunk_index == 0
+
+
+def test_merge_candidate_contexts_preserves_each_source_chunk_once():
+    from openarchive.services.search import _merge_passages
+
+    items = [
+        [3, [[1, "소개"], [2, "첫 근거"], [3, "중심"], [4, "두 번째 근거"]], 7, 0.9],
+        [5, [[3, "중심"], [4, "두 번째 근거"], [5, "결론"]], 7, 0.8],
+        [12, [[11, "별도 소개"], [12, "별도 근거"]], 7, 0.7],
+    ]
+    passages = _merge_passages(items)
+    assert len(passages) == 2
+    assert passages[0].chunk_index == 3 and passages[0].score == 0.9
+    assert passages[0].content == "소개\n\n첫 근거\n\n중심\n\n두 번째 근거\n\n결론"
+    assert passages[1].content == "별도 소개\n\n별도 근거"
+    assert all(p.based_on_version == 7 for p in passages)
+    assert _merge_passages([]) == ()
+
+
+def test_merge_context_uses_candidate_anchor_when_source_indexes_have_a_gap():
+    from openarchive.services.search import _merge_passages
+
+    passages = _merge_passages([[0, [[0, "앞 근거"], [2, "뒤 근거"]], 1, 0.9]])
+    assert len(passages) == 1
+    assert passages[0].chunk_index == 0
+    assert passages[0].content == "앞 근거\n\n뒤 근거"
+
+
+def test_table_preview_keeps_previous_comparison_row_within_the_limit():
+    from openarchive.services.search import _table_preview_context
+
+    same = "| 같은 키 + 같은 요청 | 기존 문서를 돌려준다 |"
+    different = "| 같은 키 + 다른 요청 | 422로 거부한다 |"
+    following = "| 키 없음 | 새 문서를 만든다 |"
+    body = f"| 상황 | 응답 |\n|---|---|\n{same}\n{different}\n{following}"
+    preview = body[body.index(different):]
+    enriched = _table_preview_context(body, preview)
+    assert enriched == same + "\n" + different
+    assert enriched in body and len(enriched) <= 300
+    assert _table_preview_context(body, body[body.index(same):]) == body[body.index(same):]
+
+
+def test_table_preview_does_not_take_a_partial_row_or_unrelated_prose():
+    from openarchive.services.search import _table_preview_context
+
+    row = "| 조건 | 결과 |"
+    long_row = "| 다른 조건 | " + "긴 설명" * 100 + " |"
+    for prefix in ["일반 설명", "|---|---|", long_row]:
+        body = prefix + "\n" + row
+        assert _table_preview_context(body, row) == row
+    body = "| 앞 조건 | 앞 결과 |\n" + row
+    assert _table_preview_context(body, "조건 | 결과 |") == "조건 | 결과 |"
+    assert _table_preview_context(body, "없는 대목") == "없는 대목"
+    assert _table_preview_context(row, row) == row
+
+
+async def test_table_preview_keeps_source_chunk_version_and_vector_score(worker_conn, search_conn):
+    provider = FakeProvider()
+    same = "| 같은 요청 | 기존 문서를 201로 반환 |"
+    different = "| 파일 내용 변경 다른 요청 | 422로 거부 |"
+    body = "| 조건 | 결과 |\n|---|---|\n" + same + "\n" + different
+    query = "파일 내용 변경 다른 요청"
+    did = await insert_test_document(worker_conn, title="재시도 조건", content=body)
+    await process_all_embedding_jobs(worker_conn, provider)
+    await worker_conn.execute(
+        'UPDATE document_chunks SET embedding=%s::vector WHERE document_id=%s',
+        (to_pgvector_literal(provider.embed([query])[0]), did),
+    )
+    hit = (await search_documents(search_conn, provider, query=query, k=1))[0]
+    assert hit.document_id == did and hit.via is None
+    assert hit.preview == same + "\n" + different
+    assert hit.preview in hit.content
+    assert hit.chunk_index == 0 and hit.based_on_version == 1
+    assert hit.score == pytest.approx(1.0, abs=1e-6)
+
+
+def test_table_preview_does_not_wrap_to_the_end_for_an_indented_first_row():
+    from openarchive.services.search import _table_preview_context
+
+    body = "  | 첫 조건 | 첫 결과 |\n| 마지막 조건 | 마지막 결과 | "
+    preview = body.strip()
+    assert _table_preview_context(body, preview) == preview

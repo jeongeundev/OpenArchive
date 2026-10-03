@@ -1,0 +1,206 @@
+{
+  "kind": "assistant-authored new validation questions; not independent user questions",
+  "source_commit": "fde4e8b",
+  "k_values": [
+    5,
+    10
+  ],
+  "evaluation": "whitespace-normalized exact evidence coverage; all required spans must occur in specified source; not general semantic answer grading",
+  "sources": [
+    {
+      "path": "README.md",
+      "sha256": "67bafa6585ab6c822c4cbe9382ac672837f10e160acf857b6c6a3b4c6f649415"
+    },
+    {
+      "path": "docs/ARCHITECTURE.md",
+      "sha256": "932d48e84e9c90a765760fcbe33669c23e760463297ddd1bb445d2767fd81680"
+    },
+    {
+      "path": "docs/OPERATIONS.md",
+      "sha256": "42c5c19da3bc4682e5f6d17bc1aeab9b8d08a0e1a16e09db480a11e5ebbf6917"
+    },
+    {
+      "path": "docs/PERFORMANCE_VALIDATION.md",
+      "sha256": "517dde84147db36d479fb55458f865d9f05365babc91a3583d641b0e3f3dd7f6"
+    },
+    {
+      "path": "docs/OPENSQL_DEVIATIONS.md",
+      "sha256": "e94df1b9b4da1a8545356e53adeb6f36ac1b5aa67188149e0b58d508f95f74fc"
+    },
+    {
+      "path": "docs/PRD.md",
+      "sha256": "478c16083d5f22932d4a40d1a5e4e74747c766b8b54d1f55e747fe3fca0481b1"
+    },
+    {
+      "path": "docs/ROADMAP.md",
+      "sha256": "578b36c9f26925893f0df0d4fadcce86cd3fccb9dbf02ebb3525f31ce34972eb"
+    }
+  ],
+  "queries": [
+    {
+      "id": "idempotency",
+      "query": "업로드 응답을 못 받아 같은 키로 재시도했는데, 파일 내용을 바꿔도 괜찮아?",
+      "expected": "같은 키·같은 요청은 기존 문서를 반환하고, 다른 요청은 422로 거부한다.",
+      "evidence": [
+        {
+          "source": "docs/ARCHITECTURE.md",
+          "text": "같은 키 + 같은 요청 | 새로 만들지 않고 처음 문서를 **201**로 돌려준다.",
+          "line": 732
+        },
+        {
+          "source": "docs/ARCHITECTURE.md",
+          "text": "같은 키 + 다른 요청 | **422**.",
+          "line": 733
+        }
+      ],
+      "relevant": [
+        "docs/ARCHITECTURE.md"
+      ]
+    },
+    {
+      "id": "manual-reextract",
+      "query": "추출된 글을 직접 고쳤는데 다시 추출하면 내가 고친 내용은 남아?",
+      "expected": "원본으로 덮어쓰지만 이전 텍스트 버전에서 되돌릴 수 있다.",
+      "evidence": [
+        {
+          "source": "docs/OPERATIONS.md",
+          "text": "사람이 직접 고쳐 둔 추출 텍스트도 원본 기준으로 덮입니다.",
+          "line": 250
+        },
+        {
+          "source": "docs/OPERATIONS.md",
+          "text": "덮인 내용은 텍스트 버전 이력에 남아\n  화면에서 되돌릴 수 있습니다.",
+          "line": 250
+        }
+      ],
+      "relevant": [
+        "docs/OPERATIONS.md"
+      ]
+    },
+    {
+      "id": "no-original",
+      "query": "파일 없이 텍스트로 만든 문서도 전체 재추출 대상이야?",
+      "expected": "원본 없는 문서는 전체 재추출에서 제외되고 단건 지정은 종료 코드 1이다.",
+      "evidence": [
+        {
+          "source": "docs/OPERATIONS.md",
+          "text": "원본이 없는 문서(원본 보관 이전에 올린 문서, 텍스트로 공급한 문서)는 `--all`의 대상이 아니며,",
+          "line": 255
+        },
+        {
+          "source": "docs/OPERATIONS.md",
+          "text": "단건으로 지정하면 안내 후 종료 코드 1로 끝납니다.",
+          "line": 256
+        }
+      ],
+      "relevant": [
+        "docs/OPERATIONS.md"
+      ]
+    },
+    {
+      "id": "edges-error",
+      "query": "관계 계산 작업만 실패하면 그 문서도 검색할 수 없어져? 어떻게 복구해?",
+      "expected": "임베딩 ready와 검색은 유지되며 격리된 관계 잡은 rebuild-edges로 복구한다.",
+      "evidence": [
+        {
+          "source": "docs/OPERATIONS.md",
+          "text": "임베딩 상태 배지는 `ready` 그대로이고 검색은 정상 동작합니다.",
+          "line": 279
+        },
+        {
+          "source": "docs/OPERATIONS.md",
+          "text": "격리된 잡은 워커가 다시 집지 않으므로",
+          "line": 279
+        },
+        {
+          "source": "docs/OPERATIONS.md",
+          "text": "위의 `openarchive rebuild-edges`가 복구 경로입니다.",
+          "line": 280
+        }
+      ],
+      "relevant": [
+        "docs/OPERATIONS.md"
+      ]
+    },
+    {
+      "id": "stale-worker",
+      "query": "여러 워커가 같은 문서를 처리하다가 본문이 바뀌면 늦게 끝난 옛 결과가 남을 수 있어?",
+      "expected": "커밋 직전 잠금과 해시 재확인으로 낡은 결과를 폐기하고 최신으로 수렴한다.",
+      "evidence": [
+        {
+          "source": "docs/ARCHITECTURE.md",
+          "text": "`FOR UPDATE` + 해시 비교로 \"내가 읽은 내용이 아직 최신인가\"를 커밋 직전에 확인하면,",
+          "line": 531
+        },
+        {
+          "source": "docs/ARCHITECTURE.md",
+          "text": "낡은 결과는 스스로 폐기되고 최신 내용으로 수렴한다.",
+          "line": 531
+        }
+      ],
+      "relevant": [
+        "docs/ARCHITECTURE.md"
+      ]
+    },
+    {
+      "id": "no-chunks",
+      "query": "관련 문서 목록이 비었을 때 아직 색인이 안 된 건지 정말 관련 문서가 없는 건지 구분할 수 있어?",
+      "expected": "청크가 없으면 not_indexed, 청크가 있지만 관계가 없으면 no_edges로 구분한다.",
+      "evidence": [
+        {
+          "source": "docs/ARCHITECTURE.md",
+          "text": "**`no_edges`는 `not_indexed`와 다르다.**",
+          "line": 986
+        },
+        {
+          "source": "docs/ARCHITECTURE.md",
+          "text": "분기 기준은 `embedding_status`가 **아니라 청크 존재 여부**다.",
+          "line": 989
+        }
+      ],
+      "relevant": [
+        "docs/ARCHITECTURE.md"
+      ]
+    },
+    {
+      "id": "original-retention",
+      "query": "파일을 새 파일로 교체하면 예전에 올린 파일은 지워져? 저장 용량은 어떻게 돼?",
+      "expected": "원본은 판별로 쌓이고 이전 판 삭제 정책이 없어 용량이 누적된다.",
+      "evidence": [
+        {
+          "source": "docs/OPERATIONS.md",
+          "text": "교체할 때마다 판을 하나씩 쌓아 보관합니다",
+          "line": 284
+        },
+        {
+          "source": "docs/OPERATIONS.md",
+          "text": "이전 판을 지우는 기능과 보관 정책(개수·기간)은 아직 없어 **교체할수록 누적**됩니다.",
+          "line": 285
+        }
+      ],
+      "relevant": [
+        "docs/OPERATIONS.md"
+      ]
+    },
+    {
+      "id": "notify",
+      "query": "DB 알림이 전달되지 않으면 새 문서의 임베딩 작업도 멈추는 거야?",
+      "expected": "폴링이 주 경로이고 알림은 최적화라 알림이 유실돼도 다음 폴링에서 처리한다.",
+      "evidence": [
+        {
+          "source": "docs/ARCHITECTURE.md",
+          "text": "**주기 폴링이 주 경로**이므로 전달은 구조적으로 보장된다.",
+          "line": 538
+        },
+        {
+          "source": "docs/ARCHITECTURE.md",
+          "text": "`pg_notify`(커밋 시에만 발행)는 지연을 줄이는 최적화일 뿐, 유실돼도 다음 폴링 틱이 처리한다",
+          "line": 538
+        }
+      ],
+      "relevant": [
+        "docs/ARCHITECTURE.md"
+      ]
+    }
+  ]
+}

@@ -118,6 +118,25 @@ export function SearchResults({
                     </p>
                   ) : null}
                   <SearchExcerpt key={`${item.content}:${item.preview ?? ""}`} content={item.content} preview={item.preview} />
+                  {item.via === null && item.passages && item.passages.length > 0 ? (
+                    <details className="mt-4 border-t border-neutral-800 pt-3">
+                      <summary className="cursor-pointer text-sm text-[#0ea5e9]">
+                        검색된 본문 대목 {item.passages.length}개
+                      </summary>
+                      <div className="mt-3 space-y-4">
+                        {item.passages.map((passage, index) => (
+                          <section key={`${passage.chunk_index}:${passage.based_on_version}`}>
+                            <p className="text-xs text-neutral-500">
+                              본문 대목 {index + 1} · 텍스트 버전 {passage.based_on_version}
+                            </p>
+                            <p className="mt-2 whitespace-pre-wrap text-sm leading-relaxed text-neutral-300">
+                              {passage.content}
+                            </p>
+                          </section>
+                        ))}
+                      </div>
+                    </details>
+                  ) : null}
                 </article>
               );
             })}
