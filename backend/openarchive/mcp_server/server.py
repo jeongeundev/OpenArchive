@@ -130,6 +130,7 @@ async def search_documents(
                 "content_type": hit.content_type,
                 "tags": hit.tags,
                 "excerpt": hit.content,
+                "preview": hit.preview,
                 "chunk_index": hit.chunk_index,
                 # 확장 결과의 dist는 진입점 거리 + GRAPH_DISTANCE_PENALTY라 `1 - dist`가
                 # 음수이고, 같은 진입점에서 나온 확장은 전부 동점이다. 정렬용 값이지

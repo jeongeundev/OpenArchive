@@ -252,6 +252,7 @@ class SearchResult(BaseModel):
     score: float
     based_on_version: int
     via: SearchVia | None
+    preview: str | None = None
 
 
 class SearchResponse(BaseModel):
