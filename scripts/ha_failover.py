@@ -245,22 +245,30 @@ def judge(summary: dict) -> list[str]:
     return problems
 
 
-def write_outage(
+def write_outages(
     probes: list[dict], *, since: float
-) -> tuple[float, float | None] | None:
-    """쓰기 중단 구간: 주입 뒤 첫 실패 직전의 마지막 성공 ~ 마지막 실패 뒤의 첫 성공.
+) -> list[tuple[float, float | None]]:
+    """쓰기 중단 구간들: 주입 뒤 실패마다, 직전의 마지막 성공 ~ 직후의 첫 성공.
 
+    사이에 성공이 하나라도 있으면 구간을 나눈다 — 전원 차단과 VIP 선점 복귀처럼 떨어진
+    실패를 하나로 합치면 그 사이 정상 구간까지 중단으로 잡힌다(#151).
     이벤트는 끝난 시각으로 찍힌다. 주입 순간 매달린 probe는 타임아웃 뒤에야 실패로 남으므로
     첫 실패 시각으로 재면 중단이 그만큼 짧게 잡힌다.
     """
-    fails = [e["t"] for e in probes if not e["ok"] and e["t"] >= since]
-    if not fails:
-        return None
-    start = max(
-        (e["t"] for e in probes if e["ok"] and e["t"] < fails[0]), default=fails[0]
-    )
-    end = next((e["t"] for e in probes if e["ok"] and e["t"] > fails[-1]), None)
-    return start, end
+    outages: list[tuple[float, float | None]] = []
+    last_ok: float | None = None
+    start: float | None = None
+    for e in probes:
+        if e["ok"]:
+            if start is not None:
+                outages.append((start, e["t"]))
+                start = None
+            last_ok = e["t"]
+        elif e["t"] >= since and start is None:
+            start = last_ok if last_ok is not None else e["t"]
+    if start is not None:
+        outages.append((start, None))
+    return outages
 
 
 def tally(events: list[dict]) -> dict:
@@ -732,14 +740,24 @@ def summarize(path: Path, target: Target) -> tuple[dict, list[str]]:
 
     probes = by("probe")
     if injected and probes:
-        outage = write_outage(probes, since=t0)
-        if outage is None:
+        outages = write_outages(probes, since=t0)
+        if not outages:
             lines.append("-- 쓰기 중단(probe): 없음")
         else:
-            start, end = outage
+            recovered = all(end for _, end in outages)
             lines.append(
-                f"-- 쓰기 중단(probe): 마지막 성공 +{start - t0:.1f}s ~ 첫 성공 "
-                + (f"+{end - t0:.1f}s → {end - start:.1f}s" if end else "없음")
+                "-- 쓰기 중단(probe): 최장 "
+                + (
+                    f"{max(end - start for start, end in outages):.1f}s"
+                    if recovered
+                    else "복구 없음"
+                )
+                + " · 구간 "
+                + ", ".join(
+                    f"+{start - t0:.1f}~"
+                    + (f"+{end - t0:.1f}s({end - start:.1f}s)" if end else "복구 없음")
+                    for start, end in outages
+                )
             )
     ok_probes = [e for e in probes if e["ok"]]
     changes = [

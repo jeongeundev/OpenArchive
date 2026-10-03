@@ -29,7 +29,7 @@ from scripts.ha_failover import (
     tally,
     unavailable_spans,
     uploader,
-    write_outage,
+    write_outages,
 )
 
 # --- 클라이언트 백오프: 웹 UI·MCP와 같은 규칙(ADR-048 결정 4) ---------------------------
@@ -338,17 +338,33 @@ def test_write_outage_spans_last_success_before_to_first_success_after():
         p(40.8, True),
     ]
 
-    assert write_outage(probes, since=10.0) == (10.0, 40.7)
+    assert write_outages(probes, since=10.0) == [(10.0, 40.7)]
+
+
+def test_write_outages_split_where_a_probe_succeeded_in_between():
+    """#151: 전원 차단과 VIP 선점 복귀의 실패 사이에 성공이 계속 있었는데 하나로 합쳐
+    164초 중단으로 보고했다. 사이에 성공이 하나라도 있으면 쓰기는 돌아온 것이다."""
+    probes = [
+        p(0.1, True),
+        p(10.2, False),
+        p(10.3, True),
+        p(100.0, True),
+        p(164.2, True),
+        p(164.4, False),
+        p(164.5, True),
+    ]
+
+    assert write_outages(probes, since=0.0) == [(0.1, 10.3), (164.2, 164.5)]
 
 
 def test_write_outage_is_none_without_failures_after_injection():
     probes = [p(1.0, False), p(2.0, True), p(12.0, True)]
 
-    assert write_outage(probes, since=10.0) is None
+    assert write_outages(probes, since=10.0) == []
 
 
 def test_write_outage_without_recovery_has_open_end():
-    assert write_outage([p(10.0, True), p(15.0, False)], since=10.0) == (10.0, None)
+    assert write_outages([p(10.0, True), p(15.0, False)], since=10.0) == [(10.0, None)]
 
 
 # --- 기록 → 판정 입력 -----------------------------------------------------------------
