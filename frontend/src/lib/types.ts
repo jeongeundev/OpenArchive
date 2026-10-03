@@ -125,6 +125,7 @@ export interface SearchResult {
   score: number;
   based_on_version: number;
   via: SearchVia | null;
+  preview?: string | null;
 }
 
 export interface SearchVia {
