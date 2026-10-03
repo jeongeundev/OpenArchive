@@ -147,11 +147,50 @@ async def test_upload_retries_reuse_the_same_idempotency_key():
     assert logged[0]["statuses"] == [503, 201]
 
 
+async def test_uploader_alternates_text_and_file_uploads_and_logs_the_file_hash():
+    """원본 판(document_files)도 장애 중에 쓰여야 대조할 수 있다 — 두 번째 요청은 파일 업로드다."""
+    import asyncio
+    import hashlib
+
+    stop = asyncio.Event()
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        if len(seen) == 2:
+            stop.set()
+        return httpx.Response(201)
+
+    logged: list[dict] = []
+    target = Target(dsn="", api="http://api", nodes=[], prefix="ha-t-")
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        await uploader(lambda kind, **kw: logged.append(kw), stop, client, target)
+
+    text, file = seen
+    assert text.url.path == "/documents/text"
+    assert "file_sha256" not in logged[0]
+    assert file.url.path == "/documents"
+    assert file.headers["content-type"].startswith("multipart/form-data")
+    body = file.read()
+    sent = body.split(b"\r\n\r\n", 2)[2].split(b"\r\n--", 1)[0]  # title 필드 뒤 file 필드
+    assert logged[1]["file_sha256"] == hashlib.sha256(sent).hexdigest()
+    assert logged[1]["sha256"] == hashlib.sha256(sent).hexdigest()  # md는 바이트가 곧 본문
+    assert logged[1]["title"].encode() in body
+
+
 # --- 장부 대조 ----------------------------------------------------------------------
 
 
-def entry(title, ok, sha="h"):
-    return {"title": title, "ok": ok, "sha256": sha}
+def entry(title, ok, sha="h", file_sha=None):
+    e = {"title": title, "ok": ok, "sha256": sha}
+    if file_sha is not None:
+        e["file_sha256"] = file_sha
+    return e
+
+
+def row(title, stored="h", recomputed="h", version=1, files=()):
+    """ledger_rows 한 행: 제목, 저장 해시, 본문 재계산 해시, 버전, 원본 판 [(판, 저장 sha, 재계산 sha)]."""
+    return (title, stored, recomputed, version, [list(f) for f in files])
 
 
 def test_reconcile_finds_lost_mismatched_ghost_duplicate_and_unknown_rows():
@@ -164,12 +203,12 @@ def test_reconcile_finds_lost_mismatched_ghost_duplicate_and_unknown_rows():
         entry("f", False),  # 실패했고 DB에도 없음 — 정상
     ]
     rows = [
-        ("a", "h", "h"),
-        ("c", "h", "other"),
-        ("d", "h", "h"),
-        ("e", "h", "h"),
-        ("e", "h", "h"),
-        ("z", "h", "h"),  # 장부에 없는 행
+        row("a"),
+        row("c", recomputed="other"),
+        row("d"),
+        row("e"),
+        row("e"),
+        row("z"),  # 장부에 없는 행
     ]
 
     r = reconcile(ledger, rows)
@@ -182,15 +221,42 @@ def test_reconcile_finds_lost_mismatched_ghost_duplicate_and_unknown_rows():
         "ghosts": ["d"],
         "duplicates": ["e"],
         "unknown": ["z"],
+        "file_mismatched": [],
+        "version_drift": [],
     }
 
 
 def test_hash_is_checked_against_both_stored_hash_and_recomputed_content():
     """content_hash만 보면 본문이 깨져도 통과한다 — 본문 sha256도 같이 본다."""
-    r = reconcile([entry("a", True)], [("a", "h", "broken")])
+    r = reconcile([entry("a", True)], [row("a", recomputed="broken")])
     assert r["mismatched"] == ["a"]
-    r = reconcile([entry("a", True)], [("a", "broken", "h")])
+    r = reconcile([entry("a", True)], [row("a", stored="broken")])
     assert r["mismatched"] == ["a"]
+
+
+def test_uploaded_file_must_be_stored_once_as_version_1_with_the_same_bytes():
+    """파일 업로드는 원본 판 하나(1판)가 DB 계산 sha256과 재계산 sha256 모두 보낸 바이트와 같아야 한다."""
+    ledger = [entry(t, True, file_sha="f") for t in ("ok", "none", "bad", "twice", "v2", "broken")]
+    rows = [
+        row("ok", files=[(1, "f", "f")]),
+        row("none"),  # 원본이 저장되지 않았다
+        row("bad", files=[(1, "x", "x")]),  # 다른 바이트
+        row("twice", files=[(1, "f", "f"), (2, "f", "f")]),  # 재시도가 판을 하나 더 쌓았다
+        row("v2", files=[(2, "f", "f")]),
+        row("broken", files=[(1, "f", "x")]),  # 저장 해시만 맞고 바이트가 다르다
+    ]
+
+    assert reconcile(ledger, rows)["file_mismatched"] == ["none", "bad", "twice", "v2", "broken"]
+
+
+def test_text_upload_without_original_file_is_not_a_file_mismatch():
+    assert reconcile([entry("t", True)], [row("t")])["file_mismatched"] == []
+
+
+def test_acked_document_whose_version_moved_is_reported():
+    """부하 중 문서를 고치지 않는다 — 버전이 1이 아니면 같은 요청이 두 번 적용된 것이다."""
+    r = reconcile([entry("a", True), entry("b", True)], [row("a"), row("b", version=2)])
+    assert r["version_drift"] == ["b"]
 
 
 # --- Patroni 승격 대상 ----------------------------------------------------------------
@@ -238,6 +304,8 @@ CLEAN = {
         "ghosts": [],
         "duplicates": [],
         "unknown": [],
+        "file_mismatched": [],
+        "version_drift": [],
     },
     "raw_500": {"upload": 0, "search": 0},
     "final_failures": {"upload": 0, "search": 0},
@@ -259,6 +327,8 @@ def test_clean_run_passes():
         ({"reconcile": CLEAN["reconcile"] | {"mismatched": ["c"]}}, "불일치"),
         ({"reconcile": CLEAN["reconcile"] | {"ghosts": ["d"]}}, "실패 응답"),
         ({"reconcile": CLEAN["reconcile"] | {"duplicates": ["e"]}}, "중복"),
+        ({"reconcile": CLEAN["reconcile"] | {"file_mismatched": ["f"]}}, "원본"),
+        ({"reconcile": CLEAN["reconcile"] | {"version_drift": ["v"]}}, "버전"),
         ({"raw_500": {"upload": 0, "search": 2}}, "500"),
         ({"final_failures": {"upload": 1, "search": 0}}, "사용자"),
         ({"converged": False}, "수렴"),
@@ -298,8 +368,9 @@ async def test_ledger_rows_and_digest_cover_only_the_run_prefix(migrated_db: str
         first = node_digest(conn, "ha-run1-")
 
     assert sorted(r[0] for r in rows) == ["ha-run1-00001", "ha-run1-00002"]
-    _, stored, recomputed = next(r for r in rows if r[0] == "ha-run1-00001")
+    _, stored, recomputed, version, files = next(r for r in rows if r[0] == "ha-run1-00001")
     assert stored == recomputed  # 저장 해시와 본문 재계산이 같은 형식이다
+    assert (version, files) == (1, [])
 
     async with await psycopg.AsyncConnection.connect(migrated_db, autocommit=True) as conn:
         await conn.execute(
@@ -307,6 +378,28 @@ async def test_ledger_rows_and_digest_cover_only_the_run_prefix(migrated_db: str
         )
     with psycopg.connect(migrated_db) as conn:
         assert node_digest(conn, "ha-run1-") != first  # 본문이 바뀌면 다이제스트도 바뀐다
+
+
+async def test_ledger_rows_and_digest_include_original_file_versions(migrated_db: str):
+    import hashlib
+
+    data = b"# \xec\x9b\x90\xeb\xb3\xb8\n"
+    async with await psycopg.AsyncConnection.connect(migrated_db, autocommit=True) as conn:
+        doc = await insert_test_document(conn, title="ha-f-00001", content="# 원본\n")
+    with psycopg.connect(migrated_db) as conn:
+        before = node_digest(conn, "ha-f-")
+        conn.execute(
+            "INSERT INTO document_files (document_id, file_version, filename, data, text_version,"
+            " uploaded_by) VALUES (%s, 1, 'a.md', %s, 1, 'alice')",
+            (doc, data),
+        )
+        conn.commit()
+        [(_, _, _, _, files)] = ledger_rows(conn, "ha-f-")
+        after = node_digest(conn, "ha-f-")
+
+    sha = hashlib.sha256(data).hexdigest()
+    assert files == [[1, sha, sha]]
+    assert after != before  # 노드끼리 원본 바이트도 같은지 본다
 
 
 async def test_prefix_wildcards_are_escaped(migrated_db: str):
