@@ -147,3 +147,17 @@ describe("SearchResults", () => {
     expect(screen.queryByText(/이어짐/)).not.toBeInTheDocument();
   });
 });
+
+it("긴 발췌의 뒤쪽 근거를 펼쳐 보고 다시 접을 수 있다", () => {
+  const evidence = "큰 작업 뒤 작은 문서는 약 22.3초 기다렸습니다.";
+  render(<SearchResults response={{ ...response, items: [{ ...response.items[0], content: "앞부분 설명 ".repeat(80) + evidence }] }} loading={false} error={null} />);
+  expect(screen.queryByText(new RegExp(evidence))).not.toBeInTheDocument();
+  const expand = screen.getByRole("button", { name: "발췌 더보기" });
+  expect(expand).toHaveAttribute("aria-expanded", "false");
+  fireEvent.click(expand);
+  expect(screen.getByText(new RegExp(evidence))).toBeInTheDocument();
+  const collapse = screen.getByRole("button", { name: "발췌 접기" });
+  expect(collapse).toHaveAttribute("aria-expanded", "true");
+  fireEvent.click(collapse);
+  expect(screen.queryByText(new RegExp(evidence))).not.toBeInTheDocument();
+});
