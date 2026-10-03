@@ -274,11 +274,12 @@ async def test_search_tool_matches_the_rest_endpoint_and_returns_evidence(
     assert [item["excerpt"] for item in tool_items] == [
         item["content"] for item in rest_items
     ]
-    for field in ("title", "filename", "content_type", "tags", "based_on_version"):
+    for field in ("title", "filename", "content_type", "tags", "based_on_version", "passages"):
         assert [item[field] for item in tool_items] == [
             item[field] for item in rest_items
         ], field
     assert tool_items[0]["based_on_version"] == 1
+    assert tool_items[0]["passages"]
 
 
 async def test_mcp_user_setting_controls_private_access_for_all_tools(

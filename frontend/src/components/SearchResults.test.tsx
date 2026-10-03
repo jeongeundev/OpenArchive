@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import type { SearchResponse } from "@/lib/types";
@@ -111,10 +111,100 @@ describe("SearchResults", () => {
     expect(screen.queryByText(/-1\.860/)).not.toBeInTheDocument();
   });
 
+  it("직접 결과의 순서를 유지하고 연결 문서는 별도 영역에 한 번씩 표시한다", () => {
+    const first = response.items[0];
+    const linked = { ...first, document_id: "document-2", title: "장애 대응", via: {
+      from_document_id: first.document_id, kind: "related", depth: 1,
+    } };
+    const second = { ...first, document_id: "document-3", title: "백업 가이드" };
+    render(<SearchResults response={{ ...response, items: [first, second, linked,
+      { ...first, via: linked.via }, { ...linked, chunk_index: 3 },
+    ] }} loading={false} error={null} />);
+
+    const direct = screen.getByRole("region", { name: "검색 결과" });
+    const related = screen.getByRole("region", { name: "함께 볼 문서" });
+    expect(within(direct).getAllByRole("link").map((link) => link.textContent)).toEqual([
+      "OpenSQL 운영 가이드", "백업 가이드",
+    ]);
+    expect(within(related).getAllByRole("link")).toHaveLength(1);
+    expect(within(related).getByRole("link", { name: "장애 대응" })).toBeInTheDocument();
+    expect(within(related).queryByRole("link", { name: first.title })).not.toBeInTheDocument();
+  });
+
+  it("응답에 없는 출발 문서는 제목이나 링크를 추측해서 노출하지 않는다", () => {
+    render(<SearchResults response={{ ...response, items: [{ ...response.items[0],
+      via: { from_document_id: "hidden-document", kind: "refers", depth: 2 },
+    }] }} loading={false} error={null} />);
+    expect(screen.getByRole("region", { name: "함께 볼 문서" })).toHaveTextContent("연결된 문서에서");
+    expect(screen.queryByRole("link", { name: "hidden-document" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "검색 결과" })).not.toBeInTheDocument();
+  });
+
   it("확장 결과가 없으면 별도 영역이나 빈 상태를 만들지 않는다", () => {
     render(<SearchResults response={response} loading={false} error={null} />);
 
-    expect(screen.queryByText(/확장 결과/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "함께 볼 문서" })).not.toBeInTheDocument();
     expect(screen.queryByText(/이어짐/)).not.toBeInTheDocument();
   });
+});
+
+it("긴 발췌의 뒤쪽 근거를 펼쳐 보고 다시 접을 수 있다", () => {
+  const evidence = "큰 작업 뒤 작은 문서는 약 22.3초 기다렸습니다.";
+  render(<SearchResults response={{ ...response, items: [{ ...response.items[0], content: "앞부분 설명 ".repeat(80) + evidence }] }} loading={false} error={null} />);
+  expect(screen.queryByText(new RegExp(evidence))).not.toBeInTheDocument();
+  const expand = screen.getByRole("button", { name: "발췌 더보기" });
+  expect(expand).toHaveAttribute("aria-expanded", "false");
+  fireEvent.click(expand);
+  expect(screen.getByText(new RegExp(evidence))).toBeInTheDocument();
+  const collapse = screen.getByRole("button", { name: "발췌 접기" });
+  expect(collapse).toHaveAttribute("aria-expanded", "true");
+  fireEvent.click(collapse);
+  expect(screen.queryByText(new RegExp(evidence))).not.toBeInTheDocument();
+});
+
+it("서버가 고른 대목을 미리보기로 쓰고 전체 문맥은 펼쳐서 보여준다", () => {
+  const context = "설정 안내 ".repeat(80) + "이전 버전 청크로 계속 검색됩니다.";
+  render(<SearchResults response={{ ...response, items: [{ ...response.items[0], content: context, preview: "이전 버전 청크로 계속 검색됩니다." }] }} loading={false} error={null} />);
+  expect(screen.getByText("이전 버전 청크로 계속 검색됩니다.")).toBeInTheDocument();
+  expect(screen.queryByText(/설정 안내/)).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "발췌 더보기" }));
+  expect(screen.getByText(/설정 안내/)).toBeInTheDocument();
+});
+
+it("첫 발췌 밖의 검색된 본문 대목을 펼쳐 출처와 텍스트 버전을 확인한다", () => {
+  const passage = "새 청크가 준비되기 전에는 이전 버전 청크로 검색됩니다.";
+  render(<SearchResults response={{ ...response, items: [{ ...response.items[0],
+    passages: [{ chunk_index: 12, content: passage, based_on_version: 2, score: 0.7 }],
+  }] }} loading={false} error={null} />);
+  const summary = screen.getByText("검색된 본문 대목 1개");
+  const details = summary.closest("details");
+  expect(details).not.toHaveAttribute("open");
+  expect(screen.getByText(passage)).not.toBeVisible();
+  fireEvent.click(summary);
+  expect(details).toHaveAttribute("open");
+  expect(screen.getByText(passage)).toBeVisible();
+  expect(screen.getByText("본문 대목 1 · 텍스트 버전 2")).toBeVisible();
+  expect(screen.getByRole("link", { name: "OpenSQL 운영 가이드" })).toHaveAttribute("href", "/documents/document-1");
+  fireEvent.click(summary);
+  expect(screen.getByText(passage)).not.toBeVisible();
+});
+
+it("대목을 임의로 자르거나 HTML로 해석하지 않고 서버의 문맥 순서대로 보여준다", () => {
+  const first = "상황 설명 ".repeat(100) + "끝의 근거입니다.";
+  const second = "<img src=x onerror=alert(1)> 별도 근거";
+  render(<SearchResults response={{ ...response, items: [{ ...response.items[0], passages: [
+    { chunk_index: 12, content: first, based_on_version: 2, score: 0.7 },
+    { chunk_index: 30, content: second, based_on_version: 2, score: 0.6 },
+  ] }] }} loading={false} error={null} />);
+  fireEvent.click(screen.getByText("검색된 본문 대목 2개"));
+  const details = screen.getByText("검색된 본문 대목 2개").closest("details");
+  expect(details).toHaveTextContent("끝의 근거입니다.");
+  expect(screen.getByText(second)).toBeVisible();
+  expect(screen.queryByRole("img")).not.toBeInTheDocument();
+  expect(details?.querySelectorAll("section p:first-child")[0]).toHaveTextContent("본문 대목 1 · 텍스트 버전 2");
+});
+
+it("추가 대목이 비었으면 불필요한 펼치기를 표시하지 않는다", () => {
+  render(<SearchResults response={{ ...response, items: [{ ...response.items[0], passages: [] }] }} loading={false} error={null} />);
+  expect(screen.queryByText(/검색된 본문 대목/)).not.toBeInTheDocument();
 });

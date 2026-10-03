@@ -114,6 +114,13 @@ export interface Backlink {
   title: string;
 }
 
+export interface SearchPassage {
+  chunk_index: number;
+  content: string;
+  based_on_version: number;
+  score: number;
+}
+
 export interface SearchResult {
   document_id: string;
   title: string;
@@ -125,6 +132,8 @@ export interface SearchResult {
   score: number;
   based_on_version: number;
   via: SearchVia | null;
+  preview?: string | null;
+  passages?: SearchPassage[];
 }
 
 export interface SearchVia {

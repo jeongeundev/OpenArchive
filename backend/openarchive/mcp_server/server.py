@@ -110,6 +110,8 @@ async def search_documents(
     """질의와 정형 필터에 맞는 발췌·출처·기준 버전을 반환합니다.
 
     AI가 답변 근거로 사용할 사내 문서 구절을 찾을 때 사용합니다.
+    직접 결과의 passages에는 기존 벡터 후보 안의 대목을 최대 8개 제공합니다.
+    첫 excerpt에 답이 없으면 이 대목들도 확인하세요. 답변 충분성을 보장하지 않습니다.
     """
     async with connection() as conn:
         hits = await search_documents_service(
@@ -130,6 +132,16 @@ async def search_documents(
                 "content_type": hit.content_type,
                 "tags": hit.tags,
                 "excerpt": hit.content,
+                "preview": hit.preview,
+                "passages": [
+                    {
+                        "chunk_index": p.chunk_index,
+                        "content": p.content,
+                        "based_on_version": p.based_on_version,
+                        "score": p.score,
+                    }
+                    for p in hit.passages
+                ],
                 "chunk_index": hit.chunk_index,
                 # 확장 결과의 dist는 진입점 거리 + GRAPH_DISTANCE_PENALTY라 `1 - dist`가
                 # 음수이고, 같은 진입점에서 나온 확장은 전부 동점이다. 정렬용 값이지

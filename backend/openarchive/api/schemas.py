@@ -239,6 +239,15 @@ class SearchVia(BaseModel):
     depth: int
 
 
+class SearchPassage(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    chunk_index: int
+    content: str
+    based_on_version: int
+    score: float
+
+
 class SearchResult(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -252,6 +261,8 @@ class SearchResult(BaseModel):
     score: float
     based_on_version: int
     via: SearchVia | None
+    preview: str | None = None
+    passages: list[SearchPassage] = Field(default_factory=list)
 
 
 class SearchResponse(BaseModel):

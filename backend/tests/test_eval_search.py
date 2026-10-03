@@ -109,3 +109,190 @@ def test_committed_evalsets_are_well_formed(corpus: str):
     assert len(queries) >= 20  # #94: 질의 20~30개
     assert all(item["query"].strip() and item["relevant"] for item in queries)
     assert all(title.strip() for item in queries for title in item["relevant"])
+
+
+def _hit(title, *, content="설정 안내", preview=None, passages=(), via=None):
+    from openarchive.services.search import SearchHit
+
+    return SearchHit(
+        document_id=D1, title=title, filename=None, tags=[], content_type="md",
+        chunk_index=0, content=content, score=0.8, based_on_version=1,
+        via=via, preview=preview, passages=passages,
+    )
+
+
+def test_evidence_separates_document_hit_from_first_preview_and_candidate_coverage():
+    from scripts.eval_search import grade_evidence
+
+    from openarchive.services.search import SearchPassage
+
+    evidence = [{"source": "운영", "text": "알림이 유실돼도 폴링이 처리한다"}]
+    hit = _hit("운영", passages=(SearchPassage(8, evidence[0]["text"], 1, 0.6),))
+    result = grade_evidence([hit], evidence)
+    assert not result["first_excerpt"]["complete"]
+    assert not result["first_preview"]["complete"]
+    assert result["top5_passages"]["complete"]
+    assert result["top5_passages"]["matched"] == result["top5_passages"]["required"] == 1
+    assert result["first_preview"]["missing"] == evidence
+
+
+def test_evidence_requires_all_fragments_in_the_named_source_without_joining_passages():
+    from scripts.eval_search import grade_evidence
+
+    from openarchive.services.search import SearchPassage
+
+    evidence = [{"source": "운영", "text": "원본은 보관된다"}, {"source": "운영", "text": "용량은 누적된다"}]
+    wrong = _hit("다른 문서", content="원본은 보관된다. 용량은 누적된다.")
+    partial = _hit("운영", preview="원본은\n  보관된다", passages=(
+        SearchPassage(0, "원본은 보관된다", 1, 0.8),
+        SearchPassage(2, "용량은 누적된다", 1, 0.7),
+    ))
+    result = grade_evidence([wrong, partial], evidence)
+    assert not result["first_excerpt"]["complete"]
+    assert result["top5_passages"]["complete"]
+    assert not grade_evidence([partial], [{"source": "운영", "text": "보관된다 용량은"}])["top5_passages"]["complete"]
+
+
+def test_evidence_excludes_revision_and_graph_results_and_reports_empty_search_as_failure():
+    from scripts.eval_search import grade_evidence
+
+    from openarchive.services.search import SearchVia
+
+    evidence = [{"source": "운영", "text": "예전 동작"}]
+    revision = _hit("운영", content="예전 동작", preview="예전 동작", via=SearchVia(D2, "revision", 1))
+    for hits in [[], [revision]]:
+        result = grade_evidence(hits, evidence)
+        assert all(not metric["complete"] and metric["matched"] == 0 for metric in result.values())
+
+
+def test_evidence_normalizes_whitespace_but_does_not_grade_semantic_paraphrases():
+    from scripts.eval_search import grade_evidence
+
+    evidence = [{"source": "운영", "text": "이전 버전으로 검색한다"}]
+    exact = grade_evidence([_hit("운영", preview="  이전\n 버전으로\t검색한다  ")], evidence)
+    assert exact["first_preview"]["complete"]
+    paraphrase = grade_evidence([_hit("운영", preview="옛 청크를 사용한다")], evidence)
+    assert not paraphrase["first_preview"]["complete"]
+    assert grade_evidence([], None) is None
+    with pytest.raises(ValueError, match="근거"):
+        grade_evidence([], [{"source": "운영", "text": "   "}])
+    with pytest.raises(ValueError, match="근거"):
+        grade_evidence([], [])
+
+
+def test_summary_counts_only_queries_with_fixed_evidence():
+    from scripts.eval_search import grade_evidence
+
+    evidence = [{"source": "운영", "text": "정답 대목"}]
+    good = grade_evidence([_hit("운영", content="정답 대목", preview="정답 대목")], evidence)
+    bad = grade_evidence([_hit("운영")], evidence)
+    results = [QueryResult("good", [D1], {D1}, set(), evidence=good),
+               QueryResult("bad", [D1], {D1}, set(), evidence=bad),
+               QueryResult("legacy", [D1], {D1}, set())]
+    summary = summarize(results)
+    assert summary["top1_hits"] == 3
+    assert summary["evidence_queries"] == 2
+    assert summary["first_preview_complete"] == 1
+    assert summary["top5_passages_complete"] == 0
+
+
+async def test_evaluator_resolves_and_searches_the_same_private_tagged_scope(migrated_db, monkeypatch):
+    import psycopg
+    from conftest import insert_test_document, process_all_embedding_jobs
+    from scripts import eval_search
+
+    from openarchive.embeddings import FakeProvider
+
+    provider = FakeProvider()
+    monkeypatch.setattr(eval_search, "get_provider", lambda: provider)
+    text = "알림이 유실돼도 다음 폴링이 처리한다."
+    async with await psycopg.AsyncConnection.connect(migrated_db, autocommit=True) as conn:
+        allowed = await insert_test_document(conn, title="운영", content=text,
+                                             owner_id="alice", visibility="private", tags=["evaluation"])
+        await insert_test_document(conn, title="운영", content="숨김 문서",
+                                   owner_id="bob", visibility="private", tags=["evaluation"])
+        await insert_test_document(conn, title="운영", content="다른 태그", tags=["other"])
+        await process_all_embedding_jobs(conn, provider)
+    evalset = {"queries": [{"query": "알림이 유실돼도 다음 폴링이 처리한다", "relevant": ["운영"],
+                            "evidence": [{"source": "운영", "text": text}]}]}
+    results = await eval_search.evaluate(evalset, migrated_db, user_id="alice", tags=["evaluation"])
+    assert results[0].relevant == {allowed}
+    assert results[0].ranked == [allowed]
+    assert results[0].evidence["first_preview"]["complete"]
+    assert results[0].evidence["top5_passages"]["complete"]
+    assert results[0].preview_diagnosis["reason"] == "complete"
+    with pytest.raises(KeyError, match="없는 제목"):
+        await eval_search.evaluate(evalset, migrated_db, user_id="carol", tags=["evaluation"])
+
+
+def test_render_exposes_body_failure_even_when_relevant_document_is_first():
+    from scripts.eval_search import grade_evidence, render
+
+    evidence = [{"source": "운영", "text": "답 대목"}]
+    result = QueryResult("실패 사례", [D1], {D1}, set(), ["운영"], grade_evidence([_hit("운영")], evidence))
+    output = render([result], summarize([result]))
+    assert " 1  실패 사례" in output
+    assert "발췌=0 미리보기=0 후보=0" in output
+    legacy = QueryResult("기존 사례", [D1], {D1}, set(), ["운영"])
+    assert "근거:" not in render([legacy], summarize([legacy]))
+
+
+def test_minimum_evidence_window_counts_raw_whitespace_and_overlapping_occurrences():
+    from scripts.eval_search import minimum_evidence_window
+
+    evidence = [{"source": "운영", "text": "a a"}, {"source": "운영", "text": "a b"}]
+    assert minimum_evidence_window("운영", "a a a b", evidence) == 5
+    evidence = [{"source": "운영", "text": "앞 답"}, {"source": "운영", "text": "뒤 답"}]
+    assert minimum_evidence_window("운영", "앞\n\t답 x 뒤 답", evidence) == 10
+    assert minimum_evidence_window("다른 문서", "앞 답 뒤 답", evidence) is None
+    assert minimum_evidence_window("운영", "앞 답만 존재", evidence) is None
+
+
+def test_preview_diagnosis_separates_selection_scope_and_length():
+    from dataclasses import replace
+
+    from scripts.eval_search import diagnose_preview
+
+    from openarchive.services.search import SearchPassage
+
+    evidence = [{"source": "운영", "text": "앞"}, {"source": "운영", "text": "뒤"}]
+    answer = "앞" + "x" * 298 + "뒤"
+    hit = _hit("운영", content=answer, preview="잘못 선택", passages=(SearchPassage(2, answer, 1, .8),))
+    assert diagnose_preview([hit], evidence) == {
+        "reason": "selection", "first_excerpt_minimum_chars": 300,
+        "first_document_passage_minimum_chars": 300,
+    }
+    hit = replace(hit, preview=answer)
+    assert diagnose_preview([hit], evidence)["reason"] == "complete"
+    hit = replace(hit, preview="잘못 선택", content="다른 내용")
+    assert diagnose_preview([hit], evidence)["reason"] == "scope"
+    hit = replace(hit, passages=(SearchPassage(2, "앞" + "x" * 299 + "뒤", 1, .8),))
+    assert diagnose_preview([hit], evidence)["reason"] == "length"
+
+
+def test_preview_diagnosis_does_not_join_passages_or_use_another_document():
+    from dataclasses import replace
+
+    from scripts.eval_search import diagnose_preview
+
+    from openarchive.services.search import SearchPassage, SearchVia
+
+    evidence = [{"source": "운영", "text": "앞"}, {"source": "운영", "text": "뒤"}]
+    partial = _hit("운영", passages=(SearchPassage(1, "앞", 1, .8), SearchPassage(8, "뒤", 1, .7)))
+    good = _hit("운영", content="앞 뒤", preview="앞 뒤", passages=(SearchPassage(1, "앞 뒤", 1, .6),))
+    assert diagnose_preview([partial, good], evidence)["reason"] == "missing"
+    assert diagnose_preview([], evidence)["reason"] == "missing"
+    good = replace(good, via=SearchVia(D2, "revision", 1))
+    assert diagnose_preview([good], evidence)["reason"] == "missing"
+    assert diagnose_preview([], None) is None
+
+
+def test_render_exposes_preview_diagnosis_and_keeps_legacy_output():
+    from scripts.eval_search import diagnose_preview, render
+
+    hit = _hit("운영", content="정답 대목", preview="다른 내용")
+    result = QueryResult("선택 실패", [D1], {D1}, set(), ["운영"],
+                         preview_diagnosis=diagnose_preview([hit], [{"source": "운영", "text": "정답 대목"}]))
+    assert "미리보기 원인=selection" in render([result], summarize([result]))
+    legacy = QueryResult("기존 사례", [D1], {D1}, set(), ["운영"])
+    assert "미리보기 원인=" not in render([legacy], summarize([legacy]))
