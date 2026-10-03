@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 from pathlib import Path
 
@@ -9,12 +10,13 @@ from test_triggers import edges_for, insert_document, mark_document_ready, unit_
 from openarchive.embeddings import FakeProvider
 from openarchive.services.documents import DocumentNotFound, OriginalFileMissing, create_document
 from openarchive.services.system import (
+    enqueue_edge_rebuild,
     get_system_status,
-    rebuild_all_edges,
     reextract_all,
     reextract_one,
+    wait_for_edge_jobs,
 )
-from openarchive.worker import process_once
+from openarchive.worker import drain, process_once
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -171,46 +173,132 @@ async def test_job_counters_only_count_embedding_jobs(system_conn):
     assert (await status_of(system_conn)).last_job_finished_at == embed_finished_at
 
 
-async def test_rebuild_all_edges_lets_earlier_documents_see_later_ones(system_conn, migrated_db):
+# ── 관계 전량 재계산 (openarchive rebuild-edges, #156) ─────────────────────
+# 판정은 워커 하나가 한다. 이 명령은 ready 문서마다 관계 잡을 걸고 워커가 그 잡들을 비울 때까지
+# 기다린다. 테스트에서는 워커 대신 같은 처리 함수(`drain`)를 다른 연결로 돌린다.
+
+
+@pytest.fixture
+async def worker_conn(migrated_db: str):
+    async with await psycopg.AsyncConnection.connect(migrated_db, autocommit=True) as conn:
+        yield conn
+
+
+async def test_edge_rebuild_lets_earlier_documents_see_later_ones(
+    system_conn, worker_conn, migrated_db
+):
     with psycopg.connect(migrated_db, autocommit=True) as setup:
         first = insert_document(setup)
         mark_document_ready(setup, first, ["first"], vectors=[unit_vector(0)])
         second = insert_document(setup)
         mark_document_ready(setup, second, ["second"], vectors=[unit_vector(0)])
-        # 017 이후 ready 전이는 관계 잡만 만든다 — 워커가 하는 판정을 여기서 대신 돌려
-        # "나중 문서만 자기 관계를 계산한 상태"를 그대로 재현한다.
+        # 워커가 적재 순서대로 판정한 상태 — 먼저 들어온 문서는 나중 문서를 못 봤다.
+        setup.execute("DELETE FROM embedding_jobs WHERE kind = 'edges'")
         setup.execute("SELECT rebuild_document_edges(%s)", (second,))
-        assert [(row[0], row[1]) for row in edges_for(setup, first)] == [(second, first)]
+        before = edges_for(setup, first)
+        assert [(row[0], row[1]) for row in before] == [(second, first)]
 
-        assert await rebuild_all_edges(system_conn) == 2
+        queued = await enqueue_edge_rebuild(system_conn)
+        assert queued.documents == 2
+        assert edges_for(setup, first) == before  # 거는 것은 판정하지 않는다 — 워커의 일이다
+
+        await drain(worker_conn, FakeProvider())
+        assert await wait_for_edge_jobs(system_conn, queued) == 0
         rebuilt = edges_for(setup, first)
         assert {(row[0], row[1]) for row in rebuilt} == {(first, second), (second, first)}
-        assert await rebuild_all_edges(system_conn) == 2
-        assert edges_for(setup, first) == rebuilt
 
 
-async def test_rebuild_all_edges_skips_documents_that_are_not_ready(system_conn, migrated_db):
+async def test_edge_rebuild_skips_documents_that_are_not_ready(system_conn, migrated_db):
     with psycopg.connect(migrated_db, autocommit=True) as setup:
         ready = insert_document(setup)
         mark_document_ready(setup, ready, ["ready"], vectors=[unit_vector(0)])
-        pending = insert_document(setup)
+        insert_document(setup)
 
-        assert await rebuild_all_edges(system_conn) == 1
-        assert setup.execute(
-            "SELECT count(*) FROM document_edges WHERE src_document_id = %s", (pending,)
-        ).fetchone() == (0,)
-        assert setup.execute(
-            "SELECT embedding_status FROM documents WHERE id = %s", (pending,)
-        ).fetchone() == ("pending",)
+    assert (await enqueue_edge_rebuild(system_conn)).documents == 1
 
 
-async def test_rebuild_all_edges_closes_the_edge_jobs_whose_work_it_did(system_conn):
-    """전량 재계산은 **격리된** 관계 잡을 마감한다 — 안 그러면 카운터가 영구히 >0이다.
+async def test_waiting_ends_when_the_worker_empties_the_queued_jobs(
+    system_conn, worker_conn, migrated_db
+):
+    """대기는 워커가 처리할 때까지 끝나지 않고, 진행을 (처리한 수, 전체)로 알린다."""
+    with psycopg.connect(migrated_db, autocommit=True) as setup:
+        for index in range(3):
+            doc_id = insert_document(setup)
+            mark_document_ready(setup, doc_id, ["text"], vectors=[unit_vector(index)])
+        # 관계 잡까지 끝난 상태 — 기다릴 잡은 전부 이 요청이 새로 건 것이어야 한다.
+        # 대기 중인 잡과 코얼레싱되면 상한을 잘못 잡아도 이 테스트가 통과해 버린다.
+        setup.execute("UPDATE embedding_jobs SET status = 'done'")
+    queued = await enqueue_edge_rebuild(system_conn)
+    progress = []
+
+    waiting = asyncio.create_task(
+        wait_for_edge_jobs(
+            system_conn, queued, poll_interval=0.01,
+            on_progress=lambda done, total: progress.append((done, total)),
+        )
+    )
+    await asyncio.sleep(0.1)
+    assert not waiting.done()  # 워커가 아직 아무것도 처리하지 않았다
+
+    assert await drain(worker_conn, FakeProvider()) == 3
+    assert await asyncio.wait_for(waiting, timeout=5) == 0
+    assert progress[0] == (0, 3)
+    assert progress[-1] == (3, 3)
+
+
+async def test_waiting_does_not_wait_for_jobs_queued_after_the_request(
+    system_conn, worker_conn, migrated_db
+):
+    """요청 뒤에 생긴 잡까지 기다리면 적재가 계속되는 동안 명령이 끝나지 않는다."""
+    with psycopg.connect(migrated_db, autocommit=True) as setup:
+        doc_id = insert_document(setup)
+        mark_document_ready(setup, doc_id, ["text"], vectors=[unit_vector(0)])
+        queued = await enqueue_edge_rebuild(system_conn)
+        await drain(worker_conn, FakeProvider())
+        later = insert_document(setup)
+        mark_document_ready(setup, later, ["later"], vectors=[unit_vector(1)])
+
+    assert await asyncio.wait_for(wait_for_edge_jobs(system_conn, queued), timeout=5) == 0
+
+
+async def test_waiting_tells_once_when_nothing_moves_and_can_time_out(system_conn, migrated_db):
+    """워커가 없으면 잡은 줄지 않는다 — 기다리는 이유를 한 번 알리고, 상한이 있으면 끝낸다."""
+    with psycopg.connect(migrated_db, autocommit=True) as setup:
+        doc_id = insert_document(setup)
+        mark_document_ready(setup, doc_id, ["text"], vectors=[unit_vector(0)])
+    queued = await enqueue_edge_rebuild(system_conn)
+    stalls = []
+
+    with pytest.raises(TimeoutError):
+        await wait_for_edge_jobs(
+            system_conn, queued, poll_interval=0.01, stall_after=0.05, timeout=0.5,
+            on_stall=lambda: stalls.append(True),
+        )
+
+    assert stalls == [True]
+
+
+async def test_waiting_reports_documents_whose_edge_judgement_is_isolated(
+    system_conn, migrated_db
+):
+    with psycopg.connect(migrated_db, autocommit=True) as setup:
+        doc_id = insert_document(setup)
+        mark_document_ready(setup, doc_id, ["text"], vectors=[unit_vector(0)])
+        queued = await enqueue_edge_rebuild(system_conn)
+        # 워커가 재시도 예산을 소진한 것과 같은 상태
+        setup.execute("UPDATE embedding_jobs SET status = 'error' WHERE kind = 'edges'")
+
+    assert await wait_for_edge_jobs(system_conn, queued) == 1
+
+
+async def test_edge_rebuild_recovers_an_isolated_edge_job_and_the_counter(
+    system_conn, worker_conn
+):
+    """격리된 관계 잡의 복구 경로가 이 명령이다 (OPERATIONS) — 다시 걸고 판정이 성공하면 카운터가 0이 된다.
 
     관계 잡이 재시도 예산을 소진해 error로 격리되면 그 문서는 관계 미반영 수에 계속
-    세어진다(의도된 동작이다 — 격리했다고 어긋남을 숨기지 않는다). 그 상태의 복구
-    경로로 OPERATIONS가 안내하는 것이 `openarchive rebuild-edges`인데, 재계산이 잡을
-    그대로 두면 관계를 실제로 복구하고도 지표는 영영 내려오지 않는다.
+    세어진다(의도된 동작이다 — 격리했다고 어긋남을 숨기지 않는다). 다시 건 잡이 성공하면
+    워커가 격리된 잡을 마감한다 (`test_worker.py`).
     """
     await insert_test_document(
         system_conn,
@@ -223,53 +311,12 @@ async def test_rebuild_all_edges_closes_the_edge_jobs_whose_work_it_did(system_c
     )
     assert (await status_of(system_conn)).stale_edge_documents == 1
 
-    assert await rebuild_all_edges(system_conn) == 1
+    queued = await enqueue_edge_rebuild(system_conn)
+    assert (await status_of(system_conn)).stale_edge_documents == 1  # 걸었을 뿐 아직 판정 전
+    await drain(worker_conn, FakeProvider())
 
+    assert await wait_for_edge_jobs(system_conn, queued) == 0
     assert (await status_of(system_conn)).stale_edge_documents == 0
-
-
-async def test_rebuild_all_edges_leaves_the_jobs_the_worker_still_owns(system_conn):
-    """대기·처리 중인 관계 잡은 건드리지 않는다 — 그것은 워커가 가진 잡이다.
-
-    함께 마감하면 재계산이 청크를 읽은 뒤에 커밋된 ready 전이의 잡까지 지워, 마지막
-    청크 교체가 반영되지 않은 관계를 가진 채 카운터만 0이 되는 자리가 생긴다.
-    """
-    await insert_test_document(
-        system_conn,
-        title="워커의 잡",
-        content="관계 잡이 아직 대기 중인 문서.",
-    )
-    assert await process_once(system_conn, FakeProvider())  # 임베딩 잡 → ready + 관계 잡
-
-    assert await rebuild_all_edges(system_conn) == 1
-
-    assert (await status_of(system_conn)).stale_edge_documents == 1
-
-
-@pytest.mark.parametrize("autocommit", [False, True])
-async def test_rebuild_all_edges_commits_per_document(migrated_db, autocommit):
-    with psycopg.connect(migrated_db, autocommit=True) as observer:
-        for _ in range(3):
-            doc_id = insert_document(observer)
-            mark_document_ready(observer, doc_id, ["text"], vectors=[unit_vector(0)])
-        ordered_ids = [row[0] for row in observer.execute(
-            "SELECT id FROM documents ORDER BY created_at, id"
-        ).fetchall()]
-        progress = []
-
-        def on_progress(done, total):
-            progress.append((done, total))
-            # 별도 연결은 커밋된 결과만 본다. 첫 문서는 원래 나가는 관계가 없다.
-            assert observer.execute(
-                "SELECT count(*) FROM document_edges WHERE src_document_id = %s",
-                (ordered_ids[done - 1],),
-            ).fetchone()[0] == 2
-
-        async with await psycopg.AsyncConnection.connect(
-            migrated_db, autocommit=autocommit
-        ) as conn:
-            assert await rebuild_all_edges(conn, on_progress=on_progress) == 3
-        assert progress == [(1, 3), (2, 3), (3, 3)]
 
 
 # ── 원본 재추출 전량 (openarchive reextract --all) ─────────────────────────

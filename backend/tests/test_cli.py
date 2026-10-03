@@ -11,6 +11,7 @@ from pathlib import Path
 
 import psycopg
 import pytest
+from conftest import background_worker
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
 from test_triggers import insert_document, mark_document_ready, unit_vector
 
@@ -939,24 +940,79 @@ def test_reset_password_does_not_report_a_query_failure_as_a_connection_failure(
     assert "연결하지 못했습니다" not in capsys.readouterr().out
 
 
-def test_rebuild_edges_recomputes_every_ready_document(migrated_db, capsys):
-    with psycopg.connect(migrated_db, autocommit=True) as conn:
-        first = insert_document(conn)
-        mark_document_ready(conn, first, ["first"], vectors=[unit_vector(0)])
-        second = insert_document(conn)
-        mark_document_ready(conn, second, ["second"], vectors=[unit_vector(0)])
-        assert conn.execute(
-            "SELECT count(*) FROM document_edges WHERE src_document_id = %s", (first,)
-        ).fetchone() == (0,)
+def ready_documents(dsn: str, count: int) -> list:
+    """관계 잡까지 끝난 ready 문서 — 먼저 들어온 문서는 나중 문서를 못 본 상태다."""
+    with psycopg.connect(dsn, autocommit=True) as conn:
+        ids = []
+        for _ in range(count):
+            doc_id = insert_document(conn)
+            mark_document_ready(conn, doc_id, ["text"], vectors=[unit_vector(0)])
+            ids.append(doc_id)
+        conn.execute("UPDATE embedding_jobs SET status = 'done'")
+    return ids
 
+
+def test_rebuild_edges_queues_edge_jobs_and_waits_for_the_worker(migrated_db, capsys):
+    """판정은 워커가 한다 — 명령은 관계 잡을 걸고 워커가 비울 때까지 기다린다 (#156)."""
+    first, second = ready_documents(migrated_db, 2)
+
+    with background_worker(migrated_db):
         assert main(["rebuild-edges", "--dsn", migrated_db]) == 0
+
+    with psycopg.connect(migrated_db) as conn:
         assert conn.execute(
             "SELECT dst_document_id FROM document_edges WHERE src_document_id = %s", (first,)
         ).fetchall() == [(second,)]
     output = capsys.readouterr().out
-    assert "관계를 다시 계산했습니다: 문서 2건" in output
-    assert "1/2" in output
+    assert "관계 잡을 걸었습니다: 문서 2건" in output
     assert "2/2" in output
+    assert "관계를 다시 계산했습니다: 문서 2건" in output
+
+
+def test_rebuild_edges_explains_the_wait_while_no_worker_takes_the_jobs(
+    migrated_db, monkeypatch, capsys
+):
+    """워커가 없으면 잡이 줄지 않는다 — 멈춘 것처럼 보이지 않게 기다리는 이유를 알린다."""
+    monkeypatch.setattr("openarchive.cli.EDGE_POLL_SECONDS", 0.01)
+    monkeypatch.setattr("openarchive.cli.EDGE_STALL_SECONDS", 0.05)
+    ready_documents(migrated_db, 1)
+
+    with background_worker(migrated_db, start_after=1.0):
+        assert main(["rebuild-edges", "--dsn", migrated_db]) == 0
+
+    output = capsys.readouterr().out
+    assert "openarchive serve" in output
+    assert "관계를 다시 계산했습니다: 문서 1건" in output
+
+
+def test_rebuild_edges_stops_waiting_on_ctrl_c_and_leaves_the_jobs(
+    migrated_db, monkeypatch, capsys
+):
+    ready_documents(migrated_db, 1)
+
+    async def interrupted(*_args, **_kwargs):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr("openarchive.cli.wait_for_edge_jobs", interrupted)
+
+    assert main(["rebuild-edges", "--dsn", migrated_db]) == 130
+    assert "워커가 처리합니다" in capsys.readouterr().out
+    with psycopg.connect(migrated_db) as conn:
+        assert conn.execute(
+            "SELECT count(*) FROM embedding_jobs WHERE kind = 'edges' AND status = 'pending'"
+        ).fetchone() == (1,)
+
+
+def test_rebuild_edges_reports_isolated_documents_as_a_failure(migrated_db, monkeypatch, capsys):
+    ready_documents(migrated_db, 1)
+
+    async def one_isolated(*_args, **_kwargs):
+        return 1
+
+    monkeypatch.setattr("openarchive.cli.wait_for_edge_jobs", one_isolated)
+
+    assert main(["rebuild-edges", "--dsn", migrated_db]) == 1
+    assert "관계 판정이 격리된 문서 1건" in capsys.readouterr().out
 
 
 def test_rebuild_edges_reports_a_connection_failure_without_traceback(capsys):

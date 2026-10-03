@@ -989,6 +989,47 @@ async def test_an_exhausted_edge_job_does_not_mark_the_document_as_error(conn):
     assert await process_once(conn, FakeProvider()) is False  # 더는 집히지 않는다
 
 
+async def test_a_succeeding_edge_job_closes_the_isolated_edge_jobs_of_its_document(conn):
+    """판정이 성공하면 같은 문서의 격리된(error) 관계 잡을 함께 마감한다 (#156).
+
+    관계 미반영 카운터는 "관계 잡이 done이 아닌 문서"를 센다. 판정은 문서의 관계를 통째로
+    교체하므로, 나중 잡 하나의 성공이 앞서 격리된 잡이 요구한 일을 했다. 마감하지 않으면
+    `openarchive rebuild-edges`로 다시 걸어 관계를 실제로 복구하고도 카운터가 영영 내려오지 않는다.
+    다른 문서의 격리된 잡은 건드리지 않는다.
+    """
+    doc_id = await insert_document(conn)
+    other_id = await insert_document(conn, content=DOC_V2, content_hash="sha256:other")
+    await drain(conn, FakeProvider())
+    await conn.execute(
+        "UPDATE embedding_jobs SET status = 'error', last_error = '격리됨' WHERE kind = 'edges'"
+    )
+    await conn.execute("SELECT enqueue_all_edge_jobs()")
+    await conn.execute(  # 다른 문서의 새 잡은 아직 처리하지 않은 것으로 둔다
+        "DELETE FROM embedding_jobs WHERE document_id = %s AND status = 'pending'", (other_id,)
+    )
+
+    assert await process_once(conn, ExplodingProvider()) is True  # 관계 잡
+
+    assert await job_rows(conn, doc_id, kind="edges") == [
+        ("done", 1, "격리됨"),  # 마감하되 왜 격리됐는지는 남긴다
+        ("done", 1, None),
+    ]
+    assert [j[0] for j in await job_rows(conn, other_id, kind="edges")] == ["error"]
+
+
+async def test_a_failing_edge_job_leaves_the_isolated_edge_jobs_open(conn):
+    """다시 건 잡이 실패하면 격리된 잡은 그대로다 — 관계는 여전히 반영되지 않았다."""
+    doc_id = await insert_document(conn)
+    await drain(conn, FakeProvider())
+    await conn.execute("UPDATE embedding_jobs SET status = 'error' WHERE kind = 'edges'")
+    await conn.execute("SELECT enqueue_all_edge_jobs()")
+    await break_edge_rebuild(conn)
+
+    assert await process_once(conn, ExplodingProvider()) is True
+
+    assert [j[0] for j in await job_rows(conn, doc_id, kind="edges")] == ["error", "pending"]
+
+
 async def test_an_edge_job_judges_with_the_chunks_that_exist_even_during_reembedding(
     conn, other_conn
 ):

@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 import psycopg
-from conftest import process_all_embedding_jobs
+from conftest import background_worker, process_all_embedding_jobs
 
 from openarchive.config import get_settings
 from openarchive.demo import load_seed_documents, seed_documents
@@ -43,7 +43,8 @@ async def test_seed_run_rebuilds_edges_after_embedding(migrated_db: str, monkeyp
 
         monkeypatch.setenv("DATABASE_URL", migrated_db)
         get_settings.cache_clear()
-        await run(reset=False, timeout=10, owner="seed")
+        with background_worker(migrated_db):  # 관계 재계산은 워커가 관계 잡으로 한다 (#156)
+            await run(reset=False, timeout=10, owner="seed")
 
         count, = await (await conn.execute(query, (first_id,))).fetchone()
         assert count > 0

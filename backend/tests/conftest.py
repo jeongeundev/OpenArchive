@@ -2,6 +2,7 @@ import asyncio
 import contextlib
 import hashlib
 import os
+import threading
 from uuid import UUID
 
 import psycopg
@@ -202,6 +203,31 @@ def run_embedding_worker(dsn: str) -> int:
             return await process_all_embedding_jobs(conn, FakeProvider())
 
     return asyncio.run(process())
+
+
+@contextlib.contextmanager
+def background_worker(dsn: str, *, start_after: float = 0.0):
+    """명령이 기다리는 동안 다른 스레드에서 워커처럼 잡을 비운다 — `rebuild-edges`·demo 대기용.
+
+    `start_after`초 뒤에 시작해 "워커가 아직 없는" 구간을 만든다.
+    """
+    stop = threading.Event()
+
+    async def work() -> None:
+        async with await psycopg.AsyncConnection.connect(dsn, autocommit=True) as conn:
+            if stop.wait(start_after):
+                return
+            while not stop.is_set():
+                if not await process_once(conn, FakeProvider()):
+                    await asyncio.sleep(0.01)
+
+    thread = threading.Thread(target=lambda: asyncio.run(work()))
+    thread.start()
+    try:
+        yield
+    finally:
+        stop.set()
+        thread.join()
 
 
 def upload_document(
