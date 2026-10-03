@@ -291,6 +291,54 @@ async def test_waiting_reports_documents_whose_edge_judgement_is_isolated(
     assert await wait_for_edge_jobs(system_conn, queued) == 1
 
 
+async def test_isolated_count_skips_documents_the_rebuild_does_not_target(
+    system_conn, migrated_db
+):
+    """ready가 아닌 문서는 관계 잡이 다시 걸리지 않아 격리 잡이 닫힐 길이 없다.
+
+    세면 `rebuild-edges`가 매번 실패하고 "다시 실행하세요"가 거짓이 된다. 그 문서의 관계는
+    다음 ready 전이에서 트리거가 거는 잡이 맞춘다 (017).
+    """
+    with psycopg.connect(migrated_db, autocommit=True) as setup:
+        doc_id = insert_document(setup)
+        mark_document_ready(setup, doc_id, ["text"], vectors=[unit_vector(0)])
+        setup.execute("UPDATE embedding_jobs SET status = 'error' WHERE kind = 'edges'")
+        # 재임베딩이 실패해 ready에서 빠진 문서
+        setup.execute("UPDATE documents SET embedding_status = 'error' WHERE id = %s", (doc_id,))
+    queued = await enqueue_edge_rebuild(system_conn)
+
+    assert await asyncio.wait_for(wait_for_edge_jobs(system_conn, queued), timeout=5) == 0
+
+
+async def test_progress_never_goes_below_zero_when_an_earlier_job_commits_late(
+    system_conn, migrated_db
+):
+    """잡 id는 커밋 순서가 아니다 — 상한 아래 id가 첫 폴링 뒤에 커밋되면 남은 수가 늘어난다."""
+    with psycopg.connect(migrated_db, autocommit=True) as setup:
+        doc_id = insert_document(setup)
+        mark_document_ready(setup, doc_id, ["text"], vectors=[unit_vector(0)])
+        queued = await enqueue_edge_rebuild(system_conn)
+        # 상한을 넉넉히 둬 나중에 생긴 잡이 "늦게 커밋된 작은 id"처럼 보이게 한다.
+        request = type(queued)(documents=queued.documents, last_job_id=queued.last_job_id + 1000)
+        progress = []
+
+        def on_progress(done: int, total: int) -> None:
+            progress.append((done, total))
+            if len(progress) == 1:
+                late = insert_document(setup)
+                mark_document_ready(setup, late, ["late"], vectors=[unit_vector(1)])
+            else:
+                setup.execute("UPDATE embedding_jobs SET status = 'done' WHERE kind = 'edges'")
+
+        assert await asyncio.wait_for(
+            wait_for_edge_jobs(system_conn, request, poll_interval=0.01, on_progress=on_progress),
+            timeout=5,
+        ) == 0
+
+    assert len(progress) >= 3
+    assert all(0 <= done <= total for done, total in progress)
+
+
 async def test_edge_rebuild_recovers_an_isolated_edge_job_and_the_counter(
     system_conn, worker_conn
 ):

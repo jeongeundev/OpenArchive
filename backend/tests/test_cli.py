@@ -7,6 +7,7 @@ Mock으로는 확인할 수 없다 (CLAUDE.md 개발 프로세스).
 
 import asyncio
 import hashlib
+import time
 from pathlib import Path
 
 import psycopg
@@ -952,6 +953,20 @@ def ready_documents(dsn: str, count: int) -> list:
     return ids
 
 
+@pytest.mark.timeout(30)
+def test_background_worker_surfaces_a_worker_crash(migrated_db, monkeypatch):
+    """헬퍼의 워커가 죽으면 기다리던 명령은 끝나지 않는다 — 타임아웃 뒤 원인 예외가 보여야 한다."""
+
+    async def crash(*_args, **_kwargs):
+        raise RuntimeError("worker crashed")
+
+    monkeypatch.setattr("conftest.process_once", crash)
+
+    with pytest.raises(RuntimeError, match="worker crashed"), background_worker(migrated_db):
+        time.sleep(0.2)
+
+
+@pytest.mark.timeout(60)
 def test_rebuild_edges_queues_edge_jobs_and_waits_for_the_worker(migrated_db, capsys):
     """판정은 워커가 한다 — 명령은 관계 잡을 걸고 워커가 비울 때까지 기다린다 (#156)."""
     first, second = ready_documents(migrated_db, 2)
@@ -969,6 +984,7 @@ def test_rebuild_edges_queues_edge_jobs_and_waits_for_the_worker(migrated_db, ca
     assert "관계를 다시 계산했습니다: 문서 2건" in output
 
 
+@pytest.mark.timeout(60)
 def test_rebuild_edges_explains_the_wait_while_no_worker_takes_the_jobs(
     migrated_db, monkeypatch, capsys
 ):

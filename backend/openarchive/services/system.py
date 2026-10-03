@@ -135,12 +135,16 @@ async def enqueue_edge_rebuild(conn: psycopg.AsyncConnection) -> EdgeRebuild:
 async def _edge_rebuild_state(conn: psycopg.AsyncConnection, request: EdgeRebuild) -> tuple[int, int]:
     """(아직 처리되지 않은 요청 잡 수, 관계 판정이 격리된 문서 수)."""
     # 트랜잭션 안에서 읽는다 — 밖의 SELECT는 HA에서 replica로 가 진행을 늦게 본다 (ADR-010).
+    # 격리는 ready 문서만 센다 — 재계산이 잡을 거는 대상이 그것뿐이라, 나머지의 격리 잡은
+    # 다시 실행해도 닫히지 않는다. 그 문서는 다음 ready 전이의 관계 잡이 맞춘다 (017).
     async with conn.transaction():
         cur = await conn.execute(
             """
-            SELECT count(*) FILTER (WHERE status IN ('pending', 'processing') AND id <= %s),
-                   count(DISTINCT document_id) FILTER (WHERE status = 'error')
-            FROM embedding_jobs WHERE kind = 'edges'
+            SELECT count(*) FILTER (WHERE j.status IN ('pending', 'processing') AND j.id <= %s),
+                   count(DISTINCT j.document_id)
+                     FILTER (WHERE j.status = 'error' AND d.embedding_status = 'ready')
+            FROM embedding_jobs j JOIN documents d ON d.id = j.document_id
+            WHERE j.kind = 'edges'
             """,
             (request.last_job_id,),
         )
@@ -163,7 +167,8 @@ async def wait_for_edge_jobs(
     않으면 잡은 큐에 남은 채 줄지 않는다. 다시 줄기 시작하면 다음 정체에 또 부른다.
     `timeout`을 넘기면 TimeoutError다. 잡은 그대로 남아 워커가 뜨면 처리된다.
 
-    격리된 문서 수는 이 요청에 한정하지 않는다 — 관계 미반영 카운터가 보는 것과 같은 상태다.
+    격리된 문서 수는 이 요청에 한정하지 않는다 — 요청 전부터 격리돼 있던 ready 문서도 센다.
+    ready가 아닌 문서는 세지 않는다(재계산 대상이 아니다).
     """
     loop = asyncio.get_running_loop()
     started = last_moved = loop.time()
@@ -171,7 +176,8 @@ async def wait_for_edge_jobs(
     stalled = False
     while True:
         current, isolated = await _edge_rebuild_state(conn, request)
-        if total is None:
+        # 잡 id는 커밋 순서가 아니어서 상한 아래 잡이 늦게 커밋되면 남은 수가 늘 수 있다.
+        if total is None or current > total:
             total = current
         if current != remaining:
             remaining, last_moved, stalled = current, loop.time(), False

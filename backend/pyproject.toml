@@ -58,6 +58,7 @@ openarchive = "openarchive.cli:main"
 dev = [
     "pytest",
     "pytest-asyncio",
+    "pytest-timeout", # 워커를 기다리는 테스트가 워커 실패 시 멈추지 않고 실패하게 한다
     "httpx", # fastapi.testclient.TestClient가 요구한다
     "ruff",
     # wheel 내용 테스트가 --no-build-isolation으로 빌드한다. 3.12+ venv에는 setuptools가 없어

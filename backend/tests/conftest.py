@@ -209,9 +209,11 @@ def run_embedding_worker(dsn: str) -> int:
 def background_worker(dsn: str, *, start_after: float = 0.0):
     """명령이 기다리는 동안 다른 스레드에서 워커처럼 잡을 비운다 — `rebuild-edges`·demo 대기용.
 
-    `start_after`초 뒤에 시작해 "워커가 아직 없는" 구간을 만든다.
+    `start_after`초 뒤에 시작해 "워커가 아직 없는" 구간을 만든다. 워커가 예외로 죽으면 기다리던
+    명령은 끝나지 않는다 — 쓰는 테스트에 `pytest.mark.timeout`을 걸고, 빠져나올 때 그 예외를 다시 던진다.
     """
     stop = threading.Event()
+    crashed: list[Exception] = []
 
     async def work() -> None:
         async with await psycopg.AsyncConnection.connect(dsn, autocommit=True) as conn:
@@ -221,13 +223,21 @@ def background_worker(dsn: str, *, start_after: float = 0.0):
                 if not await process_once(conn, FakeProvider()):
                     await asyncio.sleep(0.01)
 
-    thread = threading.Thread(target=lambda: asyncio.run(work()))
+    def run() -> None:
+        try:
+            asyncio.run(work())
+        except Exception as error:  # noqa: BLE001 — 빠져나올 때 다시 던진다
+            crashed.append(error)
+
+    thread = threading.Thread(target=run)
     thread.start()
     try:
         yield
     finally:
         stop.set()
         thread.join()
+        if crashed:
+            raise crashed[0]
 
 
 def upload_document(
