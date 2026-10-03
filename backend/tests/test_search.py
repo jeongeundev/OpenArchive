@@ -846,3 +846,32 @@ async def test_identifier_selects_excerpt_without_changing_rank_or_score(
     else:
         assert hit.chunk_index == 0
         assert marker not in hit.content
+
+async def test_natural_question_selects_excerpt_from_same_version_without_reordering(
+    worker_conn, search_conn,
+):
+    provider = FakeProvider()
+    query = '수정 문서 검색'
+    did = await insert_test_document(
+        worker_conn, title='버전 관리',
+        content=('설정 파일 연결 안내.\n\n' * 100) +
+                ('수정 문서 검색은 이전 버전을 유지합니다.\n\n' * 15),
+    )
+    await process_all_embedding_jobs(worker_conn, provider)
+    qvec = to_pgvector_literal(provider.embed([query])[0])
+    # Document rank comes from the first chunk, but the answer is a different passage.
+    await worker_conn.execute(
+        'UPDATE document_chunks SET embedding=%s::vector WHERE document_id=%s',
+        (qvec, did),
+    )
+    hits = await search_documents(search_conn, provider, query=query)
+    hit = next(h for h in hits if h.document_id == did and h.via is None)
+    assert '이전 버전을 유지합니다' in hit.content
+    assert not hit.content.startswith('설정 파일')
+    assert hit.score == pytest.approx(1.0, abs=1e-6)
+    stored = await (await worker_conn.execute(
+        'SELECT content,version FROM document_chunks WHERE document_id=%s AND chunk_index=%s',
+        (did, hit.chunk_index),
+    )).fetchone()
+    assert hit.based_on_version == stored[1] == 1
+    assert '이전 버전을 유지합니다' in stored[0]
