@@ -48,7 +48,11 @@
 
 - **백업이 없다.** 설치기 `archive_command`는 `/bin/true`다. 문서는 비동기 복제의 유실을 백업(Barman 절)으로 메우는
   구성을 따로 둔다 — 이 환경에는 적용하지 않았다(별도 결정).
-- **failover 유실 범위**는 `maximum_lag_on_failover`(1MB) 이내다. 측정은 모든 회차에서 유실 0이었지만 보장은 아니다.
+- **failover 유실에는 상한 보장이 없다.** `maximum_lag_on_failover`(1MB)는 마지막으로 보고된 지연이 큰 replica를
+  후보에서 빼 줄 뿐이다(보고 주기 뒤의 WAL은 세지 않는다). 측정은 모든 회차에서 유실 0이었지만 보장은 아니다 —
+  네트워크 분리 회차에서는 OpenProxy를 우회해 옛 Primary에 직결한 쓰기가 `pg_rewind`로 버려졌다(`SETUP_OPENSQL.md` §16, #165).
+- **watchdog을 켜지 않는다.** 문서·설치기 모두 설정하지 않는다. Patroni 프로세스가 살아 있으면 DCS를 잃은 Leader가
+  스스로 강등하지만(분리 회차 실측), Patroni가 멈춘 경우의 펜싱은 없다.
 - **동기 복제는 OpenProxy 1.1.3에서 쓸 수 없다.** 결함 기록은 `notes/ha110/openproxy-1.1.3-sync-standby.md`(로컬).
 
 ## 점검하는 법
