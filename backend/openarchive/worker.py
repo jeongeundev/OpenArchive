@@ -339,8 +339,9 @@ async def finalize_edge_job(conn: psycopg.AsyncConnection, job: ClaimedJob) -> b
     잃었으면 False.
 
     판정 본체는 DB 함수 `rebuild_document_edges` 하나다 (014). 워커는 규칙을 복제하지
-    않는다 — `openarchive rebuild-edges`의 전량 재계산과 결과가 갈리면 안 되고, 판정이
-    DB 안에 있다는 것이 이 과제의 주장이기 때문이다 (ADR-029 결정 6).
+    않는다 — 판정이 DB 안에 있다는 것이 이 과제의 주장이기 때문이다. 관계를 쓰는 곳도 이
+    잡 하나다: `openarchive rebuild-edges`의 전량 재계산은 판정을 직접 부르지 않고 모든
+    ready 문서에 관계 잡을 건다 (ADR-029 결정 6 개정, #156).
 
     임베딩 잡과 달리 **낡았다는 이유로 폐기하지 않는다.** 재임베딩이 시작된 문서라도
     지금 있는 청크로 판정한다. 폐기의 전제인 "새 ready 전이가 새 잡을 만든다"는
@@ -371,6 +372,16 @@ async def finalize_edge_job(conn: psycopg.AsyncConnection, job: ClaimedJob) -> b
 
         await conn.execute("SELECT rebuild_document_edges(%s)", (job.document_id,))
         await mark_job_done(conn, job.job_id)
+        # 판정은 문서의 관계를 통째로 교체하므로 앞서 격리된 관계 잡이 요구한 일도 했다.
+        # 마감하지 않으면 관계를 복구하고도 관계 미반영 카운터가 내려오지 않는다 (#156).
+        # last_error는 남긴다 — 왜 격리됐었는지는 기록이다.
+        await conn.execute(
+            """
+            UPDATE embedding_jobs SET status = 'done', finished_at = clock_timestamp()
+             WHERE document_id = %s AND kind = 'edges' AND status = 'error'
+            """,
+            (job.document_id,),
+        )
     return True
 
 

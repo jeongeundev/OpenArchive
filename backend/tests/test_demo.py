@@ -10,7 +10,7 @@ from pathlib import Path
 
 import psycopg
 import pytest
-from conftest import run_embedding_worker
+from conftest import background_worker, run_embedding_worker
 
 import openarchive
 from openarchive.cli import main
@@ -353,7 +353,8 @@ def test_demo_waits_for_embedding_then_rebuilds_edges(demo_db: str, capsys):
         conn.execute("DELETE FROM document_edges WHERE src_document_id = %s", (first_id,))
     capsys.readouterr()
 
-    exit_code = main(["demo", "--user", "alice", "--timeout", "10", "--dsn", demo_db])
+    with background_worker(demo_db):  # 관계 재계산은 워커가 관계 잡으로 한다 (#156)
+        exit_code = main(["demo", "--user", "alice", "--timeout", "10", "--dsn", demo_db])
 
     assert exit_code == 0
     with psycopg.connect(demo_db) as conn:
@@ -374,3 +375,18 @@ def test_demo_gives_up_waiting_without_a_worker(demo_db: str, capsys):
     assert exit_code == 1
     assert owned(demo_db) == {"alice": (64, 4)}
     assert "0초 안에 임베딩이 끝나지 않았습니다" in capsys.readouterr().out
+
+
+def test_demo_gives_up_waiting_for_edge_jobs_without_a_worker(demo_db: str, capsys):
+    """임베딩은 끝났는데 워커가 사라졌다 — 관계 잡은 걸려 있으니 rebuild-edges를 다시 할 필요가 없다."""
+    assert main(["demo", "--user", "alice", "--no-wait", "--dsn", demo_db]) == 0
+    run_embedding_worker(demo_db)
+    capsys.readouterr()
+
+    exit_code = main(["demo", "--user", "alice", "--timeout", "1", "--dsn", demo_db])
+
+    assert exit_code == 1
+    output = capsys.readouterr().out
+    assert "관계 잡" in output
+    assert "openarchive serve" in output
+    assert "rebuild-edges" not in output

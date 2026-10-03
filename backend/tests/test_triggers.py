@@ -1315,3 +1315,83 @@ def test_content_trigger_definition_skips_documents_still_extracting(conn: psyco
     ).fetchone()
 
     assert "extraction_status = 'done'" in definition
+
+
+# --- 전량 재계산을 큐로 (027, #156) ------------------------------------------------
+
+
+def pending_edge_jobs(conn: psycopg.Connection) -> list:
+    return [row[0] for row in conn.execute(
+        "SELECT document_id FROM embedding_jobs"
+        " WHERE kind = 'edges' AND status = 'pending' ORDER BY id"
+    ).fetchall()]
+
+
+def test_enqueue_all_edge_jobs_queues_every_ready_document_and_nothing_else(
+    conn: psycopg.Connection,
+):
+    """전량 재계산은 판정을 직접 돌리지 않고 ready 문서마다 관계 잡을 건다 — 쓰는 곳은 워커 하나다."""
+    first = insert_document(conn, "first", "sha256:all-first")
+    mark_document_ready(conn, first, ["first"], vectors=[unit_vector(0)])
+    second = insert_document(conn, "second", "sha256:all-second")
+    mark_document_ready(conn, second, ["second"], vectors=[unit_vector(0)])
+    insert_document(conn, "not yet", "sha256:all-pending")  # 임베딩 전 — 청크가 없다
+    conn.execute("UPDATE embedding_jobs SET status = 'done' WHERE kind = 'edges'")
+
+    assert conn.execute("SELECT enqueue_all_edge_jobs()").fetchone() == (2,)
+
+    assert sorted(pending_edge_jobs(conn)) == sorted([first, second])
+    assert conn.execute("SELECT count(*) FROM document_edges").fetchone() == (0,)
+
+
+def test_enqueue_all_edge_jobs_coalesces_with_a_pending_edge_job(conn: psycopg.Connection):
+    doc_id = insert_document(conn)
+    mark_document_ready(conn, doc_id, ["text"])  # ready 전이가 관계 잡을 이미 걸었다
+
+    assert conn.execute("SELECT enqueue_all_edge_jobs()").fetchone() == (1,)
+
+    assert pending_edge_jobs(conn) == [doc_id]
+
+
+def test_enqueue_all_edge_jobs_queues_beside_a_job_in_progress(conn: psycopg.Connection):
+    """처리 중인 잡은 그 시점의 코퍼스로 판정한다 — 새 잡이 전체 기준으로 다시 계산해야 한다."""
+    doc_id = insert_document(conn)
+    mark_document_ready(conn, doc_id, ["text"])
+    conn.execute(
+        "UPDATE embedding_jobs SET status = 'processing',"
+        " lease_expires_at = now() + interval '1 minute' WHERE kind = 'edges'"
+    )
+
+    conn.execute("SELECT enqueue_all_edge_jobs()")
+
+    assert jobs_by_kind(conn, doc_id) == [
+        ("embed", "pending"), ("edges", "processing"), ("edges", "pending")
+    ]
+
+
+def test_enqueue_all_edge_jobs_leaves_an_isolated_edge_job_for_the_worker_to_close(
+    conn: psycopg.Connection,
+):
+    """격리된(error) 관계 잡은 걸 때 닫지 않는다 — 새 잡이 또 실패하면 그 사이 카운터가 거짓이 된다.
+
+    닫는 것은 같은 문서의 관계 판정이 실제로 성공한 순간이다 (워커, `test_worker.py`).
+    """
+    doc_id = insert_document(conn)
+    mark_document_ready(conn, doc_id, ["text"])
+    conn.execute("UPDATE embedding_jobs SET status = 'error' WHERE kind = 'edges'")
+
+    conn.execute("SELECT enqueue_all_edge_jobs()")
+
+    assert jobs_by_kind(conn, doc_id) == [
+        ("embed", "pending"), ("edges", "error"), ("edges", "pending")
+    ]
+
+
+def test_enqueue_all_edge_jobs_wakes_the_worker(conn, listener):
+    doc_id = insert_document(conn)
+    mark_document_ready(conn, doc_id, ["text"])
+    list(listener.notifies(timeout=1))  # 적재가 낸 알림을 비운다
+
+    conn.execute("SELECT enqueue_all_edge_jobs()")
+
+    assert [n.channel for n in listener.notifies(timeout=5, stop_after=1)] == [CHANNEL]

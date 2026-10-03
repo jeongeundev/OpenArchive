@@ -186,7 +186,8 @@ python3 examples/ingest_text.py notes.md --base-url http://localhost:8000 \
 
 문서를 한꺼번에 많이 올렸다면 `openarchive rebuild-edges`를 한 번 실행합니다 — 문서 사이의 관계는
 각 문서가 임베딩되는 시점까지 들어온 문서만 이웃 후보로 보므로, 적재가 끝난 뒤 전체 기준으로 다시
-계산해야 먼저 올린 문서도 나중 문서와 이어집니다 ([운영 가이드](docs/OPERATIONS.md#openarchive-rebuild-edges)).
+계산해야 먼저 올린 문서도 나중 문서와 이어집니다. 계산은 워커가 하므로 `openarchive serve`가 돌고 있어야
+합니다 ([운영 가이드](docs/OPERATIONS.md#openarchive-rebuild-edges)).
 
 ### 검색하기
 

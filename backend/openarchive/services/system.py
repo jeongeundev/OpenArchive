@@ -1,3 +1,4 @@
+import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
@@ -107,44 +108,91 @@ async def get_system_status(
     )
 
 
-async def rebuild_all_edges(
-    conn: psycopg.AsyncConnection,
-    *,
-    on_progress: Callable[[int, int], None] | None = None,
-) -> int:
-    """ready 문서 전부의 관계를 다시 계산하고 처리한 문서 수를 돌려준다.
+@dataclass(frozen=True)
+class EdgeRebuild:
+    """전량 재계산 요청 하나. `last_job_id`까지의 관계 잡이 이 요청이 기다릴 잡이다."""
 
-    진행 중인 트랜잭션이 없는 연결을 받는다. 대상 조회와 문서별 재계산을 각각
-    커밋해, 중간 실패가 이미 처리한 문서까지 되돌리거나 잠금을 오래 잡지 않는다.
-    관계 교체의 원자성은 DB 함수가 지키고 진행 콜백은 커밋 뒤에 호출한다.
+    documents: int
+    last_job_id: int
 
-    재계산한 문서의 **격리된 관계 잡은 함께 마감한다.** error로 격리된 잡은 워커가 다시
-    집지 않으므로, 이 명령이 그 잡이 요구한 일을 한 것이다. 마감하지 않으면 관계를 실제로
-    복구하고도 관계 미반영 카운터가 영영 내려오지 않는다 — OPERATIONS가 이 명령을 그
-    상태의 복구 경로로 안내한다.
+
+async def enqueue_edge_rebuild(conn: psycopg.AsyncConnection) -> EdgeRebuild:
+    """ready 문서 전부에 관계 잡을 건다. 판정은 하지 않는다 — 워커 하나가 한다 (#156).
+
+    잡을 만드는 것은 DB 함수다 — 앱은 embedding_jobs에 INSERT하지 않는다. 같은 트랜잭션에서
+    잡 id 상한을 읽어 둔다: 그 아래의 관계 잡(이 요청이 건 잡과, 코얼레싱되어 대신 일하는
+    기존 대기 잡)을 기다리고, 요청 뒤에 생긴 잡은 기다리지 않는다.
     """
     async with conn.transaction():
+        (documents,) = await (await conn.execute("SELECT enqueue_all_edge_jobs()")).fetchone()
+        # 따로 읽는다 — 한 문장의 서브쿼리는 함수가 잡을 넣기 전의 스냅샷을 본다.
+        (last_job_id,) = await (
+            await conn.execute("SELECT coalesce(max(id), 0) FROM embedding_jobs")
+        ).fetchone()
+    return EdgeRebuild(documents=documents, last_job_id=last_job_id)
+
+
+async def _edge_rebuild_state(conn: psycopg.AsyncConnection, request: EdgeRebuild) -> tuple[int, int]:
+    """(아직 처리되지 않은 요청 잡 수, 관계 판정이 격리된 문서 수)."""
+    # 트랜잭션 안에서 읽는다 — 밖의 SELECT는 HA에서 replica로 가 진행을 늦게 본다 (ADR-010).
+    # 격리는 ready 문서만 센다 — 재계산이 잡을 거는 대상이 그것뿐이라, 나머지의 격리 잡은
+    # 다시 실행해도 닫히지 않는다. 그 문서는 다음 ready 전이의 관계 잡이 맞춘다 (017).
+    async with conn.transaction():
         cur = await conn.execute(
-            "SELECT id FROM documents WHERE embedding_status = 'ready' ORDER BY created_at, id"
+            """
+            SELECT count(*) FILTER (WHERE j.status IN ('pending', 'processing') AND j.id <= %s),
+                   count(DISTINCT j.document_id)
+                     FILTER (WHERE j.status = 'error' AND d.embedding_status = 'ready')
+            FROM embedding_jobs j JOIN documents d ON d.id = j.document_id
+            WHERE j.kind = 'edges'
+            """,
+            (request.last_job_id,),
         )
-        documents = await cur.fetchall()
-    total = len(documents)
-    for done, (document_id,) in enumerate(documents, start=1):
-        async with conn.transaction():
-            await conn.execute("SELECT rebuild_document_edges(%s)", (document_id,))
-            # pending·processing은 건드리지 않는다 — 그것은 워커가 가진 잡이고, 여기서
-            # 청크를 읽은 뒤에 커밋된 ready 전이의 잡일 수도 있다. 함께 마감하면 마지막
-            # 청크 교체가 반영되지 않은 관계를 가진 채 카운터만 0이 된다.
-            await conn.execute(
-                """
-                UPDATE embedding_jobs SET status = 'done', finished_at = clock_timestamp()
-                 WHERE document_id = %s AND kind = 'edges' AND status = 'error'
-                """,
-                (document_id,),
-            )
-        if on_progress is not None:
-            on_progress(done, total)
-    return total
+        return await cur.fetchone()
+
+
+async def wait_for_edge_jobs(
+    conn: psycopg.AsyncConnection,
+    request: EdgeRebuild,
+    *,
+    poll_interval: float = 1.0,
+    stall_after: float = 30.0,
+    timeout: float | None = None,
+    on_progress: Callable[[int, int], None] | None = None,
+    on_stall: Callable[[], None] | None = None,
+) -> int:
+    """워커가 요청의 관계 잡을 비울 때까지 기다리고, 판정이 격리된 문서 수를 돌려준다.
+
+    `stall_after`초 동안 남은 잡이 줄지 않으면 `on_stall`을 한 번 부른다 — 워커가 떠 있지
+    않으면 잡은 큐에 남은 채 줄지 않는다. 다시 줄기 시작하면 다음 정체에 또 부른다.
+    `timeout`을 넘기면 TimeoutError다. 잡은 그대로 남아 워커가 뜨면 처리된다.
+
+    격리된 문서 수는 이 요청에 한정하지 않는다 — 요청 전부터 격리돼 있던 ready 문서도 센다.
+    ready가 아닌 문서는 세지 않는다(재계산 대상이 아니다).
+    """
+    loop = asyncio.get_running_loop()
+    started = last_moved = loop.time()
+    total = remaining = None
+    stalled = False
+    while True:
+        current, isolated = await _edge_rebuild_state(conn, request)
+        # 잡 id는 커밋 순서가 아니어서 상한 아래 잡이 늦게 커밋되면 남은 수가 늘 수 있다.
+        if total is None or current > total:
+            total = current
+        if current != remaining:
+            remaining, last_moved, stalled = current, loop.time(), False
+            if on_progress is not None:
+                on_progress(total - remaining, total)
+        if remaining == 0:
+            return isolated
+        now = loop.time()
+        if not stalled and now - last_moved >= stall_after:
+            stalled = True
+            if on_stall is not None:
+                on_stall()
+        if timeout is not None and now - started >= timeout:
+            raise TimeoutError
+        await asyncio.sleep(poll_interval)
 
 
 @dataclass(frozen=True)
@@ -210,9 +258,9 @@ async def reextract_all(
 ) -> ReextractSummary:
     """원본이 있는 문서 전부를 보관된 최신 원본에서 다시 추출한다. 파서를 고친 뒤 쓴다.
 
-    `rebuild_all_edges`와 같은 이유로 대상 조회와 문서별 처리를 각각 커밋한다. 문서마다
-    조회 시점의 버전을 기대 버전으로 넘기므로, 그 사이 누가 편집한 문서는 덮지 않고
-    실패로 알린다. 원본 없는 문서는 대상이 아니다 — 실패가 아니라 정상 상태다.
+    대상 조회와 문서별 처리를 각각 커밋해, 중간 실패가 이미 처리한 문서를 되돌리거나 잠금을
+    오래 잡지 않게 한다. 문서마다 조회 시점의 버전을 기대 버전으로 넘기므로, 그 사이 누가
+    편집한 문서는 덮지 않고 실패로 알린다. 원본 없는 문서는 대상이 아니다 — 실패가 아니라 정상 상태다.
     """
     async with conn.transaction():
         cur = await conn.execute(

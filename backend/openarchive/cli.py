@@ -40,7 +40,7 @@ import psycopg
 import yaml
 
 from openarchive.config import ENV_FILE, get_settings
-from openarchive.demo import converge, load_seed_documents, seed_documents
+from openarchive.demo import EdgeJobsTimeout, converge, load_seed_documents, seed_documents
 from openarchive.embeddings import get_provider
 from openarchive.migrations import (
     APPLIED_SQL,
@@ -79,10 +79,11 @@ from openarchive.services.parsing import (
 from openarchive.services.search import MAX_K, SearchHit, search_documents
 from openarchive.services.system import (
     ReextractSummary,
+    enqueue_edge_rebuild,
     get_system_status,
-    rebuild_all_edges,
     reextract_all,
     reextract_one,
+    wait_for_edge_jobs,
 )
 from openarchive.services.visibility import VISIBILITY_VALUES
 
@@ -745,19 +746,51 @@ def _rebuild_progress(done: int, total: int) -> None:
     print(f"\r  {done}/{total}", end="", flush=True)
 
 
-async def _rebuild_edges(dsn: str) -> int:
+# 관계 잡 대기의 폴링 주기와, 잡이 줄지 않을 때 워커를 확인하라고 알리기까지의 시간(초).
+EDGE_POLL_SECONDS = 1.0
+EDGE_STALL_SECONDS = 30.0
+
+
+def _edge_stall() -> None:
+    print(
+        f"\n  {EDGE_STALL_SECONDS:g}초째 처리되지 않습니다 — 관계 판정은 워커가 합니다."
+        " openarchive serve가 돌고 있는지 확인하세요. 잡은 큐에 남아 워커가 뜨면 처리됩니다."
+    )
+
+
+async def _rebuild_edges(dsn: str) -> tuple[int, int]:
     async with await _connect(dsn, autocommit=True) as conn:
-        return await rebuild_all_edges(conn, on_progress=_rebuild_progress)
+        request = await enqueue_edge_rebuild(conn)
+        print(f"관계 잡을 걸었습니다: 문서 {request.documents}건 — 워커가 처리하기를 기다립니다.")
+        isolated = await wait_for_edge_jobs(
+            conn,
+            request,
+            poll_interval=EDGE_POLL_SECONDS,
+            stall_after=EDGE_STALL_SECONDS,
+            on_progress=_rebuild_progress,
+            on_stall=_edge_stall,
+        )
+        return request.documents, isolated
 
 
 def run_rebuild_edges(*, dsn: str | None) -> int:
+    """모든 ready 문서에 관계 잡을 걸고 워커가 비울 때까지 기다린다 (ADR-029 결정 6, #156)."""
     dsn = dsn or get_settings().database_url
     try:
-        count = asyncio.run(_rebuild_edges(dsn))
+        count, isolated = asyncio.run(_rebuild_edges(dsn))
     except _ConnectionFailed as error:
         print(f"연결하지 못했습니다: {error}")
         return 1
+    except KeyboardInterrupt:
+        print("\n기다리기를 멈췄습니다. 건 관계 잡은 큐에 남아 워커가 처리합니다.")
+        return 130
     print(f"\n관계를 다시 계산했습니다: 문서 {count}건")
+    if isolated:
+        print(
+            f"관계 판정이 격리된 문서 {isolated}건 — 재시도를 소진했습니다."
+            " 워커 로그에서 원인을 확인한 뒤 다시 실행하세요."
+        )
+        return 1
     return 0
 
 
@@ -1007,6 +1040,12 @@ async def _demo(dsn: str, *, username: str, wait: bool, timeout: float) -> int:
             result = await converge(
                 conn, documents, username, timeout=timeout, on_progress=_rebuild_progress
             )
+        except EdgeJobsTimeout:
+            print(
+                f"\n{timeout:g}초 안에 관계 잡이 처리되지 않았습니다. 잡은 큐에 남아 있습니다"
+                " — openarchive serve로 워커가 돌면 관계가 전체 기준으로 맞춰집니다."
+            )
+            return 1
         except TimeoutError:
             print(
                 f"{timeout:g}초 안에 임베딩이 끝나지 않았습니다. 문서는 들어가 있습니다"
@@ -1213,6 +1252,7 @@ def main(argv: list[str] | None = None) -> int:
     reset.add_argument("--dsn", help="DB 연결 문자열. 생략하면 DATABASE_URL을 씁니다.")
     rebuild_help = (
         "모든 문서의 관계를 전체 코퍼스 기준으로 다시 계산합니다. 대량 적재 뒤 한 번 실행합니다."
+        " 계산은 워커가 관계 잡으로 하므로 openarchive serve가 돌고 있어야 끝납니다."
     )
     rebuild = subcommands.add_parser(
         "rebuild-edges", help=rebuild_help, description=rebuild_help
@@ -1269,7 +1309,7 @@ def main(argv: list[str] | None = None) -> int:
         help="넣기만 하고 임베딩·관계 재계산을 기다리지 않습니다.",
     )
     demo.add_argument(
-        "--timeout", type=float, default=600, help="임베딩 완료 대기 시간(초, 기본: 600)"
+        "--timeout", type=float, default=600, help="임베딩과 관계 잡을 각각 기다리는 시간(초, 기본: 600)"
     )
     demo.add_argument("--dsn", help="DB 연결 문자열. 생략하면 DATABASE_URL을 씁니다.")
     args = parser.parse_args(argv)
