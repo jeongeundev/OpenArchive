@@ -900,7 +900,8 @@ python3 opensql_remote_installer.py --mode 3node
    ```
    - 로그: OpenProxy는 journald와 `/home/opensql/logs/<날짜>.openproxy.log`, Patroni는 `/home/opensql/logs/patroni.log`
 5. **복제는 비동기 그대로 둔다 (ADR-049 개정)** — 설치기 기본이자 공식 문서 예시가 비동기다. failover 때
-   잃을 수 있는 양은 `maximum_lag_on_failover`(1MB)가 막는다 — 그보다 뒤처진 replica는 승격하지 않는다.
+   커밋 응답을 받은 데이터를 잃을 수 있다. `maximum_lag_on_failover`(1MB)는 마지막으로 보고된 지연이 그보다
+   큰 replica를 후보에서 빼 줄 뿐 유실 상한을 보장하지 않는다(보고 주기 뒤의 WAL은 세지 않고, 시간 기준도 아니다 — #165).
    - ⛔ **OpenProxy 1.1.3에서는 동기 모드(`synchronous_mode: true`)를 켜지 않는다.** Patroni `/cluster`에
      `sync_standby` 역할이 생기면 OpenProxy가 기동·설정 재로드 때 `unknown variant sync_standby` →
      `Config parse error`로 종료한다(exit 78). 떠 있는 프로세스는 버티지만 **재시작하는 순간 죽는다.** 9/27에
@@ -969,7 +970,78 @@ VIP·node2·node3 직접 모두 같은 결과다.
 
 - ⚠️ `/home/opensql/bin/patroni`는 **PyInstaller 실행 파일이라 프로세스가 둘**이다(부트로더 → 실제 Patroni). systemd의 MainPID는 부트로더다. 부트로더에 `kill -9`를 보내면 실제 Patroni가 고아로 남아 8008을 쥔 채 클러스터를 계속 관리하고, 새 Patroni는 8초마다 죽는 루프에 빠진다(`KillMode=process`라 systemd가 고아를 정리하지 않는다). 장애 주입은 **자식(`pgrep -P <MainPID> -x patroni`)에** 한다. 고아는 SIGTERM으로 정리한다
 
-### 장애 주입 측정 (#122, 2026-09-28)
+### 최종 구성 장애 검증 (#165, 2026-10-04) — 현재 수치의 정본
+
+**대상 구성**: 이 절 위 「설치 후 교정」을 모두 적용한 상태 — 비동기 복제(교정 5)·`failsafe_mode: true`(설치기 기본)·서버 keepalive(교정 6)·`idle_in_transaction_session_timeout` 0(공식값)·앱 전용 비슈퍼유저 롤 `openarchive` + `ScramSha256`·OpenProxy etcd 공유 설정(`Transaction` 풀·읽기/쓰기 분리·`use_patroni`·`worker_threads 2`)·watchdog 꺼짐. 측정 직후 `patronictl show-config`·etcd의 OpenProxy 설정·`pg_settings`로 위 값을 다시 확인했다. 앱은 main `0cb629b`(10/3 회차는 `a00f983`, 9/30 회차는 #150 적용 직후). 세 시점 사이에 워커·`db.py`를 포함한 앱 코드가 바뀌었으므로(#153~#171) 9/30·10/3 회차는 같은 클러스터 구성의 보조 증거로만 읽는다 — 모든 시나리오를 `0cb629b`로 다시 잰 것이 h165 회차다. 임베딩은 BGE-M3(`EMBEDDING_PROVIDER=local`), 측정 중 Mac의 다른 도커 컨테이너는 껐다(9/30 회차만 켜져 있었다).
+
+**판정**(`scripts/ha_failover.py`, 위반 하나면 종료 코드 1): 업로드는 텍스트 API와 **파일 업로드를 번갈아** 보낸다. 커밋 응답(2xx)을 받은 업로드가 전부 있고 본문 sha256이 같은가(유실 0) · 파일은 **원본 판(`document_files`)이 1판 하나로 보낸 바이트와 같은가**(DB 계산 sha256·재계산 둘 다) · 문서 버전이 1에 머물렀는가 · 실패 응답인데 남은 행·중복 행이 없는가 · 백오프(웹 UI·MCP와 같은 규칙) 뒤 사용자 가시 실패 0 · 원시 500 0 · error 잡 0 · 정합성 카운터 0 수렴 · 3노드 5432 직결 다이제스트(본문·청크 수·원본 바이트) 일치.
+
+| 시나리오 | 회차 | 쓰기 중단 | 재시도로 넘긴 요청 (재시도 포함 대기) | 업로드 2xx (그중 파일) | 유실·중복·원본 불일치·버전 이동 | 0 수렴 | 판정 |
+|---|---|---|---|---|---|---|---|
+| 무장애 60초 | h165-smoke | 0 | — | 120 (60) | 0·0·0·0 | 2.2s | 통과 |
+| Primary postmaster `kill -9` (node3) | h165-s1 | 14.1s — 같은 노드에서 재기동, TL 그대로 | 업로드 14.3s·검색 21.6s (503 3~4회) | 272 (136) | 0·0·0·0 | 18.3s | 통과 |
+| switchover node3→node1 | h165-sw | 10.3s | 검색 12.1s (503) | 220 (110) | 0·0·0·0 | 5.3s | 통과 |
+| 〃 | fspec-switchover (10/3) | 10.1s | 검색 11.7s (503) | 220 (—) | 0·0·—·— | 8.2s | 통과 |
+| Primary VM 전원 차단 (node3 = Primary + 대기 OpenProxy) → 90초 뒤 기동 | h165-s2 | 40.8s | 업로드 41.3s·검색 43.1s (타임아웃 2회) | 398 (199) | 0·0·0·0 | 53.0s | 통과 |
+| Primary VM 전원 차단 (node1, OpenProxy 없음) | fspec-primary-loss (10/3) | 30.6s | 업로드 31.0s·검색 31.9s | 417 (—) | 0·0·—·— | 63.3s | 통과 |
+| Replica VM 전원 차단 (node1) → 60초 뒤 기동 | h165-s5 | 0 | — | 379 (189) | 0·0·0·0 | 22.3s | 통과 |
+| VIP MASTER VM 전원 차단 (node2, Replica) → 60초 뒤 기동 | h165-s3 | 10.2s (VIP 이동) | 검색 16.1s — VIP **선점 복귀**(+131.7s) 순간 | 453 (226) | 0·0·0·0 | 11.6s | 통과 |
+| 〃 (idle_in_transaction 걷은 뒤 첫 회차) | s3-150-1 (9/30) | 10.2s + 0.3s(선점 복귀) | 검색 16.0s — 선점 복귀 순간 | 460 (—) | 0·0·—·— | 28.5s | 통과 |
+| Leader 정상 재부팅 (`systemctl reboot`, node1) | h165-reboot | 10.3s — node3 승격, node1은 +104s에 systemd로 자동 재합류 | 업로드 11.6s·검색 13.1s (503) | 457 (228) | 0·0·0·0 | 10.4s | 통과 |
+| etcd 1대 정지 40초 (Leader 노드 node3) | h165-s4 | 0 | — | 239 (119) | 0·0·0·0 | 77.4s* | 통과 |
+| **etcd 과반 상실** (node1·node2 정지 60초) | h165-etcdq | 0 — `failsafe_mode`가 Primary 유지 | — | 358 (179) | 0·0·0·0 | 258.8s* | 통과 |
+| **Leader 네트워크 분리** (node1을 node2·3에서 90초 차단) | h165-part | 30.7s — node3 승격 | 업로드 25.9s·검색 26.8s | 429 (214) | 0·0·0·0 | 6.9s | 통과 |
+
+\* 수렴 시간은 회차끼리 비교하지 않는다. 측정 문서가 16단어 어휘의 거의 같은 글이라 회차가 쌓일수록(마지막 회차 직전 3,325건·관계 16,945행) 관계 재계산이 느려졌다 — smoke 2.2s → etcdq 258.8s. 판정(0 수렴)에는 영향이 없다. 측정이 끝난 뒤 `ha-h165-*` 문서를 지우고 `openarchive rebuild-edges`로 시연 데이터의 관계를 다시 맞췄다.
+
+**쓰기 중단·검색 불가·사용자 실패를 구분해 읽는다.** "쓰기 중단"은 VIP로 100ms마다 WAL을 남기는 probe의 마지막 성공~첫 성공이다(실패 구간마다 따로, #151). "재시도로 넘긴 요청"은 그 구간에 걸린 업로드·검색 하나가 백오프 재시도 끝에 성공하기까지 걸린 시간 — 순차 부하라 사실상 **그 동안 검색·업로드가 안 됐던 시간**이다. 사용자 가시 실패(백오프 60초 예산을 다 쓴 요청)는 전 회차 0이다. **재시도가 실패를 흡수한 것이지 중단이 없었던 것이 아니다** — "무중단"이라 쓰지 않는다.
+
+**관측 유실 0은 RPO 0이 아니다.** 비동기 복제라 Primary가 죽는 순간 replica에 닿지 않은 커밋은 잃을 수 있다. `maximum_lag_on_failover`(1MB)는 **마지막으로 보고된** 지연이 1MB를 넘는 replica를 후보에서 빼는 장치일 뿐이다 — 보고는 Patroni 루프 주기(`loop_wait` 10초)마다라 마지막 보고 뒤의 WAL은 세지 않고, 바이트 기준이라 시간 상한도 아니다. 아래 분리 회차가 실제로 응답한 커밋이 버려지는 경로를 보여 준다.
+
+**네트워크 분리 (h165-part) — Patroni의 자기 강등이 펜싱 역할을 했다.**
+
+| 분리 기준 시각 | 일어난 일 |
+|---|---|
+| +4.9s | node1(Leader)에 nft 차단 적용. OpenProxy(node2·3)가 node1에 못 닿아 VIP 경유 쓰기는 여기서 멈춘다 |
+| +4.9 ~ +18.9s | node1은 **여전히 Primary** — Mac에서 5432로 **직접** 붙은 쓰기 19건을 받았다 |
+| +19.8s | `demoting self because DCS is not accessible and I was a leader` — etcd도, `failsafe`로 물어볼 멤버도 닿지 않음 |
+| +20 ~ +70s | 강등(fast shutdown)이 끊긴 replica로 가는 walsender를 기다려 약 50초 걸렸다(서버 keepalive가 끊어 줌). 그동안 접속 거부 |
+| +35.5s | node3 승격(TL 40). **두 Primary가 동시에 쓰기를 받은 구간은 없었다** |
+| +90s / +173s | 차단 해제 → node1이 `pg_rewind from postgresql3`로 되감겨 Replica 재합류. **직접 쓰기 19건은 이때 버려졌다** |
+
+- 앱 쓰기는 OpenProxy만 거치므로(ADR-006) 분리된 옛 Primary에 닿지 못했고 장부 유실 0이었다. OpenProxy를 우회해 옛 Primary에 직결한 클라이언트는 응답받은 커밋을 잃는다 — 비동기 + 우회의 결과이며 단일 엔드포인트 규칙의 근거가 하나 더 생긴 셈이다
+- **watchdog은 켜지 않았다**(공식 문서·설치기 모두 설정하지 않음 — `OPENSQL_DEVIATIONS.md` 원칙). 위 강등은 Patroni 프로세스가 살아 있어야 일어난다. **Patroni가 멈춘 채 PostgreSQL만 Primary로 남는 경우의 펜싱은 검증하지 않았다**
+
+**etcd 과반 상실 (h165-etcdq)**: node3 Patroni가 `Error communicating with DCS` 뒤 `continue to run as a leader because failsafe mode is enabled and all members are accessible`를 남기고 Primary를 지켰다. etcd 감시 모드의 OpenProxy도 기존 역할로 계속 라우팅해 쓰기 중단·실패 0. 이 구간에는 **새 failover가 일어날 수 없다** — 이 상태에서 Primary까지 죽으면 etcd가 돌아올 때까지 쓰기가 멈춘다(복합 장애, 검증하지 않음).
+
+**재현 명령** — 저장소 루트에서, API·워커(`openarchive serve`)를 VIP DSN으로 띄우고 측정 계정을 만든 뒤:
+
+```bash
+export DATABASE_URL=postgresql://openarchive:…@192.168.64.200:6432/openarchive HA_API=http://127.0.0.1:8010/api HA_USER=… HA_PASSWORD=…
+H="--nodes 192.168.64.201,192.168.64.202,192.168.64.203 --out <결과 폴더>"
+SSH="ssh -F notes/ha110/ssh_config"; U=/Applications/UTM.app/Contents/MacOS/utmctl
+P=/home/opensql/bin/patronictl; C=/home/opensql/etc/patroni/patroni.yml
+python scripts/ha_failover.py run s1 $H --load 150 --inject "$SSH <Leader> 'sudo kill -9 \$(sudo head -1 /home/opensql/data/pgsql/postmaster.pid)'"
+python scripts/ha_failover.py run sw $H --load 120 --inject "$SSH <Leader> 'sudo -iu opensql $P -c $C switchover --leader <현> --candidate <새> --force'"
+python scripts/ha_failover.py run s2 $H --load 240 --inject "$U stop <Leader VM> --force; sleep 90; $U start <Leader VM>"
+python scripts/ha_failover.py run s5 $H --load 200 --inject "$U stop <Replica VM> --force; sleep 60; $U start <Replica VM>"
+python scripts/ha_failover.py run s3 $H --load 240 --inject "$U stop <VIP MASTER VM> --force; sleep 60; $U start <VIP MASTER VM>"
+python scripts/ha_failover.py run reboot $H --load 240 --inject "$SSH <Leader> 'sudo systemctl reboot' || true"
+python scripts/ha_failover.py run s4 $H --load 120 --inject "$SSH <노드> 'sudo systemctl stop opensql-etcd; sleep 40; sudo systemctl start opensql-etcd'"
+# 과반 상실·분리는 되돌리는 타이머를 노드 안에 먼저 건다 — ssh가 끊겨도 풀린다
+python scripts/ha_failover.py run etcdq $H --load 180 --inject "for h in <노드A> <노드B>; do $SSH \$h 'sudo systemd-run --on-active=60 /usr/bin/systemctl start opensql-etcd && sudo systemctl stop opensql-etcd' & done; wait"
+python scripts/ha_failover.py run part $H --load 240 --inject "$SSH <Leader> 'sudo systemd-run --on-active=90 /usr/sbin/nft delete table inet ha165 && printf \"table inet ha165 { chain i { type filter hook input priority -10; ip saddr { <다른 노드 둘> } drop; } chain o { type filter hook output priority -10; ip daddr { <다른 노드 둘> } drop; } }\" | sudo nft -f -'"
+```
+
+- 분리 회차는 OpenProxy가 없는 노드를 Leader로 둔 상태에서 했다. OpenProxy 노드를 떼면 양쪽 OpenProxy가 서로 못 들어 **VIP를 둘 다 잡을 수 있다** — 이 비대칭 분리는 검증하지 않았다
+- 앱 전용 롤은 `pg_stat_replication`을 볼 수 없어 측정기의 「복제 지연」 줄이 0으로 찍힌다. 지연은 Patroni REST(`/cluster`의 `lag`)로 본다
+- 원시 기록은 `notes/ha110/runs/h165-*.jsonl`·`fspec-*.jsonl`·`s3-150-1.jsonl`(로컬). 측정 문서를 지운 뒤라 `report`로 장부를 다시 대조할 수는 없다 — 위 장부 열은 측정 당시 출력이다
+
+**검증하지 않은 것**: watchdog 펜싱 · Patroni 프로세스 정지 상태의 Primary · OpenProxy 노드가 낀 비대칭 분리(VIP 이중 보유) · 동시 다중 장애(etcd 과반 상실 중 Primary 사망 등) · 디스크 가득 참 · 백업/DR(별도 이슈). 각 시나리오는 1회씩이라 시간 수치는 범위가 아니라 관측값이다.
+
+### 장애 주입 측정 (#122, 2026-09-28) — 동기 복제 시절 기록
+
+> 아래는 **동기 1대 구성**에서 잰 기록이다. 지금 구성의 수치는 위 #165 절이 정본이다.
 
 `scripts/ha_failover.py`가 부하(업로드 약 2건/초·검색·100ms 쓰기 probe)를 건 채 장애 명령을 실행하고, 수렴을 기다려 판정한다. 판정 항목은 장부 대조(커밋 응답을 받은 업로드의 존재·sha256, 실패 응답인데 DB에 남은 행, 중복), 백오프 뒤 사용자 가시 실패, 원시 500, 정합성 카운터 0 수렴, 3노드 5432 직결 다이제스트 일치, 승격 대상이 동기 standby였는지다. 위반이 하나라도 있으면 종료 코드 1이다.
 

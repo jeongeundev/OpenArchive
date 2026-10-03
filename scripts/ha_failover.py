@@ -4,7 +4,9 @@
 카운터가 0으로 수렴할 때까지 기다려 판정한다. 판정 항목은 다섯 가지다.
 
 - 장부 대조: 커밋 응답(2xx)을 받은 업로드가 전부 DB에 있고 내용 sha256이 같은가(유실 0),
-  실패 응답인데 DB에 남은 행·같은 제목의 중복 행이 없는가(멱등키, ADR-047)
+  실패 응답인데 DB에 남은 행·같은 제목의 중복 행이 없는가(멱등키, ADR-047). 업로드는 텍스트와
+  파일을 번갈아 보내고, 파일은 원본 판(document_files)이 1판 하나로 보낸 바이트와 같은지,
+  문서 버전이 1에 머물렀는지(같은 요청이 두 번 적용되지 않았는지)도 본다
 - 사용자 가시 실패: 웹 UI·MCP와 같은 백오프(1초 시작·상한 8초·전체 지터·60초)를 거친 뒤의
   최종 실패 수. 원시 응답의 500(코드 결함 신호, ADR-048)은 따로 세며 0이어야 한다.
   웹 UI와 달리 요청마다 15초 타임아웃을 두고 타임아웃도 다시 보낸다 — 매달린 요청 하나가
@@ -161,11 +163,18 @@ def _describe(error: BaseException) -> str:
 # --- 판정 ----------------------------------------------------------------------------
 
 
-def reconcile(ledger: list[dict], rows: list[tuple[str, str, str]]) -> dict:
-    """업로드 장부와 DB 행(제목, 저장 해시, 본문 재계산 해시)을 대조한다."""
+def reconcile(ledger: list[dict], rows: list[tuple]) -> dict:
+    """업로드 장부와 DB 행(제목, 저장 해시, 본문 재계산 해시, 버전, 원본 판 목록)을 대조한다.
+
+    원본 판 목록은 [판, DB가 계산해 둔 sha256, 바이트 재계산 sha256]이다.
+    """
     by_title: dict[str, list[tuple[str, str]]] = {}
-    for title, stored, recomputed in rows:
+    version: dict[str, int] = {}
+    files: dict[str, list] = {}
+    for title, stored, recomputed, ver, file_rows in rows:
         by_title.setdefault(title, []).append((stored, recomputed))
+        version[title] = ver
+        files[title] = file_rows
     acked = [e for e in ledger if e["ok"]]
     ledger_titles = {e["title"] for e in ledger}
     return {
@@ -183,6 +192,14 @@ def reconcile(ledger: list[dict], rows: list[tuple[str, str, str]]) -> dict:
         ],
         "duplicates": sorted(t for t, found in by_title.items() if len(found) > 1),
         "unknown": sorted(set(by_title) - ledger_titles),
+        "file_mismatched": [
+            e["title"]
+            for e in acked
+            if "file_sha256" in e
+            and e["title"] in by_title
+            and files[e["title"]] != [[1, e["file_sha256"], e["file_sha256"]]]
+        ],
+        "version_drift": [e["title"] for e in acked if version.get(e["title"], 1) != 1],
     }
 
 
@@ -223,6 +240,16 @@ def judge(summary: dict) -> list[str]:
         )
     if r["duplicates"]:
         problems.append(f"중복 생성 {len(r['duplicates'])}건: {r['duplicates'][:5]}")
+    if r["file_mismatched"]:
+        problems.append(
+            f"원본 판 불일치 {len(r['file_mismatched'])}건 — 1판 하나가 보낸 바이트와 같아야 한다: "
+            f"{r['file_mismatched'][:5]}"
+        )
+    if r["version_drift"]:
+        problems.append(
+            f"버전이 1이 아님 {len(r['version_drift'])}건 — 같은 요청이 두 번 적용됐다: "
+            f"{r['version_drift'][:5]}"
+        )
     raw_500 = {k: n for k, n in summary["raw_500"].items() if n}
     if raw_500:
         problems.append(f"원시 응답 500 {raw_500} — 코드 결함 신호(ADR-048)")
@@ -319,24 +346,35 @@ def _like_prefix(prefix: str) -> str:
     return re.sub(r"([\\%_])", r"\\\1", prefix) + "%"
 
 
-def ledger_rows(conn: psycopg.Connection, prefix: str) -> list[tuple[str, str, str]]:
+def ledger_rows(conn: psycopg.Connection, prefix: str) -> list[tuple]:
     return conn.execute(
-        "SELECT title, content_hash, encode(sha256(convert_to(content, 'UTF8')), 'hex')"
-        " FROM documents WHERE title LIKE %s",
+        """
+        SELECT d.title, d.content_hash, encode(sha256(convert_to(d.content, 'UTF8')), 'hex'),
+               d.version,
+               coalesce((SELECT json_agg(json_build_array(f.file_version, f.sha256,
+                                                          encode(sha256(f.data), 'hex'))
+                                         ORDER BY f.file_version)
+                         FROM document_files f WHERE f.document_id = d.id), '[]'::json)
+        FROM documents d WHERE d.title LIKE %s
+        """,
         (_like_prefix(prefix),),
     ).fetchall()
 
 
 def node_digest(conn: psycopg.Connection, prefix: str) -> str:
-    """이 회차 문서의 수·청크 수·내용을 한 값으로. 노드마다 같아야 한다."""
+    """이 회차 문서의 수·청크 수·내용·원본 바이트를 한 값으로. 노드마다 같아야 한다."""
     return conn.execute(
         """
         SELECT count(*) || ':' || (SELECT count(*) FROM document_chunks c
                                    JOIN documents d2 ON d2.id = c.document_id
                                    WHERE d2.title LIKE %s)
                || ':' || coalesce(md5(string_agg(
-                    id::text || content_hash || md5(content) || version, ',' ORDER BY id)), '')
-        FROM documents WHERE title LIKE %s
+                    id::text || content_hash || md5(content) || version
+                      || coalesce((SELECT string_agg(f.file_version || encode(sha256(f.data), 'hex'),
+                                                     '' ORDER BY f.file_version)
+                                   FROM document_files f WHERE f.document_id = d.id), ''),
+                    ',' ORDER BY id)), '')
+        FROM documents d WHERE title LIKE %s
         """,
         (_like_prefix(prefix), _like_prefix(prefix)),
     ).fetchone()[0]
@@ -436,26 +474,30 @@ async def uploader(
             + f"\n\n고유 표식 {title} {random.getrandbits(64):x}."
         )
         content = f"# {title}\n\n{body}"
+        sha256 = hashlib.sha256(content.encode()).hexdigest()
         headers = {
             "Idempotency-Key": str(uuid.uuid4())
         }  # 재시도마다 같은 키 — 한 번만 생긴다
-        t = time.time()
-        out = await call_with_backoff(
-            functools.partial(
+        if seq % 2:
+            send = functools.partial(
                 client.post,
                 f"{target.api}/documents/text",
                 headers=headers,
                 json={"title": title, "content": content, "content_type": "md"},
             )
-        )
-        _log_outcome(
-            log,
-            "upload",
-            t,
-            out,
-            title=title,
-            sha256=hashlib.sha256(content.encode()).hexdigest(),
-        )
+            extra = {}
+        else:  # 원본 판(document_files)도 장애 중에 쓰이게 한다. md는 바이트가 곧 본문이다
+            send = functools.partial(
+                client.post,
+                f"{target.api}/documents",
+                headers=headers,
+                data={"title": title},
+                files={"file": (f"{title}.md", content.encode(), "text/markdown")},
+            )
+            extra = {"file_sha256": sha256}
+        t = time.time()
+        out = await call_with_backoff(send)
+        _log_outcome(log, "upload", t, out, title=title, sha256=sha256, **extra)
         await asyncio.sleep(max(0, 0.5 - (time.time() - t)))
 
 
@@ -807,6 +849,10 @@ def summarize(path: Path, target: Target) -> tuple[dict, list[str]]:
         f"-- 장부: 2xx {rec['acked']} · DB {rec['rows']} · 유실 {len(rec['lost'])} · "
         f"불일치 {len(rec['mismatched'])} · 실패 응답인데 DB에 있음 {len(rec['ghosts'])} · "
         f"중복 {len(rec['duplicates'])} · 장부에 없는 행 {len(rec['unknown'])}"
+    )
+    lines.append(
+        f"   원본 파일 {sum('file_sha256' in e for e in by('upload') if e['ok'])}건 · "
+        f"원본 판 불일치 {len(rec['file_mismatched'])} · 버전 이동 {len(rec['version_drift'])}"
     )
     lines.append(f"-- 노드: {nodes}")
     lines.append(f"-- 승격: {counted['promotion']}")
