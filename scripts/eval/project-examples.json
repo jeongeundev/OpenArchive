@@ -1,0 +1,82 @@
+{
+  "kind": "assistant-authored examples accepted by user; not independent user questions",
+  "queries": [
+    {
+      "query": "문서를 올렸는데 검색에 안 나오면 뭘 확인해야 해?",
+      "relevant": [
+        "docs/ARCHITECTURE.md",
+        "docs/OPERATIONS.md"
+      ],
+      "expected": "추출 상태, 임베딩 상태, 워커와 작업 실패를 확인한다. 청크가 없는 새 문서는 검색되지 않는다."
+    },
+    {
+      "query": "다른 사람이 내 비공개 문서를 볼 수 있어?",
+      "relevant": [
+        "docs/ARCHITECTURE.md",
+        "docs/PRD.md"
+      ],
+      "expected": "기본적으로 소유자만 보며 사용자·그룹·공유 링크에 명시적으로 권한을 부여하면 그 범위에서 열람할 수 있다."
+    },
+    {
+      "query": "DB 서버 하나가 꺼지면 서비스는 어떻게 돼?",
+      "relevant": [
+        "docs/ARCHITECTURE.md",
+        "docs/OPERATIONS.md",
+        "docs/OPENSQL_DEVIATIONS.md"
+      ],
+      "expected": "장애 노드 역할과 구성에 따라 다르다. 3노드 primary 장애에는 승격·재연결 동안 짧은 중단이 있고 비동기 복제는 유실 가능성이 있다. 단일 구성은 재기동을 기다린다."
+    },
+    {
+      "query": "문서를 수정하면 예전 검색 결과는 어떻게 처리돼?",
+      "relevant": [
+        "docs/ARCHITECTURE.md"
+      ],
+      "expected": "새 임베딩이 준비될 때까지 이전 청크로 검색하고, 새 청크는 같은 버전으로 원자적으로 교체한다. 결과는 기준 버전을 갖는다."
+    },
+    {
+      "query": "큰 파일을 올리면 작은 문서도 오래 기다려야 해?",
+      "relevant": [
+        "docs/PERFORMANCE_VALIDATION.md"
+      ],
+      "expected": "단일 워커에서는 긴 작업 뒤 작은 작업이 기다렸다. 관측 대기 약22.3초, 두 워커 약2.9초였지만 검색 응답 지연은 증가했다."
+    },
+    {
+      "query": "OpenSQL을 사용해서 어떤 점이 좋아졌어?",
+      "relevant": [
+        "README.md",
+        "docs/ARCHITECTURE.md"
+      ],
+      "expected": "DB 트리거로 처리 작업과 버전 정합성을 관리하며 정형 필터·권한·벡터 검색을 하나의 SQL로 결합한다. OpenProxy와 OpenHA가 연결·복구를 담당한다."
+    }
+  ],
+  "sources": [
+    {
+      "path": "README.md",
+      "sha256": "4347a789ccd613c83a97912160f34fadf3677eb3313fc8339689784d269df668"
+    },
+    {
+      "path": "docs/ARCHITECTURE.md",
+      "sha256": "932d48e84e9c90a765760fcbe33669c23e760463297ddd1bb445d2767fd81680"
+    },
+    {
+      "path": "docs/OPERATIONS.md",
+      "sha256": "42c5c19da3bc4682e5f6d17bc1aeab9b8d08a0e1a16e09db480a11e5ebbf6917"
+    },
+    {
+      "path": "docs/PERFORMANCE_VALIDATION.md",
+      "sha256": "517dde84147db36d479fb55458f865d9f05365babc91a3583d641b0e3f3dd7f6"
+    },
+    {
+      "path": "docs/OPENSQL_DEVIATIONS.md",
+      "sha256": "e94df1b9b4da1a8545356e53adeb6f36ac1b5aa67188149e0b58d508f95f74fc"
+    },
+    {
+      "path": "docs/PRD.md",
+      "sha256": "478c16083d5f22932d4a40d1a5e4e74747c766b8b54d1f55e747fe3fca0481b1"
+    },
+    {
+      "path": "docs/ROADMAP.md",
+      "sha256": "578b36c9f26925893f0df0d4fadcce86cd3fccb9dbf02ebb3525f31ce34972eb"
+    }
+  ]
+}
