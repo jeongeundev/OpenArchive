@@ -836,6 +836,7 @@ async def test_identifier_selects_excerpt_without_changing_rank_or_score(
     assert hit.score == pytest.approx(nearest[1], abs=1e-6)
     if expected:
         assert marker in hit.content
+        assert hit.preview is not None and marker in hit.preview
         assert hit.chunk_index > 1
         chunk = await (await worker_conn.execute(
             'SELECT content, version FROM document_chunks WHERE document_id = %s AND chunk_index = %s',
@@ -867,7 +868,9 @@ async def test_natural_question_selects_excerpt_from_same_version_without_reorde
     hits = await search_documents(search_conn, provider, query=query)
     hit = next(h for h in hits if h.document_id == did and h.via is None)
     assert '이전 버전을 유지합니다' in hit.content
-    assert not hit.content.startswith('설정 파일')
+    assert hit.preview is not None
+    assert not hit.preview.startswith('설정 파일')
+    assert '이전 버전을 유지합니다' in hit.preview
     assert hit.score == pytest.approx(1.0, abs=1e-6)
     stored = await (await worker_conn.execute(
         'SELECT content,version FROM document_chunks WHERE document_id=%s AND chunk_index=%s',
@@ -875,3 +878,34 @@ async def test_natural_question_selects_excerpt_from_same_version_without_reorde
     )).fetchone()
     assert hit.based_on_version == stored[1] == 1
     assert '이전 버전을 유지합니다' in stored[0]
+
+async def test_excerpt_does_not_use_current_text_during_reembedding(worker_conn, search_conn):
+    provider = FakeProvider()
+    did = await insert_test_document(worker_conn, title='이전 판', content='수정 문서 검색은 이전 판의 근거를 사용합니다.')
+    await process_all_embedding_jobs(worker_conn, provider)
+    await worker_conn.execute("UPDATE documents SET content='수정 문서 검색 새판 비밀 표식',content_hash='new-excerpt-hash' WHERE id=%s", (did,))
+    hits = await search_documents(search_conn, provider, query='수정 문서 검색')
+    hit = next(h for h in hits if h.document_id == did and h.via is None)
+    assert hit.based_on_version == 1
+    assert '새판 비밀 표식' not in hit.content
+    assert '새판 비밀 표식' not in (hit.preview or '')
+    assert '이전 판의 근거' in hit.content
+
+async def test_preview_selection_only_embeds_the_query(worker_conn, search_conn):
+    class CountingProvider(FakeProvider):
+        def __init__(self):
+            self.calls = []
+
+        def embed(self, texts):
+            self.calls.append(texts)
+            return super().embed(texts)
+
+    provider = CountingProvider()
+    await insert_test_document(worker_conn, title='질의 처리', content='문서 수정 처리 근거.\n\n' * 120)
+    await process_all_embedding_jobs(worker_conn, provider)
+    provider.calls.clear()
+    hits = await search_documents(search_conn, provider, query='문서 수정 처리')
+    assert hits and hits[0].preview
+    assert provider.calls == [['문서 수정 처리']]
+    assert len(hits[0].preview) <= 300
+    assert hits[0].preview in hits[0].content

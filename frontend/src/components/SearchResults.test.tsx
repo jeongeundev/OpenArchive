@@ -161,3 +161,12 @@ it("긴 발췌의 뒤쪽 근거를 펼쳐 보고 다시 접을 수 있다", () =
   fireEvent.click(collapse);
   expect(screen.queryByText(new RegExp(evidence))).not.toBeInTheDocument();
 });
+
+it("서버가 고른 대목을 미리보기로 쓰고 전체 문맥은 펼쳐서 보여준다", () => {
+  const context = "설정 안내 ".repeat(80) + "이전 버전 청크로 계속 검색됩니다.";
+  render(<SearchResults response={{ ...response, items: [{ ...response.items[0], content: context, preview: "이전 버전 청크로 계속 검색됩니다." }] }} loading={false} error={null} />);
+  expect(screen.getByText("이전 버전 청크로 계속 검색됩니다.")).toBeInTheDocument();
+  expect(screen.queryByText(/설정 안내/)).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "발췌 더보기" }));
+  expect(screen.getByText(/설정 안내/)).toBeInTheDocument();
+});
