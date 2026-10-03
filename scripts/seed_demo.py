@@ -63,7 +63,7 @@ def main() -> int:
         "--reset", action="store_true", help="같은 소유자의 문서만 삭제 후 재적재"
     )
     parser.add_argument(
-        "--timeout", type=float, default=600, help="임베딩 완료 대기 시간(초)"
+        "--timeout", type=float, default=600, help="임베딩과 관계 잡을 각각 기다리는 시간(초)"
     )
     args = parser.parse_args()
     try:

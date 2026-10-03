@@ -21,7 +21,7 @@ from pathlib import Path
 import psycopg
 
 from openarchive.services.documents import create_text_document
-from openarchive.services.system import rebuild_all_edges
+from openarchive.services.system import enqueue_edge_rebuild, wait_for_edge_jobs
 
 CORPUS_ROOT = Path(__file__).resolve().parent / "demo_corpus"
 FRONT_MATTER_KEYS = frozenset({"title", "tags", "visibility"})
@@ -190,6 +190,10 @@ async def summarize(conn: psycopg.AsyncConnection, owner: str) -> tuple[int, int
     ).fetchone()
 
 
+class EdgeJobsTimeout(TimeoutError):
+    """임베딩은 끝났고 관계 잡도 걸었지만 워커가 시간 안에 비우지 못했다."""
+
+
 @dataclass(frozen=True)
 class Converged:
     ready: int
@@ -207,12 +211,27 @@ async def converge(
     timeout: float,
     on_progress: Callable[[int, int], None] | None = None,
 ) -> Converged:
-    """워커가 코퍼스를 전부 임베딩할 때까지 기다린 뒤 관계를 전체 기준으로 맞춘다."""
+    """워커가 코퍼스를 전부 임베딩할 때까지 기다린 뒤 관계를 전체 기준으로 맞춘다.
+
+    관계 잡의 대기가 `timeout`을 넘기면 `EdgeJobsTimeout`이다 — 임베딩 대기의 TimeoutError와
+    달리 잡은 이미 걸려 있어, 워커가 다시 돌면 따로 명령하지 않아도 수렴한다.
+    """
     ready, elapsed = await wait_until_ready(
         conn, [document.title for document in documents], timeout, owner
     )
-    # 트리거는 처리 시점까지의 문서만 후보로 보므로 적재 순서에 따라 관계가 달라진다.
-    # 적재가 끝난 뒤 한 번 전체 기준으로 수렴시킨다 (ADR-029 결정 6).
-    rebuilt = await rebuild_all_edges(conn, on_progress=on_progress)
+    # 관계 잡은 처리 시점까지의 문서만 후보로 보므로 적재 순서에 따라 관계가 달라진다.
+    # 적재가 끝난 뒤 모든 문서에 관계 잡을 다시 걸어 전체 기준으로 수렴시킨다 (ADR-029 결정 6).
+    request = await enqueue_edge_rebuild(conn)
+    try:
+        isolated = await wait_for_edge_jobs(
+            conn, request, timeout=timeout, on_progress=on_progress
+        )
+    except TimeoutError as error:
+        raise EdgeJobsTimeout(
+            "관계 잡 대기 시간이 초과되었습니다. 워커가 떠 있는지 확인하세요."
+        ) from error
+    if isolated:
+        raise RuntimeError(f"관계 판정이 격리된 문서가 {isolated}개 있습니다.")
+    rebuilt = request.documents
     chunks, edge_pairs = await summarize(conn, owner)
     return Converged(ready, elapsed, rebuilt, chunks, edge_pairs)
