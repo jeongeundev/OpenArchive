@@ -358,6 +358,7 @@ WHERE c.version <> d.version;
 | [Roadmap](docs/ROADMAP.md) | 확장점 지도와 단계적 발전 경로 |
 | [운영 가이드](docs/OPERATIONS.md) | 환경변수, 프로세스 구성, 인증, 복구 데모 |
 | [성능 검증](docs/PERFORMANCE_VALIDATION.md) | 검색 인덱스·지속 업로드·큰 파일의 재현 절차와 측정 한계 |
+| [검색 품질 검증](docs/SEARCH_QUALITY_VALIDATION.md) | 프로젝트 예시 질문의 문서 순위·발췌 평가와 개선점 |
 | [OpenSQL 조사](docs/OPENSQL_RESEARCH.md) | 배포판 확정 사항, 공식 문서 조사, 실측 기록 |
 | [OpenSQL 환경 구축](docs/SETUP_OPENSQL.md) | Rocky Linux 9.7 VM 준비부터 설치·검증까지 |
 | [UI Guide](docs/UI_GUIDE.md) | 디자인 원칙, 화면 구성 |
