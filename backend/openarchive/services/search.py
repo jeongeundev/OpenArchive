@@ -2,12 +2,14 @@
 
 import asyncio
 import re
+from collections import Counter
 from dataclasses import dataclass
 from uuid import UUID
 
 import psycopg
 
 from openarchive.embeddings.base import EmbeddingProvider
+from openarchive.services.chunking import chunk_text
 from openarchive.services.visibility import VISIBLE_TO_USER
 from openarchive.vectors import to_pgvector_literal
 
@@ -21,6 +23,7 @@ CANDIDATE_MULTIPLIER = 5
 # 함수 정의의 SET으로 같은 ef_search를 건다. 이 불변식은
 # test_search.py·test_related.py가 지킨다.
 MAX_K = 20
+EXCERPT_LENGTH = 300
 GRAPH_MAX_DEPTH = 2
 # 코사인 거리는 최대 2다. 한 단계마다 그 범위만큼 벌려 직접 결과가 관계 확장보다
 # 항상 앞서게 하고, 동시에 기존 `score = 1 - dist` 정렬 의미를 유지한다.
@@ -197,7 +200,7 @@ selected AS (
 SELECT d.id, d.title, d.filename, d.tags, d.content_type,
        COALESCE(excerpt.chunk_index, hit.chunk_index),
        COALESCE(excerpt.content, hit.content), 1 - hit.dist AS score, hit.version,
-       hit.via_document_id, hit.via_kind, hit.depth
+       hit.via_document_id, hit.via_kind, hit.depth, preview_chunks.items
 FROM selected hit
 JOIN documents d ON d.id = hit.document_id
 LEFT JOIN LATERAL (
@@ -214,6 +217,15 @@ LEFT JOIN LATERAL (
     ORDER BY matched.embedding <=> %(qvec)s::vector, matched.chunk_index
     LIMIT 1
 ) excerpt ON true
+LEFT JOIN LATERAL (
+    SELECT jsonb_agg(jsonb_build_array(c.chunk_index, c.content)
+                     ORDER BY c.chunk_index) AS items
+    FROM document_chunks c
+    WHERE hit.depth = 0
+      AND c.document_id = hit.document_id AND c.version = hit.version
+      AND c.chunk_index BETWEEN COALESCE(excerpt.chunk_index, hit.chunk_index) - 1
+                            AND COALESCE(excerpt.chunk_index, hit.chunk_index) + 1
+) preview_chunks ON true
 ORDER BY CASE WHEN hit.depth = 0 THEN 0 ELSE 1 END,
          CASE WHEN hit.depth = 0 THEN {TITLE_PRIORITY} ELSE 1 END,
          CASE WHEN hit.depth = 0 THEN {NUMBER_TITLE_PRIORITY} ELSE 1 END,
@@ -257,6 +269,7 @@ class SearchHit:
     score: float
     based_on_version: int
     via: SearchVia | None
+    preview: str | None = None
 
 
 def _identifier_pattern(query: str) -> str | None:
@@ -276,6 +289,35 @@ def _identifier_pattern(query: str) -> str | None:
         return None
     number = identifier[1:-1]
     return rf"제[[:space:]]*{number}[[:space:]]*조(?![[:space:]]*의[[:space:]]*[0-9])"
+
+
+def _preview_index(query: str, passages: list[str]) -> int | None:
+    """질의의 문자 쌍이 드러난 대목을 고른다. 일치가 없으면 벡터 발췌를 유지한다.
+
+    한국어 조사 차이도 일부 허용하도록 단어 안의 두 글자를 비교한다. 여러 대목에
+    반복되는 문자 쌍은 덜 반영하고, 길이가 긴 대목의 우연한 일치를 보정한다.
+    의미 이해나 답변 정확도 점수는 아니며 문서 순위·유사도에는 쓰지 않는다.
+    """
+    def grams(text: str) -> set[str]:
+        return {
+            word[i:i + 2]
+            for word in re.findall(r"[가-힣]+", text)
+            for i in range(len(word) - 1)
+        } | set(re.findall(r"[a-z0-9]+", text.casefold()))
+
+    # 조사·어미가 질의어로 가중되지 않게 한국어 질의 단어의 첫 두 글자만 쓴다.
+    # 본문에서는 단어 안 어디든 비교한다 (예: 재수정 ↔ 수정하면).
+    query_grams = {
+        word[:2] for word in re.findall(r"[가-힣]+", query) if len(word) >= 2
+    } | set(re.findall(r"[a-z0-9]+", query.casefold()))
+    passage_grams = [grams(p) for p in passages]
+    frequency = Counter(g for gs in passage_grams for g in gs)
+    scores = [
+        sum(1 / frequency[g] for g in gs & query_grams) / max(1, len(gs)) ** 0.5
+        for gs in passage_grams
+    ]
+    winner = max(range(len(scores)), key=scores.__getitem__)
+    return winner if scores[winner] > 0 else None
 
 
 async def search_documents(
@@ -313,6 +355,29 @@ async def search_documents(
         cur = await conn.execute(SEARCH_SQL, params)
         rows = await cur.fetchall()
 
+    # 이미 선택된 문서·버전의 주변 청크만 사용한다. 열람 범위와 문서 순위는 SQL이 결정한다.
+    identifier = params["identifier"]
+    identifier_regex = re.compile(
+        identifier.replace("[[:alnum:]_-]", r"[\w-]").replace("[[:space:]]", r"\s")
+    ) if identifier else None
+    excerpts = {}
+    for index, row in enumerate(rows):
+        if identifier_regex is not None:
+            for chunk_index, content in row[12] or []:
+                if chunk_index == row[5] and (match := identifier_regex.search(content)):
+                    excerpts[index] = (chunk_index, content[match.start():match.start() + EXCERPT_LENGTH])
+                    break
+            continue
+        options = []
+        for chunk_index, content in row[12] or []:
+            options.extend((chunk_index, passage) for passage in
+                           chunk_text(content, max_chars=EXCERPT_LENGTH, overlap=0))
+        if options:
+            winner = _preview_index(query, [p for _, p in options])
+            if winner is not None:
+                chunk_index, passage = options[winner]
+                excerpts[index] = (chunk_index, passage)
+
     return [
         SearchHit(
             document_id=row[0],
@@ -320,8 +385,9 @@ async def search_documents(
             filename=row[2],
             tags=row[3],
             content_type=row[4],
-            chunk_index=row[5],
+            chunk_index=excerpts[index][0] if index in excerpts else row[5],
             content=row[6],
+            preview=excerpts[index][1] if index in excerpts else None,
             score=float(row[7]),
             based_on_version=row[8],
             via=(
@@ -330,5 +396,5 @@ async def search_documents(
                 else None
             ),
         )
-        for row in rows
+        for index, row in enumerate(rows)
     ]
