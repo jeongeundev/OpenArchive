@@ -1,12 +1,33 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useId, useState } from "react";
 
 import { relationLabel } from "@/lib/relations";
 import type { SearchResponse } from "@/lib/types";
 
 const EXCERPT_LENGTH = 300;
+
+function SearchExcerpt({ content, preview }: { content: string; preview?: string | null }): React.ReactElement {
+  const [expanded, setExpanded] = useState(false);
+  const id = useId();
+  const collapsed = preview ?? (content.length > EXCERPT_LENGTH ? `${content.slice(0, EXCERPT_LENGTH)}…` : content);
+  const long = content !== collapsed;
+  return (
+    <>
+      <p id={id} className="mt-4 whitespace-pre-wrap text-sm leading-relaxed text-neutral-300">
+        {expanded ? content : collapsed}
+      </p>
+      {long ? (
+        <button type="button" aria-expanded={expanded} aria-controls={id}
+          onClick={() => setExpanded((value) => !value)}
+          className="mt-2 text-sm text-[#0ea5e9] hover:underline">
+          {expanded ? "발췌 접기" : "발췌 더보기"}
+        </button>
+      ) : null}
+    </>
+  );
+}
 
 export function SearchResults({
   response,
@@ -65,9 +86,6 @@ export function SearchResults({
               <p className="text-sm text-neutral-400">검색 결과와 연결된 문서입니다. 각 문서의 연결 이유를 확인하세요.</p>
             ) : null}
             {group.items.map((item) => {
-              const excerpt = item.content.length > EXCERPT_LENGTH
-                ? `${item.content.slice(0, EXCERPT_LENGTH)}…`
-                : item.content;
               const sourceTitle = item.via === null
                 ? null
                 : titlesById.get(item.via.from_document_id) ?? "연결된 문서";
@@ -99,7 +117,7 @@ export function SearchResults({
                       {sourceTitle}에서 「{relationLabel(item.via.kind)}」로 이어짐
                     </p>
                   ) : null}
-                  <p className="mt-4 text-sm leading-relaxed text-neutral-300">{excerpt}</p>
+                  <SearchExcerpt key={`${item.content}:${item.preview ?? ""}`} content={item.content} preview={item.preview} />
                 </article>
               );
             })}
