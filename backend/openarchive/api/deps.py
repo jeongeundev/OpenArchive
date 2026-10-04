@@ -82,29 +82,6 @@ async def require_user_id(user: Annotated[dict | None, Depends(current_user)]) -
     return user["username"]
 
 
-async def released_current_user(
-    authorization: Annotated[str | None, Header()] = None,
-    token: Annotated[str | None, Cookie(alias=SESSION_COOKIE)] = None,
-) -> dict | None:
-    """생성처럼 오래 걸리는 작업 전에 인증 연결을 반납한다 (ADR-043 구현 형태 1).
-
-    인증 뒤 DB 작업도 필요한 ask는 같은 연결에서 current_user를 직접 호출해
-    인증과 근거 수집을 한 번 대여로 끝낸다.
-    """
-    async with connection() as conn:
-        return await current_user(conn, authorization, token)
-
-
-async def require_released_user_id(
-    user: Annotated[dict | None, Depends(released_current_user)],
-) -> str:
-    """인증 연결을 반납한 사용자에게만 허용한다. 공유 주체는 거부한다."""
-    if user is None:
-        raise HTTPException(status_code=401, detail="로그인이 필요합니다.")
-    reject_share(user)
-    return user["username"]
-
-
 async def require_write_user_id(
     user: Annotated[dict | None, Depends(current_user)],
 ) -> str:

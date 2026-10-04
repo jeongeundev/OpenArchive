@@ -801,8 +801,8 @@ PUT /api/documents/{id}
 본문은 `{query, tags?, content_type?, k=5}`이며 빈 질의는 400이다. 로그인 사용자의 세션·위임 토큰을
 허용하고 공유 주체는 403으로 막는다(ADR-044 공유 허용 목록). 인증·검색·현재 버전 조회는 커넥션 한 번
 대여 안에서 끝낸다. `services/answer.py`의 `gather_evidence`가 `Evidence(hits, sources, system, prompt)`를
-반환하면 **커넥션을 반납한 뒤** `generate_answer`를 부른다. 요청 끝까지 연결을 쥐는 `Connection`·
-`current_user`·`require_user_id` 대신 스스로 대여·반납하는 인증 의존성을 쓴다. 생성은 동기
+반환하면 **커넥션을 반납한 뒤** `generate_answer`를 부른다. 요청 끝까지 연결을 쥐는 `Connection` 의존성을
+쓰지 않고, 빌린 커넥션 안에서 `current_user`·`require_user_id`를 함수로 직접 부른다. 생성은 동기
 `AnswerProvider.generate(system, prompt)`를 `asyncio.to_thread`로 실행한다.
 
 현재 `documents.version`은 같은 커넥션에서 `VISIBLE_TO_USER`와 함께 별도로 조회하고, 그 사이 열람에서

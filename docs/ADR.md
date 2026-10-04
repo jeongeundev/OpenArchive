@@ -2912,7 +2912,7 @@ DB 스키마를 추가하지 않고 `services/search.py`와 `services/visibility
 - **생성 동안 DB 커넥션을 쥐지 않는다** — 인증·검색·현재 버전 조회를 커넥션 한 번 대여로 끝내고 반납한 뒤 생성한다.
   로컬 7B는 CPU에서 초당 수 토큰이라 생성이 수십 초 걸리며, `Connection`·`current_user`·`require_user_id` 의존성은
   요청 끝까지 커넥션을 쥔다. 동시 질문 몇 개가 풀과 `max_connections`를 소진할 수 있으므로(ADR-048), `/api/ask`는
-  스스로 대여·반납하는 인증 의존성을 쓴다. 서비스는 DB 단계 `gather_evidence`와 생성 단계 `generate_answer`로 나눈다.
+  인증을 의존성으로 받지 않고 자기가 빌린 커넥션 안에서 `current_user`·`require_user_id`를 직접 부른다. 서비스는 DB 단계 `gather_evidence`와 생성 단계 `generate_answer`로 나눈다.
   전자는 검색 결과 그대로인 `hits`·`cited=False`인 `sources`·`system`·`prompt`를 담은 `Evidence`를 반환하고,
   후자는 동기 프로바이더를 `asyncio.to_thread`로 호출해 `AnswerResult(status, answer, sources, hits, detail)`를 반환한다.
 - **답변 결과 응답은 항상 200과 상태 넷** — `disabled`(프로바이더 None) → `no_evidence`(근거 0건) →
