@@ -41,7 +41,10 @@
       "type": "feat",
       "scope": "api",
       "desc": "POST /api/ask — 생성 전에 커넥션을 반납하고 실패해도 검색 결과를 돌려준다",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-10-05T00:05:58+0900",
+      "summary": "POST /api/ask와 status·answer·detail·sources·items 응답 구현; ADR-043의 인증·검색·현재 버전 조회 1회 대여 후 생성(생성 시 풀 점유 0), 세션·read 토큰 허용·공유 403, 기동 off/fake/ollama 설정·DB 재시도 반영. 연결 점유·공유 거절 제거·ask 재시도 제외 mutant 3개 모두 검출·복원; 전체 백엔드 1525개·프론트 354개와 scripts/check.sh·Ruff·코어/MCP diff 0 통과.",
+      "completed_at": "2026-10-05T00:27:48+0900"
     }
   ],
   "created_at": "2026-10-04T23:38:00+0900"
