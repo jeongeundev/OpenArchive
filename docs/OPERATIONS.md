@@ -32,6 +32,11 @@ mkdir -p ~/.openarchive && cp backend/.env.example ~/.openarchive/.env   # 예�
 | `SESSION_LIFETIME_HOURS` | `24` | 서버 세션과 로그인 쿠키의 수명 |
 | `SESSION_COOKIE_SECURE` | `false` | 로컬 HTTP에서는 `false`. HTTPS 상시 배포에서는 반드시 `true` |
 | `MAX_UPLOAD_MB` | `50` | 업로드·원본 교체 한 건의 상한(십진 MB). 원본 한 판이 DB에 차지하는 크기의 상한이기도 하다 — 아래 「원본 파일 보관」 |
+| `ANSWER_PROVIDER` | `off` | 기본 `off` — 검색은 그대로, 답변만 미설정. `ollama`는 로컬 Ollama 서버가 필요(설치 절차는 #96 c), `fake`는 테스트용 |
+| `OLLAMA_URL` | `http://localhost:11434` | 로컬 Ollama 서버 주소 |
+| `ANSWER_MODEL` | `qwen3:8b` | 임시 모델 태그 — #96 c의 한국어 실측으로 확정 |
+| `ANSWER_TIMEOUT_SECONDS` | `120` | 생성 호출 한 번의 HTTP 타임아웃(초). 0보다 큰 실수 |
+| `ANSWER_CONTEXT_CHARS` | `6000` | 프롬프트에 넣는 근거 본문의 글자 예산. 0보다 큰 정수 |
 
 ## 임베딩 프로바이더
 
