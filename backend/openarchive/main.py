@@ -1,9 +1,12 @@
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
+from openarchive.answers import get_answer_provider
 from openarchive.api.admin import router as admin_router
+from openarchive.api.ask import router as ask_router
 from openarchive.api.auth import router as auth_router
 from openarchive.api.clusters import router as clusters_router
 from openarchive.api.diagnostics import router as diagnostics_router
@@ -22,6 +25,8 @@ from openarchive.migrations import run_migrations
 from openarchive.services import documents as documents_service
 from openarchive.services import grants as grants_service
 
+logger = logging.getLogger(__name__)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -31,6 +36,12 @@ async def lifespan(app: FastAPI):
     await run_migrations(get_settings().database_url)
     pool = get_pool()
     await pool.open()
+    app.state.answer_provider = get_answer_provider()
+    settings = get_settings()
+    if settings.answer_provider == "ollama":
+        logger.info("답변 생성: ollama %s @ %s", settings.answer_model, settings.ollama_url)
+    else:
+        logger.info("답변 생성: %s", "꺼짐" if app.state.answer_provider is None else "fake")
     app.state.provider = get_provider()
     # 예열하지 않으면 이 로딩이 통째로 첫 검색 요청에 붙는다 (실측 12.5초).
     await warm_up(app.state.provider)
@@ -51,6 +62,7 @@ app.include_router(documents_router)
 app.include_router(clusters_router)
 app.include_router(diagnostics_router)
 app.include_router(search_router)
+app.include_router(ask_router)
 app.include_router(system_router)
 
 

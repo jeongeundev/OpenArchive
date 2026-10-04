@@ -14,7 +14,12 @@ from conftest import login_as, run_embedding_worker
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 
-from openarchive.api.deps import current_user, require_reader
+from openarchive.api.deps import (
+    current_user,
+    released_current_user,
+    require_reader,
+    require_released_user_id,
+)
 from openarchive.main import app
 
 QUERY = "OpenSQL 공유 경계 문서"
@@ -407,3 +412,15 @@ def test_only_auth_me_reads_the_principal_without_a_guard():
     }
 
     assert direct == {("GET", "/api/auth/me")}
+    # current_user를 내부에서 부르는 새 인증 의존성도 무방비로 라우터에 쓰지 않는다.
+    for _, _, dependant in api_routes():
+        if depends_on(dependant, released_current_user):
+            assert depends_on(dependant, require_released_user_id)
+
+
+def test_ask_rejects_a_share_principal(db_client, scenario):
+    response = db_client.post(
+        "/api/ask", json={"query": QUERY}, headers=bearer(scenario["token"]["token"])
+    )
+    assert response.status_code == 403
+    assert response.json()["detail"] == FORBIDDEN_DETAIL

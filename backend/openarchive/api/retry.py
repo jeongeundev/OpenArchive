@@ -46,10 +46,10 @@ IDEMPOTENT_CREATE_PATHS = ("/api/documents", "/api/documents/text")
 def is_retryable(scope: dict) -> bool:
     """재시도해도 중복 쓰기가 없는 요청인지 판별한다.
 
-    POST /api/search는 메서드만 POST인 읽기라 포함한다 — 페일오버 중에도 검색이
-    계속 성공해야 한다는 것이 이 재시도의 목적이다.
+    POST /api/search와 /api/ask는 메서드만 POST인 읽기라 포함한다.
+    ask는 DB 단계가 생성 전에 끝나므로 DB 재시도가 생성을 두 번 돌리지 않는다.
     """
-    if scope["method"] in ("GET", "HEAD") or scope["path"] == "/api/search":
+    if scope["method"] in ("GET", "HEAD") or scope["path"] in ("/api/search", "/api/ask"):
         return True
     return (
         scope["method"] == "POST"

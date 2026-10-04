@@ -45,11 +45,12 @@ def test_read_request_is_retried_once_and_then_succeeds():
     assert len(seen) == 2
 
 
-def test_search_is_retried_with_its_request_body_replayed():
+@pytest.mark.parametrize("path", ["/api/search", "/api/ask"])
+def test_search_is_retried_with_its_request_body_replayed(path):
     """POST /api/search는 메서드만 POST인 읽기다. 재시도하려면 본문이 다시 읽혀야 한다."""
-    client, seen = build_app("/api/search", "POST", failures=1)
+    client, seen = build_app(path, "POST", failures=1)
 
-    response = client.post("/api/search", json={"query": "정합성"})
+    response = client.post(path, json={"query": "정합성"})
 
     assert response.status_code == 200
     assert seen == [{"query": "정합성"}, {"query": "정합성"}]

@@ -270,6 +270,35 @@ class SearchResponse(BaseModel):
     sql: str
 
 
+class AskRequest(BaseModel):
+    query: str
+    tags: list[str] | None = None
+    content_type: str | None = None
+    k: int = Field(default=5, ge=1, le=MAX_K)
+
+
+class AskSource(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    label: int
+    document_id: UUID
+    title: str
+    chunk_index: int
+    based_on_version: int
+    current_version: int
+    revised: bool
+    content: str
+    cited: bool = False
+
+
+class AskResponse(BaseModel):
+    status: Literal["answered", "no_evidence", "disabled", "failed"]
+    answer: str | None
+    detail: str | None
+    sources: list[AskSource]
+    items: list[SearchResult]
+
+
 class RelatedDocumentItem(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

@@ -85,3 +85,22 @@ def test_startup_survives_a_failed_warmup(monkeypatch, clean_db: str, warmup_fai
         assert started.get("/api/health").json() == {"status": "ok"}
 
     assert warmup_failing_provider.failed_once  # 예열이 실제로 실패한 상태를 지나왔다
+
+
+@pytest.mark.parametrize("name", ["off", "fake", "ollama"])
+def test_startup_configures_answer_provider_without_connecting(monkeypatch, clean_db, name):
+    from openarchive.answers import FakeAnswerProvider, OllamaProvider
+
+    monkeypatch.setenv("DATABASE_URL", clean_db)
+    monkeypatch.setenv("ANSWER_PROVIDER", name)
+    monkeypatch.setenv("OLLAMA_URL", "http://127.0.0.1:1")
+    get_settings.cache_clear()
+    with TestClient(app) as started:
+        assert started.get("/api/health").status_code == 200
+        provider = app.state.answer_provider
+        if name == "off":
+            assert provider is None
+        elif name == "fake":
+            assert isinstance(provider, FakeAnswerProvider)
+        else:
+            assert isinstance(provider, OllamaProvider)
