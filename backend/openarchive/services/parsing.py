@@ -7,7 +7,7 @@ OCR은 로컬 tesseract를 호출한다(pytesseract가 임시 파일을 관리�
 
 빈 추출 결과의 거부는 이 모듈 밖에서 한다 — 판정은 `services/documents.py`가
 `EmptyExtractedText`로 하고, 400 응답 매핑은 `openarchive/main.py`의 예외 핸들러가 한다.
-extract_text는 이미지와 텍스트 없는 PDF에 빈 문자열을 반환하며 OCR하지 않는다.
+extract_text는 OCR하지 않는다 — 이미지는 빈 문자열, PDF는 텍스트 레이어만 반환한다.
 호출부가 needs_ocr로 판정해 워커 추출로 넘긴다(ADR-052). ocr_text는 그때만 호출한다.
 """
 
@@ -118,8 +118,7 @@ def extract_text(data: bytes, content_type: str) -> str:
             return ""
 
         if content_type == "pdf":
-            pages = PdfReader(io.BytesIO(data)).pages
-            return "\n\n".join(page.extract_text() or "" for page in pages)
+            return "\n\n".join(_pdf_page_texts(data))
 
         if content_type == "hwp":
             return _join_paragraphs(_hwp_paragraphs(data))
@@ -141,15 +140,29 @@ def extract_text(data: bytes, content_type: str) -> str:
         raise ValueError(f"{content_type.upper()} 파일을 읽을 수 없습니다.") from error
 
 
-def needs_ocr(content_type: str, extracted_text: str) -> bool:
-    """이미지는 항상, PDF는 텍스트 레이어가 비었을 때만 OCR한다."""
-    return content_type in IMAGE_CONTENT_TYPES or (
-        content_type == "pdf" and not extracted_text.strip()
-    )
+def needs_ocr(content_type: str, data: bytes) -> bool:
+    """이미지는 항상, PDF는 텍스트 레이어가 빈 쪽이 하나라도 있을 때 OCR한다.
+
+    문서 전체의 텍스트로 판정하면 텍스트 쪽과 스캔 쪽이 섞인 PDF의 스캔 쪽이 빈 채로 남는다.
+    호출부는 extract_text가 읽을 수 있음을 확인한 뒤에 부른다.
+    """
+    if content_type in IMAGE_CONTENT_TYPES:
+        return True
+    if content_type != "pdf":
+        return False
+    return any(not text.strip() for text in _pdf_page_texts(data))
+
+
+def _pdf_page_texts(data: bytes) -> list[str]:
+    return [page.extract_text() or "" for page in PdfReader(io.BytesIO(data)).pages]
 
 
 def ocr_text(data: bytes, content_type: str) -> str:
-    """로컬 OCR로 텍스트를 읽는다. 파일 오류는 ValueError, 설치 오류는 그대로 전파한다."""
+    """로컬 OCR로 텍스트를 읽는다. 파일 오류는 ValueError, 설치 오류는 그대로 전파한다.
+
+    PDF는 텍스트 레이어가 빈 쪽만 인식하고, 나머지 쪽은 extract_text와 같은 레이어 텍스트를
+    쓴다. 쪽 순서는 원본 그대로다.
+    """
     if content_type not in (*IMAGE_CONTENT_TYPES, "pdf"):
         raise UnsupportedFileType(f"지원하지 않는 OCR 파일 형식입니다: {content_type}")
 
@@ -161,17 +174,19 @@ def ocr_text(data: bytes, content_type: str) -> str:
             ):
                 return pytesseract.image_to_string(image, lang=OCR_LANGUAGE, config=OCR_CONFIG)
 
-        texts = []
+        texts = _pdf_page_texts(data)
         with pypdfium2.PdfDocument(data) as document:
             for index in range(len(document)):
+                if texts[index].strip():
+                    continue
                 page = document[index]
                 try:
                     bitmap = page.render(scale=300 / 72)
                     try:
                         with bitmap.to_pil() as image:
-                            texts.append(pytesseract.image_to_string(
+                            texts[index] = pytesseract.image_to_string(
                                 image, lang=OCR_LANGUAGE, config=OCR_CONFIG
-                            ))
+                            )
                     finally:
                         bitmap.close()
                 finally:

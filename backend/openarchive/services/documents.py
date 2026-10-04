@@ -277,7 +277,7 @@ async def create_document(
     문서만 커밋되고 원본이 유실되는 상태가 생기지 않는다 — 호출부가 autocommit 연결을
     넘겨도 이 함수가 트랜잭션을 연다. 멱등키는 `_create_once`를 본다.
 
-    OCR 대상(이미지, 텍스트 레이어가 빈 PDF)은 요청 안에서 인식하지 않는다. 빈 문서 텍스트와
+    OCR 대상(이미지, 텍스트 레이어가 빈 쪽이 있는 PDF)은 요청 안에서 인식하지 않는다. 빈 문서 텍스트와
     `extraction_status='pending'`으로 만들면 트리거가 추출 잡을 남기고, 워커가 OCR한 결과를
     `apply_extracted_text`로 반영한다 (ADR-052 결정 3·5). 이때 원본 판은 가리킬 텍스트
     버전이 아직 없어 `text_version`이 NULL이다.
@@ -287,7 +287,7 @@ async def create_document(
     grant_users, grant_groups = _check_grantees(visibility, owner_id, grant_users, grant_groups)
     content_type = detect_content_type(filename)
     content = extract_text(data, content_type)
-    extraction_status = "pending" if needs_ocr(content_type, content) else "done"
+    extraction_status = "pending" if needs_ocr(content_type, data) else "done"
     if extraction_status == "pending":
         content = ""
 
@@ -957,7 +957,7 @@ async def replace_original_file(
 
     content_type = detect_content_type(filename)
     content = extract_text(data, content_type)
-    ocr = needs_ocr(content_type, content)
+    ocr = needs_ocr(content_type, data)
     if not ocr and not content.strip():
         raise EmptyExtractedText(EXTRACTION_FAILED_MESSAGE)
     # OCR 대상이면 텍스트를 쓰지 않는다 — 요청 안에서 인식하지 않고 추출 잡으로 넘긴다
@@ -995,7 +995,7 @@ async def replace_original_file(
                 "version": expected_version,
                 "filename": filename,
                 "content_type": content_type,
-                # pending으로 바뀌면 022 트리거가 추출 잡을 만든다. 텍스트 레이어가 있는 원본으로
+                # pending으로 바뀌면 022 트리거가 추출 잡을 만든다. 모든 쪽에 텍스트 레이어가 있는 원본으로
                 # 바꾼 인식 실패 문서는 여기서 done이 된다. content_hash는 언급하지 않는다(003).
                 "extraction_status": "pending" if ocr else "done",
             },
@@ -1035,7 +1035,7 @@ async def reextract_text(
     트리거가 발화해(003) 같은 내용의 텍스트 버전과 재임베딩이 생긴다. 다르면 편집 경로를
     그대로 지나므로 낙관적 잠금·길이 검증·트리거 발화가 편집과 같다. 원본 판은 만들지 않는다.
 
-    최신 원본이 OCR 대상(이미지, 텍스트 레이어가 빈 PDF)이면 텍스트를 쓰지 않고 추출 중으로
+    최신 원본이 OCR 대상(이미지, 텍스트 레이어가 빈 쪽이 있는 PDF)이면 텍스트를 쓰지 않고 추출 중으로
     바꿔 워커에 넘긴다 — 돌려주는 문서의 `extraction_status`가 `pending`이다 (ADR-052 결정 6).
     """
     locked = await _lock_for_text_change(conn, document_id, needs_text=False)
@@ -1051,7 +1051,7 @@ async def reextract_text(
     content_type = detect_content_type(original[0])
     content = extract_text(original[1], content_type)
     cur = conn.cursor(row_factory=dict_row)
-    if needs_ocr(content_type, content):
+    if needs_ocr(content_type, original[1]):
         # 요청 안에서 OCR하지 않는다 (ADR-052 결정 3·6). 이전 텍스트는 그대로 두고 추출 중으로
         # 바꾸면 022 트리거가 추출 잡을 만든다. content_hash를 언급하지 않는다(003).
         # 인식에 실패했던 문서는 이것이 재시도 경로다.
