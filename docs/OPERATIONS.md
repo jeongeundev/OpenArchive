@@ -311,7 +311,7 @@ HA 환경(`SETUP_OPENSQL.md` §16)은 Barman 전용 노드 `node4`(192.168.64.20
 | WAL 보관 | streaming — `pg_receivewal` + Patroni 영구 슬롯 `barman`. `archive_command`는 `/bin/true` 그대로 |
 | 기준 백업 | 매일 전체(`backup_method = postgres`), 보존 `RECOVERY WINDOW OF 7 DAYS`, `minimum_redundancy = 1` |
 | failover 추종 | Barman Agent(`barman-agent.service`, :8080) + 각 노드 Patroni `on_role_change` 콜백 |
-| 실측 | 기준 백업 324MiB·12초 · 복원 시작→쓰기 가능 97초 · failover 뒤 추종 17~18초 |
+| 실측 | 기준 백업 324MiB·12초 · 복원 시작→쓰기 가능 161~166초(`--get-wal`, 없이는 97초) · failover 뒤 추종 17~18초 |
 
 백업은 HA를 대신하지 않습니다. failover는 노드가 죽어도 서비스를 잇는 장치이고, 백업은 잘못 지운 데이터·손상·클러스터
 전체 상실에서 **과거 시점으로 되살리는** 장치입니다 — 복원하는 동안 서비스는 멈춥니다.
@@ -410,6 +410,53 @@ DATABASE_URL=postgresql://openarchive:…@127.0.0.1:15433/openarchive openarchiv
 **5. 복원본을 어떻게 쓸지 정한다.** 필요한 문서만 내보내 운영에 다시 넣거나(`openarchive export`), 운영 클러스터 전체를
 되돌리기로 했다면 Patroni 클러스터를 이 데이터로 다시 부트스트랩합니다 — 후자는 실측하지 않았습니다. 끝나면
 `pg_ctl -D $D stop`, 디렉터리와 복원용 SSH 키를 지웁니다.
+
+### 복원 재현 — `scripts/dr_restore.py`
+
+위 절차가 데이터를 실제로 되살리는지 다시 확인하는 도구입니다. 운영 클러스터는 덮지 않고, 시험 계정의 `ha-<label>-`
+문서만 만들고 대조합니다. 준비물은 「복원 절차」와 같고(`SETUP_OPENSQL.md` §17-6), 맥에서 앱(`openarchive serve`)이
+`DATABASE_URL`(VIP)로 떠 있어야 합니다. SSH는 `DR_SSH`(예: `ssh -F notes/ha110/ssh_config`)로 줍니다.
+
+```bash
+export DATABASE_URL=… HA_API=http://127.0.0.1:8010/api HA_USER=… HA_PASSWORD=… DR_SSH="ssh -F …"
+N=192.168.64.201,192.168.64.202,192.168.64.203
+PY=backend/.venv/bin/python
+
+# PITR — 복원 지점 뒤의 삭제·폐기가 되돌아가고 뒤 업로드는 없어야 한다
+$PY scripts/ha_failover.py run dr1-a --nodes $N --load 60         # 원본 판 있는 문서 + 업로드 장부
+$PY scripts/dr_restore.py mark dr1 --nodes $N                      # 토큰·공유·업로드 → S1 → 복원 지점 dr1_before → S2
+$PY scripts/dr_restore.py break dr1                                # 문서 5 삭제·토큰 폐기·공유 삭제·업로드 10
+$PY scripts/dr_restore.py restore dr1 pitr --target-name dr1_before
+ssh -f -N -L 15433:127.0.0.1:5433 192.168.64.202                   # 복원본은 localhost에만 열린다
+$PY scripts/dr_restore.py verify dr1 pitr --dsn "…@127.0.0.1:15433/openarchive" --ledger ha-runs/dr1-a.jsonl
+DATABASE_URL="…@127.0.0.1:15433/openarchive" openarchive serve --port 8011 &   # 복원본에 앱을 붙이면
+$PY scripts/dr_restore.py converge dr1 --dsn "…@127.0.0.1:15433/openarchive"    # 처리 중이던 잡이 회수된다
+
+# 전체 복원 RPO — 부하 중 +60초에 Barman 수신을 끊고, 끊은 채로 받은 WAL 끝까지 복원한다
+$PY scripts/ha_failover.py run dr1-rpo --nodes $N --load 100 --inject-at 60 \
+    --inject "$PWD/backend/.venv/bin/python $PWD/scripts/dr_restore.py freeze"
+$PY scripts/dr_restore.py restore dr1 full                         # thaw보다 먼저 — 반대면 끊은 뒤 WAL도 받는다
+$PY scripts/dr_restore.py rpo ha-runs/dr1-rpo.jsonl --dsn "…@127.0.0.1:15433/openarchive"
+$PY scripts/dr_restore.py thaw                                     # crond 재개 → 다음 분 경계에 receive-wal
+$PY scripts/dr_restore.py drop                                     # 복원 인스턴스 정지·디렉터리 삭제
+```
+
+- `restore`는 늘 `--target-tli latest --get-wal`로 복원하고, 대상 지점이 있으면 `--target-action promote`를 붙입니다.
+  격리 설정(「복원 절차」 2번)을 덧붙여 띄우고, 쓰기 가능이 될 때까지의 시간을 `ha-runs/dr-<label>.json`에 남깁니다.
+  대상 디렉터리는 이름이 `restore`로 시작해야 합니다 — 복원 전에 지우기 때문입니다.
+- `verify`·`rpo`·`converge`는 위반이 있으면 종료 코드 1입니다. `rpo`는 끊기 전에 응답 성공한 업로드의 유실·내용 불일치와,
+  끊은 뒤 업로드가 복원본에 있는지(= 끊기가 안 걸렸다)를 봅니다.
+- 끝나면 시험 계정의 문서를 지우고 계정을 삭제한 뒤, 복원용 SSH 키를 지웁니다.
+
+**재실측 (2026-10-04 13시, 이 도구)**
+
+| 회차 | 결과 |
+|---|---|
+| PITR (`--target-name`) | 복원본 = 복원 지점: 문서 150(삭제 5 되살아남·뒤 업로드 10 없음)·개인·공유 토큰 2·공유 1·부여 2. 장부 120건 유실·불일치·원본 판·버전 이동 0. 재생이 복원 지점 `1/F111888` 바로 뒤 `1/F111938`에서 끝남. 쓰기 가능 161초(복사 49초). 복원본 워커가 좀비 잡 1건 회수, 미완료 30건 16초에 0 |
+| 전체 복원 (`--get-wal`) | 끊기 전 응답 성공 120건 유실 0·불일치 0, 끊는 중 15건 중 13건 있음, 끊은 뒤 65건 없음. 마지막 생존 업로드 → 끊기 0.09초. 쓰기 가능 166초 |
+
+`--get-wal`은 재생 중 WAL을 세그먼트마다 SSH로 가져와 쓰기 가능까지 걸리는 시간이 늘어납니다(97초 → 161~166초).
+그 대가로 닫히지 않은 마지막 세그먼트까지 되살립니다.
 
 ## 문서 생성 멱등키
 

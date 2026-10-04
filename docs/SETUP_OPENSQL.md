@@ -1182,6 +1182,18 @@ $B check opensql                            # 종료 코드 0
 **검증** — switchover를 한 번 걸어 Agent 로그에 `Applying model '<새 Leader>'`, `ps`의 `pg_receivewal`이 새 Primary를
 가리키는지 본다(실측 17~18초). 복원 시험은 `OPERATIONS.md` 「복원 절차」.
 
+**6. 복원 재현 준비** — 복원 대상 노드(예: node2)에 rsync와 Barman 클라이언트를 깔아 둔다. SSH 키는 재현할 때만
+양방향으로 넣고 끝나면 지운다. 재현 명령은 `scripts/dr_restore.py`(`OPERATIONS.md` 「복원 재현」)이다.
+
+- `rsync` — 원격 `recover`가 대상에서 부른다. 없으면 복사 단계에서 실패한다
+- Barman 클라이언트 — 2단계와 같은 방식으로 `install.sh barman`만(PostgreSQL은 이미 있다). `--get-wal` 복원의
+  `restore_command`가 `/usr/local/bin/barman-wal-restore`를 부른다
+
+```bash
+# node4 barman → 대상 opensql, 대상 opensql → node4 barman 공개키를 각각 authorized_keys에 넣는다
+sudo -u barman -i ssh opensql@192.168.64.202 hostname     # node4에서 — 비밀번호 없이 node2가 나와야 한다
+```
+
 ## 부록: 붙여넣기 주의
 
 에뮬레이션 콘솔과 SSH 모두에서 겪은 문제다.
