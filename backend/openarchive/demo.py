@@ -170,24 +170,27 @@ async def summarize(conn: psycopg.AsyncConnection, owner: str) -> tuple[int, int
 
     관계는 그 계정 문서가 한쪽이라도 걸린 것만 센다 — 기존 문서끼리의 관계는 예제 결과가 아니다.
     저장은 단방향이지만 양쪽이 서로를 발견하면 두 행이 남으므로(ADR-029 개정) 문서쌍으로 접어 센다.
+    관계 잡을 기다린 직후에 세므로 트랜잭션 안에서 읽는다 — 밖의 SELECT는 HA에서 Replica로 가
+    옛 수를 보여 준다 (ADR-010, #180).
     """
-    return await (
-        await conn.execute(
-            """
-            SELECT (SELECT count(*) FROM document_chunks c
-                      JOIN documents d ON d.id = c.document_id
-                     WHERE d.owner_id = %s),
-                   (SELECT count(*) FROM (
-                        SELECT DISTINCT least(e.src_document_id, e.dst_document_id),
-                                        greatest(e.src_document_id, e.dst_document_id)
-                        FROM document_edges e
-                        JOIN documents s ON s.id = e.src_document_id
-                        JOIN documents t ON t.id = e.dst_document_id
-                        WHERE %s IN (s.owner_id, t.owner_id)) pairs)
-            """,
-            (owner, owner),
-        )
-    ).fetchone()
+    async with conn.transaction():
+        return await (
+            await conn.execute(
+                """
+                SELECT (SELECT count(*) FROM document_chunks c
+                          JOIN documents d ON d.id = c.document_id
+                         WHERE d.owner_id = %s),
+                       (SELECT count(*) FROM (
+                            SELECT DISTINCT least(e.src_document_id, e.dst_document_id),
+                                            greatest(e.src_document_id, e.dst_document_id)
+                            FROM document_edges e
+                            JOIN documents s ON s.id = e.src_document_id
+                            JOIN documents t ON t.id = e.dst_document_id
+                            WHERE %s IN (s.owner_id, t.owner_id)) pairs)
+                """,
+                (owner, owner),
+            )
+        ).fetchone()
 
 
 class EdgeJobsTimeout(TimeoutError):
