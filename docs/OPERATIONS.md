@@ -59,7 +59,7 @@ HF_HUB_OFFLINE=1 EMBEDDING_PROVIDER=local openarchive serve
 
 ## OCR 엔진 (tesseract)
 
-이미지(PNG·JPG·JPEG)와 텍스트 레이어가 없는 스캔 PDF는 워커가 tesseract로 텍스트를 인식합니다
+이미지(PNG·JPG·JPEG)와 스캔 PDF(텍스트 레이어가 빈 쪽)는 워커가 tesseract로 텍스트를 인식합니다
 (`kor+eng`, ADR-052). tesseract는 pip 의존성이 아니라 **시스템 패키지**라 워커가 도는 호스트에 따로
 설치합니다.
 

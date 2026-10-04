@@ -43,8 +43,8 @@ DB 계층에 있고, 애플리케이션 코드에는 파이프라인을 조율�
 |---|---|---|
 | HWP/HWPX | ✅ 2차 (#133) | HWPX는 ZIP+XML, HWP 5.0은 OLE(`olefile`, BSD) 레코드 순회를 직접 구현(`pyhwp`는 AGPL-3.0). 표 셀·머리말 문단 포함, 암호·배포용 HWP는 거부. 같은 문서의 hwp·hwpx 추출 일치로 검증 |
 | XLSX/PPTX | ✅ 2차 (#134) | `openpyxl`·`python-pptx`(둘 다 MIT). XLSX는 시트명 + 탭 구분 행, 수식은 캐시된 계산값(캐시가 없으면 빈 칸). PPTX는 도형(그룹·표 포함) 텍스트 + 발표자 노트. 시트·슬라이드 사이는 빈 줄. Numbers·Keynote가 저장한 파일로 검증 |
-| 이미지·스캔 PDF OCR | ✅ 2차 (#135) | PNG/JPG/JPEG와 텍스트 레이어가 빈 PDF를 tesseract(`kor+eng`, `--psm 4`, PDF는 `pypdfium2`로 300dpi 래스터화)로 인식. 추출은 워커 잡(`kind='extract'`)이고 문서는 「텍스트 인식 중」으로 먼저 생긴다 (ADR-052). 한국어 보도자료 실측 CER 0.068·쪽당 약 3.3초(맥, tesseract 5.5) · Rocky 9 패키지(4.1.1) CER 0.031~0.050 |
-| 쪽 단위 혼합 추출 | 2차 후보 | 텍스트 레이어가 일부 쪽에만 있는 PDF는 지금 OCR하지 않아 스캔된 쪽이 빠진다(ADR-052 트레이드오프 1). OCRmyPDF `--skip-text`처럼 텍스트 없는 쪽만 OCR한다 |
+| 이미지·스캔 PDF OCR | ✅ 2차 (#135) | PNG/JPG/JPEG와 텍스트 레이어가 빈 PDF 쪽을 tesseract(`kor+eng`, `--psm 4`, PDF는 `pypdfium2`로 300dpi 래스터화)로 인식. 추출은 워커 잡(`kind='extract'`)이고 문서는 「텍스트 인식 중」으로 먼저 생긴다 (ADR-052). 한국어 보도자료 실측 CER 0.068·쪽당 약 3.3초(맥, tesseract 5.5) · Rocky 9 패키지(4.1.1) CER 0.031~0.050 |
+| 쪽 단위 혼합 추출 | ✅ 2차 (#167) | 텍스트 쪽과 스캔 쪽이 섞인 PDF는 텍스트 레이어가 빈 쪽만 인식하고 나머지 쪽은 레이어 텍스트를 쪽 순서대로 잇는다(OCRmyPDF `--skip-text`와 같은 기준, ADR-052 결정 2 개정). 쪽 번호가 얹힌 스캔 쪽은 빈 쪽이 아니라 인식하지 않는다 |
 | 이미지 캡션 | 장기 | 캡션 생성 모델도 open-weight 제약을 따른다 (ADR-003) |
 
 ### 수집 커넥터 (= `documents` INSERT 클라이언트)
