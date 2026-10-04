@@ -68,7 +68,7 @@ def test_ask_failed_keeps_search_items(db_client, evidence, monkeypatch):
     body = response.json()
     assert body["status"] == "failed"
     assert body["answer"] is None
-    assert body["detail"] == "모델 연결 실패"
+    assert body["detail"] == "답변 생성에 실패했습니다."  # 원인 문구는 서버 로그에만 남긴다
     assert body["items"] == expected
 
 

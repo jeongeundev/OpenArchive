@@ -818,7 +818,7 @@ PUT /api/documents/{id}
 - `disabled`: 프로바이더 None. 모델을 부르지 않는다.
 - `no_evidence`: 근거 0건. 모델을 부르지 않는다.
 - `answered`: 생성된 답변과 근거를 반환한다.
-- `failed`: 연결 거부·타임아웃·HTTP 오류·빈 응답을 묶은 `AnswerUnavailable`. 다른 예외는 삼키지 않는다.
+- `failed`: 연결 거부·타임아웃·HTTP 오류·빈 응답을 묶은 `AnswerUnavailable`. `detail`은 고정 문구이고 원인은 서버 로그에만 남긴다. 다른 예외는 삼키지 않는다.
 
 `sources`는 모델에 준 대목 전체다. 각 항목은 `label`(1부터, 답의 `[n]`과 대응)·`document_id`·`title`·
 `chunk_index`·`based_on_version`·`current_version`·`revised`·`content`·`cited`를 담는다. `content`는

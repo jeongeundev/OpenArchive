@@ -158,7 +158,7 @@ async def generate_answer(
         )
     except AnswerUnavailable as exc:
         logger.warning("답변 생성 실패 — 검색 결과만 돌려준다: %s", exc)
-        return AnswerResult("failed", None, evidence.sources, evidence.hits, str(exc) or "답변 생성에 실패했습니다.")
+        return AnswerResult("failed", None, evidence.sources, evidence.hits, "답변 생성에 실패했습니다.")
     labels = {int(label) for label in re.findall(r"\[(\d+)\]", response)}
     sources = [replace(source, cited=source.label in labels) for source in evidence.sources]
     return AnswerResult("answered", response, sources, evidence.hits, None)

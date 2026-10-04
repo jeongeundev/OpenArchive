@@ -137,7 +137,8 @@ async def test_disabled_and_failures_keep_search(conn, message):
         def generate(self, system, prompt):
             raise AnswerUnavailable(message)
     failed = await answer.generate_answer(evidence, FailingProvider())
-    assert failed.status == "failed" and failed.answer is None and failed.detail
+    assert failed.status == "failed" and failed.answer is None
+    assert failed.detail == "답변 생성에 실패했습니다."
     assert failed.hits == evidence.hits and failed.sources == evidence.sources
     class BrokenProvider:
         name = "broken"
