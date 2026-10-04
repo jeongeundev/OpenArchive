@@ -213,6 +213,9 @@ INFO: continue to run as a leader because failsafe mode is enabled and all membe
    > barman 언급이 **0건**이다 — 설치 자동화가 다루지 않는 컴포넌트다. #25의
    > *"채택 비용이 구조적으로 0"*은 **코드 비용**을 말한 것이고 설치·SSH 키·서버 등록은 그대로
    > 남아 있다. **DR을 켜지 않기로 확정했다** (ADR-020 결정 6).
+   > **[2026-10-04, #166] HA 환경에 Barman을 공식 구성으로 붙였다(ADR-053, ADR-020 결정 6 대체).** 전용 node4에서
+   > `install.sh barman`(=`setup.py install`)으로 깔았고 `archive_command`는 바꾸지 않았다 — WAL은 streaming
+   > (`pg_receivewal` + 영구 슬롯)으로 받는다. 위 경고("잘못 켜면 디스크가 찬다")는 슬롯에도 그대로 해당한다.
 
    관련 실측값 (2026-08-10): `wal_level = replica` · `archive_timeout = 0` ·
    `wal_keep_size = 1024` (MB) · `summarize_wal = off` (PG17 블록 증분 비활성) ·

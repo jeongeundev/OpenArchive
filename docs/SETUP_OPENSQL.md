@@ -1076,6 +1076,112 @@ DATABASE_URL=postgresql://…@192.168.64.200:6432/opensql HA_PASSWORD=… \
 
 ---
 
+## 17. Barman 백업 노드 (#166)
+
+§16 클러스터에 OpenSQL 공식 구성(문서 「Barman」 설치·설정 절)대로 백업 노드를 붙인다. 결정은 ADR-053, 운영·복원
+절차는 `OPERATIONS.md` 「백업과 복원」이다. node4는 PostgreSQL을 띄우지 않으므로 **OpenSQL 라이선스가 필요 없다**
+(라이선스는 DB 서버를 띄우는 노드에 `identified_by_host`로 묶인다).
+
+**시작 전 스냅샷** — 클러스터를 바꾸기 전에 되돌릴 기준을 남긴다: `patronictl show-config`, 각 노드 `patroni.yml`,
+`pg_replication_slots`, `\du`.
+
+**1. node4 만들기 (2GB · 2vCPU면 충분)**
+
+```bash
+U=/Applications/UTM.app/Contents/MacOS/utmctl
+$U clone opensql-ha-base --name node4      # 설치기 실행 전 베이스. MAC은 UTM 편집 화면에서 Random으로 재생성
+$U start node4; $U ip-address node4        # DHCP 주소로 들어가
+ssh <DHCP 주소> 'bash -s 4' < notes/ha110/02_personalize.sh   # hostname node4 · 192.168.64.204
+```
+
+**2. 배포판에서 PG 유틸리티와 Barman 설치** — 배포판 중 `barman`·`barman_agent`·`postgresql`·`scripts`만 옮긴다(122MB).
+
+```bash
+sudo dnf install -y python3-argcomplete python3-pyyaml rsync
+T=~/Tmax_OpenSQL_3.17.8.7_rockylinux9.7_buildtime20260720
+sudo bash -c "export OPENSQL_HOME=/opt/opensql PG_HOME=/opt/opensql PG_DATA_DIR=/opt/opensql/data-unused
+  cd $T && . ./scripts/setenv.sh $T/scripts/setenv.sh && export OPENSQL_INSTALL_HOME=$T
+  bash scripts/install.sh postgresql && bash scripts/install.sh barman"     # PostgreSQL 서비스는 띄우지 않는다
+barman --version                          # 3.11.1 — /usr/local/bin. sudo의 secure_path에는 없어 절대 경로로 부른다
+sudo useradd --system --create-home --home-dir /var/lib/barman --shell /bin/bash barman
+```
+
+**3. Barman 설정** — 모델 이름은 Patroni 멤버 이름(`postgresql1~3`)과 같아야 한다.
+
+```ini
+# /etc/barman.conf
+[barman]
+barman_user = barman
+configuration_files_directory = /etc/barman.d
+barman_home = /var/lib/barman
+log_file = /var/log/barman/barman.log
+log_level = INFO
+
+# /etc/barman.d/opensql.conf — [postgresql2]·[postgresql3]도 host만 바꿔 같은 모양
+[opensql]
+cluster = opensql
+conninfo = host=<지금 Leader> port=5432 user=barman dbname=postgres
+streaming_conninfo = host=<지금 Leader> port=5432 user=streaming_barman dbname=postgres
+backup_method = postgres
+streaming_archiver = on
+slot_name = barman
+path_prefix = /opt/opensql/bin
+retention_policy = RECOVERY WINDOW OF 7 DAYS
+minimum_redundancy = 1
+
+[postgresql1]
+cluster = opensql
+model = true
+conninfo = host=192.168.64.201 port=5432 user=barman dbname=postgres
+streaming_conninfo = host=192.168.64.201 port=5432 user=streaming_barman dbname=postgres
+```
+
+`~barman/.pgpass`(0600)에 두 롤의 비밀번호, crontab에 `* * * * * /usr/local/bin/barman cron`.
+
+**4. 클러스터 변경 4건** (되돌리기는 각 줄의 역순)
+
+```sql
+-- C1. Primary에서 postgres로 (opensql 롤은 슈퍼유저가 아니다). credcheck가 비밀번호 정책을 건다
+CREATE ROLE barman LOGIN PASSWORD '…';
+GRANT pg_monitor, pg_checkpoint TO barman;
+GRANT EXECUTE ON FUNCTION pg_backup_start(text, boolean), pg_backup_stop(boolean),
+      pg_switch_wal(), pg_create_restore_point(text) TO barman;
+CREATE ROLE streaming_barman LOGIN REPLICATION PASSWORD '…';
+```
+
+```bash
+# C2. 각 노드 patroni.yml pg_hba (이 설치에선 DCS가 아니라 로컬 파일) — 일반 접속은 기존 `host all all all md5`로 된다
+    - host replication streaming_barman 192.168.64.204/32 md5
+PY=/home/opensql/etc/patroni/patroni.yml   # patronictl은 opensql 사용자로
+# C3. 영구 슬롯 — Patroni가 세 노드 모두에 만든다
+printf 'slots:\n  barman:\n    type: physical\n' | patronictl -c $PY edit-config --apply - --force
+# C4. 각 노드 patroni.yml의 postgresql: 아래
+  callbacks:
+    on_role_change: "curl 'http://192.168.64.204:8080/renew_config'"
+patronictl -c $PY reload opensql --force     # 로그에 오류가 없는지 본다 — YAML이 틀리면 옛 설정으로 계속 돈다
+```
+
+**5. Agent와 첫 백업**
+
+```bash
+A=$T/barman_agent
+sudo install -m 755 $A/server.py /usr/local/bin/barman-agent
+# /var/lib/barman/config.yml: listen "192.168.64.204", port 8080, cluster opensql, patroni [.201~.203:8008]
+sudo cp $A/barman-agent.service /usr/lib/systemd/system/ && sudo systemctl enable --now barman-agent
+for ip in 201 202 203; do sudo firewall-cmd --permanent \
+  --add-rich-rule="rule family=ipv4 source address=192.168.64.$ip/32 port port=8080 protocol=tcp accept"; done
+sudo firewall-cmd --reload                  # Agent HTTP에는 인증이 없다 — node1~3에만 연다
+
+B="sudo -u barman -i /usr/local/bin/barman"
+$B cron                                     # 서버 디렉터리가 이때 생긴다 — 그 전 config-switch는 실패한다
+$B config-switch opensql <지금 Leader 멤버 이름>
+$B backup opensql && $B switch-wal opensql
+$B check opensql                            # 종료 코드 0
+```
+
+**검증** — switchover를 한 번 걸어 Agent 로그에 `Applying model '<새 Leader>'`, `ps`의 `pg_receivewal`이 새 Primary를
+가리키는지 본다(실측 17~18초). 복원 시험은 `OPERATIONS.md` 「복원 절차」.
+
 ## 부록: 붙여넣기 주의
 
 에뮬레이션 콘솔과 SSH 모두에서 겪은 문제다.
