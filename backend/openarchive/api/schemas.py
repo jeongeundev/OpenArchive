@@ -4,6 +4,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from openarchive.services.answer import ASK_K
 from openarchive.services.auth import SCOPE_READ, TokenScope
 from openarchive.services.search import MAX_K
 
@@ -274,7 +275,7 @@ class AskRequest(BaseModel):
     query: str
     tags: list[str] | None = None
     content_type: str | None = None
-    k: int = Field(default=5, ge=1, le=MAX_K)
+    k: int = Field(default=ASK_K, ge=1, le=MAX_K)
 
 
 class AskSource(BaseModel):

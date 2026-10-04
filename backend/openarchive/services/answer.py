@@ -11,7 +11,10 @@ from dataclasses import dataclass, replace
 from typing import Literal
 from uuid import UUID
 
+import psycopg
+
 from openarchive.answers import AnswerProvider, AnswerUnavailable
+from openarchive.embeddings.base import EmbeddingProvider
 from openarchive.services.chunking import chunk_text
 from openarchive.services.search import SearchHit, SearchPassage, search_documents
 from openarchive.services.visibility import VISIBLE_TO_USER
@@ -68,8 +71,15 @@ def _matching_passage(hit: SearchHit, current: str) -> SearchPassage:
 
 
 async def gather_evidence(
-    conn, embedding_provider, *, query, user_id, tags=None, content_type=None,
-    k=ASK_K, context_chars,
+    conn: psycopg.AsyncConnection,
+    embedding_provider: EmbeddingProvider,
+    *,
+    query: str,
+    user_id: str | None,
+    tags: list[str] | None = None,
+    content_type: str | None = None,
+    k: int = ASK_K,
+    context_chars: int,
 ) -> Evidence:
     hits = await search_documents(
         conn, embedding_provider, query=query, user_id=user_id,
