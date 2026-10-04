@@ -295,11 +295,121 @@ switchover)도 같은 경로입니다. 그 회수를 기다리는 동안에도 �
 SELECT pg_size_pretty(pg_total_relation_size('document_files'));
 ```
 
-원본이 DB 안에 있으므로 DB를 백업하면(`pg_dump` 등) 원본도 함께 들어가고, 그만큼 백업이 커집니다. 이
-설치에는 WAL 보관·PITR이 구성되어 있지 않습니다 (ADR-020 결정 6).
+원본이 DB 안에 있으므로 DB를 백업하면 원본도 함께 들어가고, 그만큼 백업이 커집니다. HA 환경의 백업·PITR은
+아래 「백업과 복원」을 보세요 (ADR-053).
 
 `MAX_UPLOAD_MB`(기본 50)가 한 판의 상한입니다. 실 OpenSQL에서 OpenProxy를 거친 50MB 원본 저장이
 시간 제한 안에 들어가는지는 아직 측정하지 않았습니다 — 큰 파일을 다루는 설치라면 먼저 확인하세요.
+
+## 백업과 복원 (Barman)
+
+HA 환경(`SETUP_OPENSQL.md` §16)은 Barman 전용 노드 `node4`(192.168.64.204)가 백업을 받습니다 (ADR-053, 구축은
+`SETUP_OPENSQL.md` §17). node4는 PostgreSQL을 띄우지 않으므로 OpenSQL 라이선스를 쓰지 않습니다.
+
+| 항목 | 값 |
+|---|---|
+| WAL 보관 | streaming — `pg_receivewal` + Patroni 영구 슬롯 `barman`. `archive_command`는 `/bin/true` 그대로 |
+| 기준 백업 | 매일 전체(`backup_method = postgres`), 보존 `RECOVERY WINDOW OF 7 DAYS`, `minimum_redundancy = 1` |
+| failover 추종 | Barman Agent(`barman-agent.service`, :8080) + 각 노드 Patroni `on_role_change` 콜백 |
+| 실측 | 기준 백업 324MiB·12초 · 복원 시작→쓰기 가능 97초 · failover 뒤 추종 17~18초 |
+
+백업은 HA를 대신하지 않습니다. failover는 노드가 죽어도 서비스를 잇는 장치이고, 백업은 잘못 지운 데이터·손상·클러스터
+전체 상실에서 **과거 시점으로 되살리는** 장치입니다 — 복원하는 동안 서비스는 멈춥니다.
+
+### 상태 확인 — 매일 보는 것
+
+```bash
+# node4에서. 종료 코드 0이 정상이다. FAILED가 하나라도 있으면 1
+sudo -u barman -i barman check opensql
+sudo -u barman -i barman list-backups opensql
+
+# Primary에서. barman 슬롯이 active=t이고 지연이 작아야 한다
+psql -c "SELECT active, pg_size_pretty(pg_current_wal_lsn() - restart_lsn) FROM pg_replication_slots WHERE slot_name = 'barman'"
+```
+
+- **Barman이 멈추면 Primary 디스크가 찹니다.** 슬롯이 WAL을 붙잡고 상한(`max_slot_wal_keep_size`)은 걸려 있지
+  않습니다. 39초 정지에 슬롯 지연 122MB가 쌓였습니다. `barman check`가 `replication slot: FAILED`·`receive-wal
+  running: FAILED`를 내면 node4의 `crond`(매분 `barman cron`)부터 확인하세요 — 다시 돌면 1분 안에 붙어 따라잡습니다.
+- Agent는 콜백을 받을 때만 움직입니다. Agent가 꺼진 사이 failover가 나면 Barman이 옛 노드에 붙어 있으니
+  `barman check`로 알아채고 `sudo -u barman -i barman config-switch opensql <새 Leader 멤버 이름>`을 실행합니다.
+- 쓰기가 거의 없는 시간에 `barman backup --wait`는 마지막 세그먼트가 닫힐 때까지 기다립니다. `barman switch-wal
+  opensql`로 닫거나 `--wait` 없이 받습니다.
+
+### 시점 지정 — 복원 지점을 미리 찍어 두기
+
+위험한 작업(대량 삭제·마이그레이션) 전에 이름 붙은 복원 지점을 남기면 시각보다 정확하게 돌아갈 수 있습니다.
+
+```bash
+# node4에서(barman 롤에 EXECUTE 권한이 있다). host는 지금 Leader
+sudo -u barman -i /opt/opensql/bin/psql -h <Leader IP> -U barman -d postgres \
+  -c "SELECT pg_create_restore_point('before_bulk_delete')"
+```
+
+### 복원 절차 — 격리 인스턴스로
+
+복원은 운영 클러스터를 덮지 않고 **노드 하나에 별도 인스턴스**(다른 디렉터리·포트)로 띄웁니다. 그 노드의 라이선스로
+뜹니다. 아래는 node2에 `/home/opensql/restore`로, 포트 5433에 띄우는 예입니다.
+
+**준비물(한 번)**: 대상 노드에 `rsync`와 Barman 클라이언트(`install.sh barman` — `barman-wal-restore`가 들어 있다),
+node4 `barman` → 대상 `opensql`과 대상 `opensql` → node4 `barman` 양방향 SSH 키. node2에는 rsync와 클라이언트가
+설치돼 있고, 키는 복원할 때만 넣고 끝나면 지웁니다.
+
+```bash
+# 1. node4에서 복원 파일을 보낸다. 두 옵션 모두 빠뜨리면 안 된다
+sudo -u barman -i barman recover \
+  --remote-ssh-command "ssh opensql@192.168.64.202" \
+  --target-tli latest --get-wal \
+  [--target-name before_bulk_delete | --target-time "2026-10-04 11:35:00+09"] [--target-action promote] \
+  opensql latest /home/opensql/restore
+```
+
+- **`--target-tli latest`** — 없으면 백업 시점 타임라인의 WAL만 복사됩니다. failover·switchover가 한 번이라도 있었으면
+  `recover`는 성공하고 기동에서 "recovery target 도달 전에 복구 끝남"으로 죽습니다.
+- **`--get-wal`** — 없으면 닫히지 않은 마지막 세그먼트(`.partial`)를 버립니다. 실측에서 끊기 직전까지 응답 성공한
+  업로드 120건이 전부 사라졌습니다(`--get-wal`로는 0건).
+- 대상 시점을 주지 않으면 받은 WAL의 끝까지 복원합니다.
+
+```bash
+# 2. 대상 노드에서 격리 설정을 덮어쓴다. 백업 안의 Patroni 설정이 운영 클러스터를 가리키기 때문이다
+D=/home/opensql/restore
+sudo -u opensql tee -a $D/postgresql.auto.conf <<'EOF'
+port = 5433
+listen_addresses = 'localhost'
+cluster_name = 'restore'
+primary_conninfo = ''
+primary_slot_name = ''
+archive_mode = off
+hba_file = '/home/opensql/restore/pg_hba.conf'
+ident_file = '/home/opensql/restore/pg_ident.conf'
+cron.launch_active_jobs = off
+restore_command = '/usr/local/bin/barman-wal-restore -P -U barman 192.168.64.204 opensql %f %p'
+EOF
+
+# 3. 기동한다. 라이선스 경로는 Patroni가 넘기던 것을 직접 준다
+sudo -u opensql env OPENSQL_LICENSE_PATH=/home/opensql/license/license.xml LD_LIBRARY_PATH=/home/opensql/lib \
+  /home/opensql/bin/pg_ctl -D $D -l $D/restore.log -w -t 900 start
+sudo -u opensql /home/opensql/bin/psql -h /home/opensql/tmp -p 5433 -U postgres -c "SELECT pg_is_in_recovery()"   # f면 끝
+```
+
+- `primary_conninfo`·`primary_slot_name`을 비우지 않으면 보관 WAL을 다 쓴 뒤 운영 클러스터에 복제로 붙어 운영 슬롯을
+  씁니다. `hba_file`은 운영 노드의 데이터 디렉터리를 가리키고 있습니다.
+- `restore_command`를 덮어쓰는 이유: Barman은 자기 hostname(`node4`, 대상 `/etc/hosts`에 없음)과 PATH 밖 명령
+  이름을 넣습니다 — 그대로 두면 "해당 명령어 없음"으로 기동이 실패합니다.
+
+**4. 앱을 붙여 확인한다.** 복원본은 단독 PostgreSQL이라 OpenProxy 없이 직결합니다(복구 작업 전용 — ADR-006을 바꾸지
+않는다). `listen_addresses = 'localhost'`이므로 SSH 터널로 붙습니다.
+
+```bash
+ssh -N -L 15433:127.0.0.1:5433 <대상 노드> &
+DATABASE_URL=postgresql://openarchive:…@127.0.0.1:15433/openarchive openarchive serve --port 8011
+```
+
+복원 시점에 처리 중이던 잡은 lease가 만료돼 있어 워커가 "좀비 잡을 pending으로 회수"하고 다시 처리합니다(실측 30건 16초).
+`/admin/status`의 대기·처리 중·정합성 카운터가 0이 되면 검색까지 정상입니다.
+
+**5. 복원본을 어떻게 쓸지 정한다.** 필요한 문서만 내보내 운영에 다시 넣거나(`openarchive export`), 운영 클러스터 전체를
+되돌리기로 했다면 Patroni 클러스터를 이 데이터로 다시 부트스트랩합니다 — 후자는 실측하지 않았습니다. 끝나면
+`pg_ctl -D $D stop`, 디렉터리와 복원용 SSH 키를 지웁니다.
 
 ## 문서 생성 멱등키
 

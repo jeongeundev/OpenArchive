@@ -23,6 +23,9 @@
 |---|---|---|---|---|
 | PostgreSQL 서버 keepalive — `tcp_keepalives_idle`·`_interval`·`_count`, `tcp_user_timeout` (Patroni DCS) | 30 · 10 · 3 · 60000ms (기본 OS 7200초 · 재전송 약 15분) | OpenProxy **노드가 통째로 죽으면** 그 노드를 거치던 트랜잭션이 Primary에 락을 쥔 채 남는다. 전원이 끊긴 상대는 FIN도 RST도 보내지 않는다. 문서의 keepalive는 **OpenProxy 쪽** 설정이라 OpenProxy가 죽으면 쓸 수 없다 — OpenSQL 안에 대안이 없다 | ADR-051. #122 S5a-2에서 워커 13분 정지(`embedding_jobs` 행 락 761초 대기) | 죽은 OpenProxy 노드의 고아 트랜잭션이 최대 약 2시간 락을 쥔다 |
 | OpenProxy 기동 전 로컬 etcd 응답 대기 — systemd 드롭인 `ExecStartPre` (최대 30초) | `etcdctl endpoint health`가 될 때까지 | `After=etcd.service`만으로는 부족하다. etcd 유닛이 `Type=simple`이라 "Started"가 포트 준비를 뜻하지 않고, OpenProxy는 안 열린 etcd에 **한 번** 시도한 뒤 로컬 파일로 대체해 뜬다. 대체된 노드는 이후 공유 설정 변경을 놓친다 | 재부팅 실측 2회(`SETUP_OPENSQL.md` §16 교정 4). `After=network.target etcd.service` 자체는 문서(OpenProxy HA 페이지) 예시에 있다 | 재부팅한 노드가 옛 로컬 설정으로 서비스할 수 있다 |
+| Barman Agent `listen`·방화벽 | `listen: 192.168.64.204`, 8080은 node1~3에만 | Agent HTTP(`/renew_config`)에 인증이 없다. 문서 예시는 `listen` 생략(기본 `0.0.0.0`) | ADR-053 결정 3 | 같은 망의 누구나 Barman 설정 전환을 부를 수 있다 |
+| 복원 시 `restore_command` 덮어쓰기 | `/usr/local/bin/barman-wal-restore -P -U barman 192.168.64.204 opensql %f %p` | Barman이 자기 hostname(`node4`, 대상 `/etc/hosts`에 없음)과 PATH 밖 명령 이름을 넣어 기동이 "해당 명령어 없음"으로 실패했다(실측) | ADR-053 결정 5·`OPERATIONS.md` 「복원 절차」 | `--get-wal` 복원이 기동하지 않는다 |
+| 복원 대상 노드의 준비물 | node2에 `rsync`·Barman 3.11.1 클라이언트(`install.sh barman`) | 원격 복원은 대상에 rsync가 필요하고(없으면 `data transfer failure`), `--get-wal`은 대상에 `barman-wal-restore`가 필요하다. 설치기 베이스 이미지엔 둘 다 없다 | 실측 2026-10-04 | 그 노드로 복원할 수 없다 |
 
 ## 2. 배포판(설치기 출력)과는 다르지만 문서·HA 템플릿대로인 것
 
@@ -35,6 +38,7 @@
 | VIP (`[general.virtual_router]`) | 만들지 않음(`--owldb`에서만) | node2(우선순위 100)·node3(90), `unicast_peers`, `advert_int = 3` | 문서 「가상 IP 다중화」. 앱은 단일 엔드포인트로만 붙는다(ADR-006). `advert_int` 3은 그 페이지 예시값(HA 템플릿 주석 예시는 1) |
 | systemd 등록 범위 | `ENABLE_SERVICE=etcd`(기본) — Patroni·OpenProxy는 `nohup` 프로세스 | Patroni·OpenProxy도 systemd | 설치기 공식 옵션 `ENABLE_SERVICE=true`와 같은 결과를 설치 뒤에 같은 템플릿으로 만들었다. 기본값으로는 재부팅한 노드가 클러스터에 돌아오지 않는다 |
 | 풀이 바라보는 DB | `postgres` | `opensql` | 설치기가 `opensql` DB를 만들고 풀은 `postgres`를 본다 (§10 「풀이 바라보는 데이터베이스」) |
+| Barman 백업 방식 | (설치기는 Barman을 다루지 않음) Agent `example/`은 `backup_method = rsync` + `ssh_command` | 설정 문서대로 `backup_method = postgres` + `streaming_archiver` + 슬롯 `barman` | 공식 자료끼리 갈린다 — 설정 문서를 따른다. DB 노드에 Barman용 SSH 키가 필요 없고 PG17 증분 경로다(ADR-053 결정 2) |
 
 ## 3. 공식과 달랐다가 되돌린 것
 
@@ -46,8 +50,11 @@
 
 ## 4. 공식 그대로 두지만 알아 둘 것
 
-- **백업이 없다.** 설치기 `archive_command`는 `/bin/true`다. 문서는 비동기 복제의 유실을 백업(Barman 절)으로 메우는
-  구성을 따로 둔다 — 이 환경에는 적용하지 않았다(별도 결정).
+- **백업은 문서 「Barman」 절대로 붙였다(ADR-053, #166).** 설치기는 Barman을 다루지 않는다(`archive_command = /bin/true`
+  그대로). 전용 node4가 streaming으로 받고, Agent가 failover를 따라간다. 노드에는 독립이지만 같은 맥의 VM이라 호스트에는
+  독립이 아니다.
+- **Barman 슬롯에 상한이 없다.** `max_slot_wal_keep_size`는 PostgreSQL 기본(-1)이다. Barman이 멈추면 Primary 디스크가
+  찬다(39초 정지에 122MB). 상한을 넘으면 백업 연속성이 끊기므로 걸지 않고 `barman check`로 감시한다.
 - **failover 유실에는 상한 보장이 없다.** `maximum_lag_on_failover`(1MB)는 마지막으로 보고된 지연이 큰 replica를
   후보에서 빼 줄 뿐이다(보고 주기 뒤의 WAL은 세지 않는다). 측정은 모든 회차에서 유실 0이었지만 보장은 아니다 —
   네트워크 분리 회차에서는 OpenProxy를 우회해 옛 Primary에 직결한 쓰기가 `pg_rewind`로 버려졌다(`SETUP_OPENSQL.md` §16, #165).
