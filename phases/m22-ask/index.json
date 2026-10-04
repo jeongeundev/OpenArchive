@@ -8,7 +8,10 @@
       "type": "docs",
       "scope": "adr",
       "desc": "ADR-043에 ask 구현 형태(커넥션 반납·응답 상태·근거 목록·공유 차단·설정)를 기록한다",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-10-04T23:40:08+0900",
+      "summary": "ADR-043에 ask 구현 계약을 추가하고 아키텍처·운영 설정 문서를 반영했으며 문서 AC와 코드 변경 없음 검증을 통과했다.",
+      "completed_at": "2026-10-04T23:44:12+0900"
     },
     {
       "step": 1,
