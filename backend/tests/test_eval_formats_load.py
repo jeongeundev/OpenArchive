@@ -21,6 +21,7 @@ from scripts.eval_formats_load import (
     derive_image_pptx,
     derive_scan_jpg,
     ensure_sources,
+    source_files,
     verify_sources,
 )
 
@@ -35,17 +36,14 @@ def _sha(data: bytes) -> str:
 def test_committed_formats_evalset_is_well_formed_without_network():
     """저장소에 없는 자료는 내려받기(fetch)나 파생(derive) 출처가 있어야 재현된다."""
     evalset = json.loads(EVALSET.read_text())
-    for source in evalset["sources"]:
-        for item in (source, source.get("replaced_by")):
-            if item is None:
-                continue
-            if "fetch" in item:
-                assert item["fetch"]["file_id"] and len(item["sha256"]) == 64
-            elif "derive" in item:
-                assert item["derive"]["kind"] in {"scan_jpg", "image_pptx"}
-                assert len(item["derive"]["from"]["sha256"]) == 64
-            else:
-                assert _sha((ROOT / item["path"]).read_bytes()) == item["sha256"]
+    for item in source_files(evalset):
+        if "fetch" in item:
+            assert item["fetch"]["file_id"] and len(item["sha256"]) == 64
+        elif "derive" in item:
+            assert item["derive"]["kind"] in {"scan_jpg", "image_pptx"}
+            assert len(item["derive"]["from"]["sha256"]) == 64
+        else:
+            assert _sha((ROOT / item["path"]).read_bytes()) == item["sha256"]
     titles = {source["title"] for source in evalset["sources"]}
     for item in evalset["queries"]:
         assert item["query"].strip() and item["category"].strip()
@@ -64,7 +62,7 @@ def test_verify_sources_rejects_a_changed_file(tmp_path):
 def test_ensure_sources_downloads_only_missing_files_and_stops_on_a_changed_download(tmp_path):
     calls = []
 
-    def download(news_id: str, file_id: str) -> bytes:
+    def download(file_id: str) -> bytes:
         calls.append(file_id)
         return {"1": b"first", "2": b"second"}[file_id]
 
@@ -106,7 +104,7 @@ def test_ensure_sources_derives_from_the_downloaded_original_and_reports_drift(t
         "derive": {"kind": "scan_jpg", "page": 1,
                    "from": {"path": "press.pdf", "fetch": {"news_id": "9", "file_id": "7"}, "sha256": _sha(pdf)}},
     }]}
-    warnings = ensure_sources(evalset, tmp_path, download=lambda news_id, file_id: pdf)
+    warnings = ensure_sources(evalset, tmp_path, download=lambda file_id: pdf)
     assert (tmp_path / "scan.jpg").read_bytes() == derive_scan_jpg(pdf, page=1)
     assert len(warnings) == 1 and "scan.jpg" in warnings[0]
 
@@ -133,6 +131,9 @@ async def test_load_creates_private_tagged_documents_replaces_and_records_reject
     outcomes = await load(evalset, tmp_path, migrated_db)
     assert [item["status"] for item in outcomes] == ["replaced", "created", "rejected"]
     assert outcomes[2]["error"]
+    # 내려받는 원본이 넣은 파일과 같아야 원본 보관 경로를 거친 평가다 — 교체 문서는 새 판
+    assert outcomes[0]["original_sha256"] == evalset["sources"][0]["replaced_by"]["sha256"]
+    assert outcomes[1]["original_sha256"] == evalset["sources"][1]["sha256"]
     async with await psycopg.AsyncConnection.connect(migrated_db) as conn:
         rows = await (await conn.execute(
             "SELECT title, owner_id, visibility, tags, content, version FROM documents ORDER BY title"
@@ -143,3 +144,39 @@ async def test_load_creates_private_tagged_documents_replaces_and_records_reject
     ]
     with pytest.raises(RuntimeError, match="이미"):
         await load(evalset, tmp_path, migrated_db)
+
+
+def _one_replaced_source(tmp_path):
+    (tmp_path / "v1.md").write_text("9월 계수")
+    (tmp_path / "v2.md").write_text("10월 계수")
+    return {
+        "tag": "eval-test", "users": {"evaluator": "alice"},
+        "sources": [{"path": "v1.md", "sha256": _sha("9월 계수".encode()), "title": "계수", "owner": "evaluator",
+                     "replaced_by": {"path": "v2.md", "sha256": _sha("10월 계수".encode())}}],
+    }
+
+
+async def test_load_stops_when_the_stored_original_differs_from_the_input(migrated_db, tmp_path, monkeypatch):
+    from scripts import eval_formats_load
+
+    async def corrupted(conn, document_id, **kwargs):
+        return {"sha256": "0" * 64}
+
+    monkeypatch.setattr(eval_formats_load, "get_original_file", corrupted)
+    with pytest.raises(RuntimeError, match="보관된 원본"):
+        await eval_formats_load.load(_one_replaced_source(tmp_path), tmp_path, migrated_db)
+
+
+async def test_load_stops_when_replacement_does_not_make_the_next_text_version(migrated_db, tmp_path, monkeypatch):
+    """현재/과거 질문은 교체가 만든 텍스트 v2를 잰다 — 판이 안 쌓이면 과거 질문이 아무것도 재지 않는다."""
+    from scripts import eval_formats_load
+
+    real = eval_formats_load.replace_original_file
+
+    async def same_version(conn, document_id, **kwargs):
+        document = await real(conn, document_id, **kwargs)
+        return {**document, "version": kwargs["client_version"]}
+
+    monkeypatch.setattr(eval_formats_load, "replace_original_file", same_version)
+    with pytest.raises(RuntimeError, match="텍스트 버전"):
+        await eval_formats_load.load(_one_replaced_source(tmp_path), tmp_path, migrated_db)

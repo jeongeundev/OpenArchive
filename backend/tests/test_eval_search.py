@@ -407,3 +407,25 @@ def test_current_only_leaks_ignore_labeled_revisions_and_report_where_the_past_i
     assert find_in_revisions([current, revision], past) == past
     assert find_in_revisions([current], past) == []
     assert find_in_revisions([current], None) == []
+
+
+def test_leaks_and_past_locations_are_reported_for_answerable_queries_too():
+    """누출은 정답 유무와 무관하다 — 정답 있는 질문에 `absent`를 달아도 집계·출력에서 빠지면 안 된다."""
+    from scripts.eval_search import render
+
+    results = [
+        QueryResult("answerable leak", [D1], {D1}, set(), leaks=["국내총책 A씨"]),
+        QueryResult("past", [D1], {D1}, set(), past_in_revisions=["2026.9.1\t1.21392"]),
+    ]
+    summary = summarize(results, ks=(1,))
+    assert summary["leaks"] == 1
+    assert summary["past_in_revisions"] == 1
+    assert "누출=['국내총책 A씨']" in render(results, summary)
+    assert "과거 값은 이전 버전 자리에 있음" in render(results, summary)
+
+
+def test_summary_without_answerable_queries_skips_rank_metrics():
+    summary = summarize([QueryResult("none", [D1], set(), set(), top_score=0.4)], ks=(1,))
+    assert summary["queries"] == 1
+    assert summary["answerable_queries"] == 0
+    assert "recall@1" not in summary and "mrr" not in summary
