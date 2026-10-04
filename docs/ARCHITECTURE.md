@@ -359,7 +359,7 @@ CREATE TRIGGER trg_documents_content_changed
 
 ### 추출 잡 — 스캔 문서는 텍스트 없이 먼저 생긴다
 
-이미지(`png`·`jpg`·`jpeg`)와 텍스트 레이어가 비어 있는 PDF는 tesseract로 OCR한다(`kor+eng`, `--psm 4`, PDF는 300dpi로 래스터화 — `services/parsing.py`). 쪽당 수 초라 업로드 요청 안에서 끝낼 수 없으므로 **추출도 워커 잡이 한다** (ADR-052). 텍스트 레이어가 있는 PDF와 나머지 형식은 지금처럼 요청 안에서 동기로 추출한다.
+이미지(`png`·`jpg`·`jpeg`)와 텍스트 레이어가 빈 쪽이 있는 PDF는 tesseract로 OCR한다(`kor+eng`, `--psm 4`, PDF는 빈 쪽만 300dpi로 래스터화하고 나머지 쪽은 레이어 텍스트를 쪽 순서대로 잇는다 — `services/parsing.py`). 쪽당 수 초라 업로드 요청 안에서 끝낼 수 없으므로 **추출도 워커 잡이 한다** (ADR-052). 모든 쪽에 텍스트 레이어가 있는 PDF와 나머지 형식은 지금처럼 요청 안에서 동기로 추출한다.
 
 ```sql
 -- 추출 중으로 들어오거나(새 스캔 문서) 추출 중으로 바뀌면(OCR 대상의 재추출·원본 교체) 추출 잡을 남긴다 (022)
@@ -376,7 +376,7 @@ CREATE TRIGGER trg_documents_extraction_requested
 4. **재추출·원본 교체**: 대상이 OCR 대상이면 텍스트를 쓰지 않고 `extraction_status = 'pending'`으로만 바꾼다(교체는 파일명·유형과 한 UPDATE). 추출이 끝날 때까지 이전 텍스트·청크로 검색된다 — 재임베딩과 같은 원칙이다.
 5. **추출 중 잠금**: 추출 중인 문서의 편집·되돌리기·재추출·원본 교체는 409다. 워커 결과가 사람이 고친 텍스트를 덮지 않게 한다. 인식 실패로 텍스트가 빈 문서는 편집·되돌리기만 409이고, 원본 교체·재추출로 다시 시도할 수 있다. 태그·제목·공개범위·삭제는 막지 않는다.
 
-**한계**: 텍스트가 **일부 쪽에만** 있는 PDF는 OCR하지 않는다 — 텍스트 레이어가 비어 있을 때만 OCR 대상이라 스캔된 쪽이 빠진다 (ADR-052 트레이드오프 1). OCR 정확도는 한국어 보도자료 래스터화 실측에서 CER 0.068(깨끗한 판)·0.093(열화판), 쪽당 약 3.3초(맥 M2 Pro · tesseract 5.5)이며, 그 오류는 문서 텍스트에 그대로 남아 편집으로 고친다. Rocky 9 패키지(tesseract 4.1.1 + langpack-kor 4.1.0)는 `rockylinux:9` 컨테이너 실측에서 CER 0.031~0.050·쪽당 3.4~5.5초였다(#135 코멘트, arm64 컨테이너라 x86 호스트 시간과는 다를 수 있다).
+**한계**: 일부러 비운 쪽이 있는 텍스트 PDF도 「텍스트 인식 중」을 거치고, 쪽 번호 같은 텍스트가 얹힌 스캔 쪽은 빈 쪽이 아니라서 인식하지 않는다 (ADR-052 트레이드오프 1). OCR 정확도는 한국어 보도자료 래스터화 실측에서 CER 0.068(깨끗한 판)·0.093(열화판), 쪽당 약 3.3초(맥 M2 Pro · tesseract 5.5)이며, 그 오류는 문서 텍스트에 그대로 남아 편집으로 고친다. Rocky 9 패키지(tesseract 4.1.1 + langpack-kor 4.1.0)는 `rockylinux:9` 컨테이너 실측에서 CER 0.031~0.050·쪽당 3.4~5.5초였다(#135 코멘트, arm64 컨테이너라 x86 호스트 시간과는 다를 수 있다).
 
 ### 관계 생성 — 트리거가 잡을 만들고 워커가 판정한다
 
@@ -670,7 +670,7 @@ OpenSQL `patroni.yml`의 PostgreSQL 파라미터는 `max_connections: 100`이다
 
 | 엔드포인트 | 내용 |
 |---|---|
-| `POST /api/documents` | multipart 업로드. 형식별 파서로 추출 → INSERT. 여기서 트리거가 파이프라인을 자동 기동 — 임베딩 관련 코드 없음. **이미지와 텍스트 레이어가 빈 PDF는 추출하지 않고 `extraction_status='pending'`으로 INSERT해 OCR을 워커 잡에 넘긴다** (「추출 잡」). 그 밖의 형식에서 **텍스트 추출 결과가 비면 400** (아래). **원본 파일은 같은 트랜잭션에서 `document_files`에 1판으로 저장한다** — 원본 저장이 실패하면 문서·텍스트 버전·잡도 남지 않는다. 상한 `MAX_UPLOAD_MB`(기본 50) 초과는 413. 선택 헤더 `Idempotency-Key`(아래) |
+| `POST /api/documents` | multipart 업로드. 형식별 파서로 추출 → INSERT. 여기서 트리거가 파이프라인을 자동 기동 — 임베딩 관련 코드 없음. **이미지와 텍스트 레이어가 빈 쪽이 있는 PDF는 추출하지 않고 `extraction_status='pending'`으로 INSERT해 OCR을 워커 잡에 넘긴다** (「추출 잡」). 그 밖의 형식에서 **텍스트 추출 결과가 비면 400** (아래). **원본 파일은 같은 트랜잭션에서 `document_files`에 1판으로 저장한다** — 원본 저장이 실패하면 문서·텍스트 버전·잡도 남지 않는다. 상한 `MAX_UPLOAD_MB`(기본 50) 초과는 413. 선택 헤더 `Idempotency-Key`(아래) |
 | `POST /api/documents/text` | JSON 텍스트 공급(`txt`·`md`). `filename`은 NULL이며, 파생 데이터는 업로드 경로와 동일하게 DB 트리거가 만든다. 빈 문서 텍스트와 500,000자 초과는 400. 선택 헤더 `Idempotency-Key`(아래) |
 | `GET /api/documents` | 목록 + `status`(임베딩 상태)/`extraction_status`/`tag` 필터, embedding_status·extraction_status 포함. 인식 실패 문서는 `status=pending`에 남으므로 곧 임베딩될 문서는 `extraction_status=done`을 함께 준다 (ADR-052 결정 4 보강) |
 | `GET /api/documents?limit=&offset=` | 같은 목록의 한 페이지(`limit` 1~100). 빼면 전부 — MCP·export는 전체를 본다. 첫 화면은 50건씩 쓴다 (#95-d) |
@@ -739,7 +739,7 @@ DB가 잠시 응답할 수 없으면(연결 끊김·페일오버·switchover 중
 
 ### 빈 파싱 결과 처리 (`POST /api/documents`)
 
-OCR 대상(이미지, 텍스트 레이어가 빈 PDF)이 아닌 형식에서 파싱 결과가 공백 제거 후 빈 문자열이면 **400을 반환하고 저장하지 않는다.** 텍스트 레이어가 빈 PDF는 여기서 거부하지 않고 OCR로 넘긴다 (「추출 잡」, ADR-052).
+OCR 대상(이미지, 텍스트 레이어가 빈 쪽이 있는 PDF)이 아닌 형식에서 파싱 결과가 공백 제거 후 빈 문자열이면 **400을 반환하고 저장하지 않는다.** 텍스트 레이어가 빈 쪽이 있는 PDF는 여기서 거부하지 않고 OCR로 넘긴다 (「추출 잡」, ADR-052).
 
 ```
 400 Bad Request

@@ -59,7 +59,7 @@ HF_HUB_OFFLINE=1 EMBEDDING_PROVIDER=local openarchive serve
 
 ## OCR 엔진 (tesseract)
 
-이미지(PNG·JPG·JPEG)와 텍스트 레이어가 없는 스캔 PDF는 워커가 tesseract로 텍스트를 인식합니다
+이미지(PNG·JPG·JPEG)와 스캔 PDF(텍스트 레이어가 빈 쪽)는 워커가 tesseract로 텍스트를 인식합니다
 (`kor+eng`, ADR-052). tesseract는 pip 의존성이 아니라 **시스템 패키지**라 워커가 도는 호스트에 따로
 설치합니다.
 
@@ -74,7 +74,8 @@ brew install tesseract tesseract-lang                    # macOS
 - **오프라인 설치가 가능합니다.** 한국어 모델은 패키지 안의 파일(`kor.traineddata`) 하나라 인식할 때
   인터넷이 필요 없습니다. 패키지를 미리 받아 옮겨 설치하면 됩니다.
 - **엔진이 없어도 기동은 됩니다.** 이미지·스캔 PDF 업로드는 받아지고, 워커가 인식을 시도하다 실패해
-  재시도 예산을 쓴 뒤 그 문서만 「텍스트 인식 실패」가 됩니다. 다른 형식은 영향이 없습니다.
+  재시도 예산을 쓴 뒤 그 문서만 「텍스트 인식 실패」가 됩니다. 백지 쪽이 하나 낀 텍스트 PDF도
+  OCR 대상이라 여기에 들어갑니다. 다른 형식은 영향이 없습니다.
 - **대기와 실패는 `/admin/status`의 「텍스트 인식」 카드에서 봅니다** — 인식 대기 문서 수와 인식 실패
   문서 수. 인식 결과가 비었거나 500KB를 넘은 문서는 재시도 없이 바로 실패로 표시됩니다. 실패 문서는
   원본 교체나 `openarchive reextract`로 다시 돌립니다.

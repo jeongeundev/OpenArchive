@@ -1742,7 +1742,9 @@ def test_an_idempotency_key_outside_1_to_255_characters_is_rejected(
     assert count_documents(migrated_db) == 0
 
 
-@pytest.mark.parametrize("fixture_name", ["scan_tax_page1.jpg", "scan_tax_pages.pdf"])
+@pytest.mark.parametrize(
+    "fixture_name", ["scan_tax_page1.jpg", "scan_tax_pages.pdf", "mixed_tax_pages.pdf"]
+)
 def test_upload_scan_returns_a_pending_extraction_document(
     db_client: TestClient, migrated_db: str, fixture_name: str
 ):
@@ -1789,6 +1791,9 @@ def test_upload_with_text_reports_done_extraction(db_client: TestClient):
 # ── 추출 상태 가드 — 추출 중에는 텍스트를 바꾸지 않는다 (ADR-052 결정 6·7) ───────
 
 SCAN_JPG = (Path(__file__).parent / "fixtures" / "scan_tax_page1.jpg").read_bytes()
+# 1·3쪽은 텍스트 레이어, 2쪽은 스캔 — 쪽 하나만 비어도 OCR 대상이다 (ADR-052 결정 2 개정)
+MIXED_PDF = (Path(__file__).parent / "fixtures" / "mixed_tax_pages.pdf").read_bytes()
+OCR_TARGETS = [("scan.jpg", SCAN_JPG, "jpg"), ("mixed.pdf", MIXED_PDF, "pdf")]
 IN_PROGRESS_DETAIL = "텍스트를 인식하는 중에는 이 작업을 할 수 없습니다. 인식이 끝난 뒤 다시 시도하세요."
 
 
@@ -1924,20 +1929,25 @@ def test_editing_a_failed_document_with_text_marks_extraction_done(
     assert pending_embed_jobs(migrated_db, document_id) == 1
 
 
-def swap_original_to_scan(dsn: str, document_id: str) -> None:
+def swap_original(dsn: str, document_id: str, filename: str, content: bytes) -> None:
     with psycopg.connect(dsn) as conn:
         conn.execute(
-            "UPDATE document_files SET filename = 'scan.jpg', data = %s WHERE document_id = %s",
-            (SCAN_JPG, document_id),
+            "UPDATE document_files SET filename = %s, data = %s WHERE document_id = %s",
+            (filename, content, document_id),
         )
 
 
+@pytest.mark.parametrize(
+    ("filename", "content"),
+    [target[:2] for target in OCR_TARGETS],
+    ids=[target[0] for target in OCR_TARGETS],
+)
 def test_reextracting_an_ocr_target_hands_over_to_an_extract_job(
-    db_client: TestClient, migrated_db: str
+    db_client: TestClient, migrated_db: str, filename: str, content: bytes
 ):
     document_id = upload(db_client).json()["id"]
     finish_jobs(migrated_db, document_id)
-    swap_original_to_scan(migrated_db, document_id)
+    swap_original(migrated_db, document_id, filename, content)
 
     stale = reextract(db_client, document_id, current_version=2)
     assert stale.status_code == 409
@@ -1972,13 +1982,18 @@ def test_reextracting_a_failed_scan_retries_recognition(
     assert jobs_of(migrated_db, document_id) == [("extract", "done"), ("extract", "pending")]
 
 
+@pytest.mark.parametrize(
+    ("filename", "content", "content_type"),
+    OCR_TARGETS,
+    ids=[target[0] for target in OCR_TARGETS],
+)
 def test_replacing_with_an_ocr_target_stacks_a_file_and_waits_for_extraction(
-    db_client: TestClient, migrated_db: str
+    db_client: TestClient, migrated_db: str, filename: str, content: bytes, content_type: str
 ):
     document_id = upload(db_client).json()["id"]
     finish_jobs(migrated_db, document_id)
 
-    response = replace_file(db_client, document_id, filename="scan.jpg", content=SCAN_JPG)
+    response = replace_file(db_client, document_id, filename=filename, content=content)
 
     assert response.status_code == 200
     assert response.json()["extraction_status"] == "pending"
@@ -1986,13 +2001,13 @@ def test_replacing_with_an_ocr_target_stacks_a_file_and_waits_for_extraction(
         1,
         "OpenSQL guide",
         "pending",
-        "scan.jpg",
-        "jpg",
+        filename,
+        content_type,
     )
     rows = file_rows(migrated_db, document_id)
     assert [(row[0], row[1], row[3]) for row in rows] == [
         (1, "guide.txt", 1),
-        (2, "scan.jpg", 1),
+        (2, filename, 1),
     ]
     assert text_version_count(migrated_db, document_id) == 1
     assert jobs_of(migrated_db, document_id) == [("embed", "done"), ("extract", "pending")]
