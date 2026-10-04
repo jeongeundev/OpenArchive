@@ -32,6 +32,12 @@ models/
 # 테스트 픽스처는 예외 — 출처·이용 조건은 fixtures/SOURCE.md
 !backend/tests/fixtures/*.pdf
 
+# 형식별 평가 자료(#167)는 정책브리핑에서 내려받는다 — 공공누리가 텍스트에 한해서라 내장 이미지를
+# 재배포하지 않는다. 출처·해시는 scripts/eval/formats.json, 설명은 SOURCE.md
+scripts/eval/formats/*
+!scripts/eval/formats/SOURCE.md
+!scripts/eval/formats/*.txt
+
 # --- OS / 에디터 ---
 .DS_Store
 .idea/

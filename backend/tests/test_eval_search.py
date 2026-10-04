@@ -296,3 +296,179 @@ def test_render_exposes_preview_diagnosis_and_keeps_legacy_output():
     assert "미리보기 원인=selection" in render([result], summarize([result]))
     legacy = QueryResult("기존 사례", [D1], {D1}, set(), ["운영"])
     assert "미리보기 원인=" not in render([legacy], summarize([legacy]))
+
+
+def test_failure_cause_separates_extraction_candidates_and_selection():
+    """#167: 근거가 추출 본문에 없으면 검색을 탓할 수 없다 — 원인을 추출·후보 부족·선택으로 나눈다."""
+    from scripts.eval_search import classify_failure
+
+    from openarchive.services.search import SearchPassage
+
+    evidence = [{"source": "운영", "text": "정답 대목"}]
+    stored = {"운영": ["앞 내용. 정답 대목. 뒤 내용."]}
+    complete = [_hit("운영", content="정답 대목")]
+    selection = [_hit("운영", content="앞 내용", passages=(SearchPassage(1, "정답 대목", 1, .7),))]
+    candidates = [_hit("운영", content="앞 내용")]
+    assert classify_failure(evidence, stored, complete) == "complete"
+    assert classify_failure(evidence, stored, selection) == "selection"
+    assert classify_failure(evidence, stored, candidates) == "candidates"
+    misread = {"운영": ["앞 내용. 정답 대룩. 뒤 내용."]}
+    assert classify_failure(evidence, misread, candidates) == "extraction"
+    assert classify_failure(evidence, {}, []) == "extraction"
+    assert classify_failure(None, stored, []) is None
+
+
+def test_failure_cause_accepts_evidence_in_any_same_title_document_and_normalizes_whitespace():
+    from scripts.eval_search import classify_failure
+
+    evidence = [{"source": "운영", "text": "서울 74091"}]
+    stored = {"운영": ["다른 판", "서울\t74091\t38612"]}
+    assert classify_failure(evidence, stored, []) == "candidates"
+
+
+def test_find_leaks_reports_forbidden_text_anywhere_in_results_including_graph_hits():
+    """과거 버전 값·남의 비공개 문서 내용은 어떤 결과 자리에도 나오면 안 된다."""
+    from scripts.eval_search import find_leaks
+
+    from openarchive.services.search import SearchPassage, SearchVia
+
+    absent = ["2026.9.1\t1.21392", "국내총책 A씨"]
+    assert find_leaks([_hit("운영", content="2026.10.1 1.21169")], absent) == []
+    assert find_leaks([_hit("운영", preview="2026.9.1  1.21392")], absent) == ["2026.9.1\t1.21392"]
+    passage = _hit("운영", passages=(SearchPassage(3, "국내총책 A씨 구속", 1, .5),))
+    assert find_leaks([passage], absent) == ["국내총책 A씨"]
+    graph = _hit("운영", content="국내총책 A씨", via=SearchVia(D2, "revision", 1))
+    assert find_leaks([graph], absent) == ["국내총책 A씨"]
+    assert find_leaks([], None) == []
+
+
+def test_summary_keeps_rank_metrics_to_answerable_queries_and_counts_causes_and_leaks():
+    """근거 없음·권한·과거 버전 질문은 정답 문서가 없다 — Recall 0으로 섞으면 순위 지표가 왜곡된다."""
+    results = [
+        QueryResult("answerable", [D1], {D1}, set(), failure_cause="selection"),
+        QueryResult("extraction", [D2], {D1}, set(), failure_cause="extraction"),
+        QueryResult("none", [D3], set(), set(), top_score=0.41),
+        QueryResult("leak", [D3], set(), set(), leaks=["국내총책 A씨"]),
+    ]
+    summary = summarize(results, ks=(1,))
+    assert summary["queries"] == 4
+    assert summary["answerable_queries"] == 2
+    assert summary["recall@1"] == pytest.approx(0.5)
+    assert summary["mrr"] == pytest.approx(0.5)
+    assert summary["misses"] == 1
+    assert summary["no_answer_queries"] == 2
+    assert summary["leaks"] == 1
+    assert summary["cause_selection"] == 1
+    assert summary["cause_extraction"] == 1
+    legacy = summarize([QueryResult("q", [D1], {D1}, set())], ks=(1,))
+    assert "no_answer_queries" not in legacy and "leaks" not in legacy
+
+
+async def test_evaluator_classifies_from_stored_text_and_records_no_answer_score(migrated_db, monkeypatch):
+    import psycopg
+    from conftest import insert_test_document, process_all_embedding_jobs
+    from scripts import eval_search
+
+    from openarchive.embeddings import FakeProvider
+
+    provider = FakeProvider()
+    monkeypatch.setattr(eval_search, "get_provider", lambda: provider)
+    async with await psycopg.AsyncConnection.connect(migrated_db, autocommit=True) as conn:
+        await insert_test_document(conn, title="스캔", content="세관장 확인 대상 5.851개 품목",
+                                   owner_id="alice", visibility="private", tags=["evaluation"])
+        await insert_test_document(conn, title="비밀", content="국내총책 A씨 구속",
+                                   owner_id="bob", visibility="private", tags=["evaluation"])
+        await process_all_embedding_jobs(conn, provider)
+    evalset = {"queries": [
+        {"query": "세관장 확인 대상 품목", "relevant": ["스캔"],
+         "evidence": [{"source": "스캔", "text": "5,851개 품목"}]},
+        {"query": "국내총책 A씨", "relevant": [], "absent": ["국내총책 A씨"]},
+    ]}
+    results = await eval_search.evaluate(evalset, migrated_db, user_id="alice", tags=["evaluation"])
+    assert results[0].failure_cause == "extraction"
+    assert results[1].relevant == set()
+    assert results[1].leaks == []
+    assert results[1].top_score is not None
+
+
+def test_current_only_leaks_ignore_labeled_revisions_and_report_where_the_past_is():
+    """과거 판본 값은 「이전 버전」(via=revision) 자리에 표시돼 나오는 것이 설계다(ARCHITECTURE ⑤).
+    현재 판 결과에 섞이면 누출이고, revision 자리에서 찾히는지는 따로 기록한다."""
+    from scripts.eval_search import find_in_revisions, find_leaks
+
+    from openarchive.services.search import SearchVia
+
+    past = ["2026.9.1\t1.21392"]
+    revision = _hit("계수", content="2026.9.1 1.21392", via=SearchVia(D1, "revision", 1))
+    current = _hit("계수", content="2026.10.1 1.21169")
+    assert find_leaks([current, revision], past, current_only=True) == []
+    assert find_leaks([current, revision], past) == past
+    assert find_leaks([_hit("계수", content="2026.9.1 1.21392")], past, current_only=True) == past
+    assert find_in_revisions([current, revision], past) == past
+    assert find_in_revisions([current], past) == []
+    assert find_in_revisions([current], None) == []
+
+
+def test_leaks_and_past_locations_are_reported_for_answerable_queries_too():
+    """누출은 정답 유무와 무관하다 — 정답 있는 질문에 `absent`를 달아도 집계·출력에서 빠지면 안 된다."""
+    from scripts.eval_search import render
+
+    results = [
+        QueryResult("answerable leak", [D1], {D1}, set(), leaks=["국내총책 A씨"]),
+        QueryResult("past", [D1], {D1}, set(), past_in_revisions=["2026.9.1\t1.21392"]),
+    ]
+    summary = summarize(results, ks=(1,))
+    assert summary["leaks"] == 1
+    assert summary["past_in_revisions"] == 1
+    assert "누출=['국내총책 A씨']" in render(results, summary)
+    assert "과거 값은 이전 버전 자리에 있음" in render(results, summary)
+
+
+def test_summary_without_answerable_queries_skips_rank_metrics():
+    summary = summarize([QueryResult("none", [D1], set(), set(), top_score=0.4)], ks=(1,))
+    assert summary["queries"] == 1
+    assert summary["answerable_queries"] == 0
+    assert "recall@1" not in summary and "mrr" not in summary
+
+
+def _hit_of(title, document_id, **kwargs):
+    from dataclasses import replace
+
+    return replace(_hit(title, **kwargs), document_id=document_id)
+
+
+def test_selection_is_judged_on_each_source_documents_own_first_excerpt():
+    """여러 문서에 걸친 근거는 첫 결과 하나로는 정의상 충분할 수 없다 — 대목 선택은 근거 출처 문서마다
+    그 문서의 첫 발췌로 본다. 문서 순위는 Recall·MRR이 따로 잰다."""
+    from scripts.eval_search import classify_failure
+
+    from openarchive.services.search import SearchPassage
+
+    evidence = [{"source": "보도", "text": "전체 551,864명"}, {"source": "현황", "text": "서울 74091"}]
+    stored = {"보도": ["전체 551,864명이 지원"], "현황": ["서울 74091 38612"]}
+    both = [_hit_of("현황", D2, content="서울 74091 38612"), _hit_of("보도", D1, content="전체 551,864명이 지원")]
+    assert classify_failure(evidence, stored, both) == "complete"
+    off = [_hit_of("현황", D2, content="부산 21152", passages=(SearchPassage(1, "서울 74091", 1, .6),)),
+           _hit_of("보도", D1, content="전체 551,864명이 지원")]
+    assert classify_failure(evidence, stored, off) == "selection"
+    # 출처 문서가 둘째 자리여도 자기 첫 발췌에 근거가 있으면 선택은 성공이다
+    single = [{"source": "스캔", "text": "43개 법령"}]
+    second = [_hit_of("인포", D2, content="숫자로 보는 제도"), _hit_of("스캔", D1, content="43개 법령, 5,851개")]
+    assert classify_failure(single, {"스캔": ["43개 법령, 5,851개"]}, second) == "complete"
+
+
+def test_alternative_evidence_sets_pick_the_best_supported_answer():
+    """같은 답이 다른 문서에 다른 표현으로 있으면 어느 쪽으로 답해도 맞다 — 근거를 한 출처로 고정하면
+    다른 정답 문서가 첫 자리일 때 실패로 잘못 센다."""
+    from scripts.eval_search import choose_evidence
+
+    scan = [{"source": "스캔", "text": "43개 법령, 5,851개"}]
+    infographic = [{"source": "인포", "text": "43개 관련 개별 법령 수"}]
+    stored = {"스캔": ["43개 법령, 5.851개"], "인포": ["43개\n관련 개별 법령 수"]}
+    hits = [_hit_of("인포", D2, content="43개\n관련 개별 법령 수"), _hit_of("스캔", D1, content="43개 법령, 5.851개")]
+    evidence, graded, cause = choose_evidence(hits, stored, [scan, infographic])
+    assert evidence == infographic and cause == "complete" and graded["first_excerpt"]["complete"]
+    # 대안이 모두 같으면 첫 근거(기본)를 쓴다
+    evidence, _, cause = choose_evidence([], {}, [scan, infographic])
+    assert evidence == scan and cause == "extraction"
+    assert choose_evidence(hits, stored, [None]) == (None, None, None)
