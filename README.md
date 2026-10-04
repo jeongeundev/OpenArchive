@@ -69,7 +69,7 @@ EMBEDDING_PROVIDER=local openarchive serve
 ![검색 화면 — 예제 문서에서 "연차 휴가는 어떻게 신청하나요"를 찾은 결과](docs/images/search.png)
 
 이미지·스캔 PDF의 텍스트 인식에는 시스템 패키지 **tesseract와 한국어 모델**이 필요합니다 — 없으면 그
-문서만 「텍스트 인식 실패」로 끝나고 다른 형식은 그대로 동작합니다 (설치 명령은
+문서(텍스트 레이어가 빈 쪽이 있는 PDF 포함)만 「텍스트 인식 실패」로 끝나고 다른 형식은 그대로 동작합니다 (설치 명령은
 [운영 가이드](docs/OPERATIONS.md#ocr-엔진-tesseract)).
 
 > ⚠️ 풀 이름과 계정은 OpenProxy 설정(`openproxy.toml`)에서 확인합니다. 설치기는 `opensql`
