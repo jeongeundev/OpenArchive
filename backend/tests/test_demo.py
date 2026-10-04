@@ -390,3 +390,25 @@ def test_demo_gives_up_waiting_for_edge_jobs_without_a_worker(demo_db: str, caps
     assert "관계 잡" in output
     assert "openarchive serve" in output
     assert "rebuild-edges" not in output
+
+
+async def test_summarize_reads_inside_a_transaction_so_ha_counts_on_the_primary(migrated_db):
+    """#180: 관계 잡을 기다린 직후 세므로, 트랜잭션 밖에서 읽으면 HA에서 Replica의 옛 수를 보여 준다."""
+    import psycopg
+
+    class Recording:
+        def __init__(self, conn):
+            self._conn = conn
+            self.statuses = []
+
+        def __getattr__(self, name):
+            return getattr(self._conn, name)
+
+        async def execute(self, *args, **kwargs):
+            self.statuses.append(self._conn.info.transaction_status)
+            return await self._conn.execute(*args, **kwargs)
+
+    async with await psycopg.AsyncConnection.connect(migrated_db, autocommit=True) as conn:
+        recording = Recording(conn)
+        assert await summarize(recording, "alice") == (0, 0)
+    assert recording.statuses == [psycopg.pq.TransactionStatus.INTRANS]

@@ -927,27 +927,30 @@ async def _import_file(
     """
     data = path.read_bytes()
     front = _read_frontmatter(data) if detect_content_type(path.name) == "md" else None
-    if front is None:
-        if await find_same_original(conn, owner_id=username, data=data):
+    # 판정과 생성을 한 트랜잭션에 둔다 — 밖의 SELECT는 HA에서 Replica로 가 방금 가져온 같은
+    # 파일을 못 보고 두 벌을 만든다 (ADR-010, #180).
+    async with conn.transaction():
+        if front is None:
+            if await find_same_original(conn, owner_id=username, data=data):
+                return None
+            return await create_document(
+                conn,
+                filename=path.name,
+                data=data,
+                owner_id=username,
+                tags=tags,
+                visibility=visibility,
+            )
+        if await find_same_text(conn, owner_id=username, content=front.body):
             return None
-        return await create_document(
+        return await create_text_document(
             conn,
-            filename=path.name,
-            data=data,
+            title=front.title or path.stem,
+            content=front.body,
             owner_id=username,
-            tags=tags,
-            visibility=visibility,
+            tags=front.tags + tags,
+            visibility=front.visibility or visibility,
         )
-    if await find_same_text(conn, owner_id=username, content=front.body):
-        return None
-    return await create_text_document(
-        conn,
-        title=front.title or path.stem,
-        content=front.body,
-        owner_id=username,
-        tags=front.tags + tags,
-        visibility=front.visibility or visibility,
-    )
 
 
 async def _import(

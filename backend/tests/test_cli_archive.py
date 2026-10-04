@@ -486,3 +486,30 @@ def test_search_refuses_an_unknown_user(searchable_db: str, capsys):
 
     assert exit_code == 1
     assert "'carol' 계정이 없습니다" in capsys.readouterr().out
+
+
+def test_import_checks_duplicates_inside_a_transaction_so_ha_reads_the_primary(
+    archive_db: str, tmp_path: Path, monkeypatch
+):
+    """#180: HA의 OpenProxy는 트랜잭션 밖 SELECT를 Replica로 보낸다. 방금 만든 문서가 아직 복제되지
+    않았으면 중복 판정이 놓쳐 두 벌이 생긴다 — 로컬에는 Replica가 없으니 판정 시점의 상태로 고정한다."""
+    from openarchive import cli
+
+    statuses = []
+
+    def spy(real):
+        async def checked(conn, **kwargs):
+            statuses.append(conn.info.transaction_status)
+            return await real(conn, **kwargs)
+        return checked
+
+    monkeypatch.setattr(cli, "find_same_original", spy(cli.find_same_original))
+    monkeypatch.setattr(cli, "find_same_text", spy(cli.find_same_text))
+    write(tmp_path, "a/guide.md", "같은 파일")
+    write(tmp_path, "b/guide.md", "같은 파일")
+    write(tmp_path, "note.md", "---\ntitle: 메모\n---\n본문\n")
+
+    assert main(["import", str(tmp_path), "--user", "alice", "--dsn", archive_db]) == 0
+
+    assert statuses == [psycopg.pq.TransactionStatus.INTRANS] * 3
+    assert sorted(r["title"] for r in documents(archive_db)) == ["guide", "메모"]
