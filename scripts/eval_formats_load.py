@@ -206,7 +206,9 @@ async def load(evalset: dict, root: Path, dsn: str) -> list[dict]:
                     raise RuntimeError(f"원본 교체가 다음 텍스트 버전을 만들지 않았다: {source['title']} "
                                        f"v{previous} → v{document['version']}")
                 status = "replaced"
-            original = await get_original_file(conn, document["id"], user_id=owner)
+            # autocommit 연결의 트랜잭션 밖 SELECT는 OpenProxy가 Replica로 보내 방금 만든 문서를 못 볼 수 있다(ADR-010)
+            async with conn.transaction():
+                original = await get_original_file(conn, document["id"], user_id=owner)
             if original["sha256"] != _sha256((root / stored["path"]).read_bytes()):
                 raise RuntimeError(f"보관된 원본이 넣은 파일과 다르다: {source['title']}")
             outcomes.append({
