@@ -300,7 +300,7 @@ def test_render_exposes_preview_diagnosis_and_keeps_legacy_output():
 
 def test_failure_cause_separates_extraction_candidates_and_selection():
     """#167: 근거가 추출 본문에 없으면 검색을 탓할 수 없다 — 원인을 추출·후보 부족·선택으로 나눈다."""
-    from scripts.eval_search import classify_failure, grade_evidence
+    from scripts.eval_search import classify_failure
 
     from openarchive.services.search import SearchPassage
 
@@ -309,21 +309,21 @@ def test_failure_cause_separates_extraction_candidates_and_selection():
     complete = [_hit("운영", content="정답 대목")]
     selection = [_hit("운영", content="앞 내용", passages=(SearchPassage(1, "정답 대목", 1, .7),))]
     candidates = [_hit("운영", content="앞 내용")]
-    assert classify_failure(evidence, stored, grade_evidence(complete, evidence)) == "complete"
-    assert classify_failure(evidence, stored, grade_evidence(selection, evidence)) == "selection"
-    assert classify_failure(evidence, stored, grade_evidence(candidates, evidence)) == "candidates"
+    assert classify_failure(evidence, stored, complete) == "complete"
+    assert classify_failure(evidence, stored, selection) == "selection"
+    assert classify_failure(evidence, stored, candidates) == "candidates"
     misread = {"운영": ["앞 내용. 정답 대룩. 뒤 내용."]}
-    assert classify_failure(evidence, misread, grade_evidence(candidates, evidence)) == "extraction"
-    assert classify_failure(evidence, {}, grade_evidence([], evidence)) == "extraction"
-    assert classify_failure(None, stored, None) is None
+    assert classify_failure(evidence, misread, candidates) == "extraction"
+    assert classify_failure(evidence, {}, []) == "extraction"
+    assert classify_failure(None, stored, []) is None
 
 
 def test_failure_cause_accepts_evidence_in_any_same_title_document_and_normalizes_whitespace():
-    from scripts.eval_search import classify_failure, grade_evidence
+    from scripts.eval_search import classify_failure
 
     evidence = [{"source": "운영", "text": "서울 74091"}]
     stored = {"운영": ["다른 판", "서울\t74091\t38612"]}
-    assert classify_failure(evidence, stored, grade_evidence([], evidence)) == "candidates"
+    assert classify_failure(evidence, stored, []) == "candidates"
 
 
 def test_find_leaks_reports_forbidden_text_anywhere_in_results_including_graph_hits():
@@ -429,3 +429,46 @@ def test_summary_without_answerable_queries_skips_rank_metrics():
     assert summary["queries"] == 1
     assert summary["answerable_queries"] == 0
     assert "recall@1" not in summary and "mrr" not in summary
+
+
+def _hit_of(title, document_id, **kwargs):
+    from dataclasses import replace
+
+    return replace(_hit(title, **kwargs), document_id=document_id)
+
+
+def test_selection_is_judged_on_each_source_documents_own_first_excerpt():
+    """여러 문서에 걸친 근거는 첫 결과 하나로는 정의상 충분할 수 없다 — 대목 선택은 근거 출처 문서마다
+    그 문서의 첫 발췌로 본다. 문서 순위는 Recall·MRR이 따로 잰다."""
+    from scripts.eval_search import classify_failure
+
+    from openarchive.services.search import SearchPassage
+
+    evidence = [{"source": "보도", "text": "전체 551,864명"}, {"source": "현황", "text": "서울 74091"}]
+    stored = {"보도": ["전체 551,864명이 지원"], "현황": ["서울 74091 38612"]}
+    both = [_hit_of("현황", D2, content="서울 74091 38612"), _hit_of("보도", D1, content="전체 551,864명이 지원")]
+    assert classify_failure(evidence, stored, both) == "complete"
+    off = [_hit_of("현황", D2, content="부산 21152", passages=(SearchPassage(1, "서울 74091", 1, .6),)),
+           _hit_of("보도", D1, content="전체 551,864명이 지원")]
+    assert classify_failure(evidence, stored, off) == "selection"
+    # 출처 문서가 둘째 자리여도 자기 첫 발췌에 근거가 있으면 선택은 성공이다
+    single = [{"source": "스캔", "text": "43개 법령"}]
+    second = [_hit_of("인포", D2, content="숫자로 보는 제도"), _hit_of("스캔", D1, content="43개 법령, 5,851개")]
+    assert classify_failure(single, {"스캔": ["43개 법령, 5,851개"]}, second) == "complete"
+
+
+def test_alternative_evidence_sets_pick_the_best_supported_answer():
+    """같은 답이 다른 문서에 다른 표현으로 있으면 어느 쪽으로 답해도 맞다 — 근거를 한 출처로 고정하면
+    다른 정답 문서가 첫 자리일 때 실패로 잘못 센다."""
+    from scripts.eval_search import choose_evidence
+
+    scan = [{"source": "스캔", "text": "43개 법령, 5,851개"}]
+    infographic = [{"source": "인포", "text": "43개 관련 개별 법령 수"}]
+    stored = {"스캔": ["43개 법령, 5.851개"], "인포": ["43개\n관련 개별 법령 수"]}
+    hits = [_hit_of("인포", D2, content="43개\n관련 개별 법령 수"), _hit_of("스캔", D1, content="43개 법령, 5.851개")]
+    evidence, graded, cause = choose_evidence(hits, stored, [scan, infographic])
+    assert evidence == infographic and cause == "complete" and graded["first_excerpt"]["complete"]
+    # 대안이 모두 같으면 첫 근거(기본)를 쓴다
+    evidence, _, cause = choose_evidence([], {}, [scan, infographic])
+    assert evidence == scan and cause == "extraction"
+    assert choose_evidence(hits, stored, [None]) == (None, None, None)

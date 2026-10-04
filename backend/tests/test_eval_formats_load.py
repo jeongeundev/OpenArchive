@@ -48,7 +48,9 @@ def test_committed_formats_evalset_is_well_formed_without_network():
     for item in evalset["queries"]:
         assert item["query"].strip() and item["category"].strip()
         assert set(item["relevant"]) <= titles
-        assert {fragment["source"] for fragment in item.get("evidence", [])} <= titles
+        for evidence in [item.get("evidence", []), *item.get("evidence_alternatives", [])]:
+            assert {fragment["source"] for fragment in evidence} <= titles
+        assert "evidence" in item or "evidence_alternatives" not in item
         assert item["relevant"] or item.get("evidence") is None
 
 
