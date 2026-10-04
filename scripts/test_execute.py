@@ -653,8 +653,13 @@ class TestInvokeCodex:
         assert cmd[1] == "exec"
         assert "--json" in cmd
         assert "--dangerously-bypass-approvals-and-sandbox" in cmd
-        assert "PREAMBLE" in cmd[-1]
-        assert "UI를 구현하세요" in cmd[-1]
+        # 프롬프트는 argv가 아니라 stdin으로 간다 — argv로 약 0.92MB를 넘기면 codex의 Node
+        # 래퍼가 RangeError(Maximum call stack size exceeded)로 즉시 죽는다(m22 step 0).
+        assert cmd[-1] == "-"
+        prompt = mock_run.call_args[1]["input"]
+        assert "PREAMBLE" in prompt
+        assert "UI를 구현하세요" in prompt
+        assert all("PREAMBLE" not in arg for arg in cmd)
 
     def test_saves_output_json(self, executor):
         mock_result = MagicMock(returncode=0, stdout='{"ok": true}', stderr="")
