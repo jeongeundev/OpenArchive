@@ -12,7 +12,8 @@ from typing import Literal
 from uuid import UUID
 
 from openarchive.answers import AnswerProvider, AnswerUnavailable
-from openarchive.services.search import SearchHit, search_documents
+from openarchive.services.chunking import chunk_text
+from openarchive.services.search import SearchHit, SearchPassage, search_documents
 from openarchive.services.visibility import VISIBLE_TO_USER
 
 logger = logging.getLogger(__name__)
@@ -53,6 +54,19 @@ class AnswerResult:
     detail: str | None
 
 
+def _matching_passage(hit: SearchHit, current: str) -> SearchPassage:
+    """직전 판 전문을 워커와 같은 청킹으로 나눠 현재 판 청크와 어절이 가장 많이 겹치는 청크를 고른다."""
+    chunks = chunk_text(hit.content)
+    words = set(current.split())
+
+    def overlap(index):
+        other = set(chunks[index].split())
+        return len(words & other) / (len(words | other) or 1)
+
+    index = max(range(len(chunks)), key=overlap)
+    return SearchPassage(index, chunks[index], hit.based_on_version, hit.score)
+
+
 async def gather_evidence(
     conn, embedding_provider, *, query, user_id, tags=None, content_type=None,
     k=ASK_K, context_chars,
@@ -61,11 +75,39 @@ async def gather_evidence(
         conn, embedding_provider, query=query, user_id=user_id,
         tags=tags, content_type=content_type, k=k,
     )
+    versions, current_chunks = {}, {}
+    if hits:
+        revisions = [hit for hit in hits if hit.via and hit.via.kind == "revision"]
+        async with conn.transaction():
+            cursor = await conn.execute(
+                f"SELECT d.id, d.version FROM documents d "
+                f"WHERE d.id = ANY(%(ids)s) AND {VISIBLE_TO_USER}",
+                {"ids": list({hit.document_id for hit in hits}), "user": user_id},
+            )
+            versions = dict(await cursor.fetchall())
+            if revisions:
+                # revision 히트의 본문은 직전 판 전문이다. 검색이 맞춘 현재 판 청크를 가져와
+                # 직전 판에서 같은 자리를 찾는다(검색 SQL은 고치지 않는다 — 코어 diff 0줄).
+                cursor = await conn.execute(
+                    "SELECT c.document_id, c.chunk_index, c.content FROM document_chunks c "
+                    "JOIN unnest(%(ids)s::uuid[], %(versions)s::int[], %(indexes)s::int[]) "
+                    "AS r(document_id, version, chunk_index) USING (document_id, version, chunk_index)",
+                    {
+                        "ids": [hit.document_id for hit in revisions],
+                        "versions": [hit.based_on_version + 1 for hit in revisions],
+                        "indexes": [hit.chunk_index for hit in revisions],
+                    },
+                )
+                current_chunks = {(row[0], row[1]): row[2] for row in await cursor.fetchall()}
     selected = []
     seen = set()
     remaining = context_chars
     for hit in hits:
-        passages = hit.passages or (hit,)
+        if hit.via and hit.via.kind == "revision":
+            current = current_chunks.get((hit.document_id, hit.chunk_index), "")
+            passages = (_matching_passage(hit, current),)
+        else:
+            passages = hit.passages or (hit,)
         for passage in passages:
             content = passage.content.strip()
             if not content or content in seen:
@@ -77,15 +119,6 @@ async def gather_evidence(
             selected.append((hit, passage, content))
             seen.add(passage.content.strip())
             remaining -= len(content)
-    versions = {}
-    if selected:
-        async with conn.transaction():
-            cursor = await conn.execute(
-                f"SELECT d.id, d.version FROM documents d "
-                f"WHERE d.id = ANY(%(ids)s) AND {VISIBLE_TO_USER}",
-                {"ids": list({hit.document_id for hit, _, _ in selected}), "user": user_id},
-            )
-            versions = dict(await cursor.fetchall())
     sources = []
     for hit, passage, content in selected:
         if hit.document_id not in versions:

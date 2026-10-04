@@ -7,6 +7,7 @@ from conftest import insert_test_document, process_all_embedding_jobs
 from openarchive.answers import AnswerUnavailable, FakeAnswerProvider
 from openarchive.embeddings import FakeProvider
 from openarchive.services import answer
+from openarchive.services.chunking import chunk_text
 from openarchive.services.search import search_documents
 
 
@@ -69,6 +70,27 @@ async def test_previous_version_is_marked(conn):
     old = next(source for source in evidence.sources if source.based_on_version == 1)
     assert old.current_version == 2 and old.revised is True
     assert f"[{old.label}] 개정 · v1 기준 · 현재 v2" in evidence.prompt
+
+
+async def test_long_previous_version_uses_matching_chunk(conn):
+    filler = "\n\n".join(f"문단 {i} 관련 없는 설명 내용입니다 " * 8 for i in range(30))
+    old_text = f"{filler}\n\n정합성 근거 개정전고유문구\n\n{filler}"
+    document_id = await seed(conn, title="개정", content=old_text)
+    intro = "\n\n".join(f"새 머리말 {i} 추가된 소개 문장입니다 " * 8 for i in range(10))
+    await conn.execute(
+        "UPDATE documents SET version=2, content=%s, content_hash=%s WHERE id=%s",
+        (f"{intro}\n\n{filler}\n\n정합성 근거 개정후고유문구\n\n{filler}", "version-two", document_id),
+    )
+    await process_all_embedding_jobs(conn, FakeProvider())
+    evidence = await answer.gather_evidence(
+        conn, FakeProvider(), query="정합성 근거", user_id="alice", context_chars=20000
+    )
+    old = next(source for source in evidence.sources if source.revised)
+    old_chunks = chunk_text(old_text)
+    assert "개정전고유문구" in old.content and len(old.content) <= 1000
+    assert old_chunks[old.chunk_index] == old.content
+    current = next(source for source in evidence.sources if not source.revised)
+    assert current.chunk_index != old.chunk_index
 
 
 async def test_empty_evidence_and_disabled_precedence(conn):
