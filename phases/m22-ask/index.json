@@ -8,10 +8,7 @@
       "type": "docs",
       "scope": "adr",
       "desc": "ADR-043에 ask 구현 형태(커넥션 반납·응답 상태·근거 목록·공유 차단·설정)를 기록한다",
-      "status": "error",
-      "started_at": "2026-10-04T23:38:00+0900",
-      "error_message": "[3회 시도 후 실패] Step did not update status",
-      "failed_at": "2026-10-04T23:38:00+0900"
+      "status": "pending"
     },
     {
       "step": 1,
