@@ -137,3 +137,26 @@ def test_a_process_reads_the_env_file_in_openarchive_home(tmp_path):
     )
 
     assert result.stdout.strip() == "postgresql://fromfile:fromfile@127.0.0.1:5433/fromfile"
+
+
+def test_answer_settings_defaults(monkeypatch):
+    for name in ("ANSWER_PROVIDER", "OLLAMA_URL", "ANSWER_MODEL",
+                 "ANSWER_TIMEOUT_SECONDS", "ANSWER_CONTEXT_CHARS"):
+        monkeypatch.delenv(name, raising=False)
+    settings = Settings(**NO_ENV_FILE)
+    assert settings.answer_provider == "off"
+    assert settings.ollama_url == "http://localhost:11434"
+    assert settings.answer_model == "qwen3:8b"
+    assert settings.answer_timeout_seconds == 120
+    assert settings.answer_context_chars == 6000
+
+
+@pytest.mark.parametrize("name,value", [
+    ("ANSWER_PROVIDER", "gpt"),
+    ("ANSWER_TIMEOUT_SECONDS", "0"),
+    ("ANSWER_CONTEXT_CHARS", "0"),
+])
+def test_invalid_answer_settings_are_rejected(monkeypatch, name, value):
+    monkeypatch.setenv(name, value)
+    with pytest.raises(ValidationError):
+        Settings(**NO_ENV_FILE)
