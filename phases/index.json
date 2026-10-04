@@ -115,6 +115,10 @@
       "dir": "m21-shares",
       "status": "completed",
       "completed_at": "2026-10-02T06:35:00+0900"
+    },
+    {
+      "dir": "m22-ask",
+      "status": "pending"
     }
   ]
 }

@@ -1,0 +1,38 @@
+{
+  "project": "OpenArchive",
+  "phase": "m22-ask",
+  "steps": [
+    {
+      "step": 0,
+      "name": "answer-docs",
+      "type": "docs",
+      "scope": "adr",
+      "desc": "ADR-043에 ask 구현 형태(커넥션 반납·응답 상태·근거 목록·공유 차단·설정)를 기록한다",
+      "status": "pending"
+    },
+    {
+      "step": 1,
+      "name": "answer-providers",
+      "type": "feat",
+      "scope": "search",
+      "desc": "답변 생성 프로바이더(fake·ollama)와 설정을 둔다 — 기본 꺼짐",
+      "status": "pending"
+    },
+    {
+      "step": 2,
+      "name": "answer-service",
+      "type": "feat",
+      "scope": "search",
+      "desc": "검색 근거를 길이 예산 안에서 조립해 답변을 만들고 근거마다 기준 버전과 개정 여부를 붙인다",
+      "status": "pending"
+    },
+    {
+      "step": 3,
+      "name": "ask-api",
+      "type": "feat",
+      "scope": "api",
+      "desc": "POST /api/ask — 생성 전에 커넥션을 반납하고 실패해도 검색 결과를 돌려준다",
+      "status": "pending"
+    }
+  ]
+}
