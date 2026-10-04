@@ -118,7 +118,8 @@
     },
     {
       "dir": "m22-ask",
-      "status": "pending"
+      "status": "completed",
+      "completed_at": "2026-10-05T00:27:48+0900"
     }
   ]
 }
