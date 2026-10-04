@@ -30,7 +30,10 @@
       "type": "feat",
       "scope": "search",
       "desc": "검색 근거를 길이 예산 안에서 조립해 답변을 만들고 근거마다 기준 버전과 개정 여부를 붙인다",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-10-04T23:55:14+0900",
+      "summary": "AnswerSource·Evidence·AnswerStatus·AnswerResult·ASK_K·gather_evidence·generate_answer를 추가해 DB 근거 조립과 생성을 분리; 프롬프트 머리 [n] 제목 · v{based} 기준[ · 현재 v{current}], 예산·중복 제거·버전·cited 처리 구현. 서비스 12개·전체 1505개·Ruff·코어 diff 0 AC 통과; 열람 회수 시나리오를 포함해 visibility 삭제·revised=False·중복 제거 삭제·빈 근거 생성·Exception 포괄 mutant 5개 모두 검출·복원.",
+      "completed_at": "2026-10-05T00:05:58+0900"
     },
     {
       "step": 3,
