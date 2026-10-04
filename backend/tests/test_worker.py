@@ -2449,7 +2449,11 @@ class BlockingOcr:
 
 @pytest.mark.parametrize(
     ("fixture_name", "reference"),
-    [("scan_tax_page1.jpg", "scan_tax_page1.txt"), ("scan_tax_pages.pdf", "scan_tax_pages.txt")],
+    [
+        ("scan_tax_page1.jpg", "scan_tax_page1.txt"),
+        ("scan_tax_pages.pdf", "scan_tax_pages.txt"),
+        ("mixed_tax_pages.pdf", "mixed_tax_pages.txt"),
+    ],
 )
 async def test_worker_ocrs_a_scan_and_the_pipeline_continues_to_ready(
     conn, fixture_name, reference

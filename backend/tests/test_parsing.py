@@ -13,6 +13,7 @@ from openpyxl import Workbook
 from PIL import Image
 from pptx import Presentation
 from pptx.util import Inches
+from pypdf import PdfReader
 
 from openarchive.services.parsing import (
     TextDecodeError,
@@ -398,14 +399,53 @@ def test_extract_text_does_not_ocr(monkeypatch) -> None:
     assert extract_text(fixture("scan_tax_pages.pdf"), "pdf").strip() == ""
 
 
-@pytest.mark.parametrize("content_type", ["png", "jpg", "jpeg", "pdf",
+@pytest.mark.parametrize("content_type", ["png", "jpg", "jpeg",
                                          "docx", "hwp", "hwpx", "txt", "md", "xlsx", "pptx"])
-@pytest.mark.parametrize("text", ["", " \t\n", "텍스트"])
-def test_needs_ocr(content_type: str, text: str) -> None:
-    expected = content_type in ("png", "jpg", "jpeg") or (
-        content_type == "pdf" and not text.strip()
-    )
-    assert needs_ocr(content_type, text) is expected
+def test_needs_ocr_for_images_only_among_non_pdf_types(content_type: str) -> None:
+    assert needs_ocr(content_type, b"") is (content_type in ("png", "jpg", "jpeg"))
+
+
+@pytest.mark.parametrize(
+    ("data", "expected"),
+    [
+        (minimal_pdf("embedding job trigger"), False),
+        (minimal_pdf(""), True),
+        (minimal_pdf("   "), True),
+        (fixture("scan_tax_pages.pdf"), True),
+        # 텍스트 레이어가 있는 쪽 사이에 스캔 쪽이 끼어 있다 — 문서 전체로 보면 텍스트가 있지만
+        # 2쪽은 OCR 없이는 빈다
+        (fixture("mixed_tax_pages.pdf"), True),
+    ],
+    ids=["text", "empty", "blank", "scan", "mixed"],
+)
+def test_needs_ocr_for_pdf_when_any_page_has_no_text_layer(data: bytes, expected: bool) -> None:
+    assert needs_ocr("pdf", data) is expected
+
+
+def test_ocr_keeps_text_layer_pages_and_reads_only_the_scanned_page(monkeypatch) -> None:
+    """혼합 PDF: 텍스트 쪽은 레이어 그대로, 스캔 쪽만 인식해 쪽 순서대로 잇는다(#167)."""
+    import pytesseract
+
+    calls = []
+    real = pytesseract.image_to_string
+
+    def counting(*args, **kwargs):
+        calls.append(1)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(pytesseract, "image_to_string", counting)
+    data = fixture("mixed_tax_pages.pdf")
+    text = ocr_text(data, "pdf")
+
+    assert len(calls) == 1  # 텍스트 레이어가 있는 1·3쪽은 인식하지 않는다
+    pages = [page.extract_text() for page in PdfReader(io.BytesIO(data)).pages]
+    assert text.count(pages[0]) == 1 and text.count(pages[2]) == 1  # 레이어 그대로, 한 번씩
+    normalized = normalize_ocr(text)
+    ocr_page = normalized.index("하반기세무조사운영방향")  # 2쪽에만 있는 안건 제목
+    assert normalized.index(normalize_ocr(pages[0])) < ocr_page
+    assert ocr_page < normalized.index(normalize_ocr(pages[2]))
+    expected = normalize_ocr(fixture("mixed_tax_pages.txt").decode())
+    assert SequenceMatcher(None, expected, normalized, autojunk=False).ratio() >= 0.85
 
 
 @pytest.mark.parametrize("content_type", ["png", "jpg", "jpeg", "pdf"])
