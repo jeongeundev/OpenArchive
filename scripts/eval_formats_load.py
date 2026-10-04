@@ -11,7 +11,8 @@
 모든 파일의 SHA-256을 평가셋과 대조한 뒤, 각 파일을 `create_document`로 `owner`(평가셋
 `users`의 계정)의 비공개 문서로 만들고 평가셋 `tag`를 붙인다. `replaced_by`가 있으면 원본
 교체(`replace_original_file`)로 새 판을 쌓는다 — 현재/과거 질문은 이 교체가 만든 텍스트 v2를
-잰다. 추출 텍스트가 비어 업로드가 거부되는 파일은 실패로 멈추지 않고 `rejected`로 기록한다.
+잰다. 교체가 다음 텍스트 버전을 만들지 않거나, 보관된 원본(`get_original_file`)의 해시가 넣은 파일과
+다르면 멈춘다. 추출 텍스트가 비어 업로드가 거부되는 파일은 실패로 멈추지 않고 `rejected`로 기록한다.
 
 OCR 문서는 「추출 중」으로 생긴다. 임베딩·OCR은 워커가 하므로 적재 뒤 워커를 돌려 잡을 비우고
 `eval_search.py --user <evaluator> --tag <tag>`로 잰다. 같은 태그 문서가 이미 있으면 거부한다 —
@@ -48,6 +49,7 @@ from openarchive.config import get_settings
 from openarchive.services.documents import (
     EmptyExtractedText,
     create_document,
+    get_original_file,
     replace_original_file,
 )
 
@@ -55,7 +57,7 @@ FIXED_TIME = datetime(2026, 10, 4, tzinfo=UTC)
 DOWNLOAD_URL = "https://www.korea.kr/common/download.do?fileId={file_id}&tblKey=GMN"
 
 
-def download_attachment(news_id: str, file_id: str) -> bytes:
+def download_attachment(file_id: str) -> bytes:
     request = urllib.request.Request(
         DOWNLOAD_URL.format(file_id=file_id), headers={"User-Agent": "Mozilla/5.0"}
     )
@@ -112,11 +114,16 @@ def _sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def _fetch(item: dict, root: Path, download: Callable[[str, str], bytes]) -> bytes:
+def source_files(evalset: dict) -> list[dict]:
+    """평가셋이 적은 파일 전부 — 각 자료와, 원본 교체가 있으면 그 교체 파일."""
+    return [item for source in evalset["sources"] for item in (source, source.get("replaced_by")) if item is not None]
+
+
+def _fetch(item: dict, root: Path, download: Callable[[str], bytes]) -> bytes:
     path = root / item["path"]
     if not path.exists():
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(download(item["fetch"]["news_id"], item["fetch"]["file_id"]))
+        path.write_bytes(download(item["fetch"]["file_id"]))
     data = path.read_bytes()
     if _sha256(data) != item["sha256"]:
         raise ValueError(f"받은 자료의 해시가 평가셋과 다르다: {item['path']}")
@@ -124,38 +131,32 @@ def _fetch(item: dict, root: Path, download: Callable[[str, str], bytes]) -> byt
 
 
 def ensure_sources(
-    evalset: dict, root: Path, *, download: Callable[[str, str], bytes] = download_attachment
+    evalset: dict, root: Path, *, download: Callable[[str], bytes] = download_attachment
 ) -> list[str]:
     """없는 자료를 받고 파생 자료를 만든다. 파생 파일 해시가 평가셋과 다르면 경고 문구를 돌려준다."""
     warnings = []
-    for source in evalset["sources"]:
-        for item in (source, source.get("replaced_by")):
-            if item is None:
-                continue
-            if "fetch" in item:
-                _fetch(item, root, download)
-            elif "derive" in item:
-                spec = item["derive"]
-                data = _DERIVE[spec["kind"]](_fetch(spec["from"], root, download), page=spec["page"])
-                path = root / item["path"]
-                path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_bytes(data)
-                if _sha256(data) != item["sha256"]:
-                    warnings.append(f"파생 자료 해시가 기준선과 다르다(라이브러리 판 차이 가능): {item['path']} "
-                                    f"{_sha256(data)}")
+    for item in source_files(evalset):
+        if "fetch" in item:
+            _fetch(item, root, download)
+        elif "derive" in item:
+            spec = item["derive"]
+            data = _DERIVE[spec["kind"]](_fetch(spec["from"], root, download), page=spec["page"])
+            path = root / item["path"]
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
+            if _sha256(data) != item["sha256"]:
+                warnings.append(f"파생 자료 해시가 기준선과 다르다(라이브러리 판 차이 가능): {item['path']} "
+                                f"{_sha256(data)}")
     return warnings
 
 
 def verify_sources(evalset: dict, root: Path) -> None:
     """평가셋이 적은 파일과 해시가 실제 파일과 같은지 확인한다. 다르면 기준선이 다른 자료를 잰다."""
-    for source in evalset["sources"]:
-        for item in (source, source.get("replaced_by")):
-            if item is None:
-                continue
-            if "derive" in item:
-                continue
-            if _sha256((root / item["path"]).read_bytes()) != item["sha256"]:
-                raise ValueError(f"자료 해시가 평가셋과 다르다: {item['path']}")
+    for item in source_files(evalset):
+        if "derive" in item:
+            continue
+        if _sha256((root / item["path"]).read_bytes()) != item["sha256"]:
+            raise ValueError(f"자료 해시가 평가셋과 다르다: {item['path']}")
 
 
 async def clean(evalset: dict, dsn: str) -> int:
@@ -192,16 +193,26 @@ async def load(evalset: dict, root: Path, dsn: str) -> list[dict]:
                 outcomes.append({"title": source["title"], "status": "rejected", "error": str(error)})
                 continue
             status = "created"
+            stored = source
             if "replaced_by" in source:
-                replacement = root / source["replaced_by"]["path"]
+                stored = source["replaced_by"]
+                replacement = root / stored["path"]
+                previous = document["version"]
                 document = await replace_original_file(
                     conn, document["id"], user_id=owner, filename=replacement.name,
-                    data=replacement.read_bytes(), client_version=document["version"],
+                    data=replacement.read_bytes(), client_version=previous,
                 )
+                if document["version"] != previous + 1:
+                    raise RuntimeError(f"원본 교체가 다음 텍스트 버전을 만들지 않았다: {source['title']} "
+                                       f"v{previous} → v{document['version']}")
                 status = "replaced"
+            original = await get_original_file(conn, document["id"], user_id=owner)
+            if original["sha256"] != _sha256((root / stored["path"]).read_bytes()):
+                raise RuntimeError(f"보관된 원본이 넣은 파일과 다르다: {source['title']}")
             outcomes.append({
                 "title": source["title"], "status": status, "id": str(document["id"]),
                 "version": document["version"], "extraction_status": document["extraction_status"],
+                "original_sha256": original["sha256"],
             })
     return outcomes
 

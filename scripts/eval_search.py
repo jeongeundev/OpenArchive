@@ -102,6 +102,9 @@ def grade_evidence(hits: list[SearchHit], evidence: list[dict] | None) -> dict |
     return result
 
 
+FAILURE_CAUSES = ("complete", "selection", "candidates", "extraction")
+
+
 def _normalize(text: str) -> str:
     return " ".join(text.split())
 
@@ -229,18 +232,23 @@ def summarize(results: list[QueryResult], ks: tuple[int, ...] = DEFAULT_KS) -> d
     summary: dict = {"queries": len(results)}
     if no_answer:
         summary["answerable_queries"] = count
-    for k in ks:
-        summary[f"recall@{k}"] = (
-            sum(recall_at_k(r.ranked, r.relevant, k) for r in answerable) / count
-        )
-    summary["mrr"] = sum(reciprocal_rank(r.ranked, r.relevant) for r in answerable) / count
-    summary["top1_hits"] = sum(1 for r in answerable if r.first_relevant_rank == 1)
-    summary["misses"] = sum(1 for r in answerable if r.first_relevant_rank is None)
-    summary["via_only"] = sum(1 for r in answerable if r.relevant_only_via)
+    if count:
+        for k in ks:
+            summary[f"recall@{k}"] = (
+                sum(recall_at_k(r.ranked, r.relevant, k) for r in answerable) / count
+            )
+        summary["mrr"] = sum(reciprocal_rank(r.ranked, r.relevant) for r in answerable) / count
+        summary["top1_hits"] = sum(1 for r in answerable if r.first_relevant_rank == 1)
+        summary["misses"] = sum(1 for r in answerable if r.first_relevant_rank is None)
+        summary["via_only"] = sum(1 for r in answerable if r.relevant_only_via)
     if no_answer:
         summary["no_answer_queries"] = no_answer
+    if no_answer or any(r.leaks for r in results):
         summary["leaks"] = sum(1 for r in results if r.leaks)
-    for cause in ("complete", "selection", "candidates", "extraction"):
+    past = sum(1 for r in results if r.past_in_revisions)
+    if past:
+        summary["past_in_revisions"] = past
+    for cause in FAILURE_CAUSES:
         tally = sum(1 for r in results if r.failure_cause == cause)
         if tally:
             summary[f"cause_{cause}"] = tally
@@ -317,12 +325,13 @@ def render(results: list[QueryResult], summary: dict) -> str:
         if result.failure_cause is not None:
             diagnosis_mark += f"  [원인={result.failure_cause}]"
         if not result.relevant:
-            mark = "! " if result.leaks else "0 "
+            mark = "0 "
             diagnosis_mark += f"  [정답 없음 최고점={result.top_score}]"
-            if result.leaks:
-                diagnosis_mark += f"  [누출={result.leaks}]"
-            if result.past_in_revisions:
-                diagnosis_mark += "  [과거 값은 이전 버전 자리에 있음]"
+        if result.leaks:
+            mark = "! "
+            diagnosis_mark += f"  [누출={result.leaks}]"
+        if result.past_in_revisions:
+            diagnosis_mark += "  [과거 값은 이전 버전 자리에 있음]"
         lines.append(
             f"{mark}{rank if rank is not None else '-':>2}  {result.query}"
             f"  →  {' / '.join(result.top_titles)}{evidence_mark}{diagnosis_mark}"
@@ -377,8 +386,9 @@ def main() -> None:
                     **({"evidence": r.evidence} if r.evidence is not None else {}),
                     **({"preview_diagnosis": r.preview_diagnosis} if r.preview_diagnosis is not None else {}),
                     **({"failure_cause": r.failure_cause} if r.failure_cause is not None else {}),
-                    **({"leaks": r.leaks, "top_score": r.top_score,
-                        "past_in_revisions": r.past_in_revisions} if not r.relevant else {}),
+                    **({"top_score": r.top_score} if not r.relevant else {}),
+                    **({"leaks": r.leaks} if r.leaks or not r.relevant else {}),
+                    **({"past_in_revisions": r.past_in_revisions} if r.past_in_revisions else {}),
                 }
                 for r in results
             ],
