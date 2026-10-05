@@ -1,0 +1,26 @@
+{
+  "project": "OpenArchive",
+  "phase": "m23-audit-log",
+  "steps": [
+    { "step": 0, "name": "audit-table", "type": "feat", "scope": "db",
+      "desc": "감사 로그 테이블과 고칠 수도 지울 수도 없게 하는 거부 트리거 (028·029)", "status": "pending" },
+    { "step": 1, "name": "audit-triggers", "type": "feat", "scope": "db",
+      "desc": "쓰기 동작을 같은 트랜잭션에서 기록하는 트리거와 원본 내려받기 기록 함수 (029)", "status": "pending" },
+    { "step": 2, "name": "access-diff", "type": "refactor", "scope": "api",
+      "desc": "열람 범위 교체를 차이만 반영하도록 바꿔 부여 변경 기록이 실제 변경만 남게 한다", "status": "pending" },
+    { "step": 3, "name": "actor-rest", "type": "feat", "scope": "api",
+      "desc": "행위자 헬퍼 set_actor와 REST 인증 연결, 원본 내려받기 기록", "status": "pending" },
+    { "step": 4, "name": "actor-mcp", "type": "feat", "scope": "mcp",
+      "desc": "stdio MCP 도구 호출의 행위자를 MCP_USER_ID로 넘긴다", "status": "pending" },
+    { "step": 5, "name": "actor-cli", "type": "feat", "scope": "cli",
+      "desc": "운영자 CLI의 --user 쓰기 경로에 행위자를 넘긴다", "status": "pending" },
+    { "step": 6, "name": "actor-worker", "type": "feat", "scope": "worker",
+      "desc": "워커가 반영하는 텍스트 인식 결과를 시스템 행위자로 기록한다", "status": "pending" },
+    { "step": 7, "name": "audit-api", "type": "feat", "scope": "api",
+      "desc": "관리자 전용 감사 로그 조회 API — 사용자·동작 필터, 최신순 커서", "status": "pending" },
+    { "step": 8, "name": "audit-ui", "type": "feat", "scope": "frontend",
+      "desc": "관리 메뉴 「감사 로그」 화면", "status": "pending" },
+    { "step": 9, "name": "audit-docs", "type": "docs", "scope": "adr",
+      "desc": "ADR-055 구현 확정과 아키텍처·조사 문서 반영", "status": "pending" }
+  ]
+}
