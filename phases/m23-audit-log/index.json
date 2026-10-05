@@ -107,7 +107,10 @@
       "type": "docs",
       "scope": "adr",
       "desc": "ADR-055 구현 확정과 아키텍처·조사 문서 반영",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-10-06T02:00:25+0900",
+      "summary": "감사 로그 구현을 문서에 반영: ADR-055 상태를 구현 #186으로·결정 1 아래 트리거/action 표와 부여 차이 기록·연쇄 삭제 건너뜀·worker 표기·결정 3 HA 실측(M1~M4 누수 0, 대조군 75/100)·set_actor 단일 지점·트레이드오프 6·「구현 때 정함」을 사용자 결정 ①~⑥으로 닫음(⑤는 #190), ADR-028/034/044/054·PRD·ROADMAP의 미구현 표기 갱신(폴더 열람 범위 변경 기록은 #187), ARCHITECTURE에 audit_log 스키마·감사 트리거 표·행위자 전달 흐름·GET /api/admin/audit, OPENSQL_RESEARCH §5-3(HA transaction 풀 실측)·§12 26번, OPERATIONS 감사 로그 절 추가; CLAUDE.md는 구현과 어긋나지 않아 그대로, test_architecture 8개 통과",
+      "completed_at": "2026-10-06T02:03:14+0900"
     }
   ],
   "created_at": "2026-10-06T00:16:26+0900"
