@@ -96,3 +96,23 @@ def test_examples_only_import_standard_library_modules():
     }
 
     assert not violations, f"examples 표준 라이브러리 밖 의존: {violations}"
+
+
+def test_application_does_not_insert_audit_log():
+    pattern = re.compile(r"\binsert\s+into\s+audit_log\b", re.IGNORECASE)
+    assert not [str(path) for path in APPLICATION_SOURCE_ROOTS[0].rglob("*.py")
+                if pattern.search(path.read_text())]
+
+
+def test_audit_gucs_are_confined_to_helper():
+    root = APPLICATION_SOURCE_ROOTS[0]
+    names = ("openarchive.actor_id", "openarchive.actor_via", "openarchive.share_id")
+    assert not [str(path) for path in root.rglob("*.py")
+                if path != root / "services" / "audit.py"
+                and any(name in path.read_text() for name in names)]
+
+
+def test_application_does_not_set_session_audit_gucs():
+    pattern = re.compile(r"\bSET\s+openarchive\.", re.IGNORECASE)
+    assert not [str(path) for path in APPLICATION_SOURCE_ROOTS[0].rglob("*.py")
+                if pattern.search(path.read_text())]

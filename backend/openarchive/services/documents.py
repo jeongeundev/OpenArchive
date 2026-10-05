@@ -824,7 +824,7 @@ async def get_original_file(
     cur = conn.cursor(row_factory=dict_row)
     await cur.execute(
         """
-        SELECT filename, data, sha256
+        SELECT filename, data, sha256, file_version
         FROM document_files
         WHERE document_id = %(id)s
           AND (%(version)s::int IS NULL OR file_version = %(version)s)
@@ -836,6 +836,10 @@ async def get_original_file(
     original = await cur.fetchone()
     if original is None:
         raise OriginalFileNotFound
+    await conn.execute(
+        "SELECT record_original_download(%s, %s)",
+        (document_id, original.pop("file_version")),
+    )
     original["media_type"] = media_type_for(original["filename"])
     return original
 
