@@ -11,6 +11,7 @@
     "build:static": "STATIC_EXPORT=1 next build && rm -rf ../backend/openarchive/static && cp -R out ../backend/openarchive/static"
   },
   "dependencies": {
+    "geist": "1.7.2",
     "jszip": "3.10.1",
     "next": "16.3.0",
     "react": "19.2.8",

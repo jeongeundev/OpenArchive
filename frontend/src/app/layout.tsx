@@ -1,20 +1,13 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+// 글꼴은 패키지에 든 파일을 쓴다. next/font/google은 빌드 때마다 Google Fonts 응답을 받아와
+// 응답이 바뀌면(unicode-range 등) 소스가 그대로여도 동봉 산출물이 달라진다.
+import { GeistSans } from "geist/font/sans";
+import { GeistMono } from "geist/font/mono";
 import { SiteHeader } from "@/components/SiteHeader";
 import { AuthProvider } from "@/components/AuthProvider";
 import { RequireAuth } from "@/components/RequireAuth";
 import { RetryNotice } from "@/components/RetryNotice";
 import "./globals.css";
-
-const geistSans = Geist({
-  variable: "--font-geist-sans",
-  subsets: ["latin"],
-});
-
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
-  subsets: ["latin"],
-});
 
 export const metadata: Metadata = {
   title: "OpenArchive",
@@ -25,7 +18,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html
       lang="ko"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      className={`${GeistSans.variable} ${GeistMono.variable} h-full antialiased`}
     >
       <body className="flex min-h-full flex-col">
         <AuthProvider>
