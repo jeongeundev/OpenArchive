@@ -202,6 +202,23 @@ class GroupSummary(BaseModel):
     members: list[str]
 
 
+class AuditEntry(BaseModel):
+    id: int
+    occurred_at: datetime
+    action: str
+    actor: str | None
+    actor_via: str | None
+    db_role: str
+    document_id: UUID | None
+    document_title: str | None
+    detail: dict
+
+
+class AuditPage(BaseModel):
+    items: list[AuditEntry]
+    next_before_id: int | None
+
+
 class CreateShareRequest(BaseModel):
     name: str = Field(min_length=1, max_length=100)
 
