@@ -41,7 +41,10 @@
       "type": "feat",
       "scope": "api",
       "desc": "행위자 헬퍼 set_actor와 REST 인증 연결, 원본 내려받기 기록",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-10-06T00:56:25+0900",
+      "summary": "set_actor(conn, *, actor, via, share_id=None) 트랜잭션 범위 GUC 헬퍼·current_user 세션/사용자 토큰/공유 토큰 연결·get_original_file의 record_original_download 호출 구현; 범위 217개·전체 1602개 및 Ruff·아키텍처 검사 통과, mutant 4종 검출·복원",
+      "completed_at": "2026-10-06T01:09:40+0900"
     },
     {
       "step": 4,
