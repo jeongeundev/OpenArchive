@@ -228,6 +228,9 @@ INFO: continue to run as a leader because failsafe mode is enabled and all membe
    Patroni·PostgreSQL·OpenProxy는 `nohup`으로 띄운 맨 프로세스다. Patroni를 죽인 뒤 106초 동안
    되살릴 주체가 없었고, Patroni watchdog도 `/dev/watchdog` 권한 부재로 비활성이다. 따라서
    **"HA 구성이 완전히 살아 있다"고 말하면 틀린다.**
+   > **[2026-09-26, #110] HA 3노드는 다르다.** node1~3은 Patroni·OpenProxy까지 systemd로 등록해 부팅 시 자동
+   > 기동하며, 재부팅 실측에서 노드가 클러스터에 스스로 돌아왔다(`SETUP_OPENSQL.md` §16, `OPENSQL_DEVIATIONS.md`
+   > 「systemd 등록 범위」). 위 3번은 Single 설치(2026-08-09)의 실태다.
 
 배포판 `$OPENSQL_HOME/scripts/`에는 `finalize_single_to_ha.sh`가 있어 Single→HA 전환 경로 자체는
 남아 있다. 그러나 **그 존재는 사무국의 Single 구성 지시를 어길 근거가 아니다.**
@@ -1275,15 +1278,15 @@ failover를 시연한 것이 아니다. 상세 조건과 타임라인은 §0 "Si
 
 | # | 항목 | Single 사유 | 3노드 (#110·#122) |
 |---|---|---|---|
-| 7 | 리더 선출·승격·`timeline` 증가 | 승격 대상 replica가 없고 `patronictl history`도 `[]`다 | ✅ Primary 노드 전원 차단 3회 모두 동기 standby 승격, 쓰기 중단 30.7~40.7초, 유실 0 |
-| 8 | OpenProxy의 새 프라이머리 자동 발견 | 기능 검증 이전에 `use_patroni`·`[general.etcd]` 설정 자체가 없다 | ✅ `[general.etcd]`로 leader 키 watch(§4 실측 정정), switchover 쓰기 중단 10.3초 |
+| 7 | 리더 선출·승격·`timeline` 증가 | 승격 대상 replica가 없고 `patronictl history`도 `[]`다 | ✅ (동기 1대 시절) Primary 노드 전원 차단 3회 모두 동기 standby 승격, 쓰기 중단 30.7~40.7초, 유실 0. 비동기 최종 구성에서는 30.6~40.8초·유실 0(`SETUP_OPENSQL.md` §16 「최종 구성 장애 검증」, #165) |
+| 8 | OpenProxy의 새 프라이머리 자동 발견 | 기능 검증 이전에 `use_patroni`·`[general.etcd]` 설정 자체가 없다 | ✅ `[general.etcd]`로 leader 키 watch(§4 실측 정정), switchover 쓰기 중단 10.3초(동기 1대 시절, 비동기 최종 구성 10.1~10.3초 — #165) |
 | 23 | watchdog 펜싱 | `/dev/watchdog` 권한이 없어 Patroni watchdog이 비활성이다 | ⛔ **확인하지 않았다** — 3노드 VM에는 `/dev/watchdog`이 있지만 공식 구성이 켜지 않아 켜지 않았다. Leader 네트워크 분리 1회에서 Patroni 자기 강등으로 두 Primary가 겹치지 않음은 확인(#165) |
-| 24 | VIP failover | Single 구성에는 이중화된 OpenProxy와 VRRP VIP가 없다 | ✅ VIP MASTER 노드 전원 차단, VIP만 옮긴 회차 쓰기 중단 8.2초 |
+| 24 | VIP failover | Single 구성에는 이중화된 OpenProxy와 VRRP VIP가 없다 | ✅ VIP MASTER 노드 전원 차단, VIP만 옮긴 회차 쓰기 중단 8.2초(동기 1대 시절, 비동기 최종 구성 10.2초 — #165) |
 
-사무국이 Single 구성을 지시했으므로(§0) 이 네 항목은 현재 구성에서 검증할 수 없다. 반면
+1차 제출 때는 사무국이 Single 구성을 지시했으므로(§0) 이 네 항목을 검증할 수 없었다. 반면
 PostgreSQL 프로세스 장애 자동 복구와 etcd 장애 중 primary 유지는 #27에서 실측했다. `patroni.yml`의
-파라미터와 `finalize_single_to_ha.sh`는 HA 전환 경로가 제품에 남아 있다는 근거일 뿐, 사무국의
-Single 지시를 어길 근거는 아니다. 고가용성 요건의 결정 정정은 후속 step에서 ADR-020에 기록한다.
+파라미터와 `finalize_single_to_ha.sh`는 HA 전환 경로가 제품에 남아 있다는 근거였을 뿐, 사무국의
+Single 지시를 어길 근거는 아니었다.
 
 2차 평가에서 HA 라이선스가 나와(§0) 7·8·24번을 공식 3노드에서 실측했다 — 수치는 §3 「3노드 실측」,
 결정은 ADR-020 2026-09-28 개정. 23번(watchdog)은 3노드에서도 확인하지 않아 ⛔로 남는다. 최종 구성(비동기)의 재측정은 `SETUP_OPENSQL.md` §16 「최종 구성 장애 검증」(#165).

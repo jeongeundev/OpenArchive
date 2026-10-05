@@ -63,27 +63,32 @@ OpenArchive/
 │   │   ├── config.py             # pydantic-settings — $OPENARCHIVE_HOME/.env(기본 ~/.openarchive/.env)
 │   │   ├── db.py                 # AsyncConnectionPool만 — import 시 부작용 없음
 │   │   ├── migrations/           # __init__.py = 러너(API startup과 `openarchive init`이 호출)
-│   │   │                         #   + SQL(패키지 안이라 wheel에 실린다) 001~019: extensions, tables, triggers, indexes,
+│   │   │                         #   + SQL(패키지 안이라 wheel에 실린다) 001~027: extensions, tables, triggers, indexes,
 │   │   │                         #   trgm, edges(006~008), auth(009), links(010~012), token(013),
 │   │   │                         #   edges 재설계(014 — rebuild_document_edges), 위키링크 정규화(015),
 │   │   │                         #   관계 잡 분리(016 — embedding_jobs.kind / 017 — ready 트리거,
 │   │   │                         #   ADR-029 결정 3 개정), 원본 파일 판 보관(018 — document_files, ADR-046),
-│   │   │                         #   문서 생성 멱등키(019 — idempotency_keys, ADR-047)
-│   │   ├── cli.py                # `openarchive init`(첫 관리자 포함)·`serve`·`create-user`·`reset-password`·`rebuild-edges`·`reextract` — 운영자 CLI (ADR-039·040·046)
-│   │   ├── api/                  # 라우터: documents, search, system, auth, admin,
-│   │   │                         #   diagnostics, clusters, retry (+ deps, schemas)
+│   │   │                         #   문서 생성 멱등키(019 — idempotency_keys, ADR-047), 잡 lease(020 — ADR-050),
+│   │   │                         #   추출 상태·추출 잡(021·022 — OCR, ADR-052), 표 셀 `\|` 위키링크(023),
+│   │   │                         #   재계산 문서 잠금(024), 그룹·열람 부여(025 — ADR-044), 외부 공유(026),
+│   │   │                         #   전량 재계산을 관계 잡으로(027 — enqueue_all_edge_jobs, ADR-029 결정 6 개정)
+│   │   ├── cli.py                # `openarchive init`(첫 관리자 포함)·`serve`·`create-user`·`reset-password`·`rebuild-edges`·`reextract`
+│   │   │                         #   ·`import`·`export`·`search`·`ask`·`demo` — 운영자 CLI, DB에 직접 붙는다 (ADR-039·040·046)
+│   │   ├── api/                  # 라우터: documents, search, ask, system, auth, admin, groups(+principals),
+│   │   │                         #   shares, diagnostics, clusters / 미들웨어 retry (+ deps, schemas)
 │   │   ├── services/             # parsing, chunking, documents, search, related,
-│   │   │                         #   links, diagnostics, clusters, auth, system, visibility
-│   │   │                         #   answer.py(근거 조립·답변 생성, ADR-043 구현 계약)
-│   │   ├── answers/              # 답변 생성 프로바이더: fake·ollama (ADR-043 구현 계약)
+│   │   │                         #   links, diagnostics, clusters, auth, system, visibility,
+│   │   │                         #   grants(그룹·부여), shares(외부 공유), answer(근거 조립·답변 생성, ADR-043)
+│   │   ├── answers/              # 답변 생성 프로바이더: fake·ollama (ADR-043)
 │   │   ├── embeddings/           # base.py(Protocol), local.py(bge-m3), fake.py
 │   │   ├── worker.py             # 워커 진입점 — 임베딩 잡과 관계 잡을 같은 큐에서 처리
+│   │   ├── demo.py · demo_corpus/ # `openarchive demo` 예제 문서
 │   │   └── mcp_server/server.py  # FastMCP stdio — search_documents, get_document, list_documents, create_document
 │   └── tests/                    # test_chunking.py, test_triggers.py, test_worker.py, test_search_api.py ...
 └── frontend/
     └── src/
-        ├── app/                  # /(목록+업로드), /documents/[id], /search, /login,
-        │                         #   /diagnostics, /clusters, /admin/status, /admin/users
+        ├── app/                  # /(목록+업로드), /documents/[id], /search(+답변 패널), /login, /settings,
+        │                         #   /diagnostics, /clusters, /admin/status, /admin/users, /admin/groups
         ├── components/
         ├── types/
         └── lib/                  # API 클라이언트 (fetch 래퍼)
@@ -91,9 +96,9 @@ OpenArchive/
 
 `services/visibility.py`의 `VISIBLE_TO_USER`는 **모든 조회 경로가 공유하는 단일 열람 술어**다. 검색·관련 문서·그래프 순회·집계·위키링크 해석이 각자 조건을 쓰면 한 곳만 빠져도 비공개 문서가 새어 나간다 (ADR-018, ADR-027). 규칙은 사용자에게 "public이거나, 소유자이거나, 본인·본인 그룹에 부여가 있다"이고, `share:<공유 uuid>` 주체에게는 "그 공유에 부여가 있다"뿐이며(ADR-044), 테이블과 주체 값 하나만 참조하는 순수 SQL이라 바인딩을 `current_setting('app.principal')`로 바꾸면 그대로 RLS 정책이 된다. 쓰기 경로의 존재 판정(`_load_for_write`)도 이 술어를 쓴다 — 보이는 사람의 쓰기는 403, 안 보이는 사람은 404.
 
-`services/grants.py`는 그룹·구성원 관리와 부여 대상 이름 해석을 맡는다(#97 b 후속 step에서 구현). 문서 열람 범위 조회·교체는 문서 서비스가 소유자 경계를 지키며 이 서비스를 재사용한다(ADR-044 「관리 경로」).
+`services/grants.py`는 그룹·구성원 관리와 부여 대상 이름 해석을 맡는다(#97 b). 문서 열람 범위 조회·교체는 문서 서비스가 소유자 경계를 지키며 이 서비스를 재사용한다(ADR-044 「관리 경로」).
 
-MCP 서버는 `openarchive.services`를 직접 재사용한다. `search_documents`는 발췌(`excerpt`)·출처(`document_id`, `title`, `filename`)·기준 버전(`based_on_version`)을 반환하고, `get_document`는 문서 텍스트와 텍스트 버전·청크 상태를, `list_documents`는 접근 가능한 문서 메타데이터를 반환한다. `create_document`는 `title`·`content`·`content_type`(`txt`·`md`)·`tags`·`visibility`를 받아 기존 텍스트 진입점으로 공급한다. 사용자 컨텍스트는 툴 인자가 아니라 `MCP_USER_ID` 환경변수로 고정한다. 미설정 시 public 문서 읽기는 허용하지만 소유자를 확정할 수 없어 쓰기는 거부한다 (ADR-025, ADR-036).
+MCP 서버는 `openarchive.services`를 직접 재사용한다. `search_documents`는 발췌(`excerpt`)·출처(`document_id`, `title`, `filename`)·기준 버전(`based_on_version`)을 반환하고, `get_document`는 문서 텍스트와 텍스트 버전·청크 상태를, `list_documents`는 접근 가능한 문서 메타데이터를 반환한다. `create_document`는 `title`·`content`·`content_type`(`txt`·`md`)·`tags`·`visibility`·`grant_users`·`grant_groups`를 받아 기존 텍스트 진입점으로 공급한다. 사용자 컨텍스트는 툴 인자가 아니라 `MCP_USER_ID` 환경변수로 고정한다. 미설정 시 public 문서 읽기는 허용하지만 소유자를 확정할 수 없어 쓰기는 거부한다 (ADR-025, ADR-036).
 
 `POST /api/search`도 같은 근거 필드(`filename`·`based_on_version`)를 함께 내려준다. 서비스가 하나여도 두 경로의 응답 스키마가 갈라지면 "REST와 MCP의 결과가 같다"가 깨진다 — `tests/test_mcp_server.py`가 두 응답을 직접 비교해 이를 지킨다.
 
@@ -517,7 +522,7 @@ COMMIT;
 
    반납하지 못하고 죽어도(SIGKILL·OOM) 정합성은 깨지지 않는다. 잡이 좀비로 남아 5번이 lease 만료 후에 회수할 뿐이다. 반납은 그 대기를 없애는 최적화다.
 
-7. 프로세스 감독: 워커가 `SIGKILL`·OOM으로 사라지면 스스로 살아날 수 없고, **되살리지 않으면 임베딩 파이프라인이 통째로 멈춘다** — 새 문서는 영원히 검색되지 않고 수정된 문서는 옛 벡터로 검색된다. 배포 호스트에서는 systemd **user** 유닛(`scripts/openarchive-worker.service` → `~/.config/systemd/user/`, `Restart=always`)이 이를 되살린다. system 유닛이 아닌 이유는 SELinux다 — Enforcing에서 `init_t`가 홈 아래 venv를 실행하지 못한다. 재부팅 생존은 여전히 없다 — 그건 DB도 함께 사라지는 문제라 워커만 살려도 붙을 곳이 없다 ([ADR-038](ADR.md)).
+7. 프로세스 감독: 워커가 `SIGKILL`·OOM으로 사라지면 스스로 살아날 수 없고, **되살리지 않으면 임베딩 파이프라인이 통째로 멈춘다** — 새 문서는 영원히 검색되지 않고 수정된 문서는 옛 벡터로 검색된다. 워커는 보통 `openarchive serve`가 API와 함께 띄운다. serve가 묶는 것은 **기동과 종료뿐**이다 — 한쪽이 멈추면 나머지도 내리고 0이 아닌 코드로 끝나 반쪽만 도는 상태(업로드는 되는데 검색에 안 잡히는 상태)를 만들지 않지만, 죽은 프로세스를 되살리지는 않는다. 되살리는 것은 serve 바깥 감독자(systemd 등)의 일이다 (ADR-038·039). `scripts/deploy_app_host.sh`로 배포하던 호스트에서는 워커만 systemd **user** 유닛(`scripts/openarchive-worker.service` → `~/.config/systemd/user/`, `Restart=always`)으로 따로 돌렸다. system 유닛이 아닌 이유는 SELinux다 — Enforcing에서 `init_t`가 홈 아래 venv를 실행하지 못한다 ([ADR-038](ADR.md)).
 
    **재기동 직후 좀비가 즉시 회수되지는 않는다.** 소유자의 죽음을 lease 만료로 판정하므로 lease(기본 60초)를 기다린다. 그 대기가 파이프라인 전체를 멈추지는 않는다 — 좀비는 `processing`이라 `claim_job`의 대상이 아니고, 워커는 남은 `pending` 잡을 그대로 집어간다. 크래시의 영향은 그 잡 하나로 격리된다(`test_pipeline_keeps_draining_while_a_zombie_waits_for_its_lease`).
 
@@ -589,6 +594,7 @@ COMMIT;
 | 미처리 잡의 무손실 보존 | **DB 계층** (`embedding_jobs`는 WAL 로깅 테이블 → 스탠바이 복제) |
 | 연결 끊김 시 재시도, 잡 재개, 좀비 회수 | **애플리케이션 (우리)** |
 | 죽은 연결 감지·오염 연결 폐기, 일시 불가용의 503·백오프, 문서 생성 멱등키, 잡 lease | **애플리케이션 (우리)** (ADR-047·048·050) |
+| 백업·시점 복원(PITR) — 잘못 지운 데이터·손상·클러스터 전체 상실 | **Barman** (전용 노드 node4, WAL streaming + 영구 슬롯, ADR-053). 복원은 운영자가 격리 인스턴스로 한다. 앱에는 휴지통이 없다 — 삭제는 즉시 영구이고 되살리는 경로는 이 복원뿐이다 |
 
 > **`PROJECT_CONTEXT.md` 설계 원칙 준수**: 위 표에서 주체가 OpenSQL 컴포넌트인 줄은 OpenSQL이 제공하는 기능이므로 애플리케이션에서 중복 구현하지 않는다 (ADR-006).
 >
@@ -606,7 +612,7 @@ DATABASE_URL="postgresql://app@<vip>:6432/<pool_name>"
 
 ### 애플리케이션이 담당하는 복구 로직
 
-- **API**: `psycopg_pool.AsyncConnectionPool(check=AsyncConnectionPool.check_connection)` — 죽은 연결을 대여 시점에 감지·폐기·재수립. 처리 도중 끊긴 요청은 미들웨어가 **1회 재시도**하되 대상은 **읽기 전용 요청**뿐이다(`GET`·`HEAD`·`POST /api/search`). 쓰기는 커밋 도달 여부를 구분할 수 없어 재시도 시 중복 생성 위험이 있다 (ADR-023).
+- **API**: `psycopg_pool.AsyncConnectionPool(check=AsyncConnectionPool.check_connection)` — 죽은 연결을 대여 시점에 감지·폐기·재수립. 처리 도중 끊긴 요청은 미들웨어가 **1회 재시도**하되 대상은 **읽기 전용 요청**뿐이다(`GET`·`HEAD`·`POST /api/search`·`POST /api/ask` — ask는 DB 단계가 생성 전에 끝나 재시도가 생성을 두 번 돌리지 않는다). 쓰기는 커밋 도달 여부를 구분할 수 없어 재시도 시 중복 생성 위험이 있다 (ADR-023).
 - **일시 불가용은 503 + `Retry-After`**: 기다리면 풀리는 DB 오류를 `openarchive.db.is_unavailable` 하나로 가른다 — 연결 유실·풀 대여 시간 초과(SQLSTATE 없는 `OperationalError`), 연결 예외 `08xxx`, OpenProxy `AllServersDown`과 서버 소켓 오류가 올라오는 `58000`, 서버 종료·기동 중인 `57P01`·`57P02`·`57P03`, 승격 직후 쓰기가 replica로 간 `25006`. **나열한 것만** 일시 불가용이다 — `OperationalError`에는 디스크 가득 참(`53100`)·인증 실패(`28P01`)·statement timeout(`57014`)처럼 기다려도 풀리지 않는 것도 섞여 있어, 그것을 503으로 주면 결함이 가려진다. 한계: 잘못된 DSN·비밀번호는 풀에서 `PoolTimeout`으로 보여 장애와 구별되지 않는다. 미들웨어(`api/retry.py`)의 즉시 1회 재시도도 이 기준을 따르고, 끝내 풀리지 않으면 **503 + `Retry-After: 1`**로 응답한다. 쓰기도 503은 받지만 즉시 재시도는 `Idempotency-Key`가 있는 문서 생성(`POST /api/documents`·`/api/documents/text`)만 한다 — 다른 쓰기는 헤더가 붙어 와도 키를 지키지 않는다. 그 밖의 오류는 500이며, 500은 코드 결함에만 남는다. #110 B에서는 장애 구간 응답이 전부 500이었다(B-5) (ADR-048 결정 3).
 - **긴 재시도는 클라이언트가 한다**: 즉시 1회로는 7~42초 중단을 덮지 못한다. 웹 UI(`lib/api.ts`)의 읽기와 업로드, MCP 도구 4개(읽기 3개와 `create_document`)가 503·네트워크 오류(MCP는 분류된 DB 오류)를 **지수 백오프(1초 시작·상한 8초) + 전체 지터, 총 60초**로 다시 시도한다. 웹 UI는 503의 `Retry-After`보다 일찍 보내지 않는다 — 간격은 `max(Retry-After, 지터 백오프)`이고, 알린 값이 남은 예산을 넘으면 바로 포기한다(RFC 9110 §10.2.3). MCP는 HTTP를 거치지 않고 서비스를 직접 불러 받을 헤더가 없다. 쓰기는 멱등키가 있는 것만 재시도한다 — 웹 UI는 업로드 동작마다, MCP는 `create_document` 호출마다 키를 하나 만들어 그 요청의 모든 재시도에 쓴다(ADR-047). 편집·태그·삭제 등 다른 쓰기는 재시도하지 않는다. 서버는 요청을 붙잡고 버티지 않는다 (ADR-048 결정 4).
 - **워커 (잡 처리)**: 동일한 풀 정책. 처리 중 연결이 끊기면 트랜잭션이 롤백되고, 잡은 `processing` 상태로 남았다가 좀비 회수 스윕이 `pending`으로 되돌린다.
@@ -631,9 +637,9 @@ API_PORT=18000 \
 bash scripts/demo_recovery.sh
 ```
 
-**② etcd 정지 — 실측 문서만 유지.** etcd를 99초 정지했을 때 `failsafe_mode=true`가 primary 강등을 막아 앱은 전 구간 아무것도 눈치채지 못했고 6432·5432 쓰기가 계속 가능했다. 즉 DCS 장애는 곧 서비스 장애가 아니다.
+**② etcd 정지 — 실측 문서만 유지 (Single 설치 2026-08-09 기준).** etcd를 99초 정지했을 때 `failsafe_mode=true`가 primary 강등을 막아 앱은 전 구간 아무것도 눈치채지 못했고 6432·5432 쓰기가 계속 가능했다. 즉 DCS 장애는 곧 서비스 장애가 아니다.
 
-**③ Patroni 정지 — 실측 문서만 유지.** Patroni만 `SIGKILL`해도 PostgreSQL은 계속 쓰기를 받았지만, etcd의 리더 키는 23.9초에 소멸했고 106초 관측 동안 아무것도 Patroni를 되살리지 않았다. 이 설치의 systemd 유닛이 `opensql-etcd.service` 하나뿐이고 Patroni·PostgreSQL·OpenProxy는 `nohup` 맨 프로세스라는 구성과 일치한다.
+**③ Patroni 정지 — 실측 문서만 유지 (Single 설치 2026-08-09 기준).** Patroni만 `SIGKILL`해도 PostgreSQL은 계속 쓰기를 받았지만, etcd의 리더 키는 23.9초에 소멸했고 106초 관측 동안 아무것도 Patroni를 되살리지 않았다. 이 설치의 systemd 유닛이 `opensql-etcd.service` 하나뿐이고 Patroni·PostgreSQL·OpenProxy는 `nohup` 맨 프로세스라는 구성과 일치한다. HA 3노드는 Patroni·OpenProxy도 systemd로 등록해 재부팅 뒤 자동 재합류한다(`SETUP_OPENSQL.md` §16 교정 4).
 
 ②·③은 시연 시간에 비해 핵심 서사를 분산시키므로 코드로 만들지 않았다. 실측 조건과 타임라인은 `OPENSQL_RESEARCH.md` §0 「Single 장애 주입 실측」에 남긴다.
 
@@ -690,6 +696,7 @@ OpenSQL `patroni.yml`의 PostgreSQL 파라미터는 `max_connections: 100`이다
 | `GET /api/documents/{id}/links` | **본문이 가리키는 위키링크.** 조회자의 열람 범위에서 해석하며, 대상이 없거나 보이지 않으면 `document_id: null` (ADR-030) |
 | `GET /api/documents/{id}/backlinks` | **이 문서를 가리키는 문서.** 열람 가능한 출발 문서만 |
 | `POST /api/search` | 하이브리드 검색 + 관계 순회 (아래) |
+| `POST /api/ask` | **근거 기반 답변** — 로그인 필요. 검색과 같은 단일 SQL로 근거를 고른 뒤 답변 프로바이더가 답한다. `ANSWER_PROVIDER=off`(기본)면 `status: "disabled"` (아래 「근거 기반 답변」, ADR-043) |
 | `POST /api/auth/login` · `logout` · `GET /api/auth/me` | 최소 로그인. 세션 토큰은 `sessions` 테이블에 저장 |
 | `POST /api/auth/tokens` · `GET /api/auth/tokens` · `DELETE /api/auth/tokens/{id}` | **세션 전용** API 토큰 발급·목록·폐기. 원문은 발급 응답에만 반환하며 기본 scope는 `read` |
 | `PUT /api/auth/password` | **세션 전용** 자기 비밀번호 변경. 현재 비밀번호를 확인하고, 바꾼 뒤 그 계정의 세션을 전부 무효화한다. 틀린 현재 비밀번호는 403(세션은 유효하므로 401이 아니다). API 토큰은 폐기하지 않는다 (ADR-040) |
@@ -706,9 +713,9 @@ OpenSQL `patroni.yml`의 PostgreSQL 파라미터는 `max_connections: 100`이다
 | `POST /api/shares/{id}/tokens` `{name}` · `DELETE /api/shares/{id}/tokens/{token_id}` | 공유 토큰 발급(원문 1회)·폐기. 세션 전용 |
 | `GET /api/system/status` | **로그인 필요 · 운영/데모 전용**: `inet_server_addr()`(현재 접속 노드), pending/processing/error **임베딩** 잡 수(`kind='embed'`), 임베딩 프로바이더명, **정합성 검증 쿼리 결과**(`c.version <> d.version` 건수), **관계 미반영 문서 수**(`kind='edges'` 잡이 `done`이 아닌 문서), **텍스트 인식 대기·실패 문서 수**(`extraction_status`가 `pending`·`failed`). `/admin/status`가 소비하며 사용자 화면은 호출하지 않는다. SQL과 결과 모델은 `services/system.py`에 있고 라우터는 인증과 응답 변환만 맡는다 |
 
-> **공유 API(#97 c)는 후속 step의 구현 계약이다.** 남의 공유 id는 404, 추가할 문서가 안 보이면 404, 보이는 남의 문서면 403이다. 공유 토큰은 ADR-044 「공유」 결정 5의 읽기 허용 목록만 통과하며 나머지는 403이다. MCP는 바꾸지 않는다.
+> **공유 API(#97 c)** — 남의 공유 id는 404, 추가할 문서가 안 보이면 404, 보이는 남의 문서면 403이다. 공유 토큰은 ADR-044 「공유」 결정 5의 읽기 허용 목록만 통과하며 나머지는 403이다. MCP는 바꾸지 않는다.
 
-> **구현 현황 (M11-c 기준, #97 c 공유 API 제외)**: 위 표에서 #97 b로 표시한 관리 API를 제외한 경로가 구현되어 있다. #97 b API는 후속 step의 구현 계약이다. 파일 업로드와 JSON 텍스트 공급은 같은 INSERT 헬퍼와 DB 트리거 파생 계약을 공유한다. 프로그램은 사람이 발급한 `read_write` 위임 API 토큰으로 세션 쿠키 없이 텍스트를 공급할 수 있다 (ADR-034·035).
+> **구현 현황**: 위 표의 경로는 모두 구현되어 있다(#97 b 관리 API·#97 c 공유 API·`/api/ask` 포함). 파일 업로드와 JSON 텍스트 공급은 같은 INSERT 헬퍼와 DB 트리거 파생 계약을 공유한다. 프로그램은 사람이 발급한 `read_write` 위임 API 토큰으로 세션 쿠키 없이 텍스트를 공급할 수 있다 (ADR-034·035).
 >
 > **모든 조회에 열람 범위가 걸린다.** 검색·관련 문서·링크·백링크·진단 집계·클러스터가 같은 `VISIBLE_TO_USER` 술어를 쓴다. 볼 수 없는 문서는 자리 표시조차 남기지 않는다 — 표시 자체가 존재와 개수를 누출한다 (ADR-027).
 >
@@ -716,8 +723,8 @@ OpenSQL `patroni.yml`의 PostgreSQL 파라미터는 `max_connections: 100`이다
 >
 > 라우터는 얇다. 요청 검증과 상태 코드 변환만 하고 실제 로직은 `services/documents.py`·`services/search.py`·`services/system.py` 등에 있으며, MCP 서버가 문서·검색 서비스를 재사용한다. 도메인 예외를 상태 코드로 옮기는 매핑은 `main.py`의 exception handler 한 곳에 있다.
 
-**생성 시 부여 대상 (#97 b 구현 계약)**: 업로드 Form·텍스트 JSON·MCP `create_document`에
-`grant_users`·`grant_groups`(사용자명·그룹명)를 추가한다. 쓰기 토큰·MCP도 생성 시 지정할 수 있다.
+**생성 시 부여 대상 (#97 b)**: 업로드 Form·텍스트 JSON·MCP `create_document`가
+`grant_users`·`grant_groups`(사용자명·그룹명)를 받는다. 쓰기 토큰·MCP도 생성 시 지정할 수 있다.
 모르는 이름은 해당 이름을 짚어 400으로 거부한다. `public`에 대상을 보내면 400이며
 `visibility=private`로 보내도록 안내한다. 아래 멱등키 지문에도 파일·텍스트 양쪽의 부여 대상을 포함한다.
 
@@ -1184,11 +1191,11 @@ class EmbeddingProvider(Protocol):
 
 ## 프론트엔드 패턴
 
-- 사용자 화면: `/`(목록 + 업로드 드롭존), `/documents/[id]`(메타데이터·텍스트 버전 이력·청크 수와 기준 버전 요약·**문서 텍스트 편집**·관련 문서·태그 추천), `/search`(질의 + 태그/유형 필터 + 결과. "실행된 SQL 보기" 토글), `/clusters`(관계 군집 덩어리와 연결), `/diagnostics`(고아·중복 후보·미분류·깨진 링크), `/login`
+- 사용자 화면: `/`(목록 + 업로드 드롭존), `/documents/[id]`(메타데이터·텍스트 버전 이력·청크 수와 기준 버전 요약·**문서 텍스트 편집**·관련 문서·태그 추천), `/search`(질의 + 태그/유형 필터 + 결과. "실행된 SQL 보기" 토글. 로그인 사용자에게는 마지막 검색 입력으로 `POST /api/ask`를 부르는 **근거 기반 답변 패널** — `AnswerPanel`), `/clusters`(관계 군집 덩어리와 연결), `/diagnostics`(고아·중복 후보·미분류·깨진 링크), `/login`, `/settings`(자기 비밀번호 변경·API 토큰·외부 공유)
 - **편집은 Client Component**다. 보기 ↔ 편집 토글, 저장 시 `version`을 함께 전송하고 409를 처리한다. 저장 직후 상태 배지가 `pending → processing → ready`로 바뀌는 것을 2초 폴링으로 보여준다
 - **사용자 화면은 인프라 상태를 노출하지 않는다.** 페일오버가 나도 화면 구성이 달라지지 않으며, 사용자는 업로드·검색이 계속 성공하는 것만 본다 (UI_GUIDE 디자인 원칙 3).
 - **읽기 요청은 503·네트워크 오류를 백오프로 기다린다**(`lib/api.ts`). 읽기 함수는 `signal`을 받고, 훅과 화면 진입 시 조회는 마운트 동안 `AbortController` 하나로 묶어 **화면을 떠나면 진행 중인 요청과 백오프 대기를 함께 취소한다** — 쓸 곳 없는 재시도가 서버에 부하를 더하거나 재시도 안내가 다른 화면에 남지 않게 한다. 새 검색은 이전 검색을 취소한다. 사용자 동작으로 시작한 읽기(버전 본문 열기, 발급·생성 뒤 목록 다시 받기)도 `useUnmountSignal`로 같은 규칙을 따른다 — 앞선 쓰기 요청은 이미 커밋됐을 수 있어 취소하지 않는다. 기다리는 동안에만 `RetryNotice`가 「연결이 원활하지 않아 다시 시도하는 중입니다.」를 보이고 성공하면 사라진다. 무엇이 멈췄는지는 말하지 않는다. `/admin/status`의 `GET /api/system/status`만은 백오프하지 않는다 — 장애를 바로 드러내야 하는 관측 채널이고, 2초 폴링 자체가 재시도다 (ADR-048 결정 4, UI_GUIDE 원칙 3).
-- 관리 화면: `/admin/status` — `GET /api/system/status`를 폴링해 접속 노드·잡 수·프로바이더 표시. **페일오버 데모의 증거 채널**이며 사용자 내비게이션에 노출하지 않는다. `/admin/users` — 계정 발급·삭제 (ADR-028)
+- 관리 화면: `/admin/status` — `GET /api/system/status`를 폴링해 접속 노드·잡 수·프로바이더 표시. **페일오버 데모의 증거 채널**이며 사용자 내비게이션에 노출하지 않는다(→ #190에서 관리자 메뉴 노출로 개정 예정). `/admin/users` — 계정 발급·삭제 (ADR-028). `/admin/groups` — 그룹 생성·삭제와 구성원 관리 (ADR-044)
 - 화면은 모두 Client Component다. 로그인 세션 확인과 목록·상세·관리 화면의 폴링 때문이다
 - API 연동은 `next.config.js` rewrites로 FastAPI 프록시
 

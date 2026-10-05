@@ -44,9 +44,11 @@ API로, AI 에이전트는 MCP로 같은 문서와 같은 권한 규칙 위에�
 | 자동 정리 | 관계 그래프의 Louvain 군집으로 문서를 태그 없이 묶어 관계 지도를 그리고, 관련 문서·태그 추천, 고아·중복·깨진 위키링크 진단 |
 | 권한 | 볼 수 없는 문서는 검색·관련 문서·그래프·집계 어디에도 나타나지 않음. 웹·REST·MCP가 같은 열람 규칙을 공유 |
 | 열람 부여·외부 공유 | 비공개 문서에 사용자·그룹 열람 권한을 부여하고, 소유한 문서만 외부 공유에 넣어 읽기 전용 토큰으로 제공. 공유 주체는 지정 문서만 열람 |
-| MCP 근거 게이트웨이 | AI 에이전트에 발췌·출처·기준 버전을 공급하고(`search_documents` 등), `create_document`로 문서를 공급받음. 답변 생성은 클라이언트가 수행 |
+| 근거 기반 답변 (옵션) | 검색된 발췌만 근거로 로컬 LLM(Ollama)이 답하고, 인용 번호가 그 텍스트 버전의 그 대목으로 이어짐. 웹 검색 화면의 답변 패널 · `openarchive ask` · `POST /api/ask`. **기본 꺼짐**(`ANSWER_PROVIDER=ollama`로 켬)이며 근거를 고르는 검색에는 LLM이 없음 ([ADR-043](docs/ADR.md)) |
+| MCP 근거 게이트웨이 | AI 에이전트에 발췌·출처·기준 버전을 공급하고(`search_documents` 등), `create_document`로 문서를 공급받음. MCP 경로에서는 답변 생성을 클라이언트(에이전트)가 수행 |
 | 위임 API 토큰 | 계정 설정에서 프로그램용 토큰을 발급·폐기. scope는 `read`·`read_write` |
-| 장애 자동 복구 | 실 OpenSQL에서 DB 프로세스 재기동·앱 재연결·미처리 작업 재개와 3노드 전환을 검증. 측정 당시 구성과 현재 비동기 복제의 보장 범위는 아래 설명 참조 |
+| 장애 자동 복구 | 실 OpenSQL 3노드(비동기 복제)에서 Primary 프로세스·노드 사망, switchover, VIP 이동, Leader 재부팅·네트워크 분리, etcd 장애를 부하 중에 주입해 앱 재시작 없이 복구됨을 검증(#165). 관측 유실 0은 보장이 아님 — 아래 설명 참조 |
+| 백업·시점 복원 | 별도 백업 노드의 Barman이 WAL을 스트리밍으로 받아 전체 복원과 시점 지정 복원(PITR)을 지원. 복원은 운영 클러스터가 아닌 격리 인스턴스로 함 ([ADR-053](docs/ADR.md), [운영 가이드](docs/OPERATIONS.md#백업과-복원-barman)) |
 
 ---
 
@@ -220,7 +222,9 @@ DB가 잠시 응답할 수 없는 동안(페일오버·switchover 등) API는 **
 추천**(관련 문서들의 태그)을 보고 태그를 붙일 수 있습니다. 본문의 `[[제목]]`은 위키링크로
 해석되어 백링크가 만들어집니다. `[[제목#절|별칭]]`과 `[[폴더/제목]]`도 제목으로 해석하며,
 `![[첨부]]`는 링크가 아닙니다. 문서를 **삭제**하면 청크·벡터·관계·대기 중인 작업까지
-함께 사라집니다 — 애플리케이션이 지우는 것이 아니라 FK CASCADE가 처리합니다.
+함께 사라집니다 — 애플리케이션이 지우는 것이 아니라 FK CASCADE가 처리합니다. **삭제는 되돌릴 수
+없고 휴지통도 없습니다.** 잘못 지운 문서를 되살리는 경로는 하나뿐입니다 — 관리자가 Barman 백업을 삭제 전
+시점으로 격리 인스턴스에 복원하고, 거기서 필요한 문서를 내보내 다시 넣습니다 ([운영 가이드 「백업과 복원」](docs/OPERATIONS.md#백업과-복원-barman)).
 
 같은 화면의 **원본 파일** 절에서는 올린 파일을 판별로 **내려받을** 수 있습니다. **새 파일로 교체**하면
 이전 원본은 지워지지 않고 판으로 남으며, 추출 텍스트가 달라졌을 때만 새 텍스트 버전이 생깁니다.
@@ -234,14 +238,16 @@ DB가 잠시 응답할 수 없는 동안(페일오버·switchover 등) API는 **
 
 ### AI 에이전트 연결 (MCP)
 
-Claude Desktop / Claude Code의 MCP 설정에 stdio 서버로 등록합니다. `<REPOSITORY>`는 이
-저장소의 절대 경로, `DATABASE_URL`은 `~/.openarchive/.env`와 같은 값입니다.
+Claude Desktop / Claude Code의 MCP 설정에 stdio 서버로 등록합니다. `command`는 위 `pipx install`이
+만든 가상환경의 Python입니다 — `<PIPX_VENVS>`는 `pipx environment --value PIPX_LOCAL_VENVS`가 알려주는
+경로로 바꿉니다(소스에서 설치했다면 그 가상환경의 `bin/python`). `DATABASE_URL`은
+`~/.openarchive/.env`와 같은 값입니다.
 
 ```json
 {
   "mcpServers": {
     "openarchive": {
-      "command": "<REPOSITORY>/backend/.venv/bin/python",
+      "command": "<PIPX_VENVS>/openarchive-server/bin/python",
       "args": ["-m", "openarchive.mcp_server.server"],
       "env": {
         "DATABASE_URL": "postgresql://openarchive:openarchive@localhost:5433/openarchive",
@@ -254,7 +260,8 @@ Claude Desktop / Claude Code의 MCP 설정에 stdio 서버로 등록합니다. `
 ```
 
 에이전트는 `search_documents`로 발췌·출처·기준 버전을 받아 근거로 쓰고, `get_document` ·
-`list_documents`로 읽으며, `create_document`로 문서를 공급합니다. 답변 생성은 에이전트 쪽입니다.
+`list_documents`로 읽으며, `create_document`로 문서를 공급합니다. MCP 경로에서 답변 생성은 에이전트
+쪽입니다 — 플랫폼 안의 답변(웹 답변 패널·`openarchive ask`·`POST /api/ask`)은 별도 옵션입니다.
 `MCP_USER_ID`가 열람 범위와 문서 소유자를 정하므로 **실제 계정명과 정확히 같게** 적습니다
 (실존 여부는 검증되지 않습니다 — [ADR-036](docs/ADR.md)). `EMBEDDING_PROVIDER`는 `serve`에
 준 값과 같아야 합니다 — 다르면 에러 없이 검색 결과만 무의미해집니다.
@@ -325,11 +332,15 @@ SELECT count(DISTINCT d.id) FROM documents d
 WHERE c.version <> d.version;
 ```
 
-**장애 복구와 데이터 내구성의 범위는 구분합니다.** 2026-09-27~28의 3노드 장애 실험에서
-관측한 유실 0은 동기 standby 1대 구성의 결과입니다. 현재는 OpenProxy 1.1.3 호환 문제로
-비동기 복제를 사용하므로, Primary 상실 시 성공 응답한 쓰기도 복제 전에 사라질 수 있습니다.
-현재 구성의 전환 확인과 과거 측정 조건은 [OpenSQL 조사](docs/OPENSQL_RESEARCH.md)와
-[공식 구성과 다른 점](docs/OPENSQL_DEVIATIONS.md)에 기록되어 있습니다.
+**장애 복구와 데이터 내구성의 범위는 구분합니다.** 현재 구성(공식 3노드, 비동기 복제)에서
+2026-10-04에 부하 중 장애를 주입해 다시 쟀습니다(#165) — 쓰기 중단은 Primary 노드 사망 30.6~40.8초,
+Leader 네트워크 분리 30.7초, postmaster kill 14.1초, switchover·VIP 이동·Leader 재부팅 10.1~10.3초,
+Replica·etcd 장애(과반 상실 포함) 0초였고, 커밋 응답을 받은 업로드(원본 파일 포함)의 유실·중복은
+모든 회차에서 0이었습니다. **이는 관측값이지 보장이 아닙니다** — 비동기 복제라 Primary를 잃는 순간
+replica에 닿지 않은 커밋은 사라질 수 있고, 복구 구간에는 쓰기가 멈춥니다(재시도가 그 구간을 흡수할
+뿐 "무중단"이 아닙니다). 회차별 표와 재현 명령은 [OpenSQL 환경 구축 §16](docs/SETUP_OPENSQL.md)
+「최종 구성 장애 검증」에, 공식 구성과 다르게 둔 설정은
+[공식 구성과 다른 점](docs/OPENSQL_DEVIATIONS.md)에 있습니다.
 
 이 그림을 떠받치는 설계 결정은 셋입니다 — 워커의 **기동 방식은 정합성의 일부가 아니고**(5초 폴링이
 주 경로, `NOTIFY`는 최적화), **검색은 필터·벡터 유사도·관계 확장까지 단일 SQL**이며, **볼 수 없는
@@ -357,10 +368,11 @@ WHERE c.version <> d.version;
 | [ADR](docs/ADR.md) | 설계 결정과 각각의 근거·트레이드오프 — 재보고 물러난 결정 포함 |
 | [PRD](docs/PRD.md) | 제품 요구사항, 하지 않는 것 |
 | [Roadmap](docs/ROADMAP.md) | 확장점 지도와 단계적 발전 경로 |
-| [운영 가이드](docs/OPERATIONS.md) | 환경변수, 프로세스 구성, 인증, 복구 데모 |
+| [운영 가이드](docs/OPERATIONS.md) | 환경변수, 프로세스 구성, 인증, 백업·복원, 복구 데모 |
 | [성능 검증](docs/PERFORMANCE_VALIDATION.md) | 검색 인덱스·지속 업로드·큰 파일의 재현 절차와 측정 한계 |
 | [검색 품질 검증](docs/SEARCH_QUALITY_VALIDATION.md) | 프로젝트 예시 질문의 문서 순위·발췌 평가와 개선점 |
 | [OpenSQL 조사](docs/OPENSQL_RESEARCH.md) | 배포판 확정 사항, 공식 문서 조사, 실측 기록 |
-| [OpenSQL 환경 구축](docs/SETUP_OPENSQL.md) | Rocky Linux 9.7 VM 준비부터 설치·검증까지 |
+| [OpenSQL 환경 구축](docs/SETUP_OPENSQL.md) | Rocky Linux 9.7 VM 준비부터 설치·검증까지, HA 3노드·Barman 백업 노드 |
+| [공식 구성과 다른 점](docs/OPENSQL_DEVIATIONS.md) | HA 환경이 OpenSQL 문서·배포판과 다른 설정과 그 이유 |
 | [UI Guide](docs/UI_GUIDE.md) | 디자인 원칙, 화면 구성 |
 | [Contributing](CONTRIBUTING.md) | 개발 규약, 브랜치·커밋 컨벤션 |
