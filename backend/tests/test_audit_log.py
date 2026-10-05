@@ -1,9 +1,12 @@
 """감사 행의 제약과 변경 거부를 실제 DB 소유자 연결로 검증한다 (ADR-055)."""
 
+import re
 from uuid import uuid4
 
 import psycopg
 import pytest
+
+from openarchive.services.audit import ACTOR_VIA, AUDIT_ACTIONS
 
 
 @pytest.fixture
@@ -32,6 +35,20 @@ def test_allowed_actions(conn, action):
     assert conn.execute(
         "INSERT INTO audit_log (action) VALUES (%s) RETURNING action", (action,)
     ).fetchone() == (action,)
+
+
+@pytest.mark.parametrize(("constraint", "expected"), [
+    ("audit_log_action_valid", AUDIT_ACTIONS),
+    ("audit_log_actor_via_valid", ACTOR_VIA),
+])
+def test_service_lists_match_db_constraints(conn, constraint, expected):
+    # API 필터·set_actor 검증이 쓰는 목록과 DB CHECK가 어긋나면, 한쪽에만 있는 값은
+    # 필터가 422로 막거나 기록이 CHECK에 걸린다 — 동작을 늘릴 때 둘을 함께 고치게 묶는다.
+    definition = conn.execute(
+        "SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conname = %s",
+        (constraint,),
+    ).fetchone()[0]
+    assert set(re.findall(r"'([a-z_]+)'::text", definition)) == set(expected)
 
 
 @pytest.mark.parametrize("via", [None, "session", "token", "mcp", "cli", "share", "worker"])
