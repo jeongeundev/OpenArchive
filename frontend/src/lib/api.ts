@@ -71,14 +71,14 @@ function changeRetrying(delta: 1 | -1): void {
 // 서버가 멱등키를 지키는 경로 (`retry.py`의 `IDEMPOTENT_CREATE_PATHS`, ADR-047 결정 1).
 const IDEMPOTENT_CREATE_PATHS = ["/api/documents", "/api/documents/text"];
 
+/** 메서드만 POST인 읽기. ask의 503은 생성 전 DB 단계에서만 나므로 다시 보내도 생성이 두 번 돌지 않는다. */
+const READ_POST_PATHS = ["/api/search", "/api/ask"];
+
 /**
  * 서버 미들웨어와 같은 기준이다 — 검색은 메서드만 POST인 읽기다. 문서 생성은 멱등키가 붙어
  * 있을 때만 다시 보낸다 — 서버가 처음 결과를 돌려주므로 안전하다(ADR-047). 다른 쓰기는
  * 헤더가 붙어도 서버가 키를 지키지 않으므로 다시 보내지 않는다.
  */
-/** 메서드만 POST인 읽기. ask의 503은 생성 전 DB 단계에서만 나므로 다시 보내도 생성이 두 번 돌지 않는다. */
-const READ_POST_PATHS = ["/api/search", "/api/ask"];
-
 function isRetryable(path: string, init: RequestInit): boolean {
   const method = (init.method ?? "GET").toUpperCase();
   if (method === "GET" || method === "HEAD" || READ_POST_PATHS.includes(path)) return true;

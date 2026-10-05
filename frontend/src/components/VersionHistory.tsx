@@ -43,6 +43,16 @@ export function VersionHistory({
   const markRef = useRef<HTMLElement>(null);
   const focusVersion = focus?.version;
   const focusChunk = focus?.chunk;
+  // 같은 문서 안의 다른 인용으로 이동하면 다시 마운트되지 않는다 — 펼침과 강조를 새 자리로 옮긴다.
+  const [shownFocus, setShownFocus] = useState(focus);
+  if (focus?.version !== shownFocus?.version || focus?.chunk !== shownFocus?.chunk) {
+    setShownFocus(focus);
+    if (focus) {
+      setOpenVersion(focus.version);
+      setPassage(null);
+      setError(null);
+    }
+  }
 
   useEffect(() => {
     if (focusVersion === undefined || focusChunk === undefined) return;
@@ -56,6 +66,7 @@ export function VersionHistory({
       })
       .catch((reason: unknown) => {
         if (controller.signal.aborted) return;
+        setOpenVersion(null);
         setError(reason instanceof ApiError ? reason.detail : "텍스트 버전을 불러오지 못했습니다.");
       });
     return () => controller.abort();
