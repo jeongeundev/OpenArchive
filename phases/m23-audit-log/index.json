@@ -85,7 +85,10 @@
       "type": "feat",
       "scope": "api",
       "desc": "관리자 전용 감사 로그 조회 API — 사용자·동작 필터, 최신순 커서",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-10-06T01:43:14+0900",
+      "summary": "GET /api/admin/audit (require_admin·세션 전용) — 쿼리 actor·action(AUDIT_ACTIONS 7종, 그 외 422)·limit(기본 50, 1~200)·before_id(id 커서), 응답 {items:[{id,occurred_at,action,actor,actor_via,db_role,document_id,document_title,detail}], next_before_id(len==limit면 마지막 id, 아니면 null)}, id DESC 최신순; services/audit.list_audit·AuditEntry/AuditPage 추가, 열람 술어 미적용(제목 예외)·본문 미포함·조회 무기록. 테스트 12개, mutant 3종 검출·복원, 범위 33개·전체 1624개 및 Ruff 통과",
+      "completed_at": "2026-10-06T01:57:15+0900"
     },
     {
       "step": 8,
