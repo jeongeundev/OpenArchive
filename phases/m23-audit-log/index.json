@@ -19,7 +19,10 @@
       "type": "feat",
       "scope": "db",
       "desc": "쓰기 동작을 같은 트랜잭션에서 기록하는 트리거와 원본 내려받기 기록 함수 (029)",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-10-06T00:28:59+0900",
+      "summary": "audit_record·record_original_download 및 trg_audit_document_created/deleted·trg_audit_visibility_changed·trg_audit_text_updated·trg_audit_original_replaced·trg_audit_grant_changed·trg_audit_group_member_changed 구현; detail={}·{version}·{kind,before,after}·{kind,change,grantee_type,grantee}·{change,group,user}·{file_version}(공유는 share_id/share_name 추가), mutant 6종 모두 검출·복원, 범위 188개·전체 1579개 테스트 및 Ruff 통과",
+      "completed_at": "2026-10-06T00:43:42+0900"
     },
     {
       "step": 2,
