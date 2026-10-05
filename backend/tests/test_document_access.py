@@ -67,6 +67,55 @@ async def document_count(conn):
     return (await cur.fetchone())[0]
 
 
+async def access_audit_details(conn, document_id):
+    cur = await conn.execute(
+        "SELECT detail FROM audit_log WHERE document_id = %s "
+        "AND action = 'access_changed' ORDER BY id", (document_id,),
+    )
+    return [row[0] for row in await cur.fetchall()]
+
+
+@pytest.mark.parametrize(
+    ("before_users", "after_users", "after_groups", "changes"),
+    [
+        (["bob"], ["bob"], [], []),
+        (["bob"], ["bob", "carol"], [], [("added", "user", "carol")]),
+        (["bob", "carol"], ["carol"], [], [("removed", "user", "bob")]),
+        (["bob"], [], ["재무팀"],
+         [("removed", "user", "bob"), ("added", "group", "재무팀")]),
+    ],
+)
+async def test_set_access_audits_only_grant_differences(
+    conn, before_users, after_users, after_groups, changes
+):
+    await create_group(conn, "재무팀")
+    doc = await insert_test_document(conn, title="d", content="본문", visibility="private")
+    await grant(conn, doc, users=before_users)
+    before = await access_audit_details(conn, doc)
+    result = await set_access(
+        conn, doc, user_id="alice", visibility="private", users=after_users, groups=after_groups
+    )
+    assert result == {"visibility": "private", "users": sorted(after_users), "groups": after_groups}
+    assert await access_audit_details(conn, doc) == before + [
+        {"kind": "grant", "change": change, "grantee_type": kind, "grantee": name}
+        for change, kind, name in changes
+    ]
+
+
+async def test_set_access_audits_visibility_and_grants(conn):
+    doc = await insert_test_document(conn, title="d", content="본문")
+    for visibility, users, previous, change in [
+        ("private", ["bob"], "public", "added"),
+        ("public", [], "private", "removed"),
+    ]:
+        before = await access_audit_details(conn, doc)
+        await set_access(conn, doc, user_id="alice", visibility=visibility, users=users, groups=[])
+        assert await access_audit_details(conn, doc) == before + [
+            {"kind": "visibility", "before": previous, "after": visibility},
+            {"kind": "grant", "change": change, "grantee_type": "user", "grantee": "bob"},
+        ]
+
+
 async def test_get_access_returns_sorted_names_for_owner(conn):
     doc = await insert_test_document(conn, title="d", content="본문", visibility="private")
     await grant(conn, doc, users=["carol", "bob"], groups=["인사팀"])
@@ -164,9 +213,13 @@ async def test_set_access_rejects_grantees_on_public(conn):
     ("users", "groups", "kind"),
     [(["bob", "ghost"], [], "user"), (["bob"], ["유령팀"], "group")],
 )
-async def test_set_access_with_unknown_name_changes_nothing(conn, users, groups, kind):
-    doc = await insert_test_document(conn, title="d", content="본문")
+@pytest.mark.parametrize("start", ["public", "private"])
+async def test_set_access_with_unknown_name_changes_nothing(conn, users, groups, kind, start):
+    doc = await insert_test_document(conn, title="d", content="본문", visibility=start)
+    if start == "private":
+        await grant(conn, doc, users=["carol"])
     before = await snapshot(conn, doc)
+    audit_before = await access_audit_details(conn, doc)
     with pytest.raises(UnknownGrantee) as exc:
         await set_access(
             conn, doc, user_id="alice", visibility="private", users=users, groups=groups
@@ -174,6 +227,7 @@ async def test_set_access_with_unknown_name_changes_nothing(conn, users, groups,
     assert exc.value.kind == kind
     # visibility도 바뀌지 않는다 — 교체는 원자적이다
     assert await snapshot(conn, doc) == before
+    assert await access_audit_details(conn, doc) == audit_before
 
 
 async def test_set_access_rejects_owner_as_grantee(conn):
@@ -362,6 +416,7 @@ async def test_set_access_keeps_share_grants(conn, start, visibility, users):
     doc = await insert_test_document(conn, title="d", content="본문", visibility=start)
     share = await create_share(conn, owner="alice", name="B사")
     await add_document(conn, share["id"], doc, owner="alice")
+    audit_before = await access_audit_details(conn, doc)
 
     result = await set_access(
         conn, doc, user_id="alice", visibility=visibility, users=users, groups=[]
@@ -370,6 +425,12 @@ async def test_set_access_keeps_share_grants(conn, start, visibility, users):
     assert result == {"visibility": visibility, "users": users, "groups": []}
     assert await share_grant_count(conn, doc) == 1
     assert await get_access(conn, doc, user_id="alice") == result
+    assert await access_audit_details(conn, doc) == audit_before + [
+        {"kind": "visibility", "before": start, "after": visibility},
+    ] + [
+        {"kind": "grant", "change": "added", "grantee_type": "user", "grantee": name}
+        for name in users
+    ]
 
 
 async def test_set_public_without_grantees_succeeds_with_share_grant(conn):

@@ -543,6 +543,43 @@ MCP 서버는 HTTP를 거치지 않고 서비스를 직접 호출하므로 API �
 > 계정명과 정확히 같게 적어야 `create_document`로 만든 문서가 Web UI에서 자기 문서로 보입니다.
 > 생략하면 public 문서 읽기만 가능하고 `create_document`는 거부됩니다.
 
+## 감사 로그
+
+문서 생성·텍스트 수정·삭제·열람 범위 변경(부여 대상 추가·제거 포함)·원본 교체·그룹 구성원 변경·원본 내려받기는
+DB가 원래 작업과 같은 트랜잭션에서 `audit_log`에 남긴다 (ADR-055). 열람·검색은 기록하지 않는다. 폴더 열람 범위 변경
+기록은 폴더 기능(#187)과 함께 들어온다.
+
+**어디서 보나** — 관리자로 로그인해 관리 메뉴 「감사 로그」(`/admin/audit`). 시각·사용자·동작·대상 문서 제목을 최신순으로
+보이고 사용자·동작으로 거른다. 본문·발췌는 보이지 않는다. API는 `GET /api/admin/audit`(관리자·세션 전용)이다.
+
+**psql로 보기** — 서버 셸에서 앱 DB에 붙어 직접 조회할 수도 있다. 조회는 기록되지 않는다.
+
+```sql
+SELECT id, occurred_at, action, actor, actor_via, db_role, document_title, detail
+FROM audit_log
+WHERE actor = 'alice'                                -- 또는 action = 'access_changed'
+ORDER BY id DESC
+LIMIT 50;
+
+-- 지워진 문서의 이력 (FK가 없어 문서가 지워져도 남는다)
+SELECT occurred_at, action, actor, detail FROM audit_log
+WHERE document_id = '<문서 ID>' ORDER BY id;
+```
+
+**행위자 표기** — `actor`는 사건 시점의 사용자명이다. 공유 토큰으로 한 원본 내려받기는 `actor_via = 'share'`이고
+`detail.share_name`에 공유 이름이 남는다. 워커의 텍스트 인식 반영은 `actor_via = 'worker'`, 운영자 CLI `reextract`는
+`actor_via = 'cli'`이며 둘 다 `actor`가 비어 있다. **앱을 거치지 않은 직접 SQL 쓰기도 트리거가 기록한다** — `actor`·`actor_via`가
+비고 `db_role`(접속한 DB 롤)만 남으며, 화면에는 「직접 접속(롤)」으로 보인다.
+
+**고칠 수도 지울 수도 없다** — `audit_log`의 UPDATE·DELETE(행 트리거)와 TRUNCATE(문 단위 트리거)는 테이블 소유자인 앱 롤로
+psql에 붙어도 「감사 로그는 고치거나 지울 수 없습니다.」로 거부된다. 다만 **테이블 소유자·슈퍼유저가 트리거를 끄거나
+테이블을 바꾸는 것은 막지 않는다** — DB 관리자로부터의 위변조 방지는 범위 밖이다 (ADR-055 트레이드오프 1).
+
+- **보존 정책이 없어 테이블은 계속 자란다.** 크기는 `SELECT pg_size_pretty(pg_total_relation_size('audit_log'))`로 본다.
+- **PITR 복원은 감사 기록도 그 시점으로 되돌린다.** 같은 DB에 있으므로 복원 지점 뒤의 기록은 복원본에 없다 (ADR-055
+  트레이드오프 3). 복원 전 기록이 필요하면 운영 DB에서 먼저 내보낸다.
+- **그룹·사용자를 지우면 함께 사라진 부여·구성원은 기록되지 않는다** — 연쇄 삭제는 기록하지 않기 때문이다 (ADR-055 트레이드오프 6).
+
 ## 실 OpenSQL에서만 검증되는 것
 
 로컬 `pgvector/pgvector:pg17` 컨테이너로 완주되는 범위와 실 OpenSQL 환경이 필요한 범위는

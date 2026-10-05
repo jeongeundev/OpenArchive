@@ -52,6 +52,7 @@ from openarchive.migrations import (
     run_migrations,
 )
 from openarchive.services.answer import ASK_K, AnswerResult, gather_evidence, generate_answer
+from openarchive.services.audit import set_actor
 from openarchive.services.auth import (
     UserAlreadyExists,
     UserNotFound,
@@ -932,6 +933,7 @@ async def _import_file(
     # 판정과 생성을 한 트랜잭션에 둔다 — 밖의 SELECT는 HA에서 Replica로 가 방금 가져온 같은
     # 파일을 못 보고 두 벌을 만든다 (ADR-010, #180).
     async with conn.transaction():
+        await set_actor(conn, actor=username, via="cli")
         if front is None:
             if await find_same_original(conn, owner_id=username, data=data):
                 return None

@@ -7,6 +7,7 @@ from uuid import UUID
 import psycopg
 from psycopg.rows import dict_row
 
+from openarchive.services.audit import set_actor
 from openarchive.services.documents import (
     DocumentNotFound,
     EmptyExtractedText,
@@ -231,6 +232,7 @@ async def reextract_one(
     """
     try:
         async with conn.transaction():
+            await set_actor(conn, actor=None, via="cli")
             row = await (
                 await conn.execute(
                     "SELECT version FROM documents WHERE id = %s FOR UPDATE",
@@ -277,6 +279,7 @@ async def reextract_all(
     for done, (document_id, version) in enumerate(documents, start=1):
         try:
             async with conn.transaction():
+                await set_actor(conn, actor=None, via="cli")
                 document, was_changed = await reextract_text(
                     conn, document_id, expected_version=version
                 )

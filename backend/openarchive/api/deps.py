@@ -6,6 +6,7 @@ from fastapi import Cookie, Depends, Header, HTTPException, Request
 
 from openarchive.db import connection
 from openarchive.embeddings.base import EmbeddingProvider
+from openarchive.services.audit import set_actor
 from openarchive.services.auth import (
     CREDENTIAL_SESSION,
     PRINCIPAL_SHARE,
@@ -46,13 +47,20 @@ async def current_user(
         BEARER_PREFIX.lower()
     ):
         try:
-            return await validate_token(conn, authorization[len(BEARER_PREFIX) :])
+            user = await validate_token(conn, authorization[len(BEARER_PREFIX) :])
+            if user["kind"] == PRINCIPAL_SHARE:
+                await set_actor(conn, actor=None, via="share", share_id=user["share_id"])
+            else:
+                await set_actor(conn, actor=user["username"], via="token")
+            return user
         except AuthenticationFailed:
             return None
     if token is None:
         return None
     try:
-        return await validate_session(conn, token)
+        user = await validate_session(conn, token)
+        await set_actor(conn, actor=user["username"], via="session")
+        return user
     except AuthenticationFailed:
         return None
 

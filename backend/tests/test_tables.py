@@ -18,6 +18,7 @@ import psycopg
 import pytest
 
 CORE_TABLES = {
+    "audit_log",
     "documents",
     "document_versions",
     "document_chunks",

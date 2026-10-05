@@ -7,6 +7,7 @@ from fastapi.responses import JSONResponse
 from openarchive.answers import OllamaProvider, get_answer_provider
 from openarchive.api.admin import router as admin_router
 from openarchive.api.ask import router as ask_router
+from openarchive.api.audit import router as audit_router
 from openarchive.api.auth import router as auth_router
 from openarchive.api.clusters import router as clusters_router
 from openarchive.api.diagnostics import router as diagnostics_router
@@ -54,6 +55,7 @@ app = FastAPI(title="OpenArchive API", lifespan=lifespan)
 app.add_middleware(RetryOnUnavailable)
 app.include_router(admin_router)
 app.include_router(groups_router)
+app.include_router(audit_router)
 app.include_router(principals_router)
 app.include_router(shares_router)
 app.include_router(auth_router)

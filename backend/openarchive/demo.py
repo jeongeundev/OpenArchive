@@ -20,6 +20,7 @@ from pathlib import Path
 
 import psycopg
 
+from openarchive.services.audit import set_actor
 from openarchive.services.documents import create_text_document
 from openarchive.services.system import enqueue_edge_rebuild, wait_for_edge_jobs
 
@@ -122,15 +123,17 @@ async def seed_documents(
     for document in documents:
         if document.title in existing:
             continue
-        await create_text_document(
-            conn,
-            title=document.title,
-            content=document.content,
-            content_type="md",
-            owner_id=owner,
-            tags=document.tags,
-            visibility=document.visibility,
-        )
+        async with conn.transaction():
+            await set_actor(conn, actor=owner, via="cli")
+            await create_text_document(
+                conn,
+                title=document.title,
+                content=document.content,
+                content_type="md",
+                owner_id=owner,
+                tags=document.tags,
+                visibility=document.visibility,
+            )
         existing.add(document.title)
         created += 1
     return created

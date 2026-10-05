@@ -242,6 +242,36 @@ export interface GroupSummary {
   members: string[];
 }
 
+/** 감사 로그의 동작. DB 트리거·함수가 기록한다 (ADR-055). */
+export type AuditAction =
+  | "document_created"
+  | "text_updated"
+  | "document_deleted"
+  | "access_changed"
+  | "group_member_changed"
+  | "original_replaced"
+  | "original_downloaded";
+
+export type AuditActorVia = "session" | "token" | "mcp" | "cli" | "share" | "worker";
+
+export interface AuditEntry {
+  id: number;
+  occurred_at: string;
+  action: AuditAction;
+  actor: string | null;
+  actor_via: AuditActorVia | null;
+  db_role: string;
+  document_id: string | null;
+  /** 관리자에게도 제목만 보인다 — 본문·발췌는 없다 (ADR-055 결정 8). */
+  document_title: string | null;
+  detail: Record<string, unknown>;
+}
+
+export interface AuditPage {
+  items: AuditEntry[];
+  next_before_id: number | null;
+}
+
 /** 열람 부여 대상으로 고를 수 있는 이름들. 로그인한 사용자 누구나 받는다 (ADR-044). */
 export interface Principals {
   users: string[];

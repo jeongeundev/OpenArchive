@@ -824,7 +824,7 @@ async def get_original_file(
     cur = conn.cursor(row_factory=dict_row)
     await cur.execute(
         """
-        SELECT filename, data, sha256
+        SELECT filename, data, sha256, file_version
         FROM document_files
         WHERE document_id = %(id)s
           AND (%(version)s::int IS NULL OR file_version = %(version)s)
@@ -836,6 +836,10 @@ async def get_original_file(
     original = await cur.fetchone()
     if original is None:
         raise OriginalFileNotFound
+    await conn.execute(
+        "SELECT record_original_download(%s, %s)",
+        (document_id, original.pop("file_version")),
+    )
     original["media_type"] = media_type_for(original["filename"])
     return original
 
@@ -1259,6 +1263,8 @@ async def set_access(
 ) -> dict:
     """열람 범위를 통째로 교체한다. 실패하면 아무것도 바뀌지 않는다.
 
+    부여는 차이만 반영 — 감사 로그가 실제 변경만 남기게 한다(ADR-055).
+
     공개범위만 바꾸므로 `UPDATE OF content_hash` 트리거는 발화하지 않는다 — 버전도
     재임베딩도 없다. 열람 범위는 조회 시점 술어라 그래프·관계도 다시 만들 필요가 없다(ADR-027).
     """
@@ -1267,7 +1273,7 @@ async def set_access(
     users, groups = _check_grantees(visibility, user_id, users, groups)
     async with conn.transaction():
         await _load_owner_document(conn, document_id, user_id)
-        # 동시 교체가 DELETE와 INSERT 사이에 끼면 부여 유니크 충돌이 난다. 워커·024와 같은
+        # 현재 부여 조회와 차이 반영 사이에 동시 교체가 끼지 않게 한다. 워커·024와 같은
         # 수준으로 잠가 FK 확인(FOR KEY SHARE)과는 부딪히지 않게 한다.
         cur = await conn.execute(
             "SELECT 1 FROM documents WHERE id = %s FOR NO KEY UPDATE", (document_id,)
@@ -1276,6 +1282,14 @@ async def set_access(
             raise DocumentNotFound
         # 이름을 변경 전에 해석한다 — 모르는 이름이면 아무것도 바뀌지 않는다.
         user_ids, group_ids = await resolve_grantees(conn, users=users, groups=groups)
+        cur = await conn.execute(
+            "SELECT user_id, group_id FROM document_grants "
+            "WHERE document_id = %s AND share_id IS NULL",
+            (document_id,),
+        )
+        current = await cur.fetchall()
+        current_users = {row[0] for row in current if row[0] is not None}
+        current_groups = {row[1] for row in current if row[1] is not None}
         await conn.execute(
             "UPDATE documents SET visibility = %s, updated_at = now() WHERE id = %s",
             (visibility, document_id),
@@ -1283,10 +1297,15 @@ async def set_access(
         # 공유 부여는 남긴다 — 공유는 열람 범위와 별개 축이라 공유 화면에서만 바뀐다
         # (ADR-044 「공유」 결정 2). 지우면 열람 범위를 고칠 때마다 외부 공유가 조용히 끊긴다.
         await conn.execute(
-            "DELETE FROM document_grants WHERE document_id = %s AND share_id IS NULL",
-            (document_id,),
+            "DELETE FROM document_grants WHERE document_id = %s AND share_id IS NULL "
+            "AND (user_id = ANY(%s) OR group_id = ANY(%s))",
+            (document_id, list(current_users - set(user_ids)), list(current_groups - set(group_ids))),
         )
-        await insert_grants(conn, document_id, user_ids, group_ids)
+        await insert_grants(
+            conn, document_id,
+            [user for user in user_ids if user not in current_users],
+            [group for group in group_ids if group not in current_groups],
+        )
         return await _read_access(conn, document_id)
 
 

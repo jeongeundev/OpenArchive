@@ -17,6 +17,7 @@ from mcp.server.fastmcp import FastMCP
 from openarchive.config import get_settings
 from openarchive.db import close_pool, connection, get_pool, is_unavailable
 from openarchive.embeddings import get_provider
+from openarchive.services.audit import set_actor
 from openarchive.services.documents import ExtractionStatus, create_text_document
 from openarchive.services.documents import get_document as get_document_service
 from openarchive.services.documents import list_documents as list_documents_service
@@ -243,6 +244,7 @@ async def create_document(
     @with_backoff
     async def attempt() -> dict:
         async with connection() as conn:
+            await set_actor(conn, actor=user_id, via="mcp")
             document = await create_text_document(
                 conn,
                 title=title,

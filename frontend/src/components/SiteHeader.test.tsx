@@ -62,6 +62,7 @@ describe("SiteHeader", () => {
     expect(screen.getByRole("button", { name: "로그아웃" })).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "사용자 관리" })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "그룹 관리" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "감사 로그" })).not.toBeInTheDocument();
   });
 
   it("관리자에게만 사용자 관리 진입점을 제공한다", async () => {
@@ -78,6 +79,7 @@ describe("SiteHeader", () => {
       "/admin/users",
     );
     expect(screen.getByRole("link", { name: "그룹 관리" })).toHaveAttribute("href", "/admin/groups");
+    expect(screen.getByRole("link", { name: "감사 로그" })).toHaveAttribute("href", "/admin/audit");
   });
 
   it("사용자명이 계정 설정으로 가는 링크다", async () => {

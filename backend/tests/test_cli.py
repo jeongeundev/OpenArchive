@@ -61,6 +61,7 @@ def test_owned_tables_match_the_migration_files():
     감지하지 못한 채 마이그레이션이 ALTER로 손대게 된다.
     """
     assert OWNED_TABLES == {
+        "audit_log",
         "api_tokens",
         "document_chunks",
         "document_edges",
@@ -1153,3 +1154,17 @@ def test_reextract_reports_documents_handed_to_ocr(migrated_db, capsys):
     output = capsys.readouterr().out
     assert "바뀜 0건 · 같음 0건 · 실패 0건" in output
     assert "텍스트 인식 대기 1건" in output
+
+
+@pytest.mark.parametrize("all_documents", [False, True])
+def test_reextract_records_operator_actor(migrated_db, all_documents):
+    from test_audit import rows
+
+    ids = [upload_original(migrated_db, f"original {i}") for i in range(2)]
+    for document_id in ids:
+        edit_text(migrated_db, document_id, "edited")
+    targets = ["--all"] if all_documents else [ids[0]]
+    assert main(["reextract", *targets, "--dsn", migrated_db]) == 0
+    audit = [row for row in rows(migrated_db) if row[0] == "text_updated" and row[4] == {"version": 3}]
+    assert len(audit) == (2 if all_documents else 1)
+    assert all(row[1:3] == (None, "cli") for row in audit)

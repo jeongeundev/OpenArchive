@@ -2604,3 +2604,60 @@ async def test_a_document_deleted_during_ocr_is_not_a_failure(conn, other_conn, 
         "SELECT count(*) FROM embedding_jobs WHERE document_id = %s", (doc_id,)
     )
     assert (await cur.fetchone())[0] == 0
+
+
+async def text_updated_audit(conn, doc_id) -> list[tuple]:
+    cur = await conn.execute(
+        "SELECT actor, actor_via, detail FROM audit_log"
+        " WHERE document_id = %s AND action = 'text_updated' ORDER BY id",
+        (doc_id,),
+    )
+    return await cur.fetchall()
+
+
+async def claim_reextract(conn, first_text: str):
+    """첫 텍스트(v1)가 있는 스캔 문서를 재추출 대기로 두고 그 추출 잡을 선점한다."""
+    doc_id = await upload_scan(conn)
+    first = await claim_job(conn)
+    assert await finalize_extract_job(conn, first, first_text) is True
+    # 첫 추출이 이은 임베딩 잡은 비켜 둔다 — 다음 선점이 재추출 잡이어야 한다.
+    await conn.execute(
+        "UPDATE embedding_jobs SET status = 'done' WHERE document_id = %s AND status = 'pending'",
+        (doc_id,),
+    )
+    await conn.execute(
+        "UPDATE documents SET extraction_status = 'pending' WHERE id = %s", (doc_id,)
+    )
+    job = await claim_job(conn)
+    assert job.kind == "extract"
+    return doc_id, job
+
+
+async def test_reextraction_records_text_update_by_the_worker(conn):
+    """재추출이 만든 새 텍스트 버전은 「시스템(워커)」이 남긴다 — 직접 접속이 아니다 (ADR-055)."""
+    doc_id, job = await claim_reextract(conn, "첫 인식 결과")
+
+    assert await finalize_extract_job(conn, job, "다시 인식한 결과") is True
+
+    assert await text_version_numbers(conn, doc_id) == [1, 2]
+    assert await text_updated_audit(conn, doc_id) == [(None, "worker", {"version": 2})]
+
+
+async def test_first_extraction_records_no_text_update(conn):
+    """첫 추출은 v1이 첫 텍스트라 버전이 오르지 않는다 — 수정 기록이 없다."""
+    doc_id = await upload_scan(conn)
+    job = await claim_job(conn)
+
+    assert await finalize_extract_job(conn, job, "첫 인식 결과") is True
+
+    assert await text_version_numbers(conn, doc_id) == [1]
+    assert await text_updated_audit(conn, doc_id) == []
+
+
+async def test_unchanged_reextraction_records_no_text_update(conn):
+    doc_id, job = await claim_reextract(conn, "같은 인식 결과")
+
+    assert await finalize_extract_job(conn, job, "같은 인식 결과") is True
+
+    assert await text_version_numbers(conn, doc_id) == [1]
+    assert await text_updated_audit(conn, doc_id) == []
