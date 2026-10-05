@@ -61,6 +61,7 @@ def test_owned_tables_match_the_migration_files():
     감지하지 못한 채 마이그레이션이 ALTER로 손대게 된다.
     """
     assert OWNED_TABLES == {
+        "audit_log",
         "api_tokens",
         "document_chunks",
         "document_edges",
