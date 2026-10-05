@@ -63,7 +63,7 @@ OpenArchive/
 │   │   ├── config.py             # pydantic-settings — $OPENARCHIVE_HOME/.env(기본 ~/.openarchive/.env)
 │   │   ├── db.py                 # AsyncConnectionPool만 — import 시 부작용 없음
 │   │   ├── migrations/           # __init__.py = 러너(API startup과 `openarchive init`이 호출)
-│   │   │                         #   + SQL(패키지 안이라 wheel에 실린다) 001~027: extensions, tables, triggers, indexes,
+│   │   │                         #   + SQL(패키지 안이라 wheel에 실린다) 001~029: extensions, tables, triggers, indexes,
 │   │   │                         #   trgm, edges(006~008), auth(009), links(010~012), token(013),
 │   │   │                         #   edges 재설계(014 — rebuild_document_edges), 위키링크 정규화(015),
 │   │   │                         #   관계 잡 분리(016 — embedding_jobs.kind / 017 — ready 트리거,
@@ -71,14 +71,15 @@ OpenArchive/
 │   │   │                         #   문서 생성 멱등키(019 — idempotency_keys, ADR-047), 잡 lease(020 — ADR-050),
 │   │   │                         #   추출 상태·추출 잡(021·022 — OCR, ADR-052), 표 셀 `\|` 위키링크(023),
 │   │   │                         #   재계산 문서 잠금(024), 그룹·열람 부여(025 — ADR-044), 외부 공유(026),
-│   │   │                         #   전량 재계산을 관계 잡으로(027 — enqueue_all_edge_jobs, ADR-029 결정 6 개정)
+│   │   │                         #   전량 재계산을 관계 잡으로(027 — enqueue_all_edge_jobs, ADR-029 결정 6 개정),
+│   │   │                         #   감사 로그(028 — audit_log / 029 — 기록·거부 트리거, ADR-055)
 │   │   ├── cli.py                # `openarchive init`(첫 관리자 포함)·`serve`·`create-user`·`reset-password`·`rebuild-edges`·`reextract`
 │   │   │                         #   ·`import`·`export`·`search`·`ask`·`demo` — 운영자 CLI, DB에 직접 붙는다 (ADR-039·040·046)
 │   │   ├── api/                  # 라우터: documents, search, ask, system, auth, admin, groups(+principals),
-│   │   │                         #   shares, diagnostics, clusters / 미들웨어 retry (+ deps, schemas)
+│   │   │                         #   shares, audit(감사 로그 조회), diagnostics, clusters / 미들웨어 retry (+ deps, schemas)
 │   │   ├── services/             # parsing, chunking, documents, search, related,
 │   │   │                         #   links, diagnostics, clusters, auth, system, visibility,
-│   │   │                         #   grants(그룹·부여), shares(외부 공유), answer(근거 조립·답변 생성, ADR-043)
+│   │   │                         #   grants(그룹·부여), shares(외부 공유), audit(행위자 전달·조회, ADR-055), answer(근거 조립·답변 생성, ADR-043)
 │   │   ├── answers/              # 답변 생성 프로바이더: fake·ollama (ADR-043)
 │   │   ├── embeddings/           # base.py(Protocol), local.py(bge-m3), fake.py
 │   │   ├── worker.py             # 워커 진입점 — 임베딩 잡과 관계 잡을 같은 큐에서 처리
@@ -88,7 +89,8 @@ OpenArchive/
 └── frontend/
     └── src/
         ├── app/                  # /(목록+업로드), /documents/[id], /search(+답변 패널), /login, /settings,
-        │                         #   /diagnostics, /clusters, /admin/status, /admin/users, /admin/groups
+        │                         #   /diagnostics, /clusters, /admin/status, /admin/users, /admin/groups,
+        │                         #   /admin/audit
         ├── components/
         ├── types/
         └── lib/                  # API 클라이언트 (fetch 래퍼)
@@ -279,6 +281,20 @@ CREATE TABLE api_tokens (
   CHECK (num_nonnulls(user_id, share_id) = 1), -- 026: 사용자 또는 공유 하나
   CHECK (share_id IS NULL OR scope = 'read')
 );
+
+-- audit_log: 사건 시점의 감사 기록 (028, ADR-055). 앱은 INSERT하지 않는다 — 029의 트리거·함수가 쓴다
+-- UPDATE·DELETE·TRUNCATE는 029의 트리거가 거부한다(테이블 소유자인 앱 롤에도)
+CREATE TABLE audit_log (
+  id             bigserial PRIMARY KEY,        -- 정렬·커서 기준 (같은 트랜잭션의 행은 occurred_at이 같다)
+  occurred_at    timestamptz NOT NULL DEFAULT now(),
+  action         text NOT NULL,                -- CHECK 7종 (아래 「감사 로그」 절)
+  actor          text,                         -- 사용자명 스냅샷. 앱 행위자가 없으면 NULL
+  actor_via      text,                         -- session|token|mcp|cli|share|worker, 직접 SQL이면 NULL
+  db_role        text NOT NULL DEFAULT current_user,
+  document_id    uuid,                         -- FK 없음: 문서가 지워져도 기록은 남는다
+  document_title text,                         -- 제목 스냅샷
+  detail         jsonb NOT NULL DEFAULT '{}'
+);
 ```
 
 `026_shares_tables.sql`은 기존 마이그레이션을 수정하지 않고 위 공유 스키마를 추가한다.
@@ -363,6 +379,39 @@ CREATE TRIGGER trg_documents_content_changed
 - **PUT 시**: API는 `documents`의 `version`(+1), `content`, `content_hash`만 UPDATE한다. 이력 기록은 트리거가 **같은 트랜잭션에서** 수행하므로, 본문만 바뀌고 이력이 누락되는 상태가 구조적으로 불가능하다.
 - `ON CONFLICT (document_id, version) DO NOTHING`은 재실행 안전장치다. 같은 버전 번호로 트리거가 두 번 발화해도 이력이 중복되지 않는다.
 - **추출 중 문서(`extraction_status <> 'done'`)에서는 발화하지 않는다.** 스캔 문서는 빈 텍스트로 INSERT되는데, 여기서 발화하면 빈 v1이 이력에 남고 청크가 나올 수 없는 임베딩 잡이 돈다. v1은 워커가 첫 텍스트를 쓰는 UPDATE가 기록한다 (아래 「추출 잡」).
+
+### 감사 로그 — 트리거가 같은 트랜잭션에서 남긴다 (ADR-055)
+
+"누가 무엇을 바꿨나"도 잡 생성과 같은 원칙이다 — 기록이 빠지는 경로가 DB 밖에 없어야 한다. 쓰기는 대상 테이블의 AFTER 트리거가, 원본 내려받기는 DB 함수가 **원래 작업과 같은 트랜잭션에서** `audit_log`에 쓴다. 쓰기가 롤백되면 기록도 함께 사라진다. INSERT 지점은 함수 `audit_record()` 하나다(`029_audit_triggers.sql`).
+
+| 트리거 · 함수 | 대상 · 조건 | `action` · `detail` |
+|---|---|---|
+| `trg_audit_document_created` / `trg_audit_document_deleted` | `documents` INSERT / DELETE | `document_created` / `document_deleted` · `{}` |
+| `trg_audit_visibility_changed` | `documents` UPDATE OF `visibility`, 값이 바뀔 때 | `access_changed` · `{kind: visibility, before, after}` |
+| `trg_audit_text_updated` | `document_versions` INSERT, v2 이상 | `text_updated` · `{version}` |
+| `trg_audit_original_replaced` | `document_files` INSERT, 2판 이상 | `original_replaced` · `{file_version}` |
+| `trg_audit_grant_changed` | `document_grants` INSERT / DELETE — 공유 부여·연쇄 삭제 제외 | `access_changed` · `{kind: grant, change, grantee_type, grantee}` |
+| `trg_audit_group_member_changed` | `group_members` INSERT / DELETE — 연쇄 삭제 제외 | `group_member_changed` · `{change, group, user}` |
+| `record_original_download(document_id, file_version)` | 원본 판을 읽는 트랜잭션에서 `get_original_file`이 호출 | `original_downloaded` · `{file_version}` |
+| `trg_audit_log_reject_change` / `trg_audit_log_reject_truncate` | `audit_log` UPDATE·DELETE(행) / TRUNCATE(문) | 예외 — 거부 |
+
+- **부여 대상(사용자·그룹)의 추가·제거도 「열람 범위 변경」이다.** 「제한」 문서의 열람자는 부여 행으로 바뀐다. 그래서 `set_access`는 부여를 전량 교체하지 않고 **차이만** DELETE·INSERT한다 — 바뀌지 않은 대상이 「제거→추가」로 기록되지 않게.
+- **연쇄 삭제는 건너뛴다.** 문서·그룹·사용자를 지울 때 함께 지워지는 부여·구성원 행은 부모가 이미 없으므로 기록하지 않는다 — 실제 사건(문서 삭제)이 「부여 제거」 기록에 덮이지 않게. 그 대가로 그룹·사용자 삭제로 사라진 권한은 감사 로그에 없다(ADR-055 트레이드오프 6).
+- 감사 행은 문서에 FK를 걸지 않고 제목·사용자명을 스냅샷으로 둔다. 문서를 지워도 그 문서의 기록과 제목이 남는다.
+
+**행위자 전달 흐름.** 진입점이 트랜잭션 안에서 `services/audit.py`의 `set_actor`를 부르면, 그것이 트랜잭션 범위 GUC 세 개(`openarchive.actor_id`·`actor_via`·`share_id`)를 `set_config(…, true)`로 건다. 트리거의 `audit_record()`가 그 값을 `NULLIF(current_setting(name, true), '')`로 읽는다 — HA 풀 백엔드에서는 값이 없을 때 NULL이 아니라 `''`이 온다.
+
+| 진입점 | `actor` | `actor_via` |
+|---|---|---|
+| REST — 세션 / 사용자 API 토큰 (`api/deps.py` `current_user`) | 사용자명 | `session` / `token` |
+| REST — 공유 토큰 | NULL (`detail`에 `share_id`·`share_name`) | `share` |
+| stdio MCP `create_document` | `MCP_USER_ID` | `mcp` |
+| 운영자 CLI `import`·`demo` | `--user` | `cli` |
+| 운영자 CLI `reextract` | NULL | `cli` |
+| 워커 — OCR 결과 반영(재추출 v2 이상) | NULL | `worker` |
+| psql 등 직접 SQL | NULL (`db_role`만) | NULL |
+
+`set_actor`는 autocommit 유휴 상태(트랜잭션 밖)에서 부르면 예외다. 세션 `SET`은 OpenProxy 풀 백엔드를 타고 다음 클라이언트로 새므로(HA 실측 75/100, `OPENSQL_RESEARCH.md` §5-3) 쓰지 않는다 — GUC 이름이 이 파일 밖에 나오거나 세션 `SET`을 쓰는 코드는 `test_architecture.py`가 막는다.
 
 ### 추출 잡 — 스캔 문서는 텍스트 없이 먼저 생긴다
 
@@ -703,11 +752,12 @@ OpenSQL `patroni.yml`의 PostgreSQL 파라미터는 `max_connections: 100`이다
 | `GET /api/diagnostics` | **진단.** 고아 문서·깨진 링크·중복 후보 등을 **열람 범위 기준**으로 집계 (ADR-027) |
 | `GET /api/clusters` | **관계 지도.** 관계 그래프의 Louvain 군집. 조회 시점 계산, 열람 범위 기준. 이름은 (군집 안 빈도 − 밖 빈도)가 양수인 태그 중 최대, 없으면 중심 문서 제목 (ADR-042 개정) |
 | `GET /api/admin/users` 등 | 관리자 전용 |
+| `GET /api/admin/audit` | **관리자·세션 전용** 감사 로그 조회. 쿼리 `actor`·`action`(7종, 그 밖은 422)·`limit`(기본 50, 1~200)·`before_id`(id 커서). 응답 `{items, next_before_id}`, id 내림차순. 열람 술어를 걸지 않고 대상 문서 **제목**까지만 보인다(ADR-055 결정 8). 조회 자체는 기록하지 않는다 |
 | `POST /api/admin/groups` · `GET /api/admin/groups` · `DELETE /api/admin/groups/{id}` | **관리자·세션 전용**. 그룹 생성·목록·삭제. 이름 변경 없음 (#97 b) |
 | `PUT /api/admin/groups/{id}/members/{username}` · `DELETE /api/admin/groups/{id}/members/{username}` | **관리자·세션 전용**. 구성원 추가·제거 (#97 b) |
 | `GET /api/principals` | **로그인**. 부여 대상 사용자명·그룹명 목록. 익명은 401 (#97 b) |
 | `GET /api/documents/{id}/access` | **로그인·소유자 전용**. 열람 범위 설정 조회. 보이는 비소유자는 403, 안 보이면 404 (#97 b) |
-| `PUT /api/documents/{id}/access` | **소유자·세션 전용**. `{visibility, users, groups}`로 전체 교체. 보이는 비소유자는 403, 안 보이면 404. 조직 공개로 바꾸면 사용자·그룹 부여만 삭제하고 공유 부여는 유지 (#97 b·c) |
+| `PUT /api/documents/{id}/access` | **소유자·세션 전용**. `{visibility, users, groups}`로 전체 교체(저장은 바뀐 부여만 DELETE·INSERT — 감사 기록이 실제 변경만 남도록, ADR-055). 보이는 비소유자는 403, 안 보이면 404. 조직 공개로 바꾸면 사용자·그룹 부여만 삭제하고 공유 부여는 유지 (#97 b·c) |
 | `POST /api/shares` `{name}` · `GET /api/shares` · `DELETE /api/shares/{id}` | 내 공유 생성·목록(포함 문서 id·제목, 토큰 메타)·삭제. 세션 전용 |
 | `PUT /api/shares/{id}/documents/{document_id}` · `DELETE /api/shares/{id}/documents/{document_id}` | 공유에 내 문서 넣기·빼기(멱등 204). 세션 전용 |
 | `POST /api/shares/{id}/tokens` `{name}` · `DELETE /api/shares/{id}/tokens/{token_id}` | 공유 토큰 발급(원문 1회)·폐기. 세션 전용 |
