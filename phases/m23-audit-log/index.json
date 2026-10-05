@@ -52,7 +52,10 @@
       "type": "feat",
       "scope": "mcp",
       "desc": "stdio MCP 도구 호출의 행위자를 MCP_USER_ID로 넘긴다",
-      "status": "pending"
+      "status": "completed",
+      "summary": "stdio MCP create_document에 set_actor로 MCP_USER_ID·mcp 행위자 전달; 생성 감사·미설정/빈 주체 무기록 테스트 추가, 호출 제거 mutant 검출·복원, MCP·아키텍처 40개·전체 1605개 테스트 및 Ruff 통과",
+      "started_at": "2026-10-06T01:09:40+0900",
+      "completed_at": "2026-10-06T01:19:37+0900"
     },
     {
       "step": 5,
