@@ -45,6 +45,7 @@ import psycopg
 from openarchive.config import get_settings
 from openarchive.db import close_pool, connection, get_pool, keepalive_kwargs
 from openarchive.embeddings import EmbeddingProvider, get_provider, warm_up
+from openarchive.services.audit import set_actor
 from openarchive.services.chunking import chunk_text
 from openarchive.services.documents import apply_extracted_text
 from openarchive.services.parsing import detect_content_type, ocr_text
@@ -422,6 +423,8 @@ async def finalize_extract_job(conn: psycopg.AsyncConnection, job: ClaimedJob, t
         if not await lock_owned_job(conn, job):
             logger.warning("잃은 추출 잡의 결과를 버린다 — job_id=%s", job.job_id)
             return False
+        # 재추출이 만드는 새 텍스트 버전의 감사 행위자 — 요청한 사람은 워커가 모른다 (ADR-055).
+        await set_actor(conn, actor=None, via="worker")
         outcome = await apply_extracted_text(conn, job.document_id, text)
         if outcome == "failed":
             logger.warning(
