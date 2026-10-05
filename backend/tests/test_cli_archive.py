@@ -1,4 +1,4 @@
-"""`openarchive import`·`export`·`search` — 셸에서 문서를 넣고 빼고 찾는 CLI (#95-b).
+"""`openarchive import`·`export`·`search`·`ask` — 셸에서 문서를 넣고 빼고 찾고 묻는 CLI (#95-b, #96 b).
 
 세 명령 모두 코어(`openarchive.services`)를 그대로 부른다. 여기서 지키는 것은 CLI가 더하는
 부분 — 폴더 순회·frontmatter·재실행 건너뛰기·행위 주체 확인·출력 — 이고, 문서 생성과
@@ -13,9 +13,15 @@ import pytest
 import yaml
 from conftest import run_embedding_worker
 
+from openarchive.answers import AnswerUnavailable
 from openarchive.cli import main
+from openarchive.config import get_settings
 from openarchive.services.auth import hash_password
-from openarchive.services.documents import create_document, create_text_document
+from openarchive.services.documents import (
+    create_document,
+    create_text_document,
+    update_extracted_text,
+)
 
 UNREACHABLE_DSN = "postgresql://nobody@127.0.0.1:1/none"
 
@@ -485,6 +491,99 @@ def test_search_refuses_an_unknown_user(searchable_db: str, capsys):
     exit_code = main(["search", "x", "--user", "carol", "--dsn", searchable_db])
 
     assert exit_code == 1
+    assert "'carol' 계정이 없습니다" in capsys.readouterr().out
+
+
+# ── ask ────────────────────────────────────────────────────────────────
+
+
+@pytest.fixture
+def askable_db(searchable_db: str, monkeypatch) -> str:
+    monkeypatch.setenv("ANSWER_PROVIDER", "fake")
+    get_settings.cache_clear()  # searchable_db가 시드하며 이미 설정을 읽어 캐시했다
+    return searchable_db
+
+
+def test_ask_prints_the_answer_and_the_cited_sources_with_versions(askable_db: str, capsys):
+    exit_code = main(["ask", "OpenSQL 설치", "--user", "bob", "--dsn", askable_db])
+
+    assert exit_code == 0
+    out = capsys.readouterr().out
+    answer, sources = out.split("\n근거\n")
+    assert "[1]" in answer  # 답 본문이 인용 번호를 단다
+    assert "[1] 설치 안내 · v1 기준" in sources
+    assert "OpenSQL 설치 절차" in out
+    assert "비밀" not in out  # 열람 밖 문서는 인용에도 나오지 않는다
+
+
+def test_ask_marks_a_source_whose_document_was_revised_since(askable_db: str, capsys):
+    """근거가 v1인데 문서가 v2가 됐으면 「v1 기준 · 현재 v2」 (ADR-043 결정 3)."""
+    seed(
+        askable_db,
+        lambda conn: create_text_document(
+            conn, title="개정 규정", content="개정 전 정합성 근거", owner_id="alice"
+        ),
+    )
+    run_embedding_worker(askable_db)
+    with psycopg.connect(askable_db) as conn:
+        (document_id,) = conn.execute(
+            "SELECT id FROM documents WHERE title = '개정 규정'"
+        ).fetchone()
+    seed(
+        askable_db,
+        lambda conn: update_extracted_text(
+            conn, document_id, user_id="alice", content="개정 후 정합성 근거", client_version=1
+        ),
+    )
+    run_embedding_worker(askable_db)
+
+    assert main(["ask", "정합성 근거", "--user", "bob", "--dsn", askable_db]) == 0
+
+    assert "개정 규정 · v1 기준 · 현재 v2" in capsys.readouterr().out
+
+
+def test_ask_says_when_answering_is_off_without_touching_the_db(monkeypatch, capsys):
+    """기본 꺼짐(ADR-043 결정 2) — 꺼져 있으면 DB에 붙지도 않고 켜는 법을 알려 준다."""
+    monkeypatch.setenv("ANSWER_PROVIDER", "off")
+
+    exit_code = main(["ask", "x", "--user", "bob", "--dsn", UNREACHABLE_DSN])
+
+    assert exit_code == 1
+    out = capsys.readouterr().out
+    assert "ANSWER_PROVIDER" in out
+    assert "연결하지 못했습니다" not in out
+
+
+def test_ask_says_so_when_there_is_no_evidence(askable_db: str, capsys):
+    exit_code = main(
+        ["ask", "OpenSQL", "--user", "bob", "--tag", "없는태그", "--dsn", askable_db]
+    )
+
+    assert exit_code == 0
+    assert "근거로 쓸 문서를 찾지 못했습니다" in capsys.readouterr().out
+
+
+def test_ask_reports_a_failed_generation(askable_db: str, monkeypatch, capsys):
+    from openarchive.answers import FakeAnswerProvider
+
+    def unavailable(self, system, prompt):
+        raise AnswerUnavailable("connection refused")
+
+    monkeypatch.setattr(FakeAnswerProvider, "generate", unavailable)
+
+    exit_code = main(["ask", "OpenSQL 설치", "--user", "bob", "--dsn", askable_db])
+
+    assert exit_code == 1
+    assert "답변 생성에 실패했습니다" in capsys.readouterr().out
+
+
+def test_ask_rejects_k_out_of_range(askable_db: str, capsys):
+    assert main(["ask", "x", "--user", "bob", "-k", "0", "--dsn", askable_db]) == 2
+    assert "k는" in capsys.readouterr().out
+
+
+def test_ask_refuses_an_unknown_user(askable_db: str, capsys):
+    assert main(["ask", "x", "--user", "carol", "--dsn", askable_db]) == 1
     assert "'carol' 계정이 없습니다" in capsys.readouterr().out
 
 

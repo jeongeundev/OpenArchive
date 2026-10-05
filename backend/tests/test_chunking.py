@@ -16,7 +16,7 @@ from itertools import pairwise
 
 import pytest
 
-from openarchive.services.chunking import chunk_text
+from openarchive.services.chunking import chunk_spans, chunk_text
 
 # 문단 경계(빈 줄)가 하나도 없는 본문. 강제 분할 경로를 탄다.
 LONG_SENTENCE = "임베딩 잡은 트리거가 만들고 워커는 그것을 집어간다. "
@@ -352,3 +352,24 @@ def test_new_boundary_cases_keep_every_invariant(text: str):
     for left, right in pairwise(chunks):
         assert shared_boundary(left, right)
     assert chunks == chunk_text(text, max_chars=max_chars, overlap=overlap)
+
+
+SPAN_CASES = [
+    *BOUNDARY_CASES,
+    "\n\n  " + "\n\n".join(MARKED_PARAGRAPHS) + "  \n",
+    DIGITS,
+    LONG_SENTENCE * 40,
+]
+
+
+@pytest.mark.parametrize("text", SPAN_CASES)
+def test_chunk_spans_locate_each_chunk_in_the_original_text(text: str):
+    """인용 클릭이 그 판의 그 자리로 가려면 청크가 원문의 어디인지 알아야 한다 (#96 b)."""
+    chunks = chunk_text(text, max_chars=120, overlap=30)
+    spans = chunk_spans(text, max_chars=120, overlap=30)
+
+    assert [text[start:end] for start, end in spans] == chunks
+
+
+def test_chunk_spans_of_blank_text_are_empty():
+    assert chunk_spans("  \n ") == []

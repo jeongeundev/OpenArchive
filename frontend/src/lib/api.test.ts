@@ -4,6 +4,7 @@ import {
   ApiError,
   addGroupMember,
   addShareDocument,
+  ask,
   changePassword,
   createGroup,
   createShare,
@@ -17,6 +18,7 @@ import {
   getDocument,
   getDocumentAccess,
   getDocumentProgress,
+  getDocumentVersion,
   isRetrying,
   listDocuments,
   listGroups,
@@ -193,6 +195,35 @@ describe("API responses", () => {
 
     const body = JSON.parse(fetchMock.mock.calls[0][1]?.body as string);
     expect(body).not.toHaveProperty("tags");
+  });
+
+  it("asks with the same body as search, omitting empty filters", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ status: "disabled", answer: null, detail: null, sources: [], items: [] })),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await ask({ query: "OpenSQL", tags: [], contentType: "md", k: 5 });
+
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/ask");
+    expect(fetchMock.mock.calls[0][1]?.method).toBe("POST");
+    expect(JSON.parse(fetchMock.mock.calls[0][1]?.body as string)).toEqual({
+      query: "OpenSQL",
+      content_type: "md",
+      k: 5,
+    });
+  });
+
+  // 답변 인용이 「그 버전의 그 자리」로 가려면 서버가 그 판의 대목 위치를 계산해야 한다 (#96 b).
+  it("asks the version endpoint for a chunk's position when given one", async () => {
+    const fetchMock = vi.fn<(url: string) => Promise<Response>>(() => Promise.resolve(new Response("{}")));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await getDocumentVersion("doc/1", 3, undefined, 2);
+    await getDocumentVersion("doc/1", 3);
+
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/documents/doc%2F1/versions/3?chunk=2");
+    expect(fetchMock.mock.calls[1][0]).toBe("/api/documents/doc%2F1/versions/3");
   });
 
   it("returns normally for a 204 delete response without parsing JSON", async () => {
@@ -390,6 +421,21 @@ describe("API retry on temporary unavailability", () => {
 
     await expect(result).resolves.toEqual({ items: [] });
     expect(fetchMock.mock.calls[1][1]?.body).toBe(JSON.stringify({ query: "정합성" }));
+  });
+
+  // 서버는 DB 단계(생성 전)에서만 503을 낸다 — 다시 보내도 생성이 두 번 돌지 않는다 (ADR-043).
+  it("retries ask, which is a read sent as POST, after a 503", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(unavailable())
+      .mockResolvedValueOnce(ok({ status: "answered", sources: [], items: [] }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = ask({ query: "정합성" });
+    await vi.advanceTimersByTimeAsync(2000);
+
+    await expect(result).resolves.toMatchObject({ status: "answered" });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   // ADR-047 — 첫 시도가 커밋된 채 응답만 잃었어도, 같은 키로 다시 보내면 처음 문서가 온다.

@@ -97,6 +97,41 @@ describe("VersionHistory", () => {
     expect(fetchMock.mock.calls[0][0]).toBe("/api/documents/document-1/versions/1");
   });
 
+  // 답변 인용 클릭 → 그 버전의 그 자리 (ADR-043 결정 3, #96 b). 위치는 서버가 UTF-16 단위로 준다.
+  it("가리킨 버전을 펼치고 대목을 강조해 그 자리로 스크롤한다", async () => {
+    const content = "🚀 머리말\n\n둘째 대목이다.\n\n셋째";
+    const passage = "둘째 대목이다.";
+    const start = content.indexOf(passage);
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        version: 2,
+        content,
+        created_at: versions[2].created_at,
+        passage_start: start,
+        passage_end: start + passage.length,
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const scrollIntoView = vi.fn();
+    Element.prototype.scrollIntoView = scrollIntoView;
+
+    render(
+      <VersionHistory
+        documentId="document-1"
+        versions={versions}
+        currentVersion={3}
+        disabled={false}
+        focus={{ version: 2, chunk: 1 }}
+        onRestored={vi.fn()}
+      />,
+    );
+
+    const mark = await screen.findByText(passage, { selector: "mark" });
+    expect(mark.closest("pre")).toHaveTextContent("🚀 머리말 둘째 대목이다. 셋째");
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/documents/document-1/versions/2?chunk=1");
+    expect(scrollIntoView).toHaveBeenCalled();
+  });
+
   it("되돌리기는 새 버전이 생긴다고 알린 뒤에 실행한다", async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ version: 4 }));
     vi.stubGlobal("fetch", fetchMock);
