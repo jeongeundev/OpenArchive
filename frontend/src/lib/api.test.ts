@@ -21,6 +21,7 @@ import {
   getDocumentVersion,
   isRetrying,
   listDocuments,
+  listAudit,
   listGroups,
   listPrincipals,
   listShares,
@@ -573,6 +574,25 @@ describe("groups and document access", () => {
     vi.stubGlobal("fetch", fetchMock);
     return fetchMock;
   }
+
+  it("lists audit entries with only the given filters in the query", async () => {
+    const fetchMock = stubFetch(JSON.stringify({ items: [], next_before_id: null }));
+
+    const page = await listAudit({ actor: "bob", action: "text_updated", beforeId: 42, limit: 50 });
+
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "/api/admin/audit?actor=bob&action=text_updated&limit=50&before_id=42",
+    );
+    expect(page).toEqual({ items: [], next_before_id: null });
+  });
+
+  it("omits empty audit filters", async () => {
+    const fetchMock = stubFetch(JSON.stringify({ items: [], next_before_id: null }));
+
+    await listAudit({ actor: "", action: "" });
+
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/admin/audit");
+  });
 
   it("lists groups from the admin path", async () => {
     const fetchMock = stubFetch("[]");

@@ -1,5 +1,7 @@
 import type {
   AskResponse,
+  AuditAction,
+  AuditPage,
   ContentType,
   AuthStatus,
   Backlink,
@@ -274,6 +276,19 @@ export function deleteUser(id: string): Promise<void> {
     { method: "DELETE" },
     { parse: false },
   );
+}
+
+export function listAudit(
+  filters: { actor?: string; action?: AuditAction | ""; limit?: number; beforeId?: number },
+  signal?: AbortSignal,
+): Promise<AuditPage> {
+  const params = new URLSearchParams();
+  if (filters.actor) params.set("actor", filters.actor);
+  if (filters.action) params.set("action", filters.action);
+  if (filters.limit !== undefined) params.set("limit", String(filters.limit));
+  if (filters.beforeId !== undefined) params.set("before_id", String(filters.beforeId));
+  const query = params.toString();
+  return request<AuditPage>(`/api/admin/audit${query ? `?${query}` : ""}`, { signal });
 }
 
 export function listGroups(signal?: AbortSignal): Promise<GroupSummary[]> {
