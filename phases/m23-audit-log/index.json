@@ -63,7 +63,10 @@
       "type": "feat",
       "scope": "cli",
       "desc": "운영자 CLI의 --user 쓰기 경로에 행위자를 넘긴다",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-10-06T01:19:37+0900",
+      "summary": "import(_import_file)·demo(seed_documents, 문서마다 트랜잭션)는 actor=--user·via=cli, --user 없는 reextract_one/reextract_all은 reextract_text가 documents 텍스트를 직접 바꿔 text_updated를 남기므로 actor=None·via=cli를 각 트랜잭션 안에서 set_actor; OCR 대상은 추출 잡만 걸어 step 6(워커) 몫. 테스트 3종 추가, 트랜잭션 밖 이동·호출 제거 mutant 3종 검출·복원, 범위 139개·전체 1609개 및 Ruff 통과",
+      "completed_at": "2026-10-06T01:33:21+0900"
     },
     {
       "step": 6,
