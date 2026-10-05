@@ -64,6 +64,9 @@ dev = [
     # wheel 내용 테스트가 --no-build-isolation으로 빌드한다. 3.12+ venv에는 setuptools가 없어
     # 이게 빠지면 CI에서만 빌드 백엔드를 못 찾는다. build-system.requires와 같은 하한이다.
     "setuptools>=77",
+    # scripts/eval_formats_load.py가 스캔 파생 파일에 잡음을 넣는다(#167). 로컬은 [local]의
+    # sentence-transformers가 끌고 와 드러나지 않았고, .[dev]만 까는 CI에서 수집이 깨졌다.
+    "numpy",
 ]
 # 실제 임베딩(BAAI/bge-m3)을 돌릴 때만 필요하다. 기본 dependencies에 두지 않는 이유는
 # sentence-transformers가 torch를 끌고 와 설치 용량이 수 GB 늘어나는 데 반해,
