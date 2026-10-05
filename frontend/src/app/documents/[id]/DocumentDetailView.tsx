@@ -1,8 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
-import { useEffect, useState } from "react";
+import { usePathname, useSearchParams } from "next/navigation";
+import { useEffect, useMemo, useState } from "react";
 
 import { AccessPanel } from "@/components/AccessPanel";
 import { DocumentActions } from "@/components/DocumentActions";
@@ -19,6 +19,19 @@ import { ApiError, getDocumentBacklinks, getDocumentLinks, updateTags } from "@/
 import { useAuth } from "@/components/AuthProvider";
 import { EXTRACTING_NOTICE, type Backlink, type ResolvedLink } from "@/lib/types";
 
+/**
+ * 답변 인용 링크 `?version=&chunk=` (ADR-043 결정 3). window.location이 아니라 라우터에서 읽는다 —
+ * 검색 화면에서 오는 클라이언트 이동은 새 화면을 그린 뒤에 주소창을 바꾼다.
+ */
+function readVersionFocus(params: URLSearchParams): { version: number; chunk: number } | null {
+  const version = Number(params.get("version"));
+  const chunk = Number(params.get("chunk"));
+  if (!params.has("chunk") || !Number.isInteger(version) || version < 1 || !Number.isInteger(chunk) || chunk < 0) {
+    return null;
+  }
+  return { version, chunk };
+}
+
 export function DocumentDetailView(): React.ReactElement {
   // 정적 export에서는 빌드 시점의 껍데기 경로(FALLBACK_DOCUMENT_ID)가 params로 들어온다.
   // 서버가 어떤 ID 요청에든 같은 파일을 내려주므로, 실제 ID는 브라우저 URL에서 읽는다.
@@ -33,6 +46,8 @@ export function DocumentDetailView(): React.ReactElement {
   const [links, setLinks] = useState<ResolvedLink[] | null>(null);
   const [backlinks, setBacklinks] = useState<Backlink[]>([]);
   const [linksError, setLinksError] = useState<string | null>(null);
+  const searchParams = useSearchParams();
+  const versionFocus = useMemo(() => readVersionFocus(new URLSearchParams(searchParams.toString())), [searchParams]);
   const { auth } = useAuth();
   const anonymous = !auth.authenticated;
   // 열람 범위는 소유자만 본다. 비소유자에게는 조회도 하지 않는다 — 패널 자리가 제한의 존재를 드러낸다.
@@ -154,6 +169,7 @@ export function DocumentDetailView(): React.ReactElement {
         versions={document.versions}
         currentVersion={document.version}
         disabled={anonymous}
+        focus={versionFocus}
         restoreBlockedReason={
           document.extraction_status === "pending" ? EXTRACTING_NOTICE : null
         }

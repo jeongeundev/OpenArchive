@@ -14,6 +14,7 @@ from uuid import UUID
 import psycopg
 from psycopg.rows import dict_row
 
+from openarchive.services.chunking import chunk_spans
 from openarchive.services.grants import insert_grants, resolve_grantees
 from openarchive.services.parsing import (
     UnsupportedFileType,
@@ -1107,11 +1108,16 @@ async def get_document_version(
     *,
     version: int,
     user_id: str,
+    chunk: int | None = None,
 ) -> dict:
     """과거 텍스트 버전의 본문을 돌려준다 (ADR-037 결정 1).
 
     열람 범위는 문서 본체와 같은 술어를 쓴다. 볼 수 없는 문서의 버전은 없는 것과 같이
     다뤄야 한다 — 버전 번호의 존재만 알려줘도 문서의 존재와 수정 횟수가 새어 나간다.
+
+    `chunk`를 주면 그 판을 워커와 같은 청킹으로 잘라 그 번호 대목의 위치를
+    `passage_start`·`passage_end`로 싣는다 — 답변 인용이 「그 버전의 그 자리」로 가는 길이다
+    (ADR-043, #96 b). 브라우저가 쓰는 UTF-16 단위로 센다. 번호에 맞는 청크가 없으면 싣지 않는다.
     """
     cur = conn.cursor(row_factory=dict_row)
     await cur.execute(
@@ -1128,7 +1134,18 @@ async def get_document_version(
     document_version = await cur.fetchone()
     if document_version is None:
         raise DocumentNotFound
+    if chunk is not None:
+        content = document_version["content"]
+        spans = chunk_spans(content)
+        if chunk < len(spans):
+            start, end = spans[chunk]
+            document_version["passage_start"] = _utf16_len(content[:start])
+            document_version["passage_end"] = _utf16_len(content[:end])
     return document_version
+
+
+def _utf16_len(text: str) -> int:
+    return len(text.encode("utf-16-le")) // 2
 
 
 async def restore_version(

@@ -304,9 +304,10 @@ async def get_document_version(
     version: Annotated[int, Path(ge=1)],
     conn: Connection,
     user_id: Annotated[str, Depends(require_reader)],
+    chunk: Annotated[int | None, Query(ge=0)] = None,
 ) -> TextVersionDetail:
     document_version = await service.get_document_version(
-        conn, document_id, version=version, user_id=user_id
+        conn, document_id, version=version, user_id=user_id, chunk=chunk
     )
     return TextVersionDetail.model_validate(document_version)
 

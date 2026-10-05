@@ -1,4 +1,5 @@
 import type {
+  AskResponse,
   ContentType,
   AuthStatus,
   Backlink,
@@ -75,9 +76,12 @@ const IDEMPOTENT_CREATE_PATHS = ["/api/documents", "/api/documents/text"];
  * 있을 때만 다시 보낸다 — 서버가 처음 결과를 돌려주므로 안전하다(ADR-047). 다른 쓰기는
  * 헤더가 붙어도 서버가 키를 지키지 않으므로 다시 보내지 않는다.
  */
+/** 메서드만 POST인 읽기. ask의 503은 생성 전 DB 단계에서만 나므로 다시 보내도 생성이 두 번 돌지 않는다. */
+const READ_POST_PATHS = ["/api/search", "/api/ask"];
+
 function isRetryable(path: string, init: RequestInit): boolean {
   const method = (init.method ?? "GET").toUpperCase();
-  if (method === "GET" || method === "HEAD" || path === "/api/search") return true;
+  if (method === "GET" || method === "HEAD" || READ_POST_PATHS.includes(path)) return true;
   return (
     method === "POST" &&
     IDEMPOTENT_CREATE_PATHS.includes(path) &&
@@ -446,13 +450,16 @@ export function editDocument(
   );
 }
 
+/** `chunk`를 주면 그 판에서 그 대목의 위치도 받는다 — 답변 인용이 가리키는 자리다 (#96 b). */
 export function getDocumentVersion(
   id: string,
   version: number,
   signal?: AbortSignal,
+  chunk?: number,
 ): Promise<TextVersionDetail> {
+  const query = chunk === undefined ? "" : `?chunk=${chunk}`;
   return request<TextVersionDetail>(
-    `/api/documents/${encodeURIComponent(id)}/versions/${version}`,
+    `/api/documents/${encodeURIComponent(id)}/versions/${version}${query}`,
     { signal },
   );
 }
@@ -543,15 +550,14 @@ export function reembedDocument(id: string): Promise<DocumentSummary> {
   });
 }
 
-export function search(
-  input: {
-    query: string;
-    tags?: string[];
-    contentType?: ContentType | null;
-    k?: number;
-  },
-  signal?: AbortSignal,
-): Promise<SearchResponse> {
+interface SearchRequestInput {
+  query: string;
+  tags?: string[];
+  contentType?: ContentType | null;
+  k?: number;
+}
+
+function searchBody(input: SearchRequestInput): string {
   const body: {
     query: string;
     tags?: string[];
@@ -563,12 +569,25 @@ export function search(
   if (input.tags !== undefined && input.tags.length > 0) body.tags = input.tags;
   if (input.contentType != null) body.content_type = input.contentType;
   if (input.k !== undefined) body.k = input.k;
+  return JSON.stringify(body);
+}
 
+export function search(input: SearchRequestInput, signal?: AbortSignal): Promise<SearchResponse> {
   return request<SearchResponse>("/api/search", {
     method: "POST",
     signal,
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
+    body: searchBody(input),
+  });
+}
+
+/** 검색과 같은 인자로 근거 기반 답변을 묻는다. 답하지 못해도 200이며 `status`가 이유다 (ADR-043). */
+export function ask(input: SearchRequestInput, signal?: AbortSignal): Promise<AskResponse> {
+  return request<AskResponse>("/api/ask", {
+    method: "POST",
+    signal,
+    headers: { "Content-Type": "application/json" },
+    body: searchBody(input),
   });
 }
 

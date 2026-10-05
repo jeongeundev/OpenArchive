@@ -52,6 +52,15 @@ def chunk_text(text: str, *, max_chars: int = 1000, overlap: int = 150) -> list[
         ValueError: `max_chars`가 1 미만이거나, `overlap`이 음수 또는 `max_chars` 이상일 때.
             `overlap >= max_chars`면 창의 전진 폭이 0 이하가 되어 분할이 끝나지 않는다.
     """
+    return [text[start:end] for start, end in chunk_spans(text, max_chars=max_chars, overlap=overlap)]
+
+
+def chunk_spans(text: str, *, max_chars: int = 1000, overlap: int = 150) -> list[tuple[int, int]]:
+    """`chunk_text`의 각 청크가 원문 `text`의 어디인지 `(start, end)`로 돌려준다.
+
+    `text[start:end]`가 곧 같은 번호의 청크다. 답변 인용이 「그 버전의 그 자리」를
+    가리키려면 청크 번호를 원문 위치로 되돌려야 한다 (#96 b).
+    """
     if max_chars < 1:
         raise ValueError(f"max_chars는 1 이상이어야 한다: {max_chars}")
     if not 0 <= overlap < max_chars:
@@ -62,8 +71,9 @@ def chunk_text(text: str, *, max_chars: int = 1000, overlap: int = 150) -> list[
     body = text.strip()
     if not body:
         return []
+    offset = len(text) - len(text.lstrip())
 
-    chunks: list[str] = []
+    spans: list[tuple[int, int]] = []
     start = 0
     while True:
         limit = start + max_chars
@@ -73,12 +83,14 @@ def chunk_text(text: str, *, max_chars: int = 1000, overlap: int = 150) -> list[
             cut = _boundary_cut(body, start, limit, floor=start + overlap)
             end = cut if cut is not None else limit
 
-        piece = body[start:end].strip()
+        segment = body[start:end]
+        piece = segment.strip()
         if piece:
-            chunks.append(piece)
+            piece_start = offset + start + len(segment) - len(segment.lstrip())
+            spans.append((piece_start, piece_start + len(piece)))
 
         if end >= len(body):
-            return chunks
+            return spans
         start = end - overlap
 
 
