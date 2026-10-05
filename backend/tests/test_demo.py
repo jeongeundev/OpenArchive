@@ -412,3 +412,14 @@ async def test_summarize_reads_inside_a_transaction_so_ha_counts_on_the_primary(
         recording = Recording(conn)
         assert await summarize(recording, "alice") == (0, 0)
     assert recording.statuses == [psycopg.pq.TransactionStatus.INTRANS]
+
+
+async def test_seed_records_actor_for_each_document(migrated_db):
+    from test_audit import rows
+
+    documents = [SeedDocument(str(i), f"document {i}", ["audit"]) for i in range(3)]
+    async with await psycopg.AsyncConnection.connect(migrated_db, autocommit=True) as conn:
+        created = await seed_documents(conn, documents, "seed")
+    audit = rows(migrated_db)
+    assert created == len(audit) == 3
+    assert all(row[:3] == ("document_created", "seed", "cli") for row in audit)

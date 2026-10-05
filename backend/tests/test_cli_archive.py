@@ -612,3 +612,15 @@ def test_import_checks_duplicates_inside_a_transaction_so_ha_reads_the_primary(
 
     assert statuses == [psycopg.pq.TransactionStatus.INTRANS] * 3
     assert sorted(r["title"] for r in documents(archive_db)) == ["guide", "메모"]
+
+
+def test_import_records_actor_for_each_file(archive_db, tmp_path):
+    from test_audit import rows
+
+    write(tmp_path, "one.txt", "first file")
+    write(tmp_path, "two.md", "# second file")
+    write(tmp_path, "three.md", "---\ntitle: Third\ntags: audit\n---\nthird file")
+    assert main(["import", str(tmp_path), "--user", "alice", "--dsn", archive_db]) == 0
+    audit = rows(archive_db)
+    assert len(audit) == 3
+    assert all(row[:3] == ("document_created", "alice", "cli") for row in audit)
