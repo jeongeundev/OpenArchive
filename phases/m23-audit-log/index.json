@@ -30,7 +30,10 @@
       "type": "refactor",
       "scope": "api",
       "desc": "열람 범위 교체를 차이만 반영하도록 바꿔 부여 변경 기록이 실제 변경만 남게 한다",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-10-06T00:43:42+0900",
+      "summary": "set_access 사용자·그룹 부여 차이만 DELETE·INSERT하여 실제 변경만 감사 기록; 공유·잠금·응답·updated_at 유지, 범위 121개·전체 1584개·최종 문서 열람 39개 및 Ruff 통과, 전량 교체 mutant 검출·복원",
+      "completed_at": "2026-10-06T00:56:25+0900"
     },
     {
       "step": 3,
