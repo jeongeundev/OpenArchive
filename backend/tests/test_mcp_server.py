@@ -94,6 +94,41 @@ async def test_registers_exactly_four_document_tools():
     }
 
 
+async def test_create_records_mcp_actor(monkeypatch, mcp_database):
+    from test_audit import rows
+
+    from openarchive.mcp_server.server import create_document
+
+    monkeypatch.setenv("MCP_USER_ID", "alice")
+    get_settings.cache_clear()
+
+    created = await create_document("MCP 감사 문서", "감사 대상 텍스트")
+
+    assert rows(mcp_database, created["document_id"]) == [
+        ("document_created", "alice", "mcp", "MCP 감사 문서", {})
+    ]
+
+
+@pytest.mark.parametrize("env_value", [None, ""])
+async def test_create_without_user_context_leaves_no_audit(
+    monkeypatch, mcp_database, env_value
+):
+    from test_audit import rows
+
+    from openarchive.mcp_server.server import MissingUserContext, create_document
+
+    if env_value is None:
+        monkeypatch.delenv("MCP_USER_ID", raising=False)
+    else:
+        monkeypatch.setenv("MCP_USER_ID", env_value)
+    get_settings.cache_clear()
+
+    assert rows(mcp_database) == []
+    with pytest.raises(MissingUserContext, match="MCP_USER_ID"):
+        await create_document("주체 없는 감사 문서", "저장되면 안 되는 텍스트")
+    assert rows(mcp_database) == []
+
+
 # 미설정뿐 아니라 빈 값·공백도 주체가 없는 상태다. pydantic은 `MCP_USER_ID=""`를 None이 아니라
 # 빈 문자열로 담고, owner_id에는 FK도 CHECK도 없어 그대로 두면 소유자 없는 문서가 조용히 생긴다.
 @pytest.mark.parametrize("env_value", [None, "", "   "])
