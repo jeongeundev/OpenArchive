@@ -45,3 +45,11 @@ jobs:
         run: cd frontend && npm ci
       - name: Check
         run: bash scripts/check.sh
+      # check.sh가 정적 export를 다시 빌드한다. 커밋된 동봉 산출물이 소스와 어긋나면 여기서 드러난다.
+      - name: Bundled static is up to date
+        run: |
+          if [ -n "$(git status --porcelain -- backend/openarchive/static)" ]; then
+            git status --porcelain -- backend/openarchive/static
+            echo "backend/openarchive/static이 소스와 다르다 — bash scripts/check.sh 후 산출물을 커밋할 것"
+            exit 1
+          fi
