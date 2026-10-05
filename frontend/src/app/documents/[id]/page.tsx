@@ -1,3 +1,5 @@
+import { Suspense } from "react";
+
 import { DocumentDetailView } from "./DocumentDetailView";
 
 /** 정적 export가 뽑아 두는 껍데기 경로. 서버가 모든 문서 ID 요청에 이 파일을 내려준다. */
@@ -14,5 +16,10 @@ export function generateStaticParams(): { id: string }[] {
 export const dynamicParams = false;
 
 export default function DocumentDetailPage(): React.ReactElement {
-  return <DocumentDetailView />;
+  // useSearchParams(인용 위치)는 정적 export에서 Suspense 경계를 요구한다 — 없으면 빌드가 실패한다.
+  return (
+    <Suspense fallback={<p className="text-sm text-neutral-500">불러오는 중…</p>}>
+      <DocumentDetailView />
+    </Suspense>
+  );
 }

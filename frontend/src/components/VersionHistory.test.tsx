@@ -97,6 +97,131 @@ describe("VersionHistory", () => {
     expect(fetchMock.mock.calls[0][0]).toBe("/api/documents/document-1/versions/1");
   });
 
+  // 답변 인용 클릭 → 그 버전의 그 자리 (ADR-043 결정 3, #96 b). 위치는 서버가 UTF-16 단위로 준다.
+  it("가리킨 버전을 펼치고 대목을 강조해 그 자리로 스크롤한다", async () => {
+    const content = "🚀 머리말\n\n둘째 대목이다.\n\n셋째";
+    const passage = "둘째 대목이다.";
+    const start = content.indexOf(passage);
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        version: 2,
+        content,
+        created_at: versions[2].created_at,
+        passage_start: start,
+        passage_end: start + passage.length,
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const scrollIntoView = vi.fn();
+    Element.prototype.scrollIntoView = scrollIntoView;
+
+    render(
+      <VersionHistory
+        documentId="document-1"
+        versions={versions}
+        currentVersion={3}
+        disabled={false}
+        focus={{ version: 2, chunk: 1 }}
+        onRestored={vi.fn()}
+      />,
+    );
+
+    const mark = await screen.findByText(passage, { selector: "mark" });
+    expect(mark.closest("pre")).toHaveTextContent("🚀 머리말 둘째 대목이다. 셋째");
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/documents/document-1/versions/2?chunk=1");
+    expect(scrollIntoView).toHaveBeenCalled();
+  });
+
+  // 같은 문서 안에서 다른 인용으로 클라이언트 이동하면 컴포넌트가 다시 마운트되지 않는다.
+  it("가리킨 자리가 바뀌면 그 버전을 펼치고 이전 강조를 지운다", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse({
+          version: 2,
+          content: "둘째 판 대목",
+          created_at: versions[2].created_at,
+          passage_start: 0,
+          passage_end: "둘째 판 대목".length,
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({ version: 1, content: "첫째 판 본문", created_at: versions[0].created_at }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    Element.prototype.scrollIntoView = vi.fn();
+    const props = {
+      documentId: "document-1",
+      versions,
+      currentVersion: 3,
+      disabled: false,
+      onRestored: vi.fn(),
+    };
+
+    const { rerender } = render(<VersionHistory {...props} focus={{ version: 2, chunk: 0 }} />);
+    await screen.findByText("둘째 판 대목", { selector: "mark" });
+
+    rerender(<VersionHistory {...props} focus={{ version: 1, chunk: 9 }} />);
+
+    expect(await screen.findByText("첫째 판 본문")).toBeInTheDocument();
+    expect(screen.queryByText("둘째 판 대목")).not.toBeInTheDocument();
+    expect(document.querySelector("mark")).toBeNull();
+  });
+
+  it("같은 버전의 위치 없는 대목으로 옮기면 이전 강조가 남지 않는다", async () => {
+    const content = "첫 대목\n\n둘째 대목";
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse({
+          version: 2,
+          content,
+          created_at: versions[2].created_at,
+          passage_start: 0,
+          passage_end: "첫 대목".length,
+        }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ version: 2, content, created_at: versions[2].created_at }));
+    vi.stubGlobal("fetch", fetchMock);
+    Element.prototype.scrollIntoView = vi.fn();
+    const props = {
+      documentId: "document-1",
+      versions,
+      currentVersion: 3,
+      disabled: false,
+      onRestored: vi.fn(),
+    };
+
+    const { rerender } = render(<VersionHistory {...props} focus={{ version: 2, chunk: 0 }} />);
+    await screen.findByText("첫 대목", { selector: "mark" });
+
+    rerender(<VersionHistory {...props} focus={{ version: 2, chunk: 9 }} />);
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    expect(document.querySelector("mark")).toBeNull();
+  });
+
+  it("가리킨 버전을 불러오지 못하면 펼침을 닫고 오류를 알린다", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(jsonResponse({ detail: "버전을 찾을 수 없습니다." }, 404)),
+    );
+
+    render(
+      <VersionHistory
+        documentId="document-1"
+        versions={versions}
+        currentVersion={3}
+        disabled={false}
+        focus={{ version: 2, chunk: 0 }}
+        onRestored={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByText("버전을 찾을 수 없습니다.")).toBeInTheDocument();
+    expect(screen.queryByText("불러오는 중…")).not.toBeInTheDocument();
+  });
+
   it("되돌리기는 새 버전이 생긴다고 알린 뒤에 실행한다", async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ version: 4 }));
     vi.stubGlobal("fetch", fetchMock);

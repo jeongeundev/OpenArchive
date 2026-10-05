@@ -160,9 +160,9 @@ docker run --rm -e ADMIN_PASSWORD='change-me' openarchive \
   openarchive init --schema --yes --dsn "postgresql://…"
 ```
 
-### `openarchive import` · `export` · `search`
+### `openarchive import` · `export` · `search` · `ask`
 
-셸에서 문서를 넣고, 빼고, 찾습니다. 셋 다 `--user`로 준 계정의 권한으로 동작합니다 — 넣은 문서의
+셸에서 문서를 넣고, 빼고, 찾고, 묻습니다. 넷 다 `--user`로 준 계정의 권한으로 동작합니다 — 넣은 문서의
 소유자, 검색·내보내기의 열람 범위가 이 계정입니다. 계정이 없으면 아무것도 하지 않고 끝납니다.
 
 ```bash
@@ -170,6 +170,7 @@ openarchive import ./docs --user alice                        # 하위 폴더까
 openarchive import ./docs --user alice --tag 회의 --visibility private
 openarchive export ./backup --user alice                      # 비어 있거나 없는 폴더
 openarchive search "설치 절차" --user alice --tag 운영 -k 5
+ANSWER_PROVIDER=ollama openarchive ask "설치 절차가 뭐야?" --user alice
 ```
 
 **import**
@@ -197,6 +198,12 @@ openarchive search "설치 절차" --user alice --tag 운영 -k 5
 - 질의 임베딩은 `EMBEDDING_PROVIDER`를 따릅니다. **문서를 임베딩한 워커와 같은 값이어야** 합니다 —
   다르면 에러 없이 무의미한 결과가 나옵니다. 워커를 `local`로 돌렸다면 `EMBEDDING_PROVIDER=local
   openarchive search …`처럼 맞춥니다.
+
+**ask**
+- 웹 답변 패널과 같은 근거 기반 답변입니다(ADR-043). `search`와 같은 인자를 받고, 질의 임베딩도 같은 규칙을 따릅니다.
+- `ANSWER_PROVIDER`가 `off`(기본)면 DB에 붙지 않고 켜는 법을 알린 뒤 종료 코드 1로 끝납니다.
+- 답 아래에 **인용한 근거**만 「v3 기준 · 현재 v4」처럼 근거 버전과 함께 출력합니다. 근거로 쓸 문서가 없으면 그렇게
+  알리고(종료 코드 0), 모델 호출이 실패하면 종료 코드 1입니다. 근거에 없는 내용은 답하지 않도록 지시하지만 보장은 아닙니다.
 
 ### `openarchive demo`
 

@@ -15,6 +15,7 @@ from fastapi.testclient import TestClient
 from test_parsing import hwp_without_text, hwpx_without_text
 
 from openarchive.config import get_settings
+from openarchive.services.chunking import chunk_text
 
 
 def edit(client: TestClient, document_id: str, *, content: str, version: int, user_id="alice"):
@@ -1012,6 +1013,51 @@ def test_past_version_endpoint_rejects_a_version_that_never_existed(
     ).json()
 
     assert db_client.get(f"/api/documents/{created['id']}/versions/2").status_code == 404
+
+
+def utf16_len(text: str) -> int:
+    return len(text.encode("utf-16-le")) // 2
+
+
+def test_past_version_endpoint_locates_a_chunk_in_utf16_offsets(db_client: TestClient):
+    """답변 인용의 「그 버전의 그 자리」 — 그 판을 워커와 같은 청킹으로 잘라 대목 위치를 준다 (#96 b).
+
+    브라우저 문자열 인덱스는 UTF-16 단위라, 이모지 같은 BMP 밖 문자가 앞에 있으면
+    코드 포인트 오프셋으로는 한 칸씩 밀린다.
+    """
+    content = "🚀 머리말\n\n" + "\n\n".join(
+        f"{i}번 조항이다. " + "근거는 문서 텍스트 버전에 있다. " * 30 for i in range(1, 6)
+    )
+    chunks = chunk_text(content)
+    assert len(chunks) > 2
+    login_as(db_client, "alice")
+    created = db_client.post(
+        "/api/documents/text", json={"title": "조항", "content": content}
+    ).json()
+
+    body = db_client.get(f"/api/documents/{created['id']}/versions/1?chunk=2").json()
+
+    start, end = body["passage_start"], body["passage_end"]
+    units = body["content"].encode("utf-16-le")
+    assert units[start * 2 : end * 2].decode("utf-16-le") == chunks[2]
+    assert start == utf16_len(content[: content.index(chunks[2])])
+
+
+def test_past_version_endpoint_leaves_the_passage_empty_without_a_matching_chunk(
+    db_client: TestClient,
+):
+    """청크가 없는 번호여도 본문은 그대로 보여 준다 — 판은 있고 자리만 못 찾은 것이다."""
+    login_as(db_client, "alice")
+    created = db_client.post(
+        "/api/documents/text", json={"title": "정책", "content": "처음 내용"}
+    ).json()
+
+    without = db_client.get(f"/api/documents/{created['id']}/versions/1").json()
+    beyond = db_client.get(f"/api/documents/{created['id']}/versions/1?chunk=5").json()
+
+    assert (without["passage_start"], without["passage_end"]) == (None, None)
+    assert beyond["content"] == "처음 내용"
+    assert (beyond["passage_start"], beyond["passage_end"]) == (None, None)
 
 
 def test_restore_endpoint_appends_a_new_version_and_requeues_embedding(

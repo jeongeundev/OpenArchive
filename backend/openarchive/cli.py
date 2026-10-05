@@ -39,6 +39,7 @@ from uuid import UUID
 import psycopg
 import yaml
 
+from openarchive.answers import AnswerProvider, get_answer_provider
 from openarchive.config import ENV_FILE, get_settings
 from openarchive.demo import EdgeJobsTimeout, converge, load_seed_documents, seed_documents
 from openarchive.embeddings import get_provider
@@ -50,6 +51,7 @@ from openarchive.migrations import (
     pending_filenames,
     run_migrations,
 )
+from openarchive.services.answer import ASK_K, AnswerResult, gather_evidence, generate_answer
 from openarchive.services.auth import (
     UserAlreadyExists,
     UserNotFound,
@@ -1218,6 +1220,89 @@ def run_search(
     return 0
 
 
+async def _answer(
+    dsn: str,
+    query: str,
+    provider: AnswerProvider,
+    *,
+    username: str,
+    tags: list[str],
+    content_type: str | None,
+    k: int,
+) -> AnswerResult:
+    async with await _connect(dsn, autocommit=True) as conn:
+        await _require_user(conn, username)
+        evidence = await gather_evidence(
+            conn,
+            get_provider(),
+            query=query,
+            user_id=username,
+            tags=tags,
+            content_type=content_type,
+            k=k,
+            context_chars=get_settings().answer_context_chars,
+        )
+    return await generate_answer(evidence, provider)
+
+
+def run_ask(
+    *,
+    dsn: str | None,
+    query: str,
+    username: str,
+    tags: list[str],
+    content_type: str | None,
+    k: int,
+) -> int:
+    """`username`이 볼 수 있는 문서를 근거로 답한다. 웹 답변 패널과 같은 서비스다(ADR-043)."""
+    if not 1 <= k <= MAX_K:
+        print(f"k는 1 이상 {MAX_K} 이하여야 합니다.")
+        return 2
+    provider = get_answer_provider()
+    if provider is None:
+        print("답변 생성이 꺼져 있습니다. ANSWER_PROVIDER=ollama로 켤 수 있습니다(기본: off).")
+        print("검색은 openarchive search로 그대로 쓸 수 있습니다.")
+        return 1
+    dsn = dsn or get_settings().database_url
+    try:
+        result = asyncio.run(
+            _answer(
+                dsn, query, provider,
+                username=username, tags=tags, content_type=content_type, k=k,
+            )
+        )
+    except _ConnectionFailed as error:
+        print(f"연결하지 못했습니다: {error}")
+        return 1
+    except UserNotFound:
+        print(f"'{username}' 계정이 없습니다.")
+        return 1
+    if result.status == "no_evidence":
+        print("근거로 쓸 문서를 찾지 못했습니다.")
+        return 0
+    if result.status == "failed":
+        print(f"{result.detail} 검색은 openarchive search로 그대로 쓸 수 있습니다.")
+        return 1
+    print("근거 기반 답변 — 근거 문서만 쓰도록 지시했지만 보장은 아닙니다.")
+    print()
+    print(result.answer)
+    print()
+    print("근거")
+    for source in result.sources:
+        if not source.cited:
+            continue
+        version = f"v{source.based_on_version} 기준"
+        if source.revised:
+            version += f" · 현재 v{source.current_version}"
+        print(f"[{source.label}] {source.title} · {version}")
+        print(f"    {_snippet(source.content)}")
+        print(f"    {source.document_id} · 대목 {source.chunk_index}")
+    uncited = sum(not source.cited for source in result.sources)
+    if uncited:
+        print(f"인용하지 않은 근거 {uncited}건")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="openarchive", description="OpenArchive 운영 CLI")
     subcommands = parser.add_subparsers(dest="command", required=True)
@@ -1302,6 +1387,15 @@ def main(argv: list[str] | None = None) -> int:
     searcher.add_argument("--type", choices=SUPPORTED_CONTENT_TYPES, help="이 형식의 문서만")
     searcher.add_argument("-k", type=int, default=10, help=f"결과 수 (1~{MAX_K}, 기본: 10)")
     searcher.add_argument("--dsn", help="DB 연결 문자열. 생략하면 DATABASE_URL을 씁니다.")
+    asker = subcommands.add_parser(
+        "ask", help="문서를 근거로 답합니다. ANSWER_PROVIDER가 켜져 있어야 합니다(기본: off)."
+    )
+    asker.add_argument("query")
+    asker.add_argument("--user", required=True, help=f"{user_help} 볼 수 있는 문서만 근거로 씁니다.")
+    asker.add_argument("--tag", action="append", default=[], help="이 태그 중 하나가 붙은 문서만")
+    asker.add_argument("--type", choices=SUPPORTED_CONTENT_TYPES, help="이 형식의 문서만")
+    asker.add_argument("-k", type=int, default=ASK_K, help=f"근거를 찾을 문서 수 (1~{MAX_K}, 기본: {ASK_K})")
+    asker.add_argument("--dsn", help="DB 연결 문자열. 생략하면 DATABASE_URL을 씁니다.")
     demo = subcommands.add_parser(
         "demo", help="예제 문서(가상 회사의 사내 규정)를 넣어 봅니다. 이미 있는 제목은 건너뜁니다."
     )
@@ -1332,6 +1426,15 @@ def main(argv: list[str] | None = None) -> int:
         return run_export(dsn=args.dsn, folder=args.folder, username=args.user)
     if args.command == "search":
         return run_search(
+            dsn=args.dsn,
+            query=args.query,
+            username=args.user,
+            tags=args.tag,
+            content_type=args.type,
+            k=args.k,
+        )
+    if args.command == "ask":
+        return run_ask(
             dsn=args.dsn,
             query=args.query,
             username=args.user,

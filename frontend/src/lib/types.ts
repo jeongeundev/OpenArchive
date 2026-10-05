@@ -82,6 +82,9 @@ export interface TextVersion {
 
 export interface TextVersionDetail extends TextVersion {
   content: string;
+  /** `?chunk=`로 물은 대목의 위치(UTF-16 단위). 번호에 맞는 청크가 없으면 null이다. */
+  passage_start?: number | null;
+  passage_end?: number | null;
 }
 
 /** 원본 파일 한 판의 메타데이터. 바이트는 내려받기 경로로만 받는다. */
@@ -145,6 +148,27 @@ export interface SearchVia {
 export interface SearchResponse {
   items: SearchResult[];
   sql: string;
+}
+
+/** 근거 기반 답변의 근거 하나 — 모델에 준 대목이며 `cited`가 실제 인용 여부다 (ADR-043). */
+export interface AnswerSource {
+  label: number;
+  document_id: string;
+  title: string;
+  chunk_index: number;
+  based_on_version: number;
+  current_version: number;
+  revised: boolean;
+  content: string;
+  cited: boolean;
+}
+
+export interface AskResponse {
+  status: "answered" | "no_evidence" | "disabled" | "failed";
+  answer: string | null;
+  detail: string | null;
+  sources: AnswerSource[];
+  items: SearchResult[];
 }
 
 export interface RelatedDocument {

@@ -7,9 +7,11 @@ import { DocumentDetailView } from "./DocumentDetailView";
 
 // useRouter는 DocumentActions가 삭제 후 목록으로 보낼 때만 쓴다. usePathname은 문서 ID의
 // 출처다 — 정적 export에서는 params에 껍데기 값이 들어오므로 URL에서 읽는다.
+const navigation = vi.hoisted(() => ({ searchParams: new URLSearchParams() }));
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn() }),
   usePathname: () => "/documents/document-1",
+  useSearchParams: () => navigation.searchParams,
 }));
 
 const detail: DocumentDetail = {
@@ -347,5 +349,49 @@ describe("문서 상세의 열람 범위 패널", () => {
     expect(urls.some((url) => url.endsWith("/access"))).toBe(false);
     expect(urls).not.toContain("/api/principals");
     expect(urls).not.toContain("/api/shares");
+  });
+});
+
+// 답변 인용 링크 `/documents/{id}?version=&chunk=` (ADR-043 결정 3, #96 b).
+describe("문서 상세 페이지의 인용 위치", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    navigation.searchParams = new URLSearchParams();
+  });
+
+  // 검색 화면의 인용 링크는 클라이언트 이동이다 — Next는 새 화면을 그린 뒤에 주소창을 바꾸므로
+  // window.location은 첫 렌더에 아직 /search다. 라우터의 검색 파라미터를 읽어야 한다(실사용에서 잡힘).
+  it("주소의 version·chunk로 그 버전을 펼치고 대목 위치를 묻는다", async () => {
+    window.history.replaceState(null, "", "/search");
+    navigation.searchParams = new URLSearchParams("version=1&chunk=0");
+    const fetchMock = vi.fn((url: string) => {
+      if (url === "/api/auth/me") return Promise.resolve(jsonResponse({ authenticated: true, username: "alice", is_admin: false }));
+      if (url.endsWith("/links") || url.endsWith("/backlinks")) return Promise.resolve(jsonResponse([]));
+      if (url.endsWith("/related")) return Promise.resolve(jsonResponse(related));
+      if (url.endsWith("/tag-suggestions")) return Promise.resolve(jsonResponse(suggestions));
+      if (url.endsWith("/access")) return Promise.resolve(jsonResponse({ visibility: "public", users: [], groups: [] }));
+      if (url.includes("/versions/1")) {
+        return Promise.resolve(jsonResponse({
+          version: 1, content: "처음 근거", created_at: "2026-08-05T10:00:00Z",
+          passage_start: 0, passage_end: 5,
+        }));
+      }
+      return Promise.resolve(jsonResponse({
+        ...detail,
+        versions: [
+          { version: 1, created_at: "2026-08-05T10:00:00Z" },
+          { version: 2, created_at: "2026-08-05T11:00:00Z" },
+        ],
+      }));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    Element.prototype.scrollIntoView = vi.fn();
+
+    await renderPage();
+
+    expect(await screen.findByText("처음 근거", { selector: "mark" })).toBeInTheDocument();
+    expect(fetchMock.mock.calls.map(([url]) => url)).toContain(
+      "/api/documents/document-1/versions/1?chunk=0",
+    );
   });
 });

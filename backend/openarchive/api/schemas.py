@@ -43,6 +43,9 @@ class TextVersion(BaseModel):
 
 class TextVersionDetail(TextVersion):
     content: str
+    # `?chunk=`로 물은 대목의 위치(UTF-16 단위). 답변 인용 링크가 쓴다 (#96 b).
+    passage_start: int | None = None
+    passage_end: int | None = None
 
 
 class RestoreVersionRequest(BaseModel):

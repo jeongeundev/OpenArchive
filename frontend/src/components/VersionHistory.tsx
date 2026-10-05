@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { ApiError, getDocumentVersion, restoreDocumentVersion } from "@/lib/api";
 import type { TextVersion } from "@/lib/types";
@@ -19,6 +19,7 @@ export function VersionHistory({
   currentVersion,
   disabled,
   restoreBlockedReason = null,
+  focus = null,
   onRestored,
 }: {
   documentId: string;
@@ -27,15 +28,53 @@ export function VersionHistory({
   disabled: boolean;
   /** 되돌리기를 잠시 막아야 할 때의 이유. 버튼은 남기고 비활성으로 둔다. */
   restoreBlockedReason?: string | null;
+  /** 답변 인용이 가리킨 자리. 그 버전을 펼치고 대목을 강조한다 (ADR-043 결정 3, #96 b). */
+  focus?: { version: number; chunk: number } | null;
   onRestored: () => void;
 }): React.ReactElement {
   const sortedVersions = [...versions].sort((a, b) => b.version - a.version);
-  const [openVersion, setOpenVersion] = useState<number | null>(null);
+  const [openVersion, setOpenVersion] = useState<number | null>(focus?.version ?? null);
   const [texts, setTexts] = useState<Record<number, string>>({});
   const [confirming, setConfirming] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const unmountSignal = useUnmountSignal();
+  const [passage, setPassage] = useState<{ version: number; start: number; end: number } | null>(null);
+  const markRef = useRef<HTMLElement>(null);
+  const focusVersion = focus?.version;
+  const focusChunk = focus?.chunk;
+  // 같은 문서 안의 다른 인용으로 이동하면 다시 마운트되지 않는다 — 펼침과 강조를 새 자리로 옮긴다.
+  const [shownFocus, setShownFocus] = useState(focus);
+  if (focus?.version !== shownFocus?.version || focus?.chunk !== shownFocus?.chunk) {
+    setShownFocus(focus);
+    if (focus) {
+      setOpenVersion(focus.version);
+      setPassage(null);
+      setError(null);
+    }
+  }
+
+  useEffect(() => {
+    if (focusVersion === undefined || focusChunk === undefined) return;
+    const controller = new AbortController();
+    void getDocumentVersion(documentId, focusVersion, controller.signal, focusChunk)
+      .then((detail) => {
+        setTexts((previous) => ({ ...previous, [focusVersion]: detail.content }));
+        if (detail.passage_start != null && detail.passage_end != null) {
+          setPassage({ version: focusVersion, start: detail.passage_start, end: detail.passage_end });
+        }
+      })
+      .catch((reason: unknown) => {
+        if (controller.signal.aborted) return;
+        setOpenVersion(null);
+        setError(reason instanceof ApiError ? reason.detail : "텍스트 버전을 불러오지 못했습니다.");
+      });
+    return () => controller.abort();
+  }, [documentId, focusVersion, focusChunk]);
+
+  useEffect(() => {
+    if (passage !== null) markRef.current?.scrollIntoView({ block: "center" });
+  }, [passage, texts]);
 
   async function toggleText(version: number): Promise<void> {
     setError(null);
@@ -135,7 +174,19 @@ export function VersionHistory({
 
               {openVersion === item.version ? (
                 <pre className="whitespace-pre-wrap rounded border border-neutral-800 bg-[#0f0f0f] p-3 text-xs text-neutral-300">
-                  {texts[item.version] ?? "불러오는 중…"}
+                  {texts[item.version] === undefined ? (
+                    "불러오는 중…"
+                  ) : passage?.version === item.version ? (
+                    <>
+                      {texts[item.version].slice(0, passage.start)}
+                      <mark ref={markRef} className="bg-[#0ea5e9]/20 text-white">
+                        {texts[item.version].slice(passage.start, passage.end)}
+                      </mark>
+                      {texts[item.version].slice(passage.end)}
+                    </>
+                  ) : (
+                    texts[item.version]
+                  )}
                 </pre>
               ) : null}
 
