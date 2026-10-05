@@ -25,10 +25,10 @@
 - 백엔드: Python 3.12+, FastAPI, psycopg3 (+psycopg_pool), pytest
 - 프론트엔드: Next.js (App Router), TypeScript strict mode, Tailwind CSS
 - DB: Tmax OpenSQL v3 (PostgreSQL **17.8** + **pgvector 0.8.1** · pgvectorscale 0.9.0 번들). 애플리케이션은 **OpenProxy:6432** 경유. 2차 평가 환경은 **HA 3노드**(node1~3, Patroni·etcd·OpenProxy VRRP VIP)이며 복제는 공식 구성대로 **비동기**다. 백업은 별도 서버 node4의 **Barman**(WAL 스트리밍·PITR)이 맡는다 (ADR-020 2026-09-28 개정, ADR-049 개정, ADR-053). 1차 제출은 대회 지시에 따른 single 구성이었다
-- 개발 환경 2단: 일상 개발은 `pgvector/pgvector:pg17` 컨테이너, OpenSQL 고유 동작 확인은 Rocky Linux 9.7 **x86-64 VM** — HA 3노드 + node4(Barman), 복원본용 single VM (`docs/SETUP_OPENSQL.md` §16·§17). OpenSQL은 x86-64 전용이라 Apple Silicon에서는 에뮬레이션이 필요하므로 **DB만 VM에 두고 API·워커·프론트는 맥 네이티브로** 돌린다
+- 개발 환경 2단: 일상 개발은 `pgvector/pgvector:pg17` 컨테이너, OpenSQL 고유 동작 확인은 Rocky Linux 9.7 **x86-64 VM** — HA 3노드 + node4(Barman) (`docs/SETUP_OPENSQL.md` §16·§17). 백업 복원은 Replica 노드의 격리 인스턴스(포트 5433)로 한다 — single VM은 개발·OpenSQL 고유 동작 확인용이다. OpenSQL은 x86-64 전용이라 Apple Silicon에서는 에뮬레이션이 필요하므로 **DB만 VM에 두고 API·워커·프론트는 맥 네이티브로** 돌린다
 - 임베딩: sentence-transformers **`BAAI/bge-m3`** (MIT, 1024차원) 단일. 테스트용 `FakeProvider`만 예외. **상용 API 모델 금지** — 대회 규정 (ADR-003)
 - MCP 서버: Python `mcp` SDK (FastMCP). 로컬은 stdio, 원격은 Streamable HTTP `/mcp` + API 토큰 — 원격은 결정·미구현(#188, ADR-056)
-- 답변 생성(옵션, 기본 꺼짐): 로컬 Ollama `qwen3:8b` (ADR-043). 임베딩과 같은 이유로 **상용 API 금지**
+- 답변 생성(옵션, 기본 꺼짐): 로컬 Ollama `qwen3:8b` (ADR-043, 한국어 품질 확정은 #96 c). 임베딩과 같은 이유로 **상용 API 금지**
 - OCR: tesseract 5 + kor/eng (ADR-052) · 주제 덩어리: networkx Louvain (ADR-042)
 
 ## 아키텍처 규칙
@@ -53,8 +53,8 @@
 - 스키마 변경은 `backend/openarchive/migrations/`의 번호 붙은 raw SQL 파일로만 한다 (ORM 마이그레이션 도구 금지).
 - 백엔드 비즈니스 로직은 `backend/openarchive/services/`에 두고, API 라우터·MCP 서버·운영자 CLI(`--dsn`·`--user`)는 이를 재사용만 한다.
 - CRITICAL: API 토큰의 발급·목록·폐기, 열람 범위 변경(문서·폴더), 외부 공유 관리와 `/api/admin/*` 관리 API는 세션 전용으로 둔다. 문서를 **만들 때** 부여 대상(`grant_users`·`grant_groups`)을 지정하는 것만 토큰·MCP·CLI에 허용한다. 토큰이 토큰을 발급하면 폐기 뒤에도 자격증명을 스스로 재생할 수 있고, 문서 공급용 토큰에 계정 관리 권한을 주면 최소 권한이 무효가 된다 (ADR-034·044).
-- CRITICAL: **관리자 권한만으로는 문서를 열람하지 못한다.** 열람 술어에 `is_admin` 분기를 넣지 마라. 관리자는 계정·그룹을 관리하고 감사 로그를 보지만, 문서를 보려면 그룹 구성원이 되어야 하며 그 변경은 감사 로그에 남는다(비상 경로). 폴더 열람 범위도 폴더를 만든 사람만 바꾼다. 이유: 관리 권한과 열람 권한의 분리가 실무 관례이고, 관리자 우회는 "볼 수 없는 문서는 존재하지 않는다"를 무너뜨린다 (ADR-040·044·054).
-- CRITICAL: **감사 로그는 DB가 쓴다**(#186, ADR-055). 쓰기 동작(생성·텍스트 수정·삭제·열람 범위 변경·원본 교체·그룹 구성원 변경)은 트리거가, 읽기 동작(원본 내려받기)은 DB 함수 하나가 **원래 작업과 같은 트랜잭션에서** 기록한다. 앱이 감사 테이블에 직접 INSERT하지 마라. 감사 행의 UPDATE·DELETE는 DB가 거부하고, 문서 삭제에 연쇄되지 않도록 FK CASCADE 없이 제목을 스냅샷으로 둔다. 행위자는 `SET LOCAL`(트랜잭션 범위)로만 넘긴다 — 세션 `SET`은 OpenProxy 풀 백엔드를 타고 다음 클라이언트로 샌다(ADR-022와 같은 함정). 이유: 잡 생성과 같은 원칙 — 기록이 빠지는 경로가 DB 밖에 없어야 한다.
+- CRITICAL: **관리자 권한만으로는 문서를 열람하지 못한다.** 열람 술어에 `is_admin` 분기를 넣지 마라. 관리자는 계정·그룹을 관리하고 감사 로그를 보지만(감사 화면의 **대상 문서 제목**만은 명시적 예외로 보인다 — 본문·발췌는 아님, ADR-055 결정 8), 문서를 보려면 그룹 구성원이 되어야 하며 그 변경은 감사 로그에 남는다(비상 경로). 폴더 열람 범위도 폴더를 만든 사람만 바꾼다. 이유: 관리 권한과 열람 권한의 분리가 실무 관례이고, 관리자 우회는 "볼 수 없는 문서는 존재하지 않는다"를 무너뜨린다 (ADR-040·044·054).
+- CRITICAL: **감사 로그는 DB가 쓴다**(#186, ADR-055). 쓰기 동작(생성·텍스트 수정·삭제·열람 범위 변경·폴더 열람 범위 변경·원본 교체·그룹 구성원 변경)은 트리거가, 읽기 동작(원본 내려받기)은 DB 함수 하나가 **원래 작업과 같은 트랜잭션에서** 기록한다. 앱이 감사 테이블에 직접 INSERT하지 마라. 감사 행의 UPDATE·DELETE는 DB 트리거가 거부하고(테이블 소유자인 앱 롤로 psql에 붙어도 거부돼야 한다 — 권한 REVOKE만으로는 소유자에게 안 먹는다), 문서 삭제에 연쇄되지 않도록 FK CASCADE 없이 제목을 스냅샷으로 둔다. 행위자는 `SET LOCAL`(트랜잭션 범위)로만 넘긴다 — 세션 `SET`은 OpenProxy 풀 백엔드를 타고 다음 클라이언트로 샌다(ADR-022와 같은 함정). 이유: 잡 생성과 같은 원칙 — 기록이 빠지는 경로가 DB 밖에 없어야 한다.
 - CRITICAL: **사용자 CLI는 DB에 붙지 않는다**(#189, ADR-057). `login`·`doc …`·토큰 경로의 `search`/`ask`는 REST에 본인 API 토큰으로만 붙고 `DATABASE_URL`·DSN을 읽지 않는다. DSN을 쓰는 것은 운영자 CLI(`--dsn`·`--user`)뿐이다. 원격 MCP(#188, ADR-056)도 주체는 Bearer 토큰에서만 정한다 — `MCP_USER_ID`는 stdio 전용이다. 이유: DSN을 쥔 클라이언트는 열람 범위 밖에 있다 — 남으로 행세하는 구멍이다(ADR-040과 같은 문제).
 - **휴지통·소프트 삭제 컬럼을 만들지 않는다.** 삭제는 영구이고, 잘못 지운 것은 관리자가 Barman PITR로 격리 인스턴스에 복원해 확인한다 (ADR-037·053).
 - **근거를 만드는 파이프라인(추출·청킹·임베딩·관계·검색·근거 조립)에 LLM을 쓰지 않는다.** 답변 생성은 그 근거 위의 옵션 레이어이며 기본 꺼짐이다 (ADR-043).
