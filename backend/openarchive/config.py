@@ -39,6 +39,21 @@ class Settings(BaseSettings):
     # local = BAAI/bge-m3, fake = 결정론적 해시 벡터(테스트·CI). 상용 API 프로바이더는 없다 (ADR-003).
     embedding_provider: Literal["local", "fake"] = "fake"
 
+    # 기본 꺼짐으로 모델 설치를 선택으로 남긴다. 상용 API 프로바이더는 없다(ADR-003·043).
+    answer_provider: Literal["off", "ollama", "fake"] = "off"
+
+    # 로컬 Ollama 서버 주소. 모델 적재는 서버가 관리하며 앱 기동 시 접속하지 않는다.
+    ollama_url: str = "http://localhost:11434"
+
+    # 임시 모델 태그 — #96 c의 한국어 실측으로 확정한다 (ADR-043).
+    answer_model: str = "qwen3:8b"
+
+    # 생성 호출 한 번의 HTTP 타임아웃(초). 모델 실패와 DB 일시 불가용을 구분한다.
+    answer_timeout_seconds: float = Field(default=120, gt=0)
+
+    # 프롬프트에 넣는 근거 본문의 글자 예산. 생성 모델에 전달할 문맥량을 제한한다.
+    answer_context_chars: int = Field(default=6000, gt=0)
+
     # 잡 선점 lease(초). 워커는 처리 중 이 값의 1/3마다 연장하고, 연장이 끊긴 잡은 lease
     # 만료 뒤 회수된다 (ADR-050). 스윕도 drain 중 이 주기로 돈다.
     job_lease_seconds: int = Field(default=60, gt=0)

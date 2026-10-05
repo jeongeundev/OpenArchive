@@ -74,6 +74,8 @@ OpenArchive/
 │   │   │                         #   diagnostics, clusters, retry (+ deps, schemas)
 │   │   ├── services/             # parsing, chunking, documents, search, related,
 │   │   │                         #   links, diagnostics, clusters, auth, system, visibility
+│   │   │                         #   answer.py(근거 조립·답변 생성, ADR-043 구현 계약)
+│   │   ├── answers/              # 답변 생성 프로바이더: fake·ollama (ADR-043 구현 계약)
 │   │   ├── embeddings/           # base.py(Protocol), local.py(bge-m3), fake.py
 │   │   ├── worker.py             # 워커 진입점 — 임베딩 잡과 관계 잡을 같은 큐에서 처리
 │   │   └── mcp_server/server.py  # FastMCP stdio — search_documents, get_document, list_documents, create_document
@@ -789,6 +791,42 @@ PUT /api/documents/{id}
 - 저장 직후 `embedding_status`가 `pending`으로 돌아가고, 정합성 카운터(`c.version <> d.version`)가 1 올랐다가 워커 처리 후 0으로 복귀한다. **이 흐름이 데모의 핵심 장면이다**
 
 **원본 파일과 추출 텍스트를 구분한다.** 원본 파일은 `document_files`에 보관되지만 편집 대상이 아니므로, 편집 후에는 `filename = report.pdf`인데 `content`가 그 PDF의 추출 결과와 다른 상태가 될 수 있다. **결함이 아니라 설계된 동작**이며, 스캔 품질이 나쁜 PDF의 오추출을 고치는 정당한 용도가 있다. 재추출(`POST /reextract`)은 그 편집을 원본 기준으로 다시 덮으며, 덮인 텍스트는 버전 이력에 남는다. UI는 편집 영역을 "본문"이 아니라 **"추출 텍스트"**로 표기한다 — 원본 파일이 없는 문서에서는 **"문서 텍스트"**다 (`UI_GUIDE.md`).
+
+### 근거 기반 답변 (POST /api/ask)
+
+#96 a의 구현 계약은 [ADR-043 「구현 형태 (2026-10-04, #96 a)」](ADR.md#구현-형태-2026-10-04-96-a)가 정본이다.
+`ask`는 **검색 → 근거 조립 → 프롬프트 → 생성 → 응답**의 고정 파이프라인으로 기존 검색을 소비한다.
+검색 SQL·열람 술어·DB 스키마는 변경하지 않고 답을 저장하거나 MCP에 추가하지 않는다.
+
+본문은 `{query, tags?, content_type?, k=5}`이며 빈 질의는 400이다. 로그인 사용자의 세션·위임 토큰을
+허용하고 공유 주체는 403으로 막는다(ADR-044 공유 허용 목록). 인증·검색·현재 버전 조회는 커넥션 한 번
+대여 안에서 끝낸다. `services/answer.py`의 `gather_evidence`가 `Evidence(hits, sources, system, prompt)`를
+반환하면 **커넥션을 반납한 뒤** `generate_answer`를 부른다. 요청 끝까지 연결을 쥐는 `Connection` 의존성을
+쓰지 않고, 빌린 커넥션 안에서 `current_user`·`require_user_id`를 함수로 직접 부른다. 생성은 동기
+`AnswerProvider.generate(system, prompt)`를 `asyncio.to_thread`로 실행한다.
+
+현재 `documents.version`은 같은 커넥션에서 `VISIBLE_TO_USER`와 함께 별도로 조회하고, 그 사이 열람에서
+빠진 문서의 근거는 버린다. 검색 순위대로 `passages`(없으면 대표 청크)를 쓰고 동일 본문은 한 번만 넣는다.
+`via=revision` 히트는 본문이 직전 판 전문이므로, 직전 판을 워커와 같은 청킹으로 나눠 검색이 맞춘 현재 판 청크와
+어절이 가장 많이 겹치는 청크 하나를 근거로 쓴다(`chunk_index`도 직전 판 기준).
+`ANSWER_CONTEXT_CHARS` 예산을 지키며 첫 근거가 너무 길면 잘라서 하나는 넣는다. 300자 미리보기 대신
+본문 후보를 사용한다. 근거 없음 안내는 프롬프트 지시이며 생성 결과의 보장이 아니다.
+
+답변 결과는 200과 `{status, answer, detail, sources[], items[]}`로 반환한다. `items`는 `/api/search`의
+`SearchResult`와 같은 모양이며 모든 상태에서 검색 결과를 그대로 돌려준다. 판정 순서는 다음과 같다.
+
+- `disabled`: 프로바이더 None. 모델을 부르지 않는다.
+- `no_evidence`: 근거 0건. 모델을 부르지 않는다.
+- `answered`: 생성된 답변과 근거를 반환한다.
+- `failed`: 연결 거부·타임아웃·HTTP 오류·빈 응답을 묶은 `AnswerUnavailable`. `detail`은 고정 문구이고 원인은 서버 로그에만 남긴다. 다른 예외는 삼키지 않는다.
+
+`sources`는 모델에 준 대목 전체다. 각 항목은 `label`(1부터, 답의 `[n]`과 대응)·`document_id`·`title`·
+`chunk_index`·`based_on_version`·`current_version`·`revised`·`content`·`cited`를 담는다. `content`는
+모델에 준 텍스트 그대로이고, `revised`는 근거 버전이 현재 버전보다 작은지 나타낸다. `cited`는 기본 False이며
+답에서 해당 라벨을 실제 인용했는지 구분한다. 직전 텍스트 버전 결과도 기준 버전을 보존한다.
+
+인증·입력 오류는 기존 오류 코드를 쓰고, 503은 DB 일시 불가용에만 쓴다(ADR-048). 재시도 미들웨어의
+읽기 대상에 `/api/ask`를 넣는다. DB 단계가 생성 전에 끝나므로 DB 재시도가 생성을 두 번 돌리지 않는다.
 
 ## 검색 데이터 흐름
 

@@ -2844,7 +2844,7 @@ edge를 정렬한 뒤 `networkx.algorithms.community.louvain_communities`에
 고정하기 전 측정이라 폐기했다.
 
 ### ADR-043: 답변 생성을 옵션 레이어로 내장한다 — 근거 계약이 답변까지 연장된다
-**상태**: 2026-09-12 신규 — **초안**(2차 트랙, 착수 전 확정). ADR-015 결정 3(생성 LLM 미탑재)을 개정한다. 결정 1·2는 그대로 유효하다.
+**상태**: 2026-09-12 신규 — **초안**(2차 트랙, 착수 전 확정) · 2026-10-04 #96 a 구현 형태 반영. ADR-015 결정 3(생성 LLM 미탑재)을 개정한다. 결정 1·2는 그대로 유효하다.
 
 **맥락 — 결정 3의 근거 셋을 2차 조건에서 다시 쟀다.** ADR-015 결정 3은 1차 제출(23일)의 조건에서
 내렸다. ① *"생성 모델 4~8GB가 core 4요건 개발을 잠식한다"* — core는 끝났고 잠식할 대상이 없다.
@@ -2902,6 +2902,55 @@ Gemma·Llama는 open-weight지만 OSI 라이선스가 아니라 제외한다. �
 — 그래서 개발자 사용 사례 A의 1차 경로는 여전히 MCP이고, `ask`는 C 사례와 시연을 위한 것이다.
 스트리밍은 처음엔 두지 않고 지연을 잰 뒤 결정한다. 규정상 로컬만 가능하므로 답 품질의 상한은 우리가
 올릴 수 없다 — 대신 근거의 정확성과 버전 표시가 우리 몫이다.
+
+#### 구현 형태 (2026-10-04, #96 a)
+
+결정 1~5를 다음 계약으로 구현한다. 고정 파이프라인은 **검색 → 근거 조립 → 프롬프트 → 생성 → 응답**이다.
+DB 스키마를 추가하지 않고 `services/search.py`와 `services/visibility.py`는 변경하지 않는다(이슈 #96 「코어 diff 0줄」).
+답은 저장하지 않으며 MCP·상용 API 프로바이더는 추가하지 않는다. 모델 확정은 #96 c의 한국어 실측에 맡긴다.
+
+- **생성 동안 DB 커넥션을 쥐지 않는다** — 인증·검색·현재 버전 조회를 커넥션 한 번 대여로 끝내고 반납한 뒤 생성한다.
+  로컬 7B는 CPU에서 초당 수 토큰이라 생성이 수십 초 걸리며, `Connection`·`current_user`·`require_user_id` 의존성은
+  요청 끝까지 커넥션을 쥔다. 동시 질문 몇 개가 풀과 `max_connections`를 소진할 수 있으므로(ADR-048), `/api/ask`는
+  인증을 의존성으로 받지 않고 자기가 빌린 커넥션 안에서 `current_user`·`require_user_id`를 직접 부른다. 서비스는 DB 단계 `gather_evidence`와 생성 단계 `generate_answer`로 나눈다.
+  전자는 검색 결과 그대로인 `hits`·`cited=False`인 `sources`·`system`·`prompt`를 담은 `Evidence`를 반환하고,
+  후자는 동기 프로바이더를 `asyncio.to_thread`로 호출해 `AnswerResult(status, answer, sources, hits, detail)`를 반환한다.
+- **답변 결과 응답은 항상 200과 상태 넷** — `disabled`(프로바이더 None) → `no_evidence`(근거 0건) →
+  `answered` / `failed` 순으로 판정하고 검색 결과는 어느 상태에서든 함께 보낸다. 결정 2의 미설정 검색 유지와 이슈 보완의
+  모델 실패 시 검색 결과 제공을 지킨다. 꺼짐·근거 0건이면 모델을 부르지 않는다. `AnswerUnavailable`은 연결 거부·타임아웃·
+  HTTP 오류·빈 응답을 하나로 묶고 `failed`로 처리한다. 다른 예외는 코드 결함이므로 삼키지 않는다.
+  503은 DB 일시 불가용(ADR-048)에만 쓰며, 인증·입력 오류는 기존 오류 코드로 반환한다.
+- **근거 목록은 모델에 준 대목 전체이며 `cited`로 실제 인용을 구분한다** — `AnswerSource`에는 1부터 시작하는 `label`,
+  `document_id`(UUID)·`title`·`chunk_index`·`based_on_version`·`current_version`·`revised`·`content`·`cited`를 둔다.
+  `content`는 모델에 준 대목 그대로이고 `revised`는 `based_on_version < current_version`이다. `cited` 기본값은 False이며
+  답에 `[label]`이 실제로 나오면 True다. 준 근거와 인용한 근거가 갈려야 #96 c가 주장과 인용 대목의 일치·누락을 잴 수 있다.
+  검색이 직전 텍스트 버전을 `via=revision`으로 더하므로(ARCHITECTURE 검색 흐름 ⑤) 「v3 기준, 현재 v4」가 실제로 생긴다.
+  revision 히트의 본문은 직전 판 **전문**이라 그대로 넣으면 예산을 넘어 빠진다. 직전 판을 워커와 같은 청킹으로 나눠
+  검색이 맞춘 현재 판 청크와 어절이 가장 많이 겹치는 청크 하나를 쓰고, `chunk_index`도 그 판의 번호로 둔다 — 인용 클릭이
+  「그 버전의 그 자리」로 가야 하기 때문이다. 같은 번호를 쓰면 앞쪽에 문단이 늘거나 줄었을 때 다른 자리를 가리킨다.
+- **현재 버전은 검색 SQL을 고치지 않고 따로 조회한다** — 같은 커넥션에서 `documents.version`을 `VISIBLE_TO_USER`와
+  함께 조회한다. 코어 diff 0줄을 지키며, 그 사이 열람에서 빠진 문서의 근거는 버린다.
+- **근거는 검색 순위와 글자 예산 안에서 조립한다** — 문서의 `passages`를 쓰고 없으면 대표 청크를 쓰며 같은 본문은
+  한 번만 넣는다. `ANSWER_CONTEXT_CHARS` 안에서 조립하되 첫 근거가 예산보다 길면 잘라서라도 하나는 넣는다.
+  이슈 보완대로 300자 미리보기 대신 본문 후보를 쓰고 중복 문맥 없이 출처 라벨·근거 버전을 보존한다.
+- **공유 주체는 403으로 막는다** — 새 경로의 기본은 허용 목록 밖 차단이다(ADR-044 「공유」 결정 5).
+  공유에 열려면 이 ADR과 허용 목록을 함께 바꾼다. 로그인 사용자의 세션·위임 토큰은 허용한다.
+- **Ollama는 표준 라이브러리 HTTP로 부른다** — `answers/`는 `embeddings/`와 같은 모양으로 `AnswerProvider` Protocol의
+  `name: str`·동기 `generate(system: str, prompt: str) -> str`와 `get_answer_provider(name: str | None = None)`을 둔다.
+  `off`는 None을 반환한다. `/api/chat`에 `stream:false`·`think:false`·`temperature:0`을 보내 의존성·SBOM 증가를 0으로
+  유지한다. `think:false`는 Qwen3 추론 출력을 꺼 지연과 형식을 관리한다. 스트리밍은 지연 실측 뒤(#96 c) 결정한다.
+- **재시도 미들웨어에 `/api/ask`를 넣는다** — DB 단계가 생성보다 먼저 끝나 재시도가 생성을 두 번 돌리지 않는다.
+  승격 중에도 검색과 같은 회복 경로(ADR-048)를 받는다.
+- **설정은 다섯 개로 둔다** — `Settings` 필드와 대문자 환경변수는 아래와 같다. 기본 꺼짐과 호출·근거 예산을 명시하고,
+  `answer_model`의 `qwen3:8b`는 임시 기본값으로 두어 #96 c의 한국어 실측으로 확정한다.
+
+| Settings 필드 / 환경변수 | 타입·기본값 | 의미 |
+|---|---|---|
+| `answer_provider` / `ANSWER_PROVIDER` | `Literal["off", "ollama", "fake"] = "off"` | 검색은 그대로, 답변만 미설정 |
+| `ollama_url` / `OLLAMA_URL` | `str = "http://localhost:11434"` | 로컬 Ollama 서버 주소 |
+| `answer_model` / `ANSWER_MODEL` | `str = "qwen3:8b"` | 임시 모델 태그(#96 c에서 확정) |
+| `answer_timeout_seconds` / `ANSWER_TIMEOUT_SECONDS` | `float`, `Field(default=120, gt=0)` | 생성 호출 한 번의 HTTP 타임아웃(초) |
+| `answer_context_chars` / `ANSWER_CONTEXT_CHARS` | `int`, `Field(default=6000, gt=0)` | 프롬프트 근거 본문의 글자 예산 |
 
 ### ADR-044: 열람 모델 — 주체(사용자·그룹·공유)와 부여로 public/private를 대체한다
 **상태**: 2026-09-12 신규 — **초안**(2차 트랙, 착수 전 확정) · 2026-10-01 착수 결정 반영(#97 a, 아래 「구현 형태」 — 결정 2·3·4 개정) · 2026-10-01 #97 b 결정 반영(그룹·부여 관리) · 2026-10-02 #97 c 결정 반영(공유 주체·공유 토큰). ADR-028의 열람 규칙("public = 로그인 사용자 전체, private = 소유자")을 개정한다. ADR-028의 인증 형태(세션·관리자 발급 계정)와 ADR-018·027(술어 하나, 전 경로)은 그대로다.

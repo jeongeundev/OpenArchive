@@ -332,9 +332,12 @@ class StepExecutor:
 
         prompt = preamble + step_file.read_text()
         try:
+            # 프롬프트는 stdin(`-`)으로 넘긴다. 가드레일(docs 전체)이 커져 argv로 약 0.92MB를
+            # 넘기자 codex의 Node 래퍼가 RangeError(Maximum call stack size exceeded)로 즉시
+            # 죽었다 — 한도 신호가 아니라 폴백도 걸리지 않는다(m22 step 0).
             result = subprocess.run(
-                ["codex", "exec", "--json", "--dangerously-bypass-approvals-and-sandbox", prompt],
-                cwd=self._root, capture_output=True, text=True, timeout=1800,
+                ["codex", "exec", "--json", "--dangerously-bypass-approvals-and-sandbox", "-"],
+                cwd=self._root, input=prompt, capture_output=True, text=True, timeout=1800,
             )
         except subprocess.TimeoutExpired as e:
             # 한도에 걸린 Codex는 에러 대신 응답 없이 매달린다(m13 step 2). 예외로 executor를

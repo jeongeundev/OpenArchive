@@ -407,3 +407,13 @@ def test_only_auth_me_reads_the_principal_without_a_guard():
     }
 
     assert direct == {("GET", "/api/auth/me")}
+
+
+def test_ask_rejects_a_share_principal(db_client, scenario):
+    """/api/ask는 인증을 의존성이 아니라 본문에서 해서 위 두 구조 단언에 보이지 않는다 —
+    공유 차단은 이 행위 단언이 지킨다."""
+    response = db_client.post(
+        "/api/ask", json={"query": QUERY}, headers=bearer(scenario["token"]["token"])
+    )
+    assert response.status_code == 403
+    assert response.json()["detail"] == FORBIDDEN_DETAIL

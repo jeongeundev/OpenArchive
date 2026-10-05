@@ -4,6 +4,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from openarchive.services.answer import ASK_K
 from openarchive.services.auth import SCOPE_READ, TokenScope
 from openarchive.services.search import MAX_K
 
@@ -268,6 +269,35 @@ class SearchResult(BaseModel):
 class SearchResponse(BaseModel):
     items: list[SearchResult]
     sql: str
+
+
+class AskRequest(BaseModel):
+    query: str
+    tags: list[str] | None = None
+    content_type: str | None = None
+    k: int = Field(default=ASK_K, ge=1, le=MAX_K)
+
+
+class AskSource(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    label: int
+    document_id: UUID
+    title: str
+    chunk_index: int
+    based_on_version: int
+    current_version: int
+    revised: bool
+    content: str
+    cited: bool = False
+
+
+class AskResponse(BaseModel):
+    status: Literal["answered", "no_evidence", "disabled", "failed"]
+    answer: str | None
+    detail: str | None
+    sources: list[AskSource]
+    items: list[SearchResult]
 
 
 class RelatedDocumentItem(BaseModel):
