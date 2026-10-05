@@ -1,0 +1,70 @@
+{
+  "project": "OpenArchive",
+  "phase": "m25-folders",
+  "steps": [
+    {
+      "step": 0,
+      "name": "folder-tables",
+      "type": "feat",
+      "scope": "db",
+      "desc": "폴더·폴더 부여 테이블과 문서의 폴더 컬럼을 만든다",
+      "status": "pending"
+    },
+    {
+      "step": 1,
+      "name": "folder-audit",
+      "type": "feat",
+      "scope": "db",
+      "desc": "폴더 열람 범위 변경과 문서의 상속 전환·폴더 이동을 트리거가 감사 로그에 남긴다",
+      "status": "pending"
+    },
+    {
+      "step": 2,
+      "name": "folder-predicate",
+      "type": "feat",
+      "scope": "api",
+      "desc": "열람 술어가 최상위 폴더 범위를 상관 재귀로 상속하고 폴더 술어를 같은 판정으로 둔다",
+      "status": "pending"
+    },
+    {
+      "step": 3,
+      "name": "folder-service",
+      "type": "feat",
+      "scope": "api",
+      "desc": "폴더 만들기·트리·이름 변경·삭제·열람 범위 서비스",
+      "status": "pending"
+    },
+    {
+      "step": 4,
+      "name": "document-folder",
+      "type": "feat",
+      "scope": "api",
+      "desc": "문서의 폴더 지정·이동·개별 지정과 상세의 폴더 정보, 폴더 만든 계정 삭제 거부",
+      "status": "pending"
+    },
+    {
+      "step": 5,
+      "name": "search-folder",
+      "type": "feat",
+      "scope": "search",
+      "desc": "벡터 검색에 iterative_scan strict_order를 켜고 하위 포함 폴더 필터를 더한다",
+      "status": "pending"
+    },
+    {
+      "step": 6,
+      "name": "folder-api",
+      "type": "feat",
+      "scope": "api",
+      "desc": "폴더 API와 문서 폴더 인자 — 폴더 범위 변경은 세션 전용",
+      "status": "pending"
+    },
+    {
+      "step": 7,
+      "name": "folder-docs",
+      "type": "docs",
+      "scope": "adr",
+      "desc": "ADR-054 구현 확정·ADR-011 iterative_scan 개정과 아키텍처·규칙 문서 반영",
+      "status": "pending"
+    }
+  ]
+}
