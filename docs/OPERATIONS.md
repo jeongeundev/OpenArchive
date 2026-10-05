@@ -112,7 +112,7 @@ DSN을 확인한 뒤 `~/.openarchive/.env`의 `DATABASE_URL` 줄만 갈아 끼�
 > 설치합니다 — public은 건드리지 않고, 앱에 따로 설정할 것은 없습니다. 준비 절차는
 > [OpenSQL 환경 구축 §10 ④](SETUP_OPENSQL.md#이미-쓰고-있는-opensql에-설치할-때--새-db와-새-풀).
 
-**하지 않는 것**: API·워커·프론트 기동, DB 자동 탐색·설치, 문서 공급, 계정 생성. 이 명령을
+**하지 않는 것**: API·워커·프론트 기동, DB 자동 탐색·설치, 문서 공급, 첫 관리자 외의 계정 생성. 이 명령을
 건너뛰어도 API 서버가 startup에서 같은 마이그레이션을 적용하므로(ADR-012), init은 **필수가 아니라
 사전 점검**입니다.
 
@@ -311,8 +311,10 @@ SELECT pg_size_pretty(pg_total_relation_size('document_files'));
 원본이 DB 안에 있으므로 DB를 백업하면 원본도 함께 들어가고, 그만큼 백업이 커집니다. HA 환경의 백업·PITR은
 아래 「백업과 복원」을 보세요 (ADR-053).
 
-`MAX_UPLOAD_MB`(기본 50)가 한 판의 상한입니다. 실 OpenSQL에서 OpenProxy를 거친 50MB 원본 저장이
-시간 제한 안에 들어가는지는 아직 측정하지 않았습니다 — 큰 파일을 다루는 설치라면 먼저 확인하세요.
+`MAX_UPLOAD_MB`(기본 50)가 한 판의 상한입니다. 실 OpenSQL(Single VM)에서 OpenProxy 6432를 거쳐 상한에 붙인
+49.99MB DOCX를 세션 `statement_timeout = 30s`로 3회 쟀습니다 — 업로드(문서 + 원본 1판, 한 트랜잭션) 9.1~9.6초,
+교체 8.7~9.3초, 내려받기 2.7~2.9초(sha256 일치). x86 에뮬레이션 VM의 수치입니다 (ADR-046 트레이드오프 4, #108).
+조직이 더 짧은 `statement_timeout`을 건다면 큰 파일 업로드가 그 안에 드는지 먼저 확인하세요.
 
 ## 백업과 복원 (Barman)
 
@@ -510,9 +512,11 @@ ADMIN_PASSWORD='<비밀번호>' openarchive create-user alice [--admin]    # 셸
 읽게 되면 "관리자 권한은 계정 관리 전용"이라는 경계가 무너지기 때문입니다.
 
 ```bash
-cd backend && source .venv/bin/activate
 openarchive reset-password alice     # 새 비밀번호는 화면에 남지 않게 입력받는다
 ```
+
+`openarchive`가 설치된 환경(pipx 설치라면 그대로, 소스 설치라면 그 가상환경)에서 실행하며, DSN은
+`~/.openarchive/.env`의 `DATABASE_URL`을 쓰고 `--dsn`으로 바꿀 수 있습니다.
 
 재설정하면 그 계정의 로그인 세션이 모두 끊깁니다. 발급된 API 토큰은 그대로 유효하므로, 자격증명까지
 갈아야 하면 다시 로그인해 `/settings`에서 폐기합니다.
@@ -570,12 +574,16 @@ DB 프로세스 장애에서의 자동 복구를 단일 타임라인으로 확�
 # PATRONI_URL=http://$OPENSQL_HOST:8008, PATRONI_LOG=/home/opensql/logs/patroni.log, API_PORT=18000
 OPENSQL_HOST=<vm-ip> \
 OPENSQL_SSH=<ssh-host> \
-DATABASE_URL="postgresql://postgres:pg_password@<vm-ip>:6432/opensql" \
+DATABASE_URL="postgresql://openarchive:<비밀번호>@<vm-ip>:6432/openarchive" \
 PATRONI_URL="http://<vm-ip>:8008" \
 PATRONI_LOG="/home/opensql/logs/patroni.log" \
 API_PORT=18000 \
 bash scripts/demo_recovery.sh
 ```
+
+`DATABASE_URL`은 앱 전용 비슈퍼유저 롤·풀 `openarchive`로 줍니다([OpenSQL 환경 구축 §10 ④](SETUP_OPENSQL.md#이미-쓰고-있는-opensql에-설치할-때--새-db와-새-풀),
+[공식 구성과 다른 점](OPENSQL_DEVIATIONS.md) 「앱 접속 계정」). 생략하면 스크립트 기본값인 설치기 풀
+`postgres:pg_password@…/opensql`(슈퍼유저)로 붙습니다.
 
 SSH 공개키 인증과 원격 호스트의 비밀번호 없는 `sudo`가 필요합니다. 데모는 postmaster 부모
 프로세스에 `SIGKILL`을 한 번 보내고 Patroni의 자동 재기동, 앱 연결 예외와 재접속, 미처리 잡 재개,
@@ -593,6 +601,9 @@ SSH 공개키 인증과 원격 호스트의 비밀번호 없는 `sudo`가 필요
 비동기 복제에서는 성공 응답한 쓰기도 replica에 전달되기 전에 Primary를 잃으면 유실될 수 있다.
 작업 큐의 재개는 복구된 DB에 남아 있는 커밋을 대상으로 하며, 복제되지 않은 커밋을 재생하지 않는다.
 
-따라서 과거 유실 0을 현재 구성의 무손실 보장으로 인용하지 않는다. 현재 구성 재검증에는 실행
-커밋·Patroni 복제 설정·노드 상태를 함께 기록하고, DB 밖에 남긴 업로드 응답 장부를 복구 후 문서와
-대조한다. `scripts/ha_failover.py`의 노드별 수렴·장부 대조 결과와 실제 승격 이력을 함께 판정한다.
+현재 구성(비동기)의 재검증은 2026-10-04에 마쳤다(#165). 실행 커밋·Patroni 복제 설정·노드 상태를 함께
+기록하고, DB 밖에 남긴 업로드 응답 장부(원본 파일 포함)를 복구 후 문서와 대조했다 — Primary 프로세스·노드
+사망, switchover, VIP MASTER 사망, Replica 사망, Leader 재부팅·네트워크 분리, etcd 1대·과반 상실 전 회차에서
+유실·중복 0, 사용자 가시 실패 0, 정합성 카운터 0 수렴이었다. 수치와 재현 명령은
+[OpenSQL 환경 구축](SETUP_OPENSQL.md) §16 「최종 구성 장애 검증」이 정본이다. **이 유실 0도 관측값이지 무손실
+보장이 아니다** — 위 비동기 복제의 한계는 그대로다.
