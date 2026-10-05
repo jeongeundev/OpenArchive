@@ -74,7 +74,10 @@
       "type": "feat",
       "scope": "worker",
       "desc": "워커가 반영하는 텍스트 인식 결과를 시스템 행위자로 기록한다",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-10-06T01:33:21+0900",
+      "summary": "finalize_extract_job의 트랜잭션 안(잡 소유 확인 뒤·apply_extracted_text 전)에서 set_actor(actor=None, via='worker') — 재추출 v2+의 text_updated가 actor NULL·actor_via='worker'로 남음. 테스트 3종(재추출 기록·첫 추출 무기록·같은 텍스트 무기록) 추가, 블록 밖 이동(RuntimeError)·삭제 mutant 검출·복원, test_worker+architecture 102개·전체 1612개 및 Ruff 통과",
+      "completed_at": "2026-10-06T01:43:14+0900"
     },
     {
       "step": 7,
