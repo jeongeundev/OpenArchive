@@ -63,7 +63,7 @@ OpenArchive/
 │   │   ├── config.py             # pydantic-settings — $OPENARCHIVE_HOME/.env(기본 ~/.openarchive/.env)
 │   │   ├── db.py                 # AsyncConnectionPool만 — import 시 부작용 없음
 │   │   ├── migrations/           # __init__.py = 러너(API startup과 `openarchive init`이 호출)
-│   │   │                         #   + SQL(패키지 안이라 wheel에 실린다) 001~029: extensions, tables, triggers, indexes,
+│   │   │                         #   + SQL(패키지 안이라 wheel에 실린다) 001~031: extensions, tables, triggers, indexes,
 │   │   │                         #   trgm, edges(006~008), auth(009), links(010~012), token(013),
 │   │   │                         #   edges 재설계(014 — rebuild_document_edges), 위키링크 정규화(015),
 │   │   │                         #   관계 잡 분리(016 — embedding_jobs.kind / 017 — ready 트리거,
@@ -72,14 +72,15 @@ OpenArchive/
 │   │   │                         #   추출 상태·추출 잡(021·022 — OCR, ADR-052), 표 셀 `\|` 위키링크(023),
 │   │   │                         #   재계산 문서 잠금(024), 그룹·열람 부여(025 — ADR-044), 외부 공유(026),
 │   │   │                         #   전량 재계산을 관계 잡으로(027 — enqueue_all_edge_jobs, ADR-029 결정 6 개정),
-│   │   │                         #   감사 로그(028 — audit_log / 029 — 기록·거부 트리거, ADR-055)
+│   │   │                         #   감사 로그(028 — audit_log / 029 — 기록·거부 트리거, ADR-055),
+│   │   │                         #   폴더(030 — folders·folder_grants·documents.folder_id / 031 — 폴더 감사 트리거, ADR-054)
 │   │   ├── cli.py                # `openarchive init`(첫 관리자 포함)·`serve`·`create-user`·`reset-password`·`rebuild-edges`·`reextract`
 │   │   │                         #   ·`import`·`export`·`search`·`ask`·`demo` — 운영자 CLI, DB에 직접 붙는다 (ADR-039·040·046)
 │   │   ├── api/                  # 라우터: documents, search, ask, system, auth, admin, groups(+principals),
-│   │   │                         #   shares, audit(감사 로그 조회), diagnostics, clusters / 미들웨어 retry (+ deps, schemas)
+│   │   │                         #   shares, audit(감사 로그 조회), folders(폴더), diagnostics, clusters / 미들웨어 retry (+ deps, schemas)
 │   │   ├── services/             # parsing, chunking, documents, search, related,
 │   │   │                         #   links, diagnostics, clusters, auth, system, visibility,
-│   │   │                         #   grants(그룹·부여), shares(외부 공유), audit(행위자 전달·조회, ADR-055), answer(근거 조립·답변 생성, ADR-043)
+│   │   │                         #   grants(그룹·부여), shares(외부 공유), folders(폴더 트리·범위, ADR-054), audit(행위자 전달·조회, ADR-055), answer(근거 조립·답변 생성, ADR-043)
 │   │   ├── answers/              # 답변 생성 프로바이더: fake·ollama (ADR-043)
 │   │   ├── embeddings/           # base.py(Protocol), local.py(bge-m3), fake.py
 │   │   ├── worker.py             # 워커 진입점 — 임베딩 잡과 관계 잡을 같은 큐에서 처리
@@ -97,6 +98,8 @@ OpenArchive/
 ```
 
 `services/visibility.py`의 `VISIBLE_TO_USER`는 **모든 조회 경로가 공유하는 단일 열람 술어**다. 검색·관련 문서·그래프 순회·집계·위키링크 해석이 각자 조건을 쓰면 한 곳만 빠져도 비공개 문서가 새어 나간다 (ADR-018, ADR-027). 규칙은 사용자에게 "public이거나, 소유자이거나, 본인·본인 그룹에 부여가 있다"이고, `share:<공유 uuid>` 주체에게는 "그 공유에 부여가 있다"뿐이며(ADR-044), 테이블과 주체 값 하나만 참조하는 순수 SQL이라 바인딩을 `current_setting('app.principal')`로 바꾸면 그대로 RLS 정책이 된다. 쓰기 경로의 존재 판정(`_load_for_write`)도 이 술어를 쓴다 — 보이는 사람의 쓰기는 403, 안 보이는 사람은 404.
+
+**폴더 범위도 이 술어 안에서 판정한다** (ADR-054). 폴더에 들었고 「폴더 범위 따름」(`folder_id IS NOT NULL AND follows_folder`)인 문서는 문서 자신의 `visibility`·부여 대신 **최상위 폴더**의 범위(조직 공개 · 폴더를 만든 사람 · `folder_grants`의 사용자·그룹)로 판정하고, 「개별 지정」 문서는 지금처럼 문서 자신의 범위로 판정한다. 소유자는 어느 쪽이든 자기 문서를 본다. 최상위 폴더 판정은 문서의 폴더에서 `parent_id`를 따라 올라가는 **상관 재귀 `EXISTS (WITH RECURSIVE …)`** 조각 하나이고, 폴더 술어 `FOLDER_VISIBLE_TO_USER`(트리·폴더 목록·검색 폴더 필터)가 시작 폴더만 바꿔 같은 조각을 쓴다. 실효 범위는 저장하지 않으므로 폴더 범위·그룹 구성원 변경은 다음 조회부터 반영된다. 같은 판정을 비상관 `IN (서브쿼리)`로 쓰면 3천 청크에서 HNSW를 버리고 generic plan에서 15배 느려졌다 — 형태를 바꾸지 않는다(`db.py`의 `prepare_threshold=None`도 그 전제다). 공유 주체는 폴더를 보지 않는다(`FOLDER_VISIBLE_TO_USER`가 거짓). 볼 수 없는 폴더 안의 「개별 지정」 문서는 보이되 폴더 정보는 응답 어디에도 싣지 않는다.
 
 `services/grants.py`는 그룹·구성원 관리와 부여 대상 이름 해석을 맡는다(#97 b). 문서 열람 범위 조회·교체는 문서 서비스가 소유자 경계를 지키며 이 서비스를 재사용한다(ADR-044 「관리 경로」).
 
@@ -131,7 +134,10 @@ CREATE TABLE documents (
   -- 제거 문자를 명시한다: btrim의 1인자 형태는 공백만 제거해 탭·개행만 남은 본문이
   -- 그대로 통과하는데, 텍스트 레이어 없는 PDF의 추출 결과가 정확히 그 형태다 (M1에서 실측).
   CONSTRAINT documents_content_not_blank
-    CHECK (extraction_status <> 'done' OR length(btrim(content, E' \t\r\n\f')) > 0)
+    CHECK (extraction_status <> 'done' OR length(btrim(content, E' \t\r\n\f')) > 0),
+  -- 030 (ADR-054): 폴더와 범위 상속. 기존 문서는 folder_id NULL이라 자기 범위 그대로다
+  folder_id      uuid REFERENCES folders(id) ON DELETE RESTRICT,   -- 빈 폴더만 지운다
+  follows_folder boolean NOT NULL DEFAULT true  -- true = 「폴더 범위 따름」, false = 「개별 지정」
 );
 
 -- document_versions: 문서 텍스트의 버전 이력 (append-only)
@@ -199,6 +205,27 @@ CREATE TABLE document_grants (                 -- 문서 → 대상의 읽기. �
   group_id    uuid REFERENCES groups(id) ON DELETE CASCADE,
   share_id    uuid REFERENCES shares(id) ON DELETE CASCADE, -- 026: public/private 모두 허용
   CHECK (num_nonnulls(user_id, group_id, share_id) = 1)  -- 다형 칼럼 대신 종류별 칼럼: FK가 고아 부여를 막는다
+);
+
+-- folders·folder_grants: 폴더 트리와 열람 부여 (030, ADR-054). 범위는 최상위 폴더만 갖는다
+-- 폴더 이동은 없어 최상위 조상은 만든 뒤 바뀌지 않는다. 실효 범위는 저장하지 않는다
+CREATE TABLE folders (
+  id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  parent_id  uuid REFERENCES folders(id) ON DELETE RESTRICT,
+  name       text NOT NULL,        -- 공백뿐이 아니고 '/'를 포함하지 않는다 (CHECK)
+  created_by text NOT NULL,        -- 사용자명. 이 계정은 삭제를 거부한다
+  visibility text,                 -- public | private — 최상위만
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT folders_root_scope CHECK ((parent_id IS NULL) = (visibility IS NOT NULL))
+);
+-- 같은 부모 아래 하위 폴더만 이름이 유일하다. 최상위 이름 충돌 오류는 남의 제한 폴더를 누출한다
+CREATE UNIQUE INDEX uq_folders_parent_name ON folders (parent_id, name) WHERE parent_id IS NOT NULL;
+CREATE TABLE folder_grants (     -- 최상위 폴더 → 사용자·그룹의 읽기. 외부 공유 부여는 없다
+  folder_id uuid NOT NULL REFERENCES folders(id) ON DELETE CASCADE,
+  user_id   uuid REFERENCES users(id) ON DELETE CASCADE,
+  group_id  uuid REFERENCES groups(id) ON DELETE CASCADE,
+  CHECK (num_nonnulls(user_id, group_id) = 1)
 );
 
 -- document_chunks: 현재 버전의 청크만 유지 (인덱스 소형화 + 정합성 단순화)
@@ -337,6 +364,7 @@ CREATE INDEX idx_chunks_embedding ON document_chunks
 - HNSW 선택 근거는 ADR-002. 코사인 거리(`<=>`)는 BGE-M3의 정규화 임베딩과 맞음.
 - 필터 결합 검색의 "결과 부족" 문제는 검색 트랜잭션에서 `SET LOCAL hnsw.ef_search = 200`으로 완화한다 (ADR-011). pgvector 버전에 무관하게 동작한다.
 - `SET LOCAL hnsw.iterative_scan = relaxed_order`도 **쓸 수 있다** — 0.8+를 요구하는데 배포판이 0.8.1이다. 다만 **켜지 않는다**: ADR-011 보강 3이 실측 없이 켜지 않기로 정했고, `backend/tests/test_indexes.py`가 그 선택을 근거와 함께 고정한다.
+  - → **2026-10-06 개정 (ADR-011, #187)**: 검색 트랜잭션에 `SET LOCAL hnsw.iterative_scan = strict_order`를 건다. 폴더로 열람 범위가 좁아진 사용자의 recall@10이 0.40 → 1.00, 검색 폴더 필터가 0.27 → 0.99가 됐다. 순서를 보장하지 않는 `relaxed_order`는 쓰지 않는다. `test_indexes.py`·`test_search.py`가 이 설정과 좁은 범위의 recall을 고정한다.
 
 > **HNSW 가용성은 확정됐다.** 배포판에 pgvector **0.8.1**이 번들되어 있고(`docs/OPENSQL_RESEARCH.md` §0), 실 VM에서 `CREATE INDEX ... USING hnsw`와 검색 계획의 인덱스 사용을 실측했다(§12). ADR-002가 대비해 둔 pgvectorscale·IVFFlat 전환 경로는 쓰지 않는다.
 
@@ -393,6 +421,9 @@ CREATE TRIGGER trg_documents_content_changed
 | `trg_audit_grant_changed` | `document_grants` INSERT / DELETE — 공유 부여·연쇄 삭제 제외 | `access_changed` · `{kind: grant, change, grantee_type, grantee}` |
 | `trg_audit_group_member_changed` | `group_members` INSERT / DELETE — 연쇄 삭제 제외 | `group_member_changed` · `{change, group, user}` |
 | `record_original_download(document_id, file_version)` | 원본 판을 읽는 트랜잭션에서 `get_original_file`이 호출 | `original_downloaded` · `{file_version}` |
+| `trg_audit_folder_visibility_changed` | `folders` UPDATE OF `visibility`, 값이 바뀔 때 (031) | `folder_access_changed` · `{kind: visibility, folder_id, folder_name, before, after}` |
+| `trg_audit_folder_grant_changed` | `folder_grants` INSERT / DELETE — 연쇄 삭제 제외 (031) | `folder_access_changed` · `{kind: grant, change, grantee_type, grantee, folder_id, folder_name}` |
+| `trg_audit_document_folder_changed` | `documents` UPDATE OF `follows_folder`·`folder_id` (031) | `access_changed` · `{kind: inherit, before, after}`(`folder`/`own`) · 「폴더 범위 따름」 문서의 이동은 `{kind: folder, before, after}`(폴더 이름) |
 | `trg_audit_log_reject_change` / `trg_audit_log_reject_truncate` | `audit_log` UPDATE·DELETE(행) / TRUNCATE(문) | 예외 — 거부 |
 
 - **부여 대상(사용자·그룹)의 추가·제거도 「열람 범위 변경」이다.** 「제한」 문서의 열람자는 부여 행으로 바뀐다. 그래서 `set_access`는 부여를 전량 교체하지 않고 **차이만** DELETE·INSERT한다 — 바뀌지 않은 대상이 「제거→추가」로 기록되지 않게.
@@ -735,13 +766,14 @@ OpenSQL `patroni.yml`의 PostgreSQL 파라미터는 `max_connections: 100`이다
 | 엔드포인트 | 내용 |
 |---|---|
 | `POST /api/documents` | multipart 업로드. 형식별 파서로 추출 → INSERT. 여기서 트리거가 파이프라인을 자동 기동 — 임베딩 관련 코드 없음. **이미지와 텍스트 레이어가 빈 쪽이 있는 PDF는 추출하지 않고 `extraction_status='pending'`으로 INSERT해 OCR을 워커 잡에 넘긴다** (「추출 잡」). 그 밖의 형식에서 **텍스트 추출 결과가 비면 400** (아래). **원본 파일은 같은 트랜잭션에서 `document_files`에 1판으로 저장한다** — 원본 저장이 실패하면 문서·텍스트 버전·잡도 남지 않는다. 상한 `MAX_UPLOAD_MB`(기본 50) 초과는 413. 선택 헤더 `Idempotency-Key`(아래) |
-| `POST /api/documents/text` | JSON 텍스트 공급(`txt`·`md`). `filename`은 NULL이며, 파생 데이터는 업로드 경로와 동일하게 DB 트리거가 만든다. 빈 문서 텍스트와 500,000자 초과는 400. 선택 헤더 `Idempotency-Key`(아래) |
-| `GET /api/documents` | 목록 + `status`(임베딩 상태)/`extraction_status`/`tag`/`q`(제목 부분 일치)/`content_type` 필터. `sort=updated`(기본, 최근 수정순) 또는 `title`(제목순). embedding_status·extraction_status 포함. 인식 실패 문서는 `status=pending`에 남으므로 곧 임베딩될 문서는 `extraction_status=done`을 함께 준다 (ADR-052 결정 4 보강) |
+| `POST /api/documents/text` | JSON 텍스트 공급(`txt`·`md`). 선택 `folder_id`는 업로드 Form과 같다(아래 「폴더」). `filename`은 NULL이며, 파생 데이터는 업로드 경로와 동일하게 DB 트리거가 만든다. 빈 문서 텍스트와 500,000자 초과는 400. 선택 헤더 `Idempotency-Key`(아래) |
+| `GET /api/documents` | 목록 + `status`(임베딩 상태)/`extraction_status`/`tag`/`q`(제목 부분 일치)/`content_type` 필터. `folder_id`(그 폴더에 **직접** 든 문서만, 하위 폴더 제외) 필터. `sort=updated`(기본, 최근 수정순) 또는 `title`(제목순). embedding_status·extraction_status 포함. 인식 실패 문서는 `status=pending`에 남으므로 곧 임베딩될 문서는 `extraction_status=done`을 함께 준다 (ADR-052 결정 4 보강) |
 | `GET /api/documents?limit=&offset=` | 같은 목록의 한 페이지(`limit` 1~100). 빼면 전부 — MCP·export는 전체를 본다. 첫 화면은 50건씩 쓴다 (#95-d) |
-| `GET /api/documents/count` | 목록과 같은 `status`·`extraction_status`·`tag`·`q`·`content_type` 조건의 전체 건수 `{total}`. 화면은 이 건수로 페이지를 나눈다 |
+| `GET /api/documents/count` | 목록과 같은 `status`·`extraction_status`·`tag`·`q`·`content_type`·`folder_id` 조건의 전체 건수 `{total}`. 화면은 이 건수로 페이지를 나눈다 |
 | `GET /api/documents/tags` | 열람 가능한 문서의 태그 목록 `string[]`. 중복 없이 태그순이며 보이지 않는 문서의 태그는 포함하지 않는다 |
 | `GET /api/documents/progress` | 열람 범위 안 문서의 파이프라인 단계별 수(`extracting`·`extraction_failed`·`pending`·`processing`·`ready`·`error`). 인식이 끝난 문서만 임베딩 단계로 센다. 합이 목록의 전체 수다 (#95-d) |
-| `GET /api/documents/{id}` | 상세 + 텍스트 버전 목록 + 청크 수 + 청크 기준 버전 + `files`(원본 판 목록 — 메타데이터만, 바이트는 싣지 않는다) |
+| `GET /api/documents/{id}` | 상세 + 텍스트 버전 목록 + 청크 수 + 청크 기준 버전 + `files`(원본 판 목록 — 메타데이터만, 바이트는 싣지 않는다) + `folder`(id·이름·경로 — 조회자가 그 폴더를 볼 수 있을 때만, 아니면 `null`) |
+| `PUT /api/documents/{id}/folder` | **문서 폴더 이동.** `{folder_id}`(`null`이면 폴더 밖으로). 문서 소유자만, 쓰기 토큰 허용. 옮길 폴더는 볼 수 있어야 한다. 「폴더 범위 따름」 문서는 새 폴더의 범위로 바뀐다 (ADR-054) |
 | `GET /api/documents/{id}/file` · `GET /api/documents/{id}/files/{n}` | **원본 내려받기** — 최신 판 · 특정 판. 항상 `Content-Disposition: attachment` + `X-Content-Type-Options: nosniff`, 미디어 타입은 확장자 고정 매핑. 볼 수 없는 문서·원본 없음·없는 판은 404 (ADR-046) |
 | `PUT /api/documents/{id}/file` | **원본 교체.** multipart `file` + `current_version`. 새 판을 쌓고(이전 판 보존), 추출 텍스트가 달라졌을 때만 새 텍스트 버전(트리거가 이력·잡 생성). 새 원본이 OCR 대상이면 텍스트를 쓰지 않고 추출 잡으로 넘긴다. 최신 판과 같은 바이트면 아무것도 바꾸지 않는다. 버전 불일치·추출 중 409 · 추출 실패 400 · 상한 초과 413 |
 | `POST /api/documents/{id}/reextract` | **재추출.** `{current_version}`. 최신 판에서 다시 추출해 결과가 다르면 새 텍스트 버전, 같으면 무변경(`changed: false`). 새 판은 만들지 않는다. 최신 판이 OCR 대상이면 추출 잡으로 넘기고 `changed: false`와 `extraction_status: "pending"`으로 응답한다. 원본 없는 문서·추출 중 문서는 409 |
@@ -753,7 +785,7 @@ OpenSQL `patroni.yml`의 PostgreSQL 파라미터는 `max_connections: 100`이다
 | `GET /api/documents/{id}/tag-suggestions` | **태그 추천.** 관계 이웃의 태그 빈도 (ADR-019). 청크가 없으면 `not_indexed` |
 | `GET /api/documents/{id}/links` | **본문이 가리키는 위키링크.** 조회자의 열람 범위에서 해석하며, 대상이 없거나 보이지 않으면 `document_id: null` (ADR-030) |
 | `GET /api/documents/{id}/backlinks` | **이 문서를 가리키는 문서.** 열람 가능한 출발 문서만 |
-| `POST /api/search` | 하이브리드 검색 + 관계 순회 (아래) |
+| `POST /api/search` | 하이브리드 검색 + 관계 순회 (아래). 선택 `folder_id`는 그 폴더와 **하위 폴더**의 문서로 직접 결과를 좁힌다 |
 | `POST /api/ask` | **근거 기반 답변** — 로그인 필요. 검색과 같은 단일 SQL로 근거를 고른 뒤 답변 프로바이더가 답한다. `ANSWER_PROVIDER=off`(기본)면 `status: "disabled"` (아래 「근거 기반 답변」, ADR-043) |
 | `POST /api/auth/login` · `logout` · `GET /api/auth/me` | 최소 로그인. 세션 토큰은 `sessions` 테이블에 저장 |
 | `POST /api/auth/tokens` · `GET /api/auth/tokens` · `DELETE /api/auth/tokens/{id}` | **세션 전용** API 토큰 발급·목록·폐기. 원문은 발급 응답에만 반환하며 기본 scope는 `read` |
@@ -766,7 +798,11 @@ OpenSQL `patroni.yml`의 PostgreSQL 파라미터는 `max_connections: 100`이다
 | `PUT /api/admin/groups/{id}/members/{username}` · `DELETE /api/admin/groups/{id}/members/{username}` | **관리자·세션 전용**. 구성원 추가·제거 (#97 b) |
 | `GET /api/principals` | **로그인**. 부여 대상 사용자명·그룹명 목록. 익명은 401 (#97 b) |
 | `GET /api/documents/{id}/access` | **로그인·소유자 전용**. 열람 범위 설정 조회. 보이는 비소유자는 403, 안 보이면 404 (#97 b) |
-| `PUT /api/documents/{id}/access` | **소유자·세션 전용**. `{visibility, users, groups}`로 전체 교체(저장은 바뀐 부여만 DELETE·INSERT — 감사 기록이 실제 변경만 남도록, ADR-055). 보이는 비소유자는 403, 안 보이면 404. 조직 공개로 바꾸면 사용자·그룹 부여만 삭제하고 공유 부여는 유지 (#97 b·c) |
+| `PUT /api/documents/{id}/access` | **소유자·세션 전용**. `{visibility, users, groups, follows_folder}` — 폴더 안 문서는 `follows_folder`로 「폴더 범위 따름」↔「개별 지정」을 바꾼다(개별 지정에는 `visibility` 필수, 「폴더 범위 따름」에는 `visibility`·`users`·`groups`를 함께 보내면 400). `{visibility, users, groups}`로 전체 교체(저장은 바뀐 부여만 DELETE·INSERT — 감사 기록이 실제 변경만 남도록, ADR-055). 보이는 비소유자는 403, 안 보이면 404. 조직 공개로 바꾸면 사용자·그룹 부여만 삭제하고 공유 부여는 유지 (#97 b·c) |
+| `GET /api/folders` | **로그인**. 볼 수 있는 폴더 전체(평평한 목록, `parent_id`로 트리를 만든다). 각 폴더에 최상위 범위 요약 `scope`, 직접 든·볼 수 있는 문서 수 `document_count`, `inherited`(하위 폴더), `can_manage`·`can_change_access` (ADR-054) |
+| `POST /api/folders` `{name, parent_id?}` | 폴더 만들기. 쓰기 토큰 허용. 하위 폴더는 볼 수 있는 폴더 아래에 누구나 만든다. 새 최상위 폴더는 조직 공개 |
+| `PATCH /api/folders/{id}` `{name}` · `DELETE /api/folders/{id}` | 이름 변경·삭제 — 폴더를 만든 사람 또는 관리자(볼 수 있는 폴더에 한함). 쓰기 토큰 허용. 삭제는 빈 폴더만(하위 폴더나 문서가 있으면 「폴더가 비어 있지 않습니다.」) |
+| `GET /api/folders/{id}/access` · `PUT /api/folders/{id}/access` `{visibility, users, groups}` | 최상위 폴더의 열람 범위 조회·교체. **최상위 폴더를 만든 사람만 — 관리자도 불가.** `PUT`은 **세션 전용**, 저장은 바뀐 부여만 반영(감사). 하위 폴더는 범위가 없어 거부 |
 | `POST /api/shares` `{name}` · `GET /api/shares` · `DELETE /api/shares/{id}` | 내 공유 생성·목록(포함 문서 id·제목, 토큰 메타)·삭제. 세션 전용 |
 | `PUT /api/shares/{id}/documents/{document_id}` · `DELETE /api/shares/{id}/documents/{document_id}` | 공유에 내 문서 넣기·빼기(멱등 204). 세션 전용 |
 | `POST /api/shares/{id}/tokens` `{name}` · `DELETE /api/shares/{id}/tokens/{token_id}` | 공유 토큰 발급(원문 1회)·폐기. 세션 전용 |
@@ -781,6 +817,8 @@ OpenSQL `patroni.yml`의 PostgreSQL 파라미터는 `max_connections: 100`이다
 > 새 파일로 교체해도 문서의 id·제목·태그·공개범위·관계는 그대로이고 파일명·유형만 바뀐다 (`PUT /api/documents/{id}/file`, ADR-046).
 >
 > 라우터는 얇다. 요청 검증과 상태 코드 변환만 하고 실제 로직은 `services/documents.py`·`services/search.py`·`services/system.py` 등에 있으며, MCP 서버가 문서·검색 서비스를 재사용한다. 도메인 예외를 상태 코드로 옮기는 매핑은 `main.py`의 exception handler 한 곳에 있다.
+
+**폴더 (ADR-054, #187)**: 업로드 Form·텍스트 JSON이 선택 `folder_id`를 받는다. 폴더를 고르면 문서는 「폴더 범위 따름」으로 생기고 개별 범위 인자(`visibility`·`grant_users`·`grant_groups`)는 받지 않는다 — 문서 자신의 `visibility`는 `private`로 닫혀 저장되며, 「개별 지정」은 문서 상세에서 한다. 폴더는 멱등키 지문에도 들어간다. 볼 수 없는 폴더는 없는 폴더와 같은 404다. 공유 토큰은 폴더 경로를 쓰지 못한다(허용 목록 밖, 403). MCP 도구는 이번에 바꾸지 않았다.
 
 **생성 시 부여 대상 (#97 b)**: 업로드 Form·텍스트 JSON·MCP `create_document`가
 `grant_users`·`grant_groups`(사용자명·그룹명)를 받는다. 쓰기 토큰·MCP도 생성 시 지정할 수 있다.
@@ -904,6 +942,7 @@ BEGIN;  -- ★ plain BEGIN. READ ONLY 금지 (아래 설명)
 SET LOCAL hnsw.ef_search = 200;      -- 필터 통과 후보를 충분히 확보 (기본 40)
 SET LOCAL random_page_cost = 1.1;    -- 무필터 검색이 HNSW를 타게 한다 (ADR-011 보강 5)
 SET LOCAL jit = off;                 -- 부여 서브플랜이 JIT 임계를 넘겨 컴파일이 붙는다 (ADR-044)
+SET LOCAL hnsw.iterative_scan = strict_order;  -- 좁은 열람 범위·폴더 필터가 후보를 굶기지 않게 (ADR-011 2026-10-06 개정)
 
 WITH RECURSIVE candidates AS (       -- ① 벡터 후보 (k * 5). 필터를 여기 안에 둔다
     SELECT c.document_id, c.chunk_index,
@@ -912,6 +951,7 @@ WITH RECURSIVE candidates AS (       -- ① 벡터 후보 (k * 5). 필터를 여
     FROM document_chunks c JOIN documents d ON d.id = c.document_id
     WHERE (%(tags)s::text[] IS NULL OR d.tags && %(tags)s)
       AND (%(ctype)s::text IS NULL OR d.content_type = %(ctype)s)
+      AND ( … 폴더 필터: 볼 수 있는 폴더이고, 문서의 폴더에서 위로 올라가 그 폴더에 닿는다(상관 재귀) … )
       AND ( … services/visibility.py의 VISIBLE_TO_USER … )
     ORDER BY c.embedding <=> %(qvec)s::vector
     LIMIT %(k)s * 5
@@ -1018,13 +1058,19 @@ OpenProxy는 `query_parser_read_write_splitting` 활성 시 **트랜잭션 밖�
 
 > ⚠️ **`BEGIN READ ONLY`를 쓰면 안 된다.** OpenProxy 1.1.3부터 `BEGIN READ ONLY`와 `START TRANSACTION READ ONLY`는 **의도적으로 Replica로 라우팅**된다. "읽기 전용이니 READ ONLY로 선언하는 게 맞다"는 직관을 따르면 정확히 반대 결과가 나온다.
 
-**2. 세 개의 `SET LOCAL` — `hnsw.ef_search`·`random_page_cost`·`jit` (ADR-011 보강 4·5, ADR-044)**
+**2. 네 개의 `SET LOCAL` — `hnsw.ef_search`·`random_page_cost`·`jit`·`hnsw.iterative_scan` (ADR-011 보강 4·5·2026-10-06 개정, ADR-044)**
+
+> 2026-10-06: 처음 셋에 `hnsw.iterative_scan = strict_order`가 더해졌다(아래 마지막 문단). 넷은 `apply_vector_search_settings` 한 곳에서 건다.
 
 `ef_search = 200`: HNSW 인덱스는 `document_chunks`에 있는데 필터는 JOIN 상대인 `documents`에 있다. 기본 `ef_search = 40`으로는 태그 필터가 조금만 좁아도 `LIMIT k`를 채우지 못한다. 후보 풀을 키워 이를 완화한다. `SET LOCAL`이므로 트랜잭션이 끝나면 자동 복원된다 — ①의 명시적 트랜잭션이 여기서 한 번 더 쓸모가 있다.
 
 `random_page_cost = 1.1`: VM 기본값 4에서는 플래너가 HNSW를 아예 고르지 않는다. 힙이 3MB인데 인덱스가 47MB라, 임의 접근을 4배로 계산하면 통째로 읽는 쪽이 싸다고 나온다. **태그·유형 필터는 선택적**(`%(tags)s IS NULL OR …`)이므로 이 쿼리에는 필터 없는 경로가 항상 존재하며, 그 경로가 인덱스를 타느냐가 여기 달려 있다. 전역이 아니라 `SET LOCAL`로 거는 이유는 OpenProxy가 백엔드 반납 시 `RESET ALL`만 하고 `DISCARD ALL`은 하지 않아(§5-2) 세션 GUC에 의존하지 않는 편이 안전하기 때문이다.
 
 `jit = off`: 열람 술어의 부여 서브플랜(ADR-044)이 추정 비용을 `jit_above_cost`(100,000) 위로 올리면 JIT가 있는 PostgreSQL에서 몇 ms짜리 검색에 컴파일 수십 ms가 붙는다. 비용은 데이터 규모에 비례해, 작은 설치에서는 안 보이다가 조직이 커지면 나타난다. 실 OpenSQL 17.8은 LLVM 모듈이 없어(`pg_jit_available() = false`) 해당하지 않지만 설치 대상인 표준 PostgreSQL에는 있다.
+
+`hnsw.iterative_scan = strict_order`: 필터가 HNSW 뒤에 걸리므로, 열람 범위가 좁은 사용자(제한 폴더가 정상 사용법이 되면 흔하다)는 후보 `k * 5` 중 대부분이 걸러져 `LIMIT`을 채우지 못했다 — 문서의 5.9%만 보는 사용자의 후보가 100행 중 11.5행, recall@10 0.40. `iterative_scan`은 통과한 행이 모자라면 인덱스를 더 훑어 1.00으로 올렸다(폴더 필터 0.27 → 0.99). 거리순을 보장하는 `strict_order`를 쓴다 — 후보 CTE 뒤의 `DISTINCT ON`·재정렬이 그 순서에 기댄다. 비용은 로컬에서 측정 오차 수준, x86 에뮬레이션 VM에서 약 1.5배였다. `MAX_K * 배수 < EF_SEARCH` 불변식은 안전망으로 그대로 둔다.
+
+**폴더 필터는 직접 결과에만 걸린다.** `folder_id`를 주면 후보 CTE가 그 폴더와 하위 폴더의 문서로 좁혀지고, 관계로 확장된 결과(깊이 1·2)는 폴더 밖 문서도 나올 수 있다 — 열람 술어는 그대로 걸린다. 볼 수 없는 폴더를 주면 아무것도 나오지 않는다.
 
 > **무필터 검색 경로는 아직 직접 측정하지 않았다.** 같은 형태·같은 규모의 관련 문서 쿼리가
 > `rpc=4`에서 Seq Scan 624ms, `rpc=1.1`에서 HNSW 33.8ms인 것에 근거한 적용이다

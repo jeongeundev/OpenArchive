@@ -1,0 +1,119 @@
+from typing import Annotated
+from uuid import UUID
+
+from fastapi import APIRouter, Depends, HTTPException, Response, status
+
+from openarchive.api.deps import (
+    Connection,
+    current_user,
+    require_session_user,
+    require_user_id,
+    require_write_user_id,
+)
+from openarchive.api.schemas import (
+    CreateFolderRequest,
+    Folder,
+    FolderScope,
+    RenameFolderRequest,
+    UpdateFolderAccessRequest,
+)
+from openarchive.services import folders as service
+
+router = APIRouter(prefix="/api/folders", tags=["folders"])
+
+
+async def _is_admin(user: Annotated[dict | None, Depends(current_user)]) -> bool:
+    # 인증은 각 경로의 require_user_id/require_write_user_id가 담당한다.
+    return user is not None and user["is_admin"]
+
+
+async def _folder_response(conn, folder_id, user_id, is_admin):
+    # 생성·이름 변경의 원시 행에 조회 서비스가 제공하는 실효 범위·집계·관리 정보를 붙인다.
+    rows = await service.list_folders(conn, user_id=user_id, is_admin=is_admin)
+    return Folder.model_validate(next(row for row in rows if row["id"] == folder_id))
+
+
+@router.get("", response_model=list[Folder])
+async def list_folders(
+    conn: Connection,
+    user_id: Annotated[str, Depends(require_user_id)],
+    is_admin: Annotated[bool, Depends(_is_admin)],
+) -> list[Folder]:
+    return [
+        Folder.model_validate(row)
+        for row in await service.list_folders(conn, user_id=user_id, is_admin=is_admin)
+    ]
+
+
+@router.post("", response_model=Folder, status_code=status.HTTP_201_CREATED)
+async def create_folder(
+    body: CreateFolderRequest,
+    conn: Connection,
+    user_id: Annotated[str, Depends(require_write_user_id)],
+    is_admin: Annotated[bool, Depends(_is_admin)],
+) -> Folder:
+    try:
+        row = await service.create_folder(
+            conn, user_id=user_id, name=body.name, parent_id=body.parent_id
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    return await _folder_response(conn, row["id"], user_id, is_admin)
+
+
+@router.patch("/{folder_id}", response_model=Folder)
+async def rename_folder(
+    folder_id: UUID,
+    body: RenameFolderRequest,
+    conn: Connection,
+    user_id: Annotated[str, Depends(require_write_user_id)],
+    is_admin: Annotated[bool, Depends(_is_admin)],
+) -> Folder:
+    try:
+        row = await service.rename_folder(
+            conn, folder_id, user_id=user_id, is_admin=is_admin, name=body.name
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    return await _folder_response(conn, row["id"], user_id, is_admin)
+
+
+@router.delete("/{folder_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_folder(
+    folder_id: UUID,
+    conn: Connection,
+    user_id: Annotated[str, Depends(require_write_user_id)],
+    is_admin: Annotated[bool, Depends(_is_admin)],
+) -> Response:
+    await service.delete_folder(conn, folder_id, user_id=user_id, is_admin=is_admin)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.get("/{folder_id}/access", response_model=FolderScope)
+async def get_folder_access(
+    folder_id: UUID,
+    conn: Connection,
+    user_id: Annotated[str, Depends(require_user_id)],
+) -> FolderScope:
+    return FolderScope.model_validate(
+        await service.get_folder_access(conn, folder_id, user_id=user_id)
+    )
+
+
+@router.put("/{folder_id}/access", response_model=FolderScope)
+async def set_folder_access(
+    folder_id: UUID,
+    body: UpdateFolderAccessRequest,
+    conn: Connection,
+    user: Annotated[dict, Depends(require_session_user)],
+) -> FolderScope:
+    return FolderScope.model_validate(
+        await service.set_folder_access(
+            conn,
+            folder_id,
+            user_id=user["username"],
+            visibility=body.visibility,
+            users=body.users,
+            groups=body.groups,
+        )
+    )

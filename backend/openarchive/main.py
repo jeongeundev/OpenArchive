@@ -12,6 +12,7 @@ from openarchive.api.auth import router as auth_router
 from openarchive.api.clusters import router as clusters_router
 from openarchive.api.diagnostics import router as diagnostics_router
 from openarchive.api.documents import router as documents_router
+from openarchive.api.folders import router as folders_router
 from openarchive.api.groups import principals_router
 from openarchive.api.groups import router as groups_router
 from openarchive.api.retry import RetryOnUnavailable
@@ -24,6 +25,7 @@ from openarchive.embeddings import get_provider, warm_up
 from openarchive.frontend import mount_frontend
 from openarchive.migrations import run_migrations
 from openarchive.services import documents as documents_service
+from openarchive.services import folders as folders_service
 from openarchive.services import grants as grants_service
 
 logger = logging.getLogger(__name__)
@@ -60,6 +62,7 @@ app.include_router(principals_router)
 app.include_router(shares_router)
 app.include_router(auth_router)
 app.include_router(documents_router)
+app.include_router(folders_router)
 app.include_router(clusters_router)
 app.include_router(diagnostics_router)
 app.include_router(search_router)
@@ -69,6 +72,27 @@ app.include_router(system_router)
 
 # 서비스 계층은 HTTP를 모른다. 도메인 예외를 상태 코드로 옮기는 일은 조립 지점인
 # 여기서 한 번만 한다 — 라우터마다 같은 try/except를 반복하지 않기 위함이다.
+@app.exception_handler(folders_service.FolderNotFound)
+async def _folder_not_found(request: Request, error: Exception) -> JSONResponse:
+    return JSONResponse(status_code=404, content={"detail": str(error) or "폴더를 찾을 수 없습니다."})
+
+
+@app.exception_handler(folders_service.FolderNotEmpty)
+@app.exception_handler(folders_service.FolderNameTaken)
+async def _folder_conflict(request: Request, error: Exception) -> JSONResponse:
+    return JSONResponse(status_code=409, content={"detail": str(error)})
+
+
+@app.exception_handler(folders_service.NotFolderCreator)
+async def _folder_access_denied(request: Request, error: Exception) -> JSONResponse:
+    return JSONResponse(status_code=403, content={"detail": str(error)})
+
+
+@app.exception_handler(folders_service.SubfolderScope)
+async def _subfolder_scope(request: Request, error: Exception) -> JSONResponse:
+    return JSONResponse(status_code=400, content={"detail": str(error)})
+
+
 @app.exception_handler(documents_service.DocumentNotFound)
 async def _document_not_found(request: Request, error: Exception) -> JSONResponse:
     return JSONResponse(status_code=404, content={"detail": "문서를 찾을 수 없습니다."})

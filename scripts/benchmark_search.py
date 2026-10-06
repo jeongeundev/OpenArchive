@@ -164,6 +164,7 @@ def run_benchmark(conn, *, documents=500, chunks_per_document=40, queries=5):
         conn.execute(f"SET LOCAL hnsw.ef_search = {EF_SEARCH}")
         conn.execute("SET LOCAL random_page_cost = 1.1")
         conn.execute("SET LOCAL jit = off")
+        conn.execute("SET LOCAL hnsw.iterative_scan = strict_order")
         report["server"] = conn.execute(
             "SELECT version(),pg_is_in_recovery()"
         ).fetchone()
@@ -180,6 +181,7 @@ def run_benchmark(conn, *, documents=500, chunks_per_document=40, queries=5):
                     "edition": None,
                     "tags": None,
                     "ctype": None,
+                    "folder": None,
                     "user": "benchmark-reader",
                     "k": 10,
                 } | filters

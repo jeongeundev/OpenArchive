@@ -29,7 +29,7 @@ def test_audit_defaults(conn):
 
 @pytest.mark.parametrize("action", [
     "document_created", "text_updated", "document_deleted", "access_changed",
-    "group_member_changed", "original_replaced", "original_downloaded",
+    "group_member_changed", "original_replaced", "original_downloaded", "folder_access_changed",
 ])
 def test_allowed_actions(conn, action):
     assert conn.execute(
@@ -61,7 +61,7 @@ def test_allowed_actor_paths(conn, via):
 
 @pytest.mark.parametrize("column,value,constraint", [
     ("action", "unknown", "audit_log_action_valid"),
-    ("action", "folder_access_changed", "audit_log_action_valid"),
+    ("action", "folder_created", "audit_log_action_valid"),
     ("actor_via", "unknown", "audit_log_actor_via_valid"),
 ])
 def test_invalid_values_are_rejected(conn, column, value, constraint):
@@ -329,3 +329,100 @@ def test_rollback_removes_document_and_audit(conn):
         raise RuntimeError("rollback")
     assert audit_rows(conn) == []
     assert conn.execute("SELECT count(*) FROM documents").fetchone()[0] == 0
+
+
+def create_folder(conn, name="사업 자료"):
+    return conn.execute(
+        "INSERT INTO folders (name, created_by, visibility) "
+        "VALUES (%s, 'alice', 'public') RETURNING id", (name,),
+    ).fetchone()[0]
+
+
+def test_folder_visibility_audit_and_unchanged_value(conn):
+    folder = create_folder(conn)
+    with conn.transaction():
+        set_actor(conn, actor="kim")
+        conn.execute("UPDATE folders SET visibility = 'private' WHERE id = %s", (folder,))
+    expected = [("folder_access_changed", "kim", "session", None, None, {
+        "kind": "visibility", "folder_id": str(folder), "folder_name": "사업 자료",
+        "before": "public", "after": "private",
+    })]
+    assert audit_rows(conn) == expected
+    conn.execute("UPDATE folders SET visibility = 'private' WHERE id = %s", (folder,))
+    conn.execute("UPDATE folders SET name = '새 이름' WHERE id = %s", (folder,))
+    assert audit_rows(conn) == expected
+
+
+@pytest.mark.parametrize("grantee_type", ["user", "group"])
+def test_folder_grant_audit(conn, grantee_type):
+    folder = create_folder(conn)
+    user, group = principals(conn)
+    conn.execute("UPDATE groups SET name = '사업팀' WHERE id = %s", (group,))
+    target = user if grantee_type == "user" else group
+    column = "user_id" if grantee_type == "user" else "group_id"
+    with conn.transaction():
+        set_actor(conn, actor="kim")
+        conn.execute(
+            f"INSERT INTO folder_grants (folder_id, {column}) VALUES (%s, %s)",
+            (folder, target),
+        )
+        conn.execute("DELETE FROM folder_grants WHERE folder_id = %s", (folder,))
+    assert audit_rows(conn) == [
+        ("folder_access_changed", "kim", "session", None, None, {
+            "kind": "grant", "change": change, "grantee_type": grantee_type,
+            "grantee": "bob" if grantee_type == "user" else "사업팀",
+            "folder_id": str(folder), "folder_name": "사업 자료",
+        }) for change in ("added", "removed")
+    ]
+
+
+@pytest.mark.parametrize("parent", ["folders", "users", "groups"])
+def test_folder_grant_cascade_is_not_access_change(conn, parent):
+    folder = create_folder(conn)
+    user, group = principals(conn)
+    conn.execute("INSERT INTO folder_grants (folder_id, user_id) VALUES (%s, %s)", (folder, user))
+    conn.execute("INSERT INTO folder_grants (folder_id, group_id) VALUES (%s, %s)", (folder, group))
+    before = audit_rows(conn)
+    target = {"folders": folder, "users": user, "groups": group}[parent]
+    conn.execute(f"DELETE FROM {parent} WHERE id = %s", (target,))
+    assert audit_rows(conn) == before
+    assert conn.execute("SELECT count(*) FROM folder_grants").fetchone()[0] == (
+        0 if parent == "folders" else 1
+    )
+
+
+def test_document_folder_inheritance_audit(conn):
+    doc = create_document(conn)
+    folder = create_folder(conn)
+    conn.execute("UPDATE documents SET folder_id = %s WHERE id = %s", (folder, doc))
+    before = len(audit_rows(conn))
+    with conn.transaction():
+        set_actor(conn, actor="kim")
+        for follows in (False, False, True):
+            conn.execute("UPDATE documents SET follows_folder = %s WHERE id = %s", (follows, doc))
+    expected = [
+        ("access_changed", "kim", "session", doc, "감사 대상", {
+            "kind": "inherit", "before": old, "after": new,
+        }) for old, new in (("folder", "own"), ("own", "folder"))
+    ]
+    assert audit_rows(conn)[before:] == expected
+    conn.execute("UPDATE documents SET title = '새 제목' WHERE id = %s", (doc,))
+    assert audit_rows(conn)[before:] == expected
+
+
+@pytest.mark.parametrize("follows", [True, False])
+def test_document_folder_move_audit(conn, follows):
+    doc = create_document(conn)
+    first = create_folder(conn)
+    second = create_folder(conn, "개발 자료")
+    conn.execute("UPDATE documents SET follows_folder = %s WHERE id = %s", (follows, doc))
+    before = len(audit_rows(conn))
+    with conn.transaction():
+        set_actor(conn, actor="kim")
+        for folder in (first, second, second, None):
+            conn.execute("UPDATE documents SET folder_id = %s WHERE id = %s", (folder, doc))
+    assert audit_rows(conn)[before:] == ([
+        ("access_changed", "kim", "session", doc, "감사 대상", {
+            "kind": "folder", "before": old, "after": new,
+        }) for old, new in ((None, "사업 자료"), ("사업 자료", "개발 자료"), ("개발 자료", None))
+    ] if follows else [])
