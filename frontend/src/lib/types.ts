@@ -248,6 +248,7 @@ export type AuditAction =
   | "text_updated"
   | "document_deleted"
   | "access_changed"
+  | "folder_access_changed"
   | "group_member_changed"
   | "original_replaced"
   | "original_downloaded";
