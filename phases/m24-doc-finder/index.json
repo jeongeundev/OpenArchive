@@ -19,7 +19,10 @@
       "type": "feat",
       "scope": "api",
       "desc": "목록 API에 q·content_type·sort와 건수·태그 엔드포인트를 연다",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-10-06T09:17:50+0900",
+      "summary": "목록 API에 q·content_type·sort와 동일 조건 건수·열람 범위 태그 엔드포인트 구현; AC 207개·Ruff 및 mutant 2종 검증 통과",
+      "completed_at": "2026-10-06T09:20:56+0900"
     },
     {
       "step": 2,
