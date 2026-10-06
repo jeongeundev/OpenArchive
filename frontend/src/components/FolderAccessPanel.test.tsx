@@ -111,4 +111,14 @@ describe("FolderAccessPanel", () => {
     await renderPanel({ ...root, id: "f2", parent_id: "f1", inherited: true });
     expect(screen.queryByRole("button", { name: "열람 범위 저장" })).not.toBeInTheDocument();
   });
+
+  it("대상 선택 안내는 문서용 문구가 아니라 폴더용 문구다", async () => {
+    stubFetch(publicScope);
+    await renderPanel();
+    fireEvent.click(await screen.findByRole("radio", { name: "제한" }));
+    expect(screen.queryByText(/이 문서를 봅니다/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/소유자만 봅니다/)).not.toBeInTheDocument();
+    expect(screen.getByText(/선택한 사용자와 그룹 구성원만 이 폴더/)).toBeInTheDocument();
+  });
 });
+

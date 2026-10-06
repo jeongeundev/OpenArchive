@@ -293,3 +293,35 @@ async def test_follow_folder_rejects_individual_scope_values(conn, extra):
     access = await d.get_access(conn, doc["id"], user_id="owner")
     assert access["follows_folder"] is False
     assert access["visibility"] == "private" and access["users"] == ["kim"]
+
+
+async def test_effective_visibility_follows_root_folder(conn):
+    """화면의 「열람 범위」는 실제로 적용되는 범위다 — 폴더로 만든 문서의 자기 범위(private)가 아니다."""
+    public = await f.create_folder(conn, user_id="kim", name="인사")
+    child = await f.create_folder(conn, user_id="kim", name="채용", parent_id=public["id"])
+    private = await f.create_folder(
+        conn, user_id="kim", name="RFP", visibility="private", grant_users=["owner"]
+    )
+    created = await make(conn, child["id"])
+    assert (created["visibility"], created["effective_visibility"]) == ("private", "public")
+
+    def effective(rows, doc_id):
+        return next(row["effective_visibility"] for row in rows if row["id"] == doc_id)
+
+    assert effective(await d.list_documents(conn, user_id="lee"), created["id"]) == "public"
+    detail = await d.get_document(conn, created["id"], user_id="lee")
+    assert (detail["visibility"], detail["effective_visibility"]) == ("private", "public")
+
+    await d.move_document(conn, created["id"], user_id="owner", folder_id=private["id"])
+    detail = await d.get_document(conn, created["id"], user_id="owner")
+    assert detail["effective_visibility"] == "private"
+
+    await d.set_access(
+        conn, created["id"], user_id="owner", follows_folder=False,
+        visibility="public", users=[], groups=[],
+    )
+    detail = await d.get_document(conn, created["id"], user_id="owner")
+    assert detail["effective_visibility"] == "public"
+
+    outside = await make(conn, visibility="public")
+    assert effective(await d.list_documents(conn, user_id="lee"), outside["id"]) == "public"

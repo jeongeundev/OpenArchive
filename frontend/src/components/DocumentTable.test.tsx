@@ -74,4 +74,10 @@ describe("DocumentTable", () => {
     expect(screen.getByText("텍스트 인식 실패")).toBeInTheDocument();
     expect(screen.queryByText("대기 중")).not.toBeInTheDocument();
   });
+
+  it("폴더 범위를 따르는 문서는 실제로 적용되는 범위를 표시한다", () => {
+    render(<DocumentTable documents={[{ ...documents[1], visibility: "private", effective_visibility: "public" }]} />);
+    expect(screen.getByText("조직 공개")).toBeInTheDocument();
+    expect(screen.queryByText("제한")).not.toBeInTheDocument();
+  });
 });

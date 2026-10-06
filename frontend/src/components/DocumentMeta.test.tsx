@@ -55,8 +55,15 @@ describe("DocumentMeta", () => {
     const { rerender } = render(<DocumentMeta document={document} />);
     expect(screen.getByText("조직 공개")).toBeInTheDocument();
 
-    rerender(<DocumentMeta document={{ ...document, visibility: "private" }} />);
+    rerender(<DocumentMeta document={{ ...document, visibility: "private", effective_visibility: "private" }} />);
     expect(screen.getByText("제한")).toBeInTheDocument();
+  });
+
+  it("폴더 범위를 따르는 문서는 자기 범위가 아니라 실제로 적용되는 범위를 표시한다", () => {
+    // 폴더로 만든 문서의 자기 범위는 「제한」으로 닫혀 있다 — 조직 공개 폴더 안이면 조직 전체가 본다.
+    render(<DocumentMeta document={{ ...document, visibility: "private", effective_visibility: "public" }} />);
+    expect(screen.getByText("조직 공개")).toBeInTheDocument();
+    expect(screen.queryByText("제한")).not.toBeInTheDocument();
   });
 
   it("편집기와 중복되지 않도록 태그를 표시하지 않는다", () => {
