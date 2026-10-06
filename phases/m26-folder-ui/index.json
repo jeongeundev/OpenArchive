@@ -19,7 +19,10 @@
       "type": "feat",
       "scope": "frontend",
       "desc": "감사 로그 화면에 폴더 열람 범위 변경·상속 전환·폴더 이동 문구를 보인다",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-10-07T00:10:29+0900",
+      "summary": "폴더 감사 라벨·대상·상속 전환·이동 문구와 동작 필터 추가, TDD 및 프론트 AC 397개 테스트·타입 검사·린트·정적 빌드 통과",
+      "completed_at": "2026-10-07T00:12:49+0900"
     },
     {
       "step": 2,
