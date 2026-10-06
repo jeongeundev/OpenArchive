@@ -19,6 +19,7 @@ export default function Home(): React.ReactElement {
   const [page, setPage] = useState(0);
   const [filters, setFilters] = useState<Filters>({ sort: "updated" });
   const [tags, setTags] = useState<string[]>([]);
+  const [tagsRevision, setTagsRevision] = useState(0);
   const { documents, total, loading, error, refresh } = useDocuments({
     ...filters,
     limit: PAGE_SIZE,
@@ -35,7 +36,7 @@ export default function Home(): React.ReactElement {
       if (!controller.signal.aborted) setTags(result);
     }).catch(() => {});
     return () => controller.abort();
-  }, []);
+  }, [tagsRevision]);
 
   const onFiltersChanged = useCallback((value: Filters) => {
     setFilters(value);
@@ -46,6 +47,7 @@ export default function Home(): React.ReactElement {
   const onUploaded = useCallback(() => {
     refresh();
     refreshProgress();
+    setTagsRevision((revision) => revision + 1);
   }, [refresh, refreshProgress]);
 
   return (

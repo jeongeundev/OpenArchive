@@ -140,4 +140,23 @@ describe("목록 찾기", () => {
     expect(await screen.findByText(/openarchive demo --user alice/)).toBeInTheDocument();
     expect(screen.queryByText("조건에 맞는 문서가 없습니다.")).not.toBeInTheDocument();
   });
+  it("업로드하면 새 태그가 태그 선택지에 나타난다", async () => {
+    let uploaded = false;
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input), "http://localhost");
+      if (init?.method === "POST" && url.pathname === "/api/documents") uploaded = true;
+      const body = url.pathname === "/api/auth/me" ? { authenticated: true, username: "alice", is_admin: false }
+        : url.pathname.endsWith("/progress") ? { extracting: 0, extraction_failed: 0, pending: 0, processing: 0, ready: 2, error: 0 }
+        : url.pathname.endsWith("/count") ? { total: 2 }
+        : url.pathname.endsWith("/tags") ? (uploaded ? ["보안", "신규"] : ["보안"])
+        : init?.method === "POST" ? documents[0] : documents;
+      return Promise.resolve(new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } }));
+    }));
+    render(<AuthProvider><Home /></AuthProvider>);
+    fireEvent.change(await screen.findByLabelText("업로드할 파일"), {
+      target: { files: [new File(["본문"], "new.md", { type: "text/markdown" })] },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "업로드" }));
+    expect(await screen.findByRole("option", { name: "신규" })).toBeInTheDocument();
+  });
 });
