@@ -36,7 +36,7 @@ async def delete_user(user_id: UUID, conn: Connection) -> Response:
     except service.UserOwnsDocuments as error:
         raise HTTPException(
             status_code=409,
-            detail="소유 문서가 있는 사용자는 삭제할 수 없습니다. 문서를 먼저 삭제하세요.",
+            detail="소유한 문서나 만든 폴더가 있어 삭제할 수 없습니다.",
         ) from error
     except service.UserNotFound as error:
         raise HTTPException(status_code=404, detail="사용자를 찾을 수 없습니다.") from error

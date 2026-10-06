@@ -95,7 +95,14 @@ async def test_set_access_audits_only_grant_differences(
     result = await set_access(
         conn, doc, user_id="alice", visibility="private", users=after_users, groups=after_groups
     )
-    assert result == {"visibility": "private", "users": sorted(after_users), "groups": after_groups}
+    assert result == {
+        "follows_folder": True,
+        "folder": None,
+        "folder_scope": None,
+        "visibility": "private",
+        "users": sorted(after_users),
+        "groups": after_groups,
+    }
     assert await access_audit_details(conn, doc) == before + [
         {"kind": "grant", "change": change, "grantee_type": kind, "grantee": name}
         for change, kind, name in changes
@@ -120,6 +127,9 @@ async def test_get_access_returns_sorted_names_for_owner(conn):
     doc = await insert_test_document(conn, title="d", content="본문", visibility="private")
     await grant(conn, doc, users=["carol", "bob"], groups=["인사팀"])
     assert await get_access(conn, doc, user_id="alice") == {
+        "follows_folder": True,
+        "folder": None,
+        "folder_scope": None,
         "visibility": "private",
         "users": ["bob", "carol"],
         "groups": ["인사팀"],
@@ -129,6 +139,9 @@ async def test_get_access_returns_sorted_names_for_owner(conn):
 async def test_get_access_on_document_without_grants(conn):
     doc = await insert_test_document(conn, title="d", content="본문")
     assert await get_access(conn, doc, user_id="alice") == {
+        "follows_folder": True,
+        "folder": None,
+        "folder_scope": None,
         "visibility": "public",
         "users": [],
         "groups": [],
@@ -171,7 +184,14 @@ async def test_set_access_replaces_all_grants(conn):
         conn, doc, user_id="alice", visibility="private", users=["bob"], groups=["인사팀"]
     )
 
-    assert result == {"visibility": "private", "users": ["bob"], "groups": ["인사팀"]}
+    assert result == {
+        "follows_folder": True,
+        "folder": None,
+        "folder_scope": None,
+        "visibility": "private",
+        "users": ["bob"],
+        "groups": ["인사팀"],
+    }
     assert await get_access(conn, doc, user_id="alice") == result
     assert await visible(conn, doc, "bob")
     assert await visible(conn, doc, "dave")
@@ -184,7 +204,14 @@ async def test_set_access_to_public_clears_grants(conn):
 
     result = await set_access(conn, doc, user_id="alice", visibility="public", users=[], groups=[])
 
-    assert result == {"visibility": "public", "users": [], "groups": []}
+    assert result == {
+        "follows_folder": True,
+        "folder": None,
+        "folder_scope": None,
+        "visibility": "public",
+        "users": [],
+        "groups": [],
+    }
     assert await snapshot(conn, doc) == ("public", [])
     assert await visible(conn, doc, "carol")
 
@@ -275,6 +302,9 @@ async def test_create_text_document_with_grantees(conn):
     assert await visible(conn, document["id"], "dave")
     assert not await visible(conn, document["id"], "carol")
     assert await get_access(conn, document["id"], user_id="alice") == {
+        "follows_folder": True,
+        "folder": None,
+        "folder_scope": None,
         "visibility": "private",
         "users": ["bob"],
         "groups": ["인사팀"],
@@ -422,7 +452,14 @@ async def test_set_access_keeps_share_grants(conn, start, visibility, users):
         conn, doc, user_id="alice", visibility=visibility, users=users, groups=[]
     )
 
-    assert result == {"visibility": visibility, "users": users, "groups": []}
+    assert result == {
+        "follows_folder": True,
+        "folder": None,
+        "folder_scope": None,
+        "visibility": visibility,
+        "users": users,
+        "groups": [],
+    }
     assert await share_grant_count(conn, doc) == 1
     assert await get_access(conn, doc, user_id="alice") == result
     assert await access_audit_details(conn, doc) == audit_before + [
@@ -440,5 +477,12 @@ async def test_set_public_without_grantees_succeeds_with_share_grant(conn):
 
     result = await set_access(conn, doc, user_id="alice", visibility="public", users=[], groups=[])
 
-    assert result == {"visibility": "public", "users": [], "groups": []}
+    assert result == {
+        "follows_folder": True,
+        "folder": None,
+        "folder_scope": None,
+        "visibility": "public",
+        "users": [],
+        "groups": [],
+    }
     assert await share_grant_count(conn, doc) == 1

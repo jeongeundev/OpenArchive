@@ -41,7 +41,10 @@ class UserNotFound(Exception):
 
 
 class UserOwnsDocuments(Exception):
-    """삭제하면 소유 문서가 유령 문서가 되는 사용자다."""
+    """소유 문서나 만든 폴더가 있는 사용자다."""
+
+    def __init__(self):
+        super().__init__("소유한 문서나 만든 폴더가 있어 삭제할 수 없습니다.")
 
 
 class AuthenticationFailed(Exception):
@@ -137,11 +140,12 @@ async def list_users(conn: psycopg.AsyncConnection) -> list[dict]:
 
 
 async def delete_user(conn: psycopg.AsyncConnection, user_id: UUID) -> None:
-    """소유 문서가 있으면 삭제를 거부해 owner_id 유령 문서를 만들지 않는다."""
+    """소유 문서나 만든 폴더가 있으면 삭제를 거부해 작성자가 사라지지 않게 한다."""
     owns_document = await (
         await conn.execute(
-            "SELECT EXISTS (SELECT 1 FROM documents WHERE owner_id = (SELECT username FROM users WHERE id = %s))",
-            (user_id,),
+            "SELECT EXISTS (SELECT 1 FROM documents WHERE owner_id = (SELECT username FROM users WHERE id = %s)) "
+            "OR EXISTS (SELECT 1 FROM folders WHERE created_by = (SELECT username FROM users WHERE id = %s))",
+            (user_id, user_id),
         )
     ).fetchone()
     if owns_document[0]:

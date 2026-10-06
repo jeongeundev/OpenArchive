@@ -23,7 +23,11 @@ from openarchive.services.parsing import (
     media_type_for,
     needs_ocr,
 )
-from openarchive.services.visibility import VISIBILITY_VALUES, VISIBLE_TO_USER
+from openarchive.services.visibility import (
+    FOLDER_VISIBLE_TO_USER,
+    VISIBILITY_VALUES,
+    VISIBLE_TO_USER,
+)
 
 # 목록·요약 응답이 쓰는 컬럼. 네 곳에서 같은 나열을 반복하지 않도록 한 곳에 둔다.
 SUMMARY_COLUMNS = """id, title, filename, content_type, version, owner_id, visibility, tags,
@@ -259,6 +263,22 @@ def text_label(filename: str | None) -> str:
     return "추출 텍스트" if filename else "문서 텍스트"
 
 
+# 폴더 지정 시 명시한 public과 인자 생략을 구분한다.
+class _DefaultVisibility(str):
+    pass
+
+
+_DEFAULT_VISIBILITY = _DefaultVisibility("public")
+
+
+def _creation_scope(folder_id, visibility, users, groups):
+    if folder_id is not None:
+        if visibility is not _DEFAULT_VISIBILITY or users is not None or groups is not None:
+            raise ValueError("폴더에 넣는 문서는 폴더의 열람 범위를 따릅니다. 개별 지정은 문서 상세에서 합니다.")
+        return "private"
+    return str(visibility)
+
+
 async def create_document(
     conn: psycopg.AsyncConnection,
     *,
@@ -267,7 +287,8 @@ async def create_document(
     owner_id: str,
     title: str | None = None,
     tags: list[str] | None = None,
-    visibility: str = "public",
+    visibility: str = _DEFAULT_VISIBILITY,
+    folder_id: UUID | None = None,
     idempotency_key: str | None = None,
     grant_users: list[str] | None = None,
     grant_groups: list[str] | None = None,
@@ -285,6 +306,7 @@ async def create_document(
 
     부여 대상(`grant_users`·`grant_groups`)은 문서와 같은 트랜잭션에 들어간다 (ADR-044).
     """
+    visibility = _creation_scope(folder_id, visibility, grant_users, grant_groups)
     grant_users, grant_groups = _check_grantees(visibility, owner_id, grant_users, grant_groups)
     content_type = detect_content_type(filename)
     content = extract_text(data, content_type)
@@ -302,6 +324,7 @@ async def create_document(
             owner_id=owner_id,
             tags=tags,
             visibility=visibility,
+            folder_id=folder_id,
             empty_message=EXTRACTION_FAILED_MESSAGE,
             extraction_status=extraction_status,
             grant_users=grant_users,
@@ -329,6 +352,7 @@ async def create_document(
             title=title,
             tags=tags,
             visibility=visibility,
+            **({"folder_id": str(folder_id)} if folder_id is not None else {}),
             **_grantee_fingerprint(grant_users, grant_groups),
         ),
         insert=insert,
@@ -470,7 +494,8 @@ async def create_text_document(
     content_type: str = "md",
     owner_id: str,
     tags: list[str] | None = None,
-    visibility: str = "public",
+    visibility: str = _DEFAULT_VISIBILITY,
+    folder_id: UUID | None = None,
     idempotency_key: str | None = None,
     grant_users: list[str] | None = None,
     grant_groups: list[str] | None = None,
@@ -481,6 +506,7 @@ async def create_text_document(
     # 자기 계약을 스스로 지킨다.
     if content_type not in TEXT_CONTENT_TYPES:
         raise UnsupportedFileType("텍스트로 공급할 수 있는 유형은 txt, md입니다.")
+    visibility = _creation_scope(folder_id, visibility, grant_users, grant_groups)
     grant_users, grant_groups = _check_grantees(visibility, owner_id, grant_users, grant_groups)
 
     async def insert() -> dict:
@@ -493,6 +519,7 @@ async def create_text_document(
             owner_id=owner_id,
             tags=tags,
             visibility=visibility,
+            folder_id=folder_id,
             empty_message="문서 텍스트는 비어 있을 수 없습니다.",
             grant_users=grant_users,
             grant_groups=grant_groups,
@@ -509,6 +536,7 @@ async def create_text_document(
             content_type=content_type,
             tags=tags,
             visibility=visibility,
+            **({"folder_id": str(folder_id)} if folder_id is not None else {}),
             **_grantee_fingerprint(grant_users, grant_groups),
         ),
         insert=insert,
@@ -526,6 +554,7 @@ async def _insert_document(
     tags: list[str] | None,
     visibility: str,
     empty_message: str,
+    folder_id: UUID | None = None,
     extraction_status: str = "done",
     grant_users: list[str] | None = None,
     grant_groups: list[str] | None = None,
@@ -545,6 +574,10 @@ async def _insert_document(
         )
     if visibility not in VISIBILITY_VALUES:
         raise InvalidVisibility("공개범위는 public, private 중 하나여야 합니다.")
+    if folder_id is not None:
+        from openarchive.services.folders import ensure_folder_visible
+
+        await ensure_folder_visible(conn, folder_id, user_id=owner_id)
     # 이름을 문서 INSERT 전에 해석한다 — 모르는 이름이면 아무것도 쓰지 않고 끝난다.
     user_ids, group_ids = await resolve_grantees(
         conn, users=grant_users or [], groups=grant_groups or []
@@ -555,8 +588,8 @@ async def _insert_document(
         f"""
         INSERT INTO documents
             (title, filename, content_type, content, content_hash, owner_id, visibility, tags,
-             extraction_status)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+             extraction_status, folder_id)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         RETURNING {SUMMARY_COLUMNS}
         """,
         (
@@ -569,6 +602,7 @@ async def _insert_document(
             visibility,
             normalize_tags(tags),
             extraction_status,
+            folder_id,
         ),
     )
     document = await cur.fetchone()
@@ -667,11 +701,13 @@ AND (%(extraction)s::text IS NULL OR d.extraction_status = %(extraction)s)
 AND (%(tag)s::text IS NULL OR %(tag)s = ANY(d.tags))
 AND (%(title)s::text IS NULL OR d.title ILIKE '%%' || %(title)s || '%%' ESCAPE '\\')
 AND (%(content_type)s::text IS NULL OR d.content_type = %(content_type)s)
+AND (%(folder)s::uuid IS NULL OR (d.folder_id = %(folder)s AND EXISTS (
+    SELECT 1 FROM folders f WHERE f.id = %(folder)s AND {FOLDER_VISIBLE_TO_USER})))
 """
 
 
 def _document_filter_params(
-    user_id, embedding_status, extraction_status, tag, title_query, content_type
+    user_id, embedding_status, extraction_status, tag, title_query, content_type, folder_id
 ) -> dict:
     title = title_query.strip() if title_query is not None else None
     if title:
@@ -683,6 +719,7 @@ def _document_filter_params(
         "tag": tag,
         "title": title or None,
         "content_type": content_type,
+        "folder": folder_id,
     }
 
 
@@ -695,6 +732,7 @@ async def list_documents(
     tag: str | None = None,
     title_query: str | None = None,
     content_type: str | None = None,
+    folder_id: UUID | None = None,
     sort: DocumentSort = "updated",
     limit: int | None = None,
     offset: int = 0,
@@ -710,7 +748,7 @@ async def list_documents(
     if sort not in DOCUMENT_ORDER_BY:
         raise ValueError(f"허용되지 않은 문서 정렬: {sort}")
     params = _document_filter_params(
-        user_id, embedding_status, extraction_status, tag, title_query, content_type
+        user_id, embedding_status, extraction_status, tag, title_query, content_type, folder_id
     )
     cur = conn.cursor(row_factory=dict_row)
     await cur.execute(
@@ -735,12 +773,13 @@ async def count_documents(
     tag: str | None = None,
     title_query: str | None = None,
     content_type: str | None = None,
+    folder_id: UUID | None = None,
 ) -> int:
     """목록과 같은 열람 범위·필터로 전체 건수를 센다."""
     cur = await conn.execute(
         f"SELECT count(*) FROM documents d WHERE {DOCUMENT_FILTERS}",
         _document_filter_params(
-            user_id, embedding_status, extraction_status, tag, title_query, content_type
+            user_id, embedding_status, extraction_status, tag, title_query, content_type, folder_id
         ),
     )
     return (await cur.fetchone())[0]
@@ -798,7 +837,7 @@ async def get_document(
     cur = conn.cursor(row_factory=dict_row)
     await cur.execute(
         f"""
-        SELECT {SUMMARY_COLUMNS}, content,
+        SELECT {SUMMARY_COLUMNS}, content, d.folder_id,
                (SELECT count(*) FROM document_chunks c WHERE c.document_id = d.id) AS chunk_count,
                (SELECT min(version) FROM document_chunks c WHERE c.document_id = d.id)
                    AS chunk_version
@@ -822,6 +861,7 @@ async def get_document(
         (document_id,),
     )
     document["versions"] = await cur.fetchall()
+    document["folder"], _ = await _folder_info(conn, document.pop("folder_id"), user_id)
 
     # 원본 판은 메타데이터만 싣는다. 상세는 화면이 수시로 부르는 응답이라 바이트를 섞지 않는다.
     await cur.execute(
@@ -1287,11 +1327,54 @@ async def _load_owner_document(
     await _load_for_write(conn, document_id, user_id)
 
 
-async def _read_access(conn: psycopg.AsyncConnection, document_id: UUID) -> dict:
+async def _folder_info(conn, folder_id, user_id):
+    from openarchive.services.folders import (
+        FolderNotFound,
+        ensure_folder_visible,
+        folder_path,
+    )
+    from openarchive.services.folders import (
+        _read_access as read_folder_access,
+    )
+
+    if folder_id is None:
+        return None, None
+    try:
+        folder = await ensure_folder_visible(conn, folder_id, user_id=user_id)
+    except FolderNotFound:
+        return None, None
+    path = await folder_path(conn, folder_id)
+    scope = await read_folder_access(conn, path[0]["id"])
+    return {"id": folder_id, "name": folder["name"], "path": path}, scope
+
+
+async def move_document(
+    conn: psycopg.AsyncConnection, document_id: UUID, *, user_id: str, folder_id: UUID | None
+) -> dict:
+    """소유자의 문서를 옮기되 개별 범위와 상속 여부는 보존한다."""
+    from openarchive.services.folders import ensure_folder_visible
+
+    async with conn.transaction():
+        cur = await conn.execute(
+            "SELECT 1 FROM documents WHERE id=%s FOR NO KEY UPDATE", (document_id,)
+        )
+        if await cur.fetchone() is None:
+            raise DocumentNotFound
+        await _load_owner_document(conn, document_id, user_id)
+        if folder_id is not None:
+            await ensure_folder_visible(conn, folder_id, user_id=user_id)
+        await conn.execute(
+            "UPDATE documents SET folder_id=%s, updated_at=now() WHERE id=%s",
+            (folder_id, document_id),
+        )
+        return await get_document(conn, document_id, user_id=user_id)
+
+
+async def _read_access(conn: psycopg.AsyncConnection, document_id: UUID, user_id: str | None) -> dict:
     cur = conn.cursor(row_factory=dict_row)
     await cur.execute(
         """
-        SELECT d.visibility,
+        SELECT d.visibility, d.follows_folder, d.folder_id,
                COALESCE((SELECT array_agg(u.username ORDER BY u.username)
                          FROM document_grants g JOIN users u ON u.id = g.user_id
                          WHERE g.document_id = d.id), ARRAY[]::text[]) AS users,
@@ -1305,6 +1388,7 @@ async def _read_access(conn: psycopg.AsyncConnection, document_id: UUID) -> dict
     row = await cur.fetchone()
     if row is None:
         raise DocumentNotFound
+    row["folder"], row["folder_scope"] = await _folder_info(conn, row.pop("folder_id"), user_id)
     return row
 
 
@@ -1316,7 +1400,7 @@ async def get_access(
     목록·검색 응답에 싣지 않는 이유는 비소유자에게 "누가 이 문서를 보는가"가 새기 때문이다.
     """
     await _load_owner_document(conn, document_id, user_id)
-    return await _read_access(conn, document_id)
+    return await _read_access(conn, document_id, user_id)
 
 
 async def set_access(
@@ -1324,9 +1408,10 @@ async def set_access(
     document_id: UUID,
     *,
     user_id: str | None,
-    visibility: str,
-    users: list[str],
-    groups: list[str],
+    visibility: str | None = None,
+    users: list[str] | None = None,
+    groups: list[str] | None = None,
+    follows_folder: bool | None = None,
 ) -> dict:
     """열람 범위를 통째로 교체한다. 실패하면 아무것도 바뀌지 않는다.
 
@@ -1335,18 +1420,29 @@ async def set_access(
     공개범위만 바꾸므로 `UPDATE OF content_hash` 트리거는 발화하지 않는다 — 버전도
     재임베딩도 없다. 열람 범위는 조회 시점 술어라 그래프·관계도 다시 만들 필요가 없다(ADR-027).
     """
-    if visibility not in VISIBILITY_VALUES:
+    if follows_folder is not True and visibility not in VISIBILITY_VALUES:
         raise InvalidVisibility("공개범위는 public, private 중 하나여야 합니다.")
-    users, groups = _check_grantees(visibility, user_id, users, groups)
+    if follows_folder is not True:
+        users, groups = _check_grantees(visibility, user_id, users, groups)
     async with conn.transaction():
         await _load_owner_document(conn, document_id, user_id)
         # 현재 부여 조회와 차이 반영 사이에 동시 교체가 끼지 않게 한다. 워커·024와 같은
         # 수준으로 잠가 FK 확인(FOR KEY SHARE)과는 부딪히지 않게 한다.
         cur = await conn.execute(
-            "SELECT 1 FROM documents WHERE id = %s FOR NO KEY UPDATE", (document_id,)
+            "SELECT folder_id FROM documents WHERE id = %s FOR NO KEY UPDATE", (document_id,)
         )
-        if await cur.fetchone() is None:
+        locked = await cur.fetchone()
+        if locked is None:
             raise DocumentNotFound
+        if follows_folder is not None:
+            if locked[0] is None:
+                raise ValueError("폴더에 없는 문서는 폴더 범위를 따를 수 없습니다.")
+            await conn.execute(
+                "UPDATE documents SET follows_folder=%s, updated_at=now() WHERE id=%s",
+                (follows_folder, document_id),
+            )
+        if follows_folder is True:
+            return await _read_access(conn, document_id, user_id)
         # 이름을 변경 전에 해석한다 — 모르는 이름이면 아무것도 바뀌지 않는다.
         user_ids, group_ids = await resolve_grantees(conn, users=users, groups=groups)
         cur = await conn.execute(
@@ -1373,7 +1469,7 @@ async def set_access(
             [user for user in user_ids if user not in current_users],
             [group for group in group_ids if group not in current_groups],
         )
-        return await _read_access(conn, document_id)
+        return await _read_access(conn, document_id, user_id)
 
 
 async def _current_version(conn: psycopg.AsyncConnection, document_id: UUID) -> int:
