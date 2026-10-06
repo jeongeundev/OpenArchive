@@ -52,7 +52,10 @@
       "type": "feat",
       "scope": "frontend",
       "desc": "최상위 폴더 열람 범위 패널",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-10-07T00:23:40+0900",
+      "summary": "FolderAccessPanel(최상위 폴더 전용 · 조직 공개/제한+GranteePicker · 만든 사람만 GET access, 그 밖은 scope로 채우고 저장 버튼 유지·서버 403 표시 · 대상 없음/바로 적용 안내 · 저장 뒤 onSaved)와 FolderHeader 「열람 범위」 토글·홈 onFolderAccessSaved(문서·진행·폴더 갱신) 추가, TDD 및 프론트 AC 438개 테스트·타입 검사·린트·빌드 통과",
+      "completed_at": "2026-10-07T00:25:35+0900"
     },
     {
       "step": 5,
