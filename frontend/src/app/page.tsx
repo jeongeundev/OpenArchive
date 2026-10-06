@@ -126,7 +126,7 @@ function HomeView(): React.ReactElement {
           onChanged={refreshFolders} onDeleted={onFolderDeleted} onAccessSaved={onFolderAccessSaved} />
       ) : null}
 
-      {auth.authenticated ? <UploadDropzone onUploaded={onUploaded} /> : null}
+      {auth.authenticated ? <UploadDropzone onUploaded={onUploaded} folders={folders} defaultFolderId={folderId} /> : null}
 
       <DocumentFilters value={filters} tags={tags} onChange={onFiltersChanged} />
 

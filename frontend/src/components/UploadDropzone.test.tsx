@@ -2,7 +2,9 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import JSZip from "jszip";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { AuthProvider } from "./AuthProvider";
 import { UploadDropzone } from "./UploadDropzone";
+import type { Folder } from "@/lib/types";
 
 // Response 본문은 1회용이라 다건 업로드 모킹은 호출마다 새 Response를 만들어야 한다.
 function jsonResponse(body: string = "{}", status = 201): Response {
@@ -547,6 +549,89 @@ describe("UploadDropzone", () => {
       fireEvent.click(screen.getByRole("radio", { name: "제한" }));
       expect(await screen.findByRole("option", { name: "bob" })).toBeInTheDocument();
       expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    });
+  });
+
+  describe("폴더 선택", () => {
+    const rfp: Folder = {
+      id: "f-rfp", parent_id: null, name: "RFP", created_by: "kim", document_count: 0,
+      scope: { visibility: "private", users: [], groups: ["사업팀"] },
+      inherited: false, can_manage: true, can_change_access: true,
+    };
+    const hr: Folder = {
+      id: "f-hr", parent_id: null, name: "인사", created_by: "lee", document_count: 0,
+      scope: { visibility: "public", users: [], groups: [] },
+      inherited: false, can_manage: false, can_change_access: false,
+    };
+
+    function renderWithAuth(ui: React.ReactElement) {
+      vi.stubGlobal("fetch", vi.fn((url: string) => Promise.resolve(
+        url === "/api/auth/me"
+          ? jsonResponse(JSON.stringify({ authenticated: true, username: "kim", is_admin: false }), 200)
+          : jsonResponse(),
+      )));
+      return render(<AuthProvider>{ui}</AuthProvider>);
+    }
+
+    it("폴더 「인사」를 고르고 올리면 folder_id를 보내고 개별 범위는 보내지 않는다", async () => {
+      renderWithAuth(<UploadDropzone onUploaded={vi.fn()} folders={[rfp, hr]} defaultFolderId={null} />);
+      fireEvent.change(screen.getByLabelText("폴더"), { target: { value: "f-hr" } });
+      fireEvent.change(screen.getByLabelText("업로드할 파일"), {
+        target: { files: [new File(["text"], "guide.txt")] },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "업로드" }));
+
+      const fetchMock = vi.mocked(fetch);
+      await waitFor(() =>
+        expect(fetchMock.mock.calls.some(([url]) => url === "/api/documents")).toBe(true),
+      );
+      const call = fetchMock.mock.calls.find(([url]) => url === "/api/documents")!;
+      const body = call[1]?.body as FormData;
+      expect(body.get("folder_id")).toBe("f-hr");
+      expect(body.has("visibility")).toBe(false);
+      expect(body.has("grant_users")).toBe(false);
+      expect(body.has("grant_groups")).toBe(false);
+    });
+
+    it("폴더 「RFP」를 고르면 열람 범위가 「폴더 범위 따름(제한 · 사업팀)」으로 표시된다", async () => {
+      renderWithAuth(<UploadDropzone onUploaded={vi.fn()} folders={[rfp, hr]} defaultFolderId={null} />);
+      fireEvent.change(screen.getByLabelText("폴더"), { target: { value: "f-rfp" } });
+
+      expect(screen.getByText("폴더 범위 따름(제한 · 사업팀)")).toBeInTheDocument();
+      expect(screen.getByText("개별 지정은 업로드 뒤 문서 상세에서 합니다")).toBeInTheDocument();
+      expect(screen.queryByRole("radio", { name: "제한" })).not.toBeInTheDocument();
+      await waitFor(() => expect(vi.mocked(fetch)).toHaveBeenCalled());
+      expect(screen.queryByText("폴더를 만든 사람이 범위를 바꾸면 이 문서에도 적용됩니다")).not.toBeInTheDocument();
+    });
+
+    it("남이 만든 폴더를 고르면 범위 변경이 이 문서에도 적용된다고 안내한다", async () => {
+      renderWithAuth(<UploadDropzone onUploaded={vi.fn()} folders={[rfp, hr]} defaultFolderId={null} />);
+      fireEvent.change(screen.getByLabelText("폴더"), { target: { value: "f-hr" } });
+
+      expect(screen.getByText("폴더 범위 따름(조직 공개)")).toBeInTheDocument();
+      expect(
+        await screen.findByText("폴더를 만든 사람이 범위를 바꾸면 이 문서에도 적용됩니다"),
+      ).toBeInTheDocument();
+    });
+
+    it("폴더 없음으로 되돌리면 조직 공개 / 제한 선택이 돌아온다", () => {
+      renderWithAuth(<UploadDropzone onUploaded={vi.fn()} folders={[rfp, hr]} defaultFolderId="f-rfp" />);
+      expect(screen.queryByRole("radio", { name: "조직 공개" })).not.toBeInTheDocument();
+      fireEvent.change(screen.getByLabelText("폴더"), { target: { value: "" } });
+      expect(screen.getByRole("radio", { name: "조직 공개" })).toBeChecked();
+    });
+
+    it("기본값은 홈에서 고른 폴더이고, 고른 폴더가 바뀌면 따라간다", () => {
+      const { rerender } = renderWithAuth(
+        <UploadDropzone onUploaded={vi.fn()} folders={[rfp, hr]} defaultFolderId="f-rfp" />,
+      );
+      expect(screen.getByLabelText("폴더")).toHaveValue("f-rfp");
+      rerender(
+        <AuthProvider>
+          <UploadDropzone onUploaded={vi.fn()} folders={[rfp, hr]} defaultFolderId="f-hr" />
+        </AuthProvider>,
+      );
+      expect(screen.getByLabelText("폴더")).toHaveValue("f-hr");
     });
   });
 });
