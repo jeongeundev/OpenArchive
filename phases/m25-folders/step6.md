@@ -35,13 +35,13 @@ step 3·4의 서비스를 REST로 연다 — 폴더 라우터 신설, 문서 라
 
 | 메서드·경로 | 인증 | 요청 | 응답·오류 |
 |---|---|---|---|
-| `GET /api/folders` | 읽기 | — | `Folder[]` (`id, parent_id, name, created_by, document_count, scope{visibility, users, groups}, inherited, can_manage, can_change_access`) |
+| `GET /api/folders` | 읽기(`require_user_id` — 공유 거부) | — | `Folder[]` (`id, parent_id, name, created_by, document_count, scope{visibility, users, groups}, inherited, can_manage, can_change_access`) |
 | `POST /api/folders` | 쓰기(토큰 허용) | `{name, parent_id?}` | 201 `Folder`. 볼 수 없는 부모 404, 같은 이름 409 |
 | `PATCH /api/folders/{id}` | 쓰기(토큰 허용) | `{name}` | `Folder`. 못 보면 404, 권한 없음 403, 같은 이름 409 |
 | `DELETE /api/folders/{id}` | 쓰기(토큰 허용) | — | 204. 못 보면 404, 권한 없음 403, 비어 있지 않음 409 "폴더가 비어 있지 않습니다." |
-| `GET /api/folders/{id}/access` | 읽기 | — | 만든 사람만 `{visibility, users, groups}`, 아니면 403(볼 수 없으면 404) |
+| `GET /api/folders/{id}/access` | 읽기(`require_user_id` — 공유 거부) | — | 만든 사람만 `{visibility, users, groups}`, 아니면 403(볼 수 없으면 404) |
 | `PUT /api/folders/{id}/access` | **세션 전용** | `{visibility, users, groups}` | 만든 사람만(관리자 포함 그 밖은 403), 하위 폴더 400 |
-| `GET /api/documents?folder_id=` · `/count?folder_id=` | 읽기 | — | 직접 든 문서만 |
+| `GET /api/documents?folder_id=` · `/count?folder_id=` | 기존(`require_reader`) | — | 직접 든 문서만. 공유 주체는 어떤 폴더 id를 줘도 0건(step 4) |
 | `POST /api/documents`(업로드 Form) · `POST /api/documents/text` | 쓰기 | `folder_id` 추가 | 폴더 + 열람 범위 동시 지정 400, 못 보는 폴더 404 |
 | `PUT /api/documents/{id}/folder` | 쓰기(토큰 허용) | `{folder_id: uuid | null}` | 소유자만, 못 보는 폴더 404 |
 | `PUT /api/documents/{id}/access` | 세션 전용(기존) | `follows_folder?: bool` 추가 | 기존 + 개별 지정 전환 |
@@ -64,7 +64,7 @@ step 3·4의 서비스를 REST로 연다 — 폴더 라우터 신설, 문서 라
 1. 위 표의 각 행: 정상 응답과 오류 코드·문구.
 2. **세션 전용 경계**: API 토큰으로 `PUT /api/folders/{id}/access` → 403. 같은 토큰으로 폴더 만들기·이름 변경·문서 이동은 성공.
 3. 관리자 세션: 남의 폴더 이름 변경·삭제 성공, 범위 저장 403. 관리자가 볼 수 없는 폴더는 404.
-4. 공유 토큰은 폴더 API 전부 거부(기존 `reject_share` 규칙).
+4. 공유 토큰은 `/api/folders` 경로 전부 403(기존 `reject_share` 규칙). **`tests/test_share_access.py`의 `SHARE_READABLE_ROUTES`는 바꾸지 않는다** — 새 폴더 경로에 `require_reader`를 쓰면 허용 목록 단언이 깨진다(ADR-044 공유 결정 5: 새 경로는 기본적으로 공유를 막는다). 공유 토큰으로 `GET /api/documents?folder_id=<공유 문서가 든 폴더>`가 0건이고, `GET /api/documents/{공유 문서}`의 `folder`가 null이다.
 5. 업로드 Form에 `folder_id`와 `visibility=private`를 함께 보내면 400.
 6. 상세 응답의 `folder`가 볼 수 없는 폴더에서 null(D5).
 7. 감사 연동: 세션으로 폴더 범위를 바꾸면 `folder_access_changed` 행의 `actor`가 그 사용자다(행위자 GUC가 `current_user` 의존성에서 걸린다).
@@ -79,7 +79,7 @@ step 3·4의 서비스를 REST로 연다 — 폴더 라우터 신설, 문서 라
 
 ```bash
 docker compose up -d
-cd backend && .venv/bin/pytest tests/test_folders_api.py tests/test_documents_api.py tests/test_access_api.py tests/test_search.py tests/test_search_api.py -q
+cd backend && .venv/bin/pytest tests/test_folders_api.py tests/test_documents_api.py tests/test_access_api.py tests/test_search.py tests/test_search_api.py tests/test_share_access.py -q
 cd backend && .venv/bin/pytest -q -x
 cd backend && .venv/bin/ruff check .
 ```
@@ -88,6 +88,7 @@ cd backend && .venv/bin/ruff check .
 
 1. 위 AC 커맨드를 실행한다(두 번째 줄은 phase 끝 전 백엔드 전체 확인).
 2. mutant 확인: `PUT /api/folders/{id}/access`의 의존성을 `require_write_user_id`로 바꾸면 테스트 2가 실패해야 한다.
+   - `GET /api/folders`의 의존성을 `require_reader`로 바꾸면 테스트 4와 `test_share_access.py`가 실패해야 한다.
 3. `phases/m25-folders/index.json`의 step 6을 갱신한다.
 
 ## 금지사항

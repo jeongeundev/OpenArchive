@@ -58,7 +58,7 @@
 7. `set_access(…, follows_folder=False, visibility='private', users=[], groups=[])` → 개별 지정. 「RFP」를 볼 수 있는 kim도 못 본다. `set_access(…, follows_folder=True)` → 폴더 범위로 복귀하며 문서 자신의 값은 그대로 보존된다. 폴더 없는 문서에 `follows_folder`를 주면 무시하지 말고 거부한다. 기존 호출(인자 없음)은 그대로 동작한다.
 8. `get_access` 응답에 `follows_folder`, `folder`(볼 수 있으면 `{id, name, path}`, 아니면 null), `folder_scope`(볼 수 있으면 최상위 범위 요약) — 소유자 전용은 기존과 같다.
 9. `get_document` 응답에 `folder`: 그 사용자가 폴더를 볼 수 있으면 `{id, name, path:[{id,name},…]}`, 볼 수 없으면 **null**(D5). 폴더 이름을 바꾸면 다음 조회에서 새 이름.
-10. `list_documents(…, folder_id=X)`·`count_documents(…, folder_id=X)` → X에 **직접** 든 문서만(하위 폴더 제외). 볼 수 없는 폴더 id를 주면 0건(오류 아님 — 존재를 알리지 않는다).
+10. `list_documents(…, folder_id=X)`·`count_documents(…, folder_id=X)` → X에 **직접** 든 문서만(하위 폴더 제외). 볼 수 없는 폴더 id를 주면 0건(오류 아님 — 존재를 알리지 않는다). 폴더 필터는 `FOLDER_VISIBLE_TO_USER`로 X 자체를 볼 수 있는지도 거른다 — **공유 주체가 공유받은 문서가 든 폴더 X의 id를 주어도 0건**이다(그 문서가 X에 있다는 사실이 새지 않는다). 이 경우를 테스트로 고정한다.
 11. 목록 요약(`SUMMARY_COLUMNS`)에 `folder_id`를 **넣지 않는다** — 볼 수 없는 폴더의 id가 새기 때문이다. 이 결정을 테스트로 고정: 볼 수 없는 폴더 안 개별 공개 문서의 목록 항목에 폴더 흔적이 없다.
 12. `delete_user`: 폴더를 만든 계정 삭제 → 거부(문서 소유 거부와 같은 방식, 메시지는 "소유한 문서나 만든 폴더가 있어 삭제할 수 없습니다." 어조로 두 경우를 아우른다).
 
@@ -73,7 +73,7 @@ async def list_documents(..., folder_id: UUID | None = None) / count_documents(.
 ```
 
 - 폴더 확인은 `services/folders.py`의 `ensure_folder_visible`을 재사용한다(문서 소유자 = 업로드 사용자의 시점).
-- 폴더 필터는 목록·건수의 **공유 WHERE 조각**에 더한다(m24-doc-finder가 만든 한 곳 — 이 phase는 m24 머지 뒤에 실행한다).
+- 폴더 필터는 목록·건수의 **공유 WHERE 조각**(`DOCUMENT_FILTERS`, m24-doc-finder가 만든 한 곳)에 더한다. 형태: `(%(folder)s::uuid IS NULL OR (d.folder_id = %(folder)s AND EXISTS (SELECT 1 FROM folders f WHERE f.id = %(folder)s AND <FOLDER_VISIBLE_TO_USER>)))` — 문서 열람 술어만으로는 공유 주체의 폴더 소속이 새므로 폴더 술어를 함께 건다.
 - `move_document`·`set_access`는 문서 행을 `FOR NO KEY UPDATE`로 잠근다(기존 잠금 방식). 감사 기록은 step 1 트리거가 `folder_id`·`follows_folder` 변경에서 남긴다.
 - `delete_user`의 확인 쿼리에 `folders.created_by`를 더한다.
 
