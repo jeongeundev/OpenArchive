@@ -19,6 +19,8 @@ import pytest
 
 CORE_TABLES = {
     "audit_log",
+    "folders",
+    "folder_grants",
     "documents",
     "document_versions",
     "document_chunks",
@@ -1219,3 +1221,105 @@ def test_username_cannot_start_with_share_principal_prefix(conn: psycopg.Connect
 def test_username_allows_share_text_outside_reserved_prefix(conn: psycopg.Connection, username: str):
     user = insert_user(conn, username)
     assert conn.execute("SELECT username FROM users WHERE id = %s", (user,)).fetchone() == (username,)
+
+
+# --- 폴더·폴더 부여 (030, ADR-054) ------------------------------------------------
+
+
+def insert_folder(conn, name="사업팀", parent_id=None, visibility="public"):
+    return conn.execute(
+        "INSERT INTO folders (name, parent_id, visibility, created_by)"
+        " VALUES (%s, %s, %s, 'alice') RETURNING id",
+        (name, parent_id, visibility),
+    ).fetchone()[0]
+
+
+def test_folder_scope_belongs_only_to_roots(conn):
+    root = insert_folder(conn, visibility="private")
+    child = insert_folder(conn, parent_id=root, visibility=None)
+    assert conn.execute(
+        "SELECT visibility FROM folders WHERE id = %s", (child,)
+    ).fetchone() == (None,)
+    for parent, visibility in ((None, None), (root, "public"), (root, "private")):
+        with pytest.raises(psycopg.errors.CheckViolation):
+            insert_folder(conn, parent_id=parent, visibility=visibility)
+
+
+def test_folder_visibility_rejects_unknown_values(conn):
+    with pytest.raises(psycopg.errors.CheckViolation):
+        insert_folder(conn, visibility="publik")
+
+
+@pytest.mark.parametrize("name", ["", "  ", "\t\n", "a/b"])
+def test_folder_name_rejects_blank_or_path_separator(conn, name):
+    with pytest.raises(psycopg.errors.CheckViolation):
+        insert_folder(conn, name=name)
+
+
+def test_folder_names_are_unique_only_under_the_same_parent(conn):
+    first = insert_folder(conn)
+    second = insert_folder(conn)
+    insert_folder(conn, name="자료", parent_id=first, visibility=None)
+    insert_folder(conn, name="자료", parent_id=second, visibility=None)
+    with pytest.raises(psycopg.errors.UniqueViolation):
+        insert_folder(conn, name="자료", parent_id=first, visibility=None)
+    assert conn.execute(
+        "SELECT count(*) FROM folders WHERE parent_id IS NULL AND name = '사업팀'"
+    ).fetchone() == (2,)
+
+
+def test_folder_deletion_requires_no_children_or_documents(conn):
+    root = insert_folder(conn)
+    child = insert_folder(conn, parent_id=root, visibility=None)
+    with pytest.raises(psycopg.errors.ForeignKeyViolation):
+        conn.execute("DELETE FROM folders WHERE id = %s", (root,))
+    doc = insert_document(conn)
+    conn.execute("UPDATE documents SET folder_id = %s WHERE id = %s", (child, doc))
+    with pytest.raises(psycopg.errors.ForeignKeyViolation):
+        conn.execute("DELETE FROM folders WHERE id = %s", (child,))
+    conn.execute("DELETE FROM documents WHERE id = %s", (doc,))
+    conn.execute("DELETE FROM folders WHERE id = %s", (child,))
+    conn.execute("DELETE FROM folders WHERE id = %s", (root,))
+    assert conn.execute("SELECT count(*) FROM folders").fetchone() == (0,)
+
+
+def test_folder_grants_require_exactly_one_target_and_unique_grantees(conn):
+    folder = insert_folder(conn)
+    user = conn.execute(
+        "INSERT INTO users (username, password_hash) VALUES ('alice', 'hash') RETURNING id"
+    ).fetchone()[0]
+    group = conn.execute("INSERT INTO groups (name) VALUES ('사업팀') RETURNING id").fetchone()[0]
+    sql = "INSERT INTO folder_grants (folder_id, user_id, group_id) VALUES (%s, %s, %s)"
+    for targets in ((None, None), (user, group)):
+        with pytest.raises(psycopg.errors.CheckViolation):
+            conn.execute(sql, (folder, *targets))
+    for targets in ((user, None), (None, group)):
+        conn.execute(sql, (folder, *targets))
+        with pytest.raises(psycopg.errors.UniqueViolation):
+            conn.execute(sql, (folder, *targets))
+    assert conn.execute("SELECT count(*) FROM folder_grants").fetchone() == (2,)
+    conn.execute("DELETE FROM folders WHERE id = %s", (folder,))
+    assert conn.execute("SELECT count(*) FROM folder_grants").fetchone() == (0,)
+
+
+def test_document_folder_columns_preserve_folderless_inserts(conn):
+    doc = insert_document(conn)
+    assert conn.execute(
+        "SELECT folder_id, follows_folder FROM documents WHERE id = %s", (doc,)
+    ).fetchone() == (None, True)
+    assert conn.execute(
+        "SELECT column_name, data_type, is_nullable, column_default"
+        " FROM information_schema.columns WHERE table_schema = 'public'"
+        " AND table_name = 'documents' AND column_name IN ('folder_id', 'follows_folder')"
+        " ORDER BY column_name"
+    ).fetchall() == [
+        ("folder_id", "uuid", "YES", None),
+        ("follows_folder", "boolean", "NO", "true"),
+    ]
+    with pytest.raises(psycopg.errors.NotNullViolation):
+        conn.execute("UPDATE documents SET follows_folder = NULL WHERE id = %s", (doc,))
+    with pytest.raises(psycopg.errors.ForeignKeyViolation):
+        conn.execute(
+            "UPDATE documents SET folder_id = '00000000-0000-0000-0000-000000000000'"
+            " WHERE id = %s", (doc,)
+        )
