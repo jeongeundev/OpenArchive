@@ -88,7 +88,7 @@ describe("DocumentFolderSection", () => {
     render(<DocumentFolderSection documentId="d1" folder={inInsa} isOwner onMoved={onMoved} />);
     await choose("c");
     await waitFor(() => expect(onMoved).toHaveBeenCalled());
-    expect(confirm).toHaveBeenCalledWith("열람 범위가 「조직 공개」에서 「제한 · 사업팀」로 바뀝니다. 옮기시겠습니까?");
+    expect(confirm).toHaveBeenCalledWith("열람 범위가 바뀝니다: 「조직 공개」 → 「제한 · 사업팀」. 옮기시겠습니까?");
     expect(moves(fetchMock)).toEqual([["/api/documents/d1/folder", { folder_id: "c" }]]);
   });
 
@@ -109,7 +109,7 @@ describe("DocumentFolderSection", () => {
     fireEvent.change(screen.getByLabelText("폴더"), { target: { value: "" } });
     fireEvent.click(screen.getByRole("button", { name: "옮기기" }));
     await waitFor(() => expect(confirm).toHaveBeenCalledWith(
-      "열람 범위가 「조직 공개」에서 「제한」로 바뀝니다. 옮기시겠습니까?"));
+      "열람 범위가 바뀝니다: 「조직 공개」 → 「제한」. 옮기시겠습니까?"));
   });
 
   it("개별 지정 문서는 범위가 다른 폴더로도 확인 없이 옮긴다", async () => {
@@ -136,7 +136,7 @@ describe("DocumentFolderSection", () => {
     fireEvent.click(screen.getByRole("button", { name: "옮기기" }));
     await waitFor(() => expect(onMoved).toHaveBeenCalled());
     expect(confirm).toHaveBeenCalledWith(
-      "열람 범위가 「볼 수 없는 폴더의 범위」에서 「제한」로 바뀝니다. 옮기시겠습니까?");
+      "열람 범위가 바뀝니다: 「볼 수 없는 폴더의 범위」 → 「제한」. 옮기시겠습니까?");
     expect(moves(fetchMock)).toEqual([["/api/documents/d1/folder", { folder_id: null }]]);
   });
 
