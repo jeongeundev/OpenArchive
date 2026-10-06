@@ -798,7 +798,7 @@ OpenSQL `patroni.yml`의 PostgreSQL 파라미터는 `max_connections: 100`이다
 | `PUT /api/admin/groups/{id}/members/{username}` · `DELETE /api/admin/groups/{id}/members/{username}` | **관리자·세션 전용**. 구성원 추가·제거 (#97 b) |
 | `GET /api/principals` | **로그인**. 부여 대상 사용자명·그룹명 목록. 익명은 401 (#97 b) |
 | `GET /api/documents/{id}/access` | **로그인·소유자 전용**. 열람 범위 설정 조회. 보이는 비소유자는 403, 안 보이면 404 (#97 b) |
-| `PUT /api/documents/{id}/access` | **소유자·세션 전용**. `{visibility, users, groups, follows_folder}` — 폴더 안 문서는 `follows_folder`로 「폴더 범위 따름」↔「개별 지정」을 바꾼다(개별 지정에는 `visibility` 필수). `{visibility, users, groups}`로 전체 교체(저장은 바뀐 부여만 DELETE·INSERT — 감사 기록이 실제 변경만 남도록, ADR-055). 보이는 비소유자는 403, 안 보이면 404. 조직 공개로 바꾸면 사용자·그룹 부여만 삭제하고 공유 부여는 유지 (#97 b·c) |
+| `PUT /api/documents/{id}/access` | **소유자·세션 전용**. `{visibility, users, groups, follows_folder}` — 폴더 안 문서는 `follows_folder`로 「폴더 범위 따름」↔「개별 지정」을 바꾼다(개별 지정에는 `visibility` 필수, 「폴더 범위 따름」에는 `visibility`·`users`·`groups`를 함께 보내면 400). `{visibility, users, groups}`로 전체 교체(저장은 바뀐 부여만 DELETE·INSERT — 감사 기록이 실제 변경만 남도록, ADR-055). 보이는 비소유자는 403, 안 보이면 404. 조직 공개로 바꾸면 사용자·그룹 부여만 삭제하고 공유 부여는 유지 (#97 b·c) |
 | `GET /api/folders` | **로그인**. 볼 수 있는 폴더 전체(평평한 목록, `parent_id`로 트리를 만든다). 각 폴더에 최상위 범위 요약 `scope`, 직접 든·볼 수 있는 문서 수 `document_count`, `inherited`(하위 폴더), `can_manage`·`can_change_access` (ADR-054) |
 | `POST /api/folders` `{name, parent_id?}` | 폴더 만들기. 쓰기 토큰 허용. 하위 폴더는 볼 수 있는 폴더 아래에 누구나 만든다. 새 최상위 폴더는 조직 공개 |
 | `PATCH /api/folders/{id}` `{name}` · `DELETE /api/folders/{id}` | 이름 변경·삭제 — 폴더를 만든 사람 또는 관리자(볼 수 있는 폴더에 한함). 쓰기 토큰 허용. 삭제는 빈 폴더만(하위 폴더나 문서가 있으면 「폴더가 비어 있지 않습니다.」) |

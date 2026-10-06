@@ -1420,6 +1420,9 @@ async def set_access(
     공개범위만 바꾸므로 `UPDATE OF content_hash` 트리거는 발화하지 않는다 — 버전도
     재임베딩도 없다. 열람 범위는 조회 시점 술어라 그래프·관계도 다시 만들 필요가 없다(ADR-027).
     """
+    # 함께 온 범위를 버리면 좁혔다고 믿은 문서가 폴더 범위를 따르게 된다.
+    if follows_folder is True and (visibility is not None or users or groups):
+        raise ValueError("폴더 범위를 따르면 공개범위·부여 대상을 함께 지정할 수 없습니다.")
     if follows_folder is not True and visibility not in VISIBILITY_VALUES:
         raise InvalidVisibility("공개범위는 public, private 중 하나여야 합니다.")
     if follows_folder is not True:
