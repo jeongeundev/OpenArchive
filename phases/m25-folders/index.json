@@ -40,7 +40,10 @@
       "type": "feat",
       "scope": "api",
       "desc": "폴더 만들기·트리·이름 변경·삭제·열람 범위 서비스",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-10-06T18:44:37+0900",
+      "summary": "폴더 생성·단일 SQL 트리/실효 범위/직접 열람 문서 수·경로·이름 변경·빈 폴더 삭제·작성자 전용 범위 조회/차이 저장 서비스 구현; 실제 pgvector DB AC 81 passed·Ruff 통과, 관리자 범위 허용·집계 열람 누락·권한 선행 mutant 3종 실패 확인 후 복원.",
+      "completed_at": "2026-10-06T18:49:43+0900"
     },
     {
       "step": 4,
