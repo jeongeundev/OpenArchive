@@ -9,7 +9,7 @@ import psycopg
 
 from openarchive.embeddings.base import EmbeddingProvider
 from openarchive.services.chunking import chunk_text
-from openarchive.services.visibility import VISIBLE_TO_USER
+from openarchive.services.visibility import FOLDER_VISIBLE_TO_USER, VISIBLE_TO_USER
 from openarchive.vectors import to_pgvector_literal
 
 EF_SEARCH = 200
@@ -70,6 +70,20 @@ WITH RECURSIVE candidates AS (
     WHERE (%(tags)s::text[] IS NULL OR d.tags && %(tags)s)
       AND (%(ctype)s::text IS NULL OR d.content_type = %(ctype)s)
       AND {VISIBLE_TO_USER}
+      AND (%(folder)s::uuid IS NULL OR (
+          EXISTS (
+              SELECT 1 FROM folders f
+              WHERE f.id = %(folder)s::uuid AND {FOLDER_VISIBLE_TO_USER}
+          ) AND EXISTS (
+              WITH RECURSIVE search_folder_up AS (
+                  SELECT f.id, f.parent_id FROM folders f WHERE f.id = d.folder_id
+                  UNION ALL
+                  SELECT p.id, p.parent_id FROM folders p
+                  JOIN search_folder_up child ON p.id = child.parent_id
+              )
+              SELECT 1 FROM search_folder_up WHERE id = %(folder)s::uuid
+          )
+      ))
     ORDER BY c.embedding <=> %(qvec)s::vector
     LIMIT %(k)s * {CANDIDATE_MULTIPLIER}
 ),
@@ -268,6 +282,7 @@ async def apply_vector_search_settings(conn: psycopg.AsyncConnection) -> None:
     await conn.execute(f"SET LOCAL hnsw.ef_search = {EF_SEARCH}")
     await conn.execute("SET LOCAL random_page_cost = 1.1")
     await conn.execute("SET LOCAL jit = off")
+    await conn.execute("SET LOCAL hnsw.iterative_scan = strict_order")
 
 
 @dataclass(frozen=True)
@@ -403,6 +418,7 @@ async def search_documents(
     user_id: str | None = None,
     tags: list[str] | None = None,
     content_type: str | None = None,
+    folder_id: UUID | None = None,
     k: int = 10,
 ) -> list[SearchHit]:
     """질의 텍스트를 임베딩해 정형 필터와 함께 단일 SQL로 검색한다."""
@@ -421,6 +437,7 @@ async def search_documents(
         # 라우터가 아니라 여기 두는 이유: MCP 서버도 이 함수를 그대로 재사용한다.
         "tags": tags or None,
         "ctype": content_type,
+        "folder": folder_id,
         "user": user_id,
         "k": k,
     }

@@ -38,6 +38,116 @@ class RecordingConnection:
         return await self._conn.execute(query, params)
 
 
+async def test_search_folder_includes_deep_descendants_and_outside_relations(worker_conn):
+    provider = FakeProvider()
+    folders = []
+    inside = set()
+    for name in ("인사", "채용", "신입"):
+        cur = await worker_conn.execute(
+            "INSERT INTO folders (name, parent_id, created_by, visibility) "
+            "VALUES (%s, %s, 'alice', %s) RETURNING id",
+            (name, folders[-1] if folders else None, None if folders else "public"),
+        )
+        folder = (await cur.fetchone())[0]
+        folders.append(folder)
+        doc = await insert_test_document(worker_conn, title=name, content="폴더 검색 [[외부]]")
+        await worker_conn.execute("UPDATE documents SET folder_id = %s WHERE id = %s", (folder, doc))
+        inside.add(doc)
+    outside = await insert_test_document(worker_conn, title="외부", content="폴더 검색")
+    await process_all_embedding_jobs(worker_conn, provider)
+
+    hits = await search_documents(
+        worker_conn, provider, query="폴더 검색", user_id="alice", folder_id=folders[0]
+    )
+    assert {hit.document_id for hit in hits if hit.via is None} == inside
+    assert any(hit.document_id == outside and hit.via is not None for hit in hits)
+
+    from openarchive.api.schemas import SearchRequest
+    from openarchive.api.search import search
+
+    body = SearchRequest(query="폴더 검색", folder_id=folders[0])
+    assert body.folder_id == folders[0]
+    response = await search(body, worker_conn, provider, "alice")
+    assert {hit.document_id for hit in response.items if hit.via is None} == inside
+
+
+async def test_search_hidden_folder_excludes_individually_visible_docs(worker_conn):
+    provider = FakeProvider()
+    cur = await worker_conn.execute(
+        "INSERT INTO folders (name, created_by, visibility) "
+        "VALUES ('숨김', 'bob', 'private') RETURNING id"
+    )
+    folder = (await cur.fetchone())[0]
+    doc = await insert_test_document(worker_conn, title="개별 공개", content="폴더 검색")
+    await worker_conn.execute(
+        "UPDATE documents SET folder_id = %s, follows_folder = false WHERE id = %s", (folder, doc)
+    )
+    await process_all_embedding_jobs(worker_conn, provider)
+    assert any(hit.document_id == doc for hit in await search_documents(
+        worker_conn, provider, query="폴더 검색", user_id="alice"
+    ))
+    for selected in (folder, UUID(int=0)):
+        assert await search_documents(
+            worker_conn, provider, query="폴더 검색", user_id="alice", folder_id=selected
+        ) == []
+
+
+async def test_search_narrow_visibility_fills_k_with_iterative_scan(worker_conn):
+    """1%만 열람하는 실제 HNSW 검색. 벡터는 1200개 모두 다르게 만든다."""
+    provider = FakeProvider()
+    query = "좁은범위"
+    base = provider.embed([query])[0]
+    coordinate = next(index for index, value in enumerate(base) if value == 0)
+    cur = await worker_conn.execute(
+        "INSERT INTO folders (name, created_by, visibility) "
+        "VALUES ('검색 계획', 'writer', 'public') RETURNING id"
+    )
+    folder = (await cur.fetchone())[0]
+    async with worker_conn.transaction():
+        for index in range(1200):
+            doc = await insert_test_document(
+                worker_conn, title=f"후보 {index}", content=f"대목 {index}",
+                owner_id="viewer" if index % 100 == 99 else "writer", visibility="private",
+            )
+            await worker_conn.execute(
+                "UPDATE documents SET folder_id = %s, follows_folder = false WHERE id = %s",
+                (folder, doc),
+            )
+            vector = base.copy()
+            vector[coordinate] = (index + 1) / 1200
+            await worker_conn.execute(
+                "INSERT INTO document_chunks (document_id, version, chunk_index, content, embedding) "
+                "VALUES (%s, 1, 0, %s, %s::vector)",
+                (doc, f"대목 {index}", to_pgvector_literal(vector)),
+            )
+    cur = await worker_conn.execute("SELECT count(DISTINCT embedding::text) FROM document_chunks")
+    assert (await cur.fetchone())[0] == 1200
+    await worker_conn.execute("ANALYZE documents")
+    await worker_conn.execute("ANALYZE document_chunks")
+    recorder = RecordingConnection(worker_conn)
+    hits = await search_documents(
+        recorder, provider, query=query, user_id="viewer", folder_id=folder, k=10
+    )
+    assert len(hits) == 10
+    assert all(hit.via is None for hit in hits)
+    params = {
+        "query": query, "identifier": None, "edition": None,
+        "qvec": to_pgvector_literal(base), "tags": None, "ctype": None,
+        "user": "viewer", "folder": folder, "k": 10,
+    }
+    async with worker_conn.transaction():
+        for statement in recorder.statements[1:-1]:
+            await worker_conn.execute(statement)
+        cur = await worker_conn.execute("EXPLAIN " + SEARCH_SQL, params)
+        plan = "\n".join(row[0] for row in await cur.fetchall())
+        candidate_plan = plan.split("  CTE candidates\n", 1)[1].split("  CTE walk_ids\n", 1)[0]
+        assert "Index Scan using idx_chunks_embedding" in candidate_plan, candidate_plan
+        print("폴더 후보 계획 (1200 고유 벡터):", next(
+            line.strip() for line in candidate_plan.splitlines()
+            if "Index Scan using idx_chunks_embedding" in line
+        ))
+
+
 @pytest.fixture
 async def worker_conn(migrated_db: str):
     """워커의 claim이 즉시 커밋되도록 autocommit 연결을 쓴다."""
@@ -668,7 +778,7 @@ def test_candidate_limit_stays_below_ef_search():
 async def test_search_issues_all_tunings_inside_the_query_transaction(
     worker_conn, search_conn
 ):
-    """search_documents가 실제로 세 SET LOCAL을 검색 쿼리와 같은 트랜잭션에 건다.
+    """search_documents가 실제로 네 SET LOCAL을 검색 쿼리와 같은 트랜잭션에 건다.
 
     값을 테스트 안에서 재현하면 search.py에서 지워도 통과한다. 실행된 문장을
     받아 적어, ADR-011 보강 4·5와 JIT 끄기(ADR-044) 준수를 구현 쪽에서 검증한다.
@@ -684,7 +794,8 @@ async def test_search_issues_all_tunings_inside_the_query_transaction(
     assert recorder.statements[1] == f"SET LOCAL hnsw.ef_search = {EF_SEARCH}"
     assert recorder.statements[2] == "SET LOCAL random_page_cost = 1.1"
     assert recorder.statements[3] == "SET LOCAL jit = off"
-    assert recorder.statements[4] == SEARCH_SQL
+    assert recorder.statements[4] == "SET LOCAL hnsw.iterative_scan = strict_order"
+    assert recorder.statements[5] == SEARCH_SQL
 
 
 async def test_search_tuning_does_not_leak_past_the_transaction(worker_conn):
@@ -698,6 +809,7 @@ async def test_search_tuning_does_not_leak_past_the_transaction(worker_conn):
     provider = FakeProvider()
     await insert_test_document(worker_conn, title="튜닝", content="검색 튜닝 확인")
     await process_all_embedding_jobs(worker_conn, provider)
+    before_iterative = (await (await worker_conn.execute("SHOW hnsw.iterative_scan")).fetchone())[0]
     before_ef = (await (await worker_conn.execute("SHOW hnsw.ef_search")).fetchone())[0]
     before_rpc = (await (await worker_conn.execute("SHOW random_page_cost")).fetchone())[0]
     before_jit = (await (await worker_conn.execute("SHOW jit")).fetchone())[0]
@@ -707,6 +819,8 @@ async def test_search_tuning_does_not_leak_past_the_transaction(worker_conn):
     after_ef = (await (await worker_conn.execute("SHOW hnsw.ef_search")).fetchone())[0]
     after_rpc = (await (await worker_conn.execute("SHOW random_page_cost")).fetchone())[0]
     after_jit = (await (await worker_conn.execute("SHOW jit")).fetchone())[0]
+    after_iterative = (await (await worker_conn.execute("SHOW hnsw.iterative_scan")).fetchone())[0]
+    assert after_iterative == before_iterative != "strict_order"
     assert after_ef == before_ef != str(EF_SEARCH)
     assert after_rpc == before_rpc != "1.1"
     assert after_jit == before_jit != "off"
@@ -723,6 +837,7 @@ async def test_explain_contains_structured_filters_and_vector_ordering(worker_co
         )
     await process_all_embedding_jobs(worker_conn, provider)
     params = {
+        "folder": None,
         "query": "OpenSQL 정합성",
         "edition": None,
         "identifier": None,

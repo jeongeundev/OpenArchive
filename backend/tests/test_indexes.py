@@ -144,9 +144,8 @@ def test_ef_search_can_be_raised_for_a_single_transaction(conn: psycopg.Connecti
     함께 확인해 둔다. `SET LOCAL`이라 트랜잭션이 끝나면 자동 복원되는 것이 핵심이다 —
     복원되지 않으면 커넥션 풀에서 재사용되는 연결에 설정이 눌어붙는다.
 
-    `hnsw.iterative_scan`은 여기서 켜지 않는다. pgvector 0.8+에서 쓸 수 있으나
-    ADR-011 보강 3이 "실측 없이 켜지 않는다"고 정했고, 측정 대상인 필터 결합 검색
-    쿼리가 아직 없다.
+    검색은 폴더·좁은 열람 범위의 recall 실측에 따라 `hnsw.iterative_scan = strict_order`도
+    함께 건다(ADR-054, #187 D7). 그 설정과 복원은 test_search.py가 검증한다.
     """
     doc_id = insert_document(conn)
     insert_chunk(conn, doc_id, 0, vec(1.0))  # 이 벡터 연산으로 pgvector 모듈이 로드된다 (아래 테스트)

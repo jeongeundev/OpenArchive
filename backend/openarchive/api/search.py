@@ -27,6 +27,7 @@ async def search(
         user_id=user_id,
         tags=body.tags,
         content_type=body.content_type,
+        folder_id=body.folder_id,
         k=body.k,
     )
     return SearchResponse(items=items, sql=SEARCH_SQL)
