@@ -19,7 +19,7 @@ function shareSummary(share: ShareStub) {
 }
 
 function stubFetch(
-  access: { visibility: "public" | "private"; users: string[]; groups: string[] },
+  access: { visibility: "public" | "private"; users: string[]; groups: string[]; [key: string]: unknown },
   save: () => Response = () => jsonResponse(access),
   shares: () => Response = () => jsonResponse([]),
   shareWrite: () => Response = () => new Response(null, { status: 204 }),
@@ -118,6 +118,88 @@ describe("AccessPanel", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent(detail);
     expect(screen.getByRole("button", { name: "사용자 bob 제거" })).toBeInTheDocument();
     expect(screen.getByRole("radio", { name: "제한" })).toBeChecked();
+  });
+
+  const inFolder = {
+    folder: { id: "folder-rfp", name: "RFP", path: [{ id: "folder-rfp", name: "RFP" }] },
+    folder_scope: { visibility: "private" as const, users: [], groups: ["사업팀"] },
+  };
+
+  function stubFolderDocument(followsFolder: boolean, save: () => Response) {
+    const access = { visibility: "private" as const, users: [], groups: [], follows_folder: followsFolder, ...inFolder };
+    return stubFetch(access, save);
+  }
+
+  it("폴더 안 문서는 「폴더 범위 따름」이면 그 라디오가 골라지고 공개범위 칸이 없다", async () => {
+    stubFolderDocument(true, () => jsonResponse({}));
+    await renderPanel();
+
+    expect(await screen.findByRole("radio", { name: "폴더 범위 따름(제한 · 사업팀)" })).toBeChecked();
+    expect(screen.getByRole("radio", { name: "개별 지정" })).not.toBeChecked();
+    expect(screen.queryByRole("radio", { name: "조직 공개" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("radio", { name: "제한" })).not.toBeInTheDocument();
+    expect(screen.getByText("폴더를 만든 사람이 범위를 바꾸면 이 문서에도 적용됩니다.")).toBeInTheDocument();
+  });
+
+  it("「개별 지정」 + 「제한」(대상 없음)으로 저장하면 follows_folder false로 보낸다", async () => {
+    const fetchMock = stubFolderDocument(true, () =>
+      jsonResponse({ visibility: "private", users: [], groups: [], follows_folder: false, ...inFolder }),
+    );
+    await renderPanel();
+
+    fireEvent.click(await screen.findByRole("radio", { name: "개별 지정" }));
+    expect(screen.getByText("폴더 범위와 상관없이 이 문서만의 열람 범위를 씁니다.")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("radio", { name: "제한" }));
+    fireEvent.click(screen.getByRole("button", { name: "열람 범위 저장" }));
+
+    await waitFor(() =>
+      expect(savedBodies(fetchMock)).toEqual([
+        { follows_folder: false, visibility: "private", users: [], groups: [] },
+      ]),
+    );
+    expect(await screen.findByText("열람 범위를 저장했습니다.")).toBeInTheDocument();
+  });
+
+  it("개별 지정한 문서를 「폴더 범위 따름」으로 되돌리면 follows_folder만 보낸다", async () => {
+    const fetchMock = stubFolderDocument(false, () =>
+      jsonResponse({ visibility: "private", users: [], groups: [], follows_folder: true, ...inFolder }),
+    );
+    await renderPanel();
+
+    expect(await screen.findByRole("radio", { name: "개별 지정" })).toBeChecked();
+    expect(screen.getByRole("radio", { name: "제한" })).toBeChecked();
+    fireEvent.click(screen.getByRole("radio", { name: "폴더 범위 따름(제한 · 사업팀)" }));
+    fireEvent.click(screen.getByRole("button", { name: "열람 범위 저장" }));
+
+    await waitFor(() => expect(savedBodies(fetchMock)).toEqual([{ follows_folder: true }]));
+    expect(await screen.findByText("열람 범위를 저장했습니다.")).toBeInTheDocument();
+  });
+
+  it("폴더 밖 문서에는 전환 라디오가 없고 follows_folder를 보내지 않는다", async () => {
+    const fetchMock = stubFetch(
+      { visibility: "public", users: [], groups: [], follows_folder: true, folder: null, folder_scope: null },
+      () => jsonResponse({ visibility: "private", users: [], groups: ["개발팀"] }),
+    );
+    await renderPanel();
+
+    fireEvent.click(await screen.findByRole("radio", { name: "제한" }));
+    expect(screen.queryByRole("radio", { name: "개별 지정" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "열람 범위 저장" }));
+
+    await waitFor(() =>
+      expect(savedBodies(fetchMock)).toEqual([{ visibility: "private", users: [], groups: [] }]),
+    );
+    expect(await screen.findByText("열람 범위를 저장했습니다.")).toBeInTheDocument();
+  });
+
+  it("「폴더 범위 따름」 저장이 400이면 서버 문구를 보인다", async () => {
+    stubFolderDocument(false, () => jsonResponse({ detail: "잘못된 요청입니다." }, 400));
+    await renderPanel();
+
+    fireEvent.click(await screen.findByRole("radio", { name: "폴더 범위 따름(제한 · 사업팀)" }));
+    fireEvent.click(screen.getByRole("button", { name: "열람 범위 저장" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("잘못된 요청입니다.");
   });
 
   const partners: ShareStub = {

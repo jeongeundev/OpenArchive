@@ -13,6 +13,7 @@ import {
   removeShareDocument,
   setDocumentAccess,
 } from "@/lib/api";
+import { scopeLabel } from "@/lib/folders";
 import {
   VISIBILITY_LABEL,
   type DocumentAccess,
@@ -43,6 +44,7 @@ export function AccessPanel({
   const [visibility, setVisibility] = useState<Visibility>("public");
   const [users, setUsers] = useState<string[]>([]);
   const [groups, setGroups] = useState<string[]>([]);
+  const [followsFolder, setFollowsFolder] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -79,6 +81,7 @@ export function AccessPanel({
         setVisibility(access.visibility);
         setUsers(access.users);
         setGroups(access.groups);
+        setFollowsFolder(access.folder != null && access.follows_folder);
         setPrincipals(directory);
         setLoadError(null);
       })
@@ -101,8 +104,13 @@ export function AccessPanel({
       visibility === "public"
         ? { visibility, users: [], groups: [] }
         : { visibility, users, groups };
+    // 폴더 밖 문서는 follows_folder를 보내지 않는다. 「폴더 범위 따름」에는 공개범위를 함께 보내면 서버가 400으로 거부한다.
+    const inFolder = loaded?.folder != null;
     try {
-      const saved = await setDocumentAccess(documentId, next);
+      const saved = await setDocumentAccess(
+        documentId,
+        !inFolder ? next : followsFolder ? { followsFolder: true } : { ...next, followsFolder: false },
+      );
       setLoaded(saved);
       setUsers(saved.users);
       setGroups(saved.groups);
@@ -117,7 +125,9 @@ export function AccessPanel({
   }
 
   const controlsDisabled = disabled || saving || loaded === null;
-  const sharedOutside = visibility === "public" && (shares ?? []).some((share) => share.included);
+  const folderScope = loaded?.folder != null ? loaded.folder_scope : null;
+  const inFolder = loaded?.folder != null;
+  const sharedOutside = !(inFolder && followsFolder) && visibility === "public" && (shares ?? []).some((share) => share.included);
 
   const clearsGrants =
     visibility === "public" &&
@@ -133,39 +143,73 @@ export function AccessPanel({
         <p className="text-sm text-neutral-500">불러오는 중…</p>
       ) : (
         <>
-          <fieldset disabled={controlsDisabled}>
-            <legend className="sr-only">열람 범위</legend>
-            <div className="flex gap-4 text-sm text-neutral-300">
-              {(["public", "private"] as const).map((value) => (
-                <label className="flex items-center gap-2" key={value}>
+          {inFolder ? (
+            <fieldset disabled={controlsDisabled}>
+              <legend className="sr-only">폴더 범위 상속</legend>
+              <div className="flex flex-wrap gap-4 text-sm text-neutral-300">
+                <label className="flex items-center gap-2">
                   <input
-                    checked={visibility === value}
-                    name="document-visibility"
-                    onChange={() => setVisibility(value)}
+                    checked={followsFolder}
+                    name="document-inherit"
+                    onChange={() => setFollowsFolder(true)}
                     type="radio"
-                    value={value}
                   />
-                  {VISIBILITY_LABEL[value]}
+                  폴더 범위 따름({folderScope !== null ? scopeLabel(folderScope) : ""})
                 </label>
-              ))}
-            </div>
-          </fieldset>
-          {visibility === "private" ? (
-            <GranteePicker
-              disabled={controlsDisabled}
-              groups={groups}
-              onChange={(next) => {
-                setUsers(next.users);
-                setGroups(next.groups);
-              }}
-              principals={principals}
-              users={users}
-            />
-          ) : (
-            <p className="text-sm text-neutral-500">
-              조직 공개 문서는 로그인한 모든 사용자가 봅니다.
-              {clearsGrants ? " 저장하면 지정한 부여 대상도 함께 지워집니다. 외부 공유 포함은 유지됩니다." : ""}
-            </p>
+                <label className="flex items-center gap-2">
+                  <input
+                    checked={!followsFolder}
+                    name="document-inherit"
+                    onChange={() => setFollowsFolder(false)}
+                    type="radio"
+                  />
+                  개별 지정
+                </label>
+              </div>
+              <p className="mt-2 text-sm text-neutral-500">
+                {followsFolder
+                  ? "폴더를 만든 사람이 범위를 바꾸면 이 문서에도 적용됩니다."
+                  : "폴더 범위와 상관없이 이 문서만의 열람 범위를 씁니다."}
+              </p>
+            </fieldset>
+          ) : null}
+          {inFolder && followsFolder ? null : (
+            <>
+              <fieldset disabled={controlsDisabled}>
+                <legend className="sr-only">열람 범위</legend>
+                <div className="flex gap-4 text-sm text-neutral-300">
+                  {(["public", "private"] as const).map((value) => (
+                    <label className="flex items-center gap-2" key={value}>
+                      <input
+                        checked={visibility === value}
+                        name="document-visibility"
+                        onChange={() => setVisibility(value)}
+                        type="radio"
+                        value={value}
+                      />
+                      {VISIBILITY_LABEL[value]}
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
+              {visibility === "private" ? (
+                <GranteePicker
+                  disabled={controlsDisabled}
+                  groups={groups}
+                  onChange={(next) => {
+                    setUsers(next.users);
+                    setGroups(next.groups);
+                  }}
+                  principals={principals}
+                  users={users}
+                />
+              ) : (
+                <p className="text-sm text-neutral-500">
+                  조직 공개 문서는 로그인한 모든 사용자가 봅니다.
+                  {clearsGrants ? " 저장하면 지정한 부여 대상도 함께 지워집니다. 외부 공유 포함은 유지됩니다." : ""}
+                </p>
+              )}
+            </>
           )}
           <button
             className="rounded-lg bg-white px-4 py-2 text-sm text-black hover:bg-neutral-200 disabled:bg-neutral-700 disabled:text-neutral-400"
