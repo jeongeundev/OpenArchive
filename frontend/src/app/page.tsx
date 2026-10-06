@@ -1,7 +1,9 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
+import { DocumentFilters } from "@/components/DocumentFilters";
+import { listDocumentTags, type DocumentFilters as Filters } from "@/lib/api";
 import { DocumentPager } from "@/components/DocumentPager";
 import { DocumentTable } from "@/components/DocumentTable";
 import { EmptyDocuments } from "@/components/EmptyDocuments";
@@ -15,14 +17,31 @@ const PAGE_SIZE = 50;
 
 export default function Home(): React.ReactElement {
   const [page, setPage] = useState(0);
-  const { documents, loading, error, refresh } = useDocuments({
+  const [filters, setFilters] = useState<Filters>({ sort: "updated" });
+  const [tags, setTags] = useState<string[]>([]);
+  const { documents, total, loading, error, refresh } = useDocuments({
+    ...filters,
     limit: PAGE_SIZE,
     offset: page * PAGE_SIZE,
   });
   const { progress, error: progressError, refresh: refreshProgress } = useDocumentProgress();
   const { auth } = useAuth();
-  const total =
+  const globalTotal =
     progress === null ? null : Object.values(progress).reduce((sum, count) => sum + count, 0);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    listDocumentTags(controller.signal).then((result) => {
+      if (!controller.signal.aborted) setTags(result);
+    }).catch(() => {});
+    return () => controller.abort();
+  }, []);
+
+  const onFiltersChanged = useCallback((value: Filters) => {
+    setFilters(value);
+    setPage(0);
+  }, []);
+  const hasFilters = Boolean(filters.q?.trim() || filters.contentType || filters.tag);
 
   const onUploaded = useCallback(() => {
     refresh();
@@ -40,17 +59,19 @@ export default function Home(): React.ReactElement {
 
       {auth.authenticated ? <UploadDropzone onUploaded={onUploaded} /> : null}
 
-      {total === 0 && auth.username !== null ? (
+      <DocumentFilters value={filters} tags={tags} onChange={onFiltersChanged} />
+
+      {globalTotal === 0 && auth.username !== null ? (
         <EmptyDocuments username={auth.username} />
       ) : loading ? (
         <p className="text-sm text-neutral-500">불러오는 중…</p>
       ) : (
         <div className="space-y-4">
           {progress !== null ? <PipelineProgress progress={progress} /> : null}
-          <DocumentTable documents={documents} />
-          {total === null && progressError !== null ? (
+          <DocumentTable documents={documents} emptyMessage={hasFilters ? "조건에 맞는 문서가 없습니다." : undefined} />
+          {globalTotal === null && progressError !== null ? (
             <p className="text-sm text-neutral-500" role="status">
-              처리 현황을 불러오지 못했습니다 — 전체 문서 수와 페이지를 표시할 수 없습니다.
+              처리 현황을 불러오지 못했습니다 — 전체 문서 수를 표시할 수 없습니다.
               ({progressError})
             </p>
           ) : null}

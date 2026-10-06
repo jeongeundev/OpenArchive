@@ -13,8 +13,10 @@ const DATE_FORMATTER = new Intl.DateTimeFormat("ko-KR", {
 
 export function DocumentTable({
   documents,
+  emptyMessage = "아직 문서가 없습니다.",
 }: {
   documents: DocumentSummary[];
+  emptyMessage?: string;
 }): React.ReactElement {
   return (
     <div className="overflow-x-auto rounded-lg border border-neutral-800 bg-[#141414]">
@@ -33,7 +35,7 @@ export function DocumentTable({
           {documents.length === 0 ? (
             <tr>
               <td className="px-4 py-8 text-neutral-500" colSpan={6}>
-                아직 문서가 없습니다.
+                {emptyMessage}
               </td>
             </tr>
           ) : (
