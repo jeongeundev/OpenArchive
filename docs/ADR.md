@@ -3256,7 +3256,7 @@ CASCADE로 사라져 제한 문서의 열람 범위가 좁아지고, 소유자�
    | 메서드 | 경로 |
    |---|---|
    | POST | `/api/search` |
-   | GET | `/api/documents` · `/api/documents/progress` · `/api/documents/{id}` |
+   | GET | `/api/documents` · `/api/documents/progress` · `/api/documents/count` · `/api/documents/tags` · `/api/documents/{id}` |
    | GET | `/api/documents/{id}/file` · `/api/documents/{id}/files/{file_version}` |
    | GET | `/api/documents/{id}/links` · `/api/documents/{id}/backlinks` · `/api/documents/{id}/related` |
    | GET | `/api/documents/{id}/versions/{version}` |
@@ -3267,6 +3267,9 @@ CASCADE로 사라져 제한 문서의 열람 범위가 좁아지고, 소유자�
    `/api/documents/{id}/tag-suggestions`(편집 보조), `/api/auth/me`(사람 계정이 아니다),
    모든 쓰기·세션 전용·관리 경로도 막는다. **새 경로는 기본적으로 공유를 막으며 허용 목록에
    넣어야 열린다.**
+   → **2026-10-06 보강**: 목록 찾기(#187)의 `/api/documents/count`(같은 조건의 건수)와
+   `/api/documents/tags`(보이는 문서의 태그 목록)를 허용 목록에 넣는다. 둘 다 이미 열린
+   `/api/documents`에서 계산되는 값이라 공유 밖 문서의 개수나 태그는 드러나지 않는다.
 6. **공유 주체의 접속은 REST만이다.** 구현 형태 결정 3 개정을 유지하며 MCP는 바꾸지 않는다.
    → **2026-10-05 개정**: 원격 MCP(ADR-056, 결정·미구현 #188)가 생기면 공유 토큰도 원격 MCP의 읽기 도구를 쓴다 —
    허용 목록 원칙(결정 5)과 같은 축으로 읽기만 열리고 `create_document`는 거부된다. stdio MCP는 그대로 공유 주체가 없다.

@@ -24,6 +24,8 @@ SHARE_READABLE_ROUTES = {
     ("POST", "/api/search"),
     ("GET", "/api/documents"),
     ("GET", "/api/documents/progress"),
+    ("GET", "/api/documents/count"),
+    ("GET", "/api/documents/tags"),
     ("GET", "/api/documents/{document_id}"),
     ("GET", "/api/documents/{document_id}/file"),
     ("GET", "/api/documents/{document_id}/files/{file_version}"),
@@ -255,6 +257,19 @@ def test_aggregates_stay_inside_the_share(db_client: TestClient, scenario):
     assert collect_document_ids(diagnostics.json(), all_ids) <= inside_ids
     broken = {link["target_title"] for link in diagnostics.json()["broken_links"]["items"]}
     assert "외부 50" in broken
+
+
+def test_list_count_and_tags_stay_inside_the_share(db_client: TestClient, scenario):
+    """목록 찾기의 건수·태그 선택지도 공유 밖 문서의 개수와 태그를 드러내지 않는다."""
+    headers = bearer(scenario["token"]["token"])
+
+    count = db_client.get("/api/documents/count", headers=headers)
+    tags = db_client.get("/api/documents/tags", headers=headers)
+
+    assert count.status_code == 200
+    assert count.json() == {"total": 5}
+    assert tags.status_code == 200
+    assert tags.json() == ["공유"]
 
 
 def db_snapshot(dsn: str):
