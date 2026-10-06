@@ -41,7 +41,10 @@
       "type": "feat",
       "scope": "frontend",
       "desc": "문서 목록 상단에 제목 검색·유형·태그·정렬을 두고 조건 건수로 페이지를 나눈다",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-10-06T09:23:32+0900",
+      "summary": "제목 검색(300ms 디바운스)·유형·태그·정렬 UI와 조건 건수 페이지 나눔·빈 결과 안내 구현; 프론트 394개·lint·타입 검사·정적 빌드 및 mutant 2종 검증 통과",
+      "completed_at": "2026-10-06T09:27:44+0900"
     },
     {
       "step": 4,
