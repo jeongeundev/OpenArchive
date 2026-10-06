@@ -221,7 +221,7 @@ describe("API responses", () => {
       .mockResolvedValue(new Response(JSON.stringify({ items: [], sql: "" })));
     vi.stubGlobal("fetch", fetchMock);
 
-    await search({ query: "OpenSQL", tags: [], contentType: null, k: 10 });
+    await search({ query: "OpenSQL", tags: [], contentType: null, folderId: null, k: 10 });
 
     const body = JSON.parse(fetchMock.mock.calls[0][1]?.body as string);
     expect(body).not.toHaveProperty("tags");

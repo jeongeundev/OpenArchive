@@ -23,8 +23,21 @@ const askResponse = {
   items: [],
 };
 
-function stubFetch(authenticated: boolean) {
+const hrFolder = {
+  id: "f-hr", parent_id: null, name: "인사", created_by: "lee", document_count: 1,
+  scope: { visibility: "public", users: [], groups: [] },
+  inherited: false, can_manage: false, can_change_access: false,
+};
+
+function stubFetch(authenticated: boolean, foldersStatus = 200) {
   const fetchMock = vi.fn<(url: string, init?: RequestInit) => Promise<Response>>((url) => {
+    if (url === "/api/folders") {
+      return Promise.resolve(foldersStatus === 200
+        ? jsonResponse([hrFolder])
+        : new Response(JSON.stringify({ detail: "공유 토큰으로는 쓸 수 없습니다." }), {
+          status: foldersStatus, headers: { "Content-Type": "application/json" },
+        }));
+    }
     if (url === "/api/auth/me") {
       return Promise.resolve(jsonResponse({ authenticated, username: authenticated ? "alice" : null, is_admin: false }));
     }
@@ -93,5 +106,46 @@ describe("검색 화면의 근거 기반 답변", () => {
     await searchFor("장애 복구");
 
     expect(screen.queryByRole("heading", { name: "근거 기반 답변" })).not.toBeInTheDocument();
+  });
+});
+
+describe("검색 화면의 폴더 필터", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("고른 폴더를 검색과 답변 요청에 같은 folder_id로 보낸다", async () => {
+    const fetchMock = stubFetch(true);
+    await renderPage();
+    const select = await screen.findByLabelText("폴더");
+    fireEvent.change(select, { target: { value: "f-hr" } });
+    await searchFor("채용 절차");
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "이 검색어로 답변 받기" }));
+    });
+
+    const searchCall = fetchMock.mock.calls.find(([url]) => url === "/api/search");
+    const askCall = fetchMock.mock.calls.find(([url]) => url === "/api/ask");
+    expect(JSON.parse(String(searchCall?.[1]?.body))).toMatchObject({ query: "채용 절차", folder_id: "f-hr" });
+    expect(JSON.parse(String(askCall?.[1]?.body))).toMatchObject({ folder_id: "f-hr" });
+  });
+
+  it("폴더 목록을 볼 수 없으면 폴더 칸 없이 검색한다", async () => {
+    const fetchMock = stubFetch(true, 403);
+    await renderPage();
+    await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => url === "/api/folders")).toBe(true));
+
+    expect(screen.queryByLabelText("폴더")).not.toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    await searchFor("채용 절차");
+
+    const searchCall = fetchMock.mock.calls.find(([url]) => url === "/api/search");
+    expect(JSON.parse(String(searchCall?.[1]?.body))).not.toHaveProperty("folder_id");
+  });
+
+  it("로그인하지 않으면 폴더 목록을 부르지 않는다", async () => {
+    const fetchMock = stubFetch(false);
+    await renderPage();
+    expect(fetchMock.mock.calls.some(([url]) => url === "/api/folders")).toBe(false);
+    expect(screen.queryByLabelText("폴더")).not.toBeInTheDocument();
   });
 });

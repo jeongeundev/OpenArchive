@@ -2,21 +2,27 @@
 
 import { useState } from "react";
 
+import { FolderSelect } from "@/components/FolderSelect";
 import { MAX_K, SUPPORTED_CONTENT_TYPES } from "@/lib/types";
-import type { ContentType } from "@/lib/types";
+import type { ContentType, Folder } from "@/lib/types";
 import type { SearchInput } from "@/lib/useSearch";
 
 export function SearchForm({
   onSearch,
   pending,
+  folders = [],
 }: {
   onSearch: (input: SearchInput) => void;
   pending: boolean;
+  folders?: Folder[];
 }): React.ReactElement {
   const [query, setQuery] = useState("");
   const [tags, setTags] = useState("");
   const [contentType, setContentType] = useState<ContentType | "">("");
   const [k, setK] = useState(10);
+  const [folderId, setFolderId] = useState<string | null>(null);
+  // 볼 수 있는 폴더가 사라졌으면(목록 갱신·권한 변경) 선택도 버린다.
+  const selectedFolderId = folders.some((folder) => folder.id === folderId) ? folderId : null;
 
   return (
     <form
@@ -28,6 +34,7 @@ export function SearchForm({
           query: query.trim(),
           tags: tags.split(",").map((tag) => tag.trim()).filter(Boolean),
           contentType: contentType || null,
+          folderId: selectedFolderId,
           k: Math.min(MAX_K, Math.max(1, k)),
         });
       }}
@@ -76,6 +83,21 @@ export function SearchForm({
           />
         </label>
       </div>
+
+      {folders.length > 0 ? (
+        <div className="space-y-2">
+          <FolderSelect
+            folders={folders}
+            value={selectedFolderId}
+            onChange={setFolderId}
+            label="폴더"
+            noneLabel="전체 폴더"
+          />
+          <p className="text-xs text-neutral-500">
+            폴더는 직접 맞은 결과에만 걸립니다(하위 폴더 포함). 관계로 이어진 결과는 폴더 밖 문서일 수 있습니다.
+          </p>
+        </div>
+      ) : null}
 
       <button
         type="submit"

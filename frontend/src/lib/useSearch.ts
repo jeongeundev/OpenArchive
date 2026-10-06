@@ -9,6 +9,7 @@ export interface SearchInput {
   query: string;
   tags: string[];
   contentType: ContentType | null;
+  folderId: string | null;
   k: number;
 }
 
