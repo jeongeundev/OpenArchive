@@ -654,6 +654,7 @@ async def apply_extracted_text(
         )
     return "applied"
 
+
 DocumentSort = Literal["updated", "title"]
 DOCUMENT_ORDER_BY = {
     "updated": "d.updated_at DESC, d.id",
@@ -759,6 +760,7 @@ async def list_visible_tags(
         {"user": user_id},
     )
     return [row[0] for row in await cur.fetchall()]
+
 
 async def document_progress(
     conn: psycopg.AsyncConnection, *, user_id: str | None = None

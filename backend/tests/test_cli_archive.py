@@ -21,6 +21,7 @@ from openarchive.services.documents import (
     create_document,
     create_text_document,
     update_extracted_text,
+    update_tags,
 )
 
 UNREACHABLE_DSN = "postgresql://nobody@127.0.0.1:1/none"
@@ -332,6 +333,31 @@ def test_export_keeps_every_document_when_titles_collide_or_contain_separators(
     assert all(path.parent == target for path in files)
     assert sorted(frontmatter(path)[1] for path in files) == ["둘", "셋", "하나"]
     assert {frontmatter(path)[0]["title"] for path in files} == {"같은 제목", "a/b:c"}
+
+
+def test_export_names_colliding_titles_by_creation_order_not_last_edit(
+    archive_db: str, tmp_path: Path
+):
+    """제목이 겹치면 먼저 만든 문서가 번호 없는 이름을 갖는다 — 나중에 고쳐도 바뀌지 않는다."""
+    created: list[dict] = []
+
+    async def make(conn, content: str) -> None:
+        created.append(
+            await create_text_document(conn, title="같은 제목", content=content, owner_id="alice")
+        )
+
+    seed(
+        archive_db,
+        lambda conn: make(conn, "먼저"),
+        lambda conn: make(conn, "나중"),
+        lambda conn: update_tags(conn, created[0]["id"], user_id="alice", tags=["고침"]),
+    )
+    target = tmp_path / "out"
+
+    assert main(["export", str(target), "--user", "alice", "--dsn", archive_db]) == 0
+
+    assert frontmatter(target / "같은 제목.md")[1] == "먼저"
+    assert frontmatter(target / "같은 제목 (2).md")[1] == "나중"
 
 
 def test_export_skips_documents_whose_text_is_not_recognized_yet(
