@@ -192,6 +192,35 @@ describe("AccessPanel", () => {
     expect(await screen.findByText("열람 범위를 저장했습니다.")).toBeInTheDocument();
   });
 
+  const inHiddenFolder = { folder: null, folder_scope: null, hidden_folder: true };
+
+  it("볼 수 없는 폴더 안 문서는 폴더 이름 없이 「폴더 범위 따름」으로 보인다", async () => {
+    stubFetch({ visibility: "private", users: [], groups: [], follows_folder: true, ...inHiddenFolder });
+    await renderPanel();
+
+    expect(await screen.findByRole("radio", { name: "폴더 범위 따름(볼 수 없는 폴더)" })).toBeChecked();
+    expect(screen.queryByRole("radio", { name: "조직 공개" })).not.toBeInTheDocument();
+    expect(screen.queryByText(/RFP/)).not.toBeInTheDocument();
+  });
+
+  it("볼 수 없는 폴더 안 문서를 「개별 지정」으로 저장하면 follows_folder false로 보낸다", async () => {
+    const fetchMock = stubFetch(
+      { visibility: "private", users: [], groups: [], follows_folder: true, ...inHiddenFolder },
+      () => jsonResponse({ visibility: "public", users: [], groups: [], follows_folder: false, ...inHiddenFolder }),
+    );
+    await renderPanel();
+
+    fireEvent.click(await screen.findByRole("radio", { name: "개별 지정" }));
+    fireEvent.click(screen.getByRole("radio", { name: "조직 공개" }));
+    fireEvent.click(screen.getByRole("button", { name: "열람 범위 저장" }));
+
+    await waitFor(() =>
+      expect(savedBodies(fetchMock)).toEqual([
+        { follows_folder: false, visibility: "public", users: [], groups: [] },
+      ]),
+    );
+  });
+
   it("「폴더 범위 따름」 저장이 400이면 서버 문구를 보인다", async () => {
     stubFolderDocument(false, () => jsonResponse({ detail: "잘못된 요청입니다." }, 400));
     await renderPanel();

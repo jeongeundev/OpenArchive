@@ -405,3 +405,32 @@ describe("문서 상세 페이지의 인용 위치", () => {
     );
   });
 });
+
+describe("볼 수 없는 폴더 안 자기 문서", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("폴더 이름 없이 그 사실을 알리고 열람 범위 패널도 폴더 안으로 다룬다", async () => {
+    const access: DocumentAccess = {
+      visibility: "private", users: [], groups: [], follows_folder: true,
+      folder: null, folder_scope: null, hidden_folder: true,
+    };
+    vi.stubGlobal("fetch", vi.fn((url: string) => {
+      if (url === "/api/auth/me") return Promise.resolve(jsonResponse({ authenticated: true, username: "alice", is_admin: false }));
+      if (url.endsWith("/links") || url.endsWith("/backlinks")) return Promise.resolve(jsonResponse([]));
+      if (url.endsWith("/related")) return Promise.resolve(jsonResponse(related));
+      if (url.endsWith("/tag-suggestions")) return Promise.resolve(jsonResponse(suggestions));
+      if (url === "/api/shares") return Promise.resolve(jsonResponse([]));
+      if (url === "/api/folders") return Promise.resolve(jsonResponse([]));
+      if (url === "/api/principals") return Promise.resolve(jsonResponse({ users: [], groups: [] }));
+      if (url.endsWith("/access")) return Promise.resolve(jsonResponse(access));
+      return Promise.resolve(jsonResponse({ ...detail, hidden_folder: true }));
+    }));
+
+    await renderPage();
+
+    expect(await screen.findByText("볼 수 없는 폴더")).toBeInTheDocument();
+    expect(await screen.findByRole("radio", { name: "폴더 범위 따름(볼 수 없는 폴더)" })).toBeChecked();
+  });
+});

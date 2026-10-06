@@ -123,6 +123,34 @@ describe("DocumentFolderSection", () => {
     expect(moves(fetchMock)).toEqual([["/api/documents/d1/folder", { folder_id: "c" }]]);
   });
 
+  const hiddenAccess = { folder: null, folder_scope: null, hidden_folder: true };
+
+  it("볼 수 없는 폴더 안 자기 문서는 이름 없이 알리고, 폴더 밖으로 뺄 수 있다", async () => {
+    const fetchMock = stub(hiddenAccess);
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const onMoved = vi.fn();
+    render(<DocumentFolderSection documentId="d1" folder={null} hiddenFolder isOwner onMoved={onMoved} />);
+    expect(screen.getByText("볼 수 없는 폴더")).toBeInTheDocument();
+    await screen.findByRole("option", { name: "인사/채용" });
+    expect(screen.getByLabelText("폴더")).toHaveValue("");
+    fireEvent.click(screen.getByRole("button", { name: "옮기기" }));
+    await waitFor(() => expect(onMoved).toHaveBeenCalled());
+    expect(confirm).toHaveBeenCalledWith(
+      "열람 범위가 「볼 수 없는 폴더의 범위」에서 「제한」로 바뀝니다. 옮기시겠습니까?");
+    expect(moves(fetchMock)).toEqual([["/api/documents/d1/folder", { folder_id: null }]]);
+  });
+
+  it("볼 수 없는 폴더 안 개별 지정 문서는 확인 없이 옮긴다", async () => {
+    const fetchMock = stub({ ...hiddenAccess, follows_folder: false });
+    const confirm = vi.spyOn(window, "confirm");
+    const onMoved = vi.fn();
+    render(<DocumentFolderSection documentId="d1" folder={null} hiddenFolder isOwner onMoved={onMoved} />);
+    await choose("c");
+    await waitFor(() => expect(onMoved).toHaveBeenCalled());
+    expect(confirm).not.toHaveBeenCalled();
+    expect(moves(fetchMock)).toEqual([["/api/documents/d1/folder", { folder_id: "c" }]]);
+  });
+
   it("이동이 거부되면 서버 문구를 보인다", async () => {
     vi.stubGlobal("fetch", vi.fn((url: string, init?: RequestInit) => {
       if (url === "/api/folders") return json([insa, hire, rfp]);

@@ -50,7 +50,7 @@ def test_owner_reads_access(db_client: TestClient):
     response = db_client.get(f"/api/documents/{doc}/access")
 
     assert response.status_code == 200
-    assert response.json() == {"visibility": "private", "users": [], "groups": [], "follows_folder": True, "folder": None, "folder_scope": None}
+    assert response.json() == {"visibility": "private", "users": [], "groups": [], "follows_folder": True, "folder": None, "folder_scope": None, "hidden_folder": False}
 
 
 def test_owner_replaces_access_and_grantee_can_read(db_client: TestClient, migrated_db: str):
@@ -64,7 +64,7 @@ def test_owner_replaces_access_and_grantee_can_read(db_client: TestClient, migra
     )
 
     assert response.status_code == 200
-    assert response.json() == {"visibility": "private", "users": ["bob"], "groups": ["인사팀"], "follows_folder": True, "folder": None, "folder_scope": None}
+    assert response.json() == {"visibility": "private", "users": ["bob"], "groups": ["인사팀"], "follows_folder": True, "folder": None, "folder_scope": None, "hidden_folder": False}
     login_as(db_client, "bob")
     assert db_client.get(f"/api/documents/{doc}").status_code == 200
 
@@ -160,7 +160,7 @@ def test_changing_access_is_session_only(db_client: TestClient, migrated_db: str
     assert put.status_code == 403
     assert grant_rows(migrated_db, doc) == []
     assert get.status_code == 200
-    assert get.json() == {"visibility": "private", "users": [], "groups": [], "follows_folder": True, "folder": None, "folder_scope": None}
+    assert get.json() == {"visibility": "private", "users": [], "groups": [], "follows_folder": True, "folder": None, "folder_scope": None, "hidden_folder": False}
 
 
 def test_upload_with_grantees_creates_grants(db_client: TestClient, migrated_db: str):
@@ -179,7 +179,7 @@ def test_upload_with_grantees_creates_grants(db_client: TestClient, migrated_db:
     assert response.status_code == 201
     doc = response.json()["id"]
     access = db_client.get(f"/api/documents/{doc}/access").json()
-    assert access == {"visibility": "private", "users": ["bob", "carol"], "groups": ["인사팀"], "follows_folder": True, "folder": None, "folder_scope": None}
+    assert access == {"visibility": "private", "users": ["bob", "carol"], "groups": ["인사팀"], "follows_folder": True, "folder": None, "folder_scope": None, "hidden_folder": False}
 
 
 def test_upload_with_grantees_works_with_read_write_token(
@@ -221,7 +221,7 @@ def test_text_api_with_grantees_creates_grants(db_client: TestClient, migrated_d
     assert response.status_code == 201
     login_as(db_client, "alice")
     access = db_client.get(f"/api/documents/{response.json()['id']}/access").json()
-    assert access == {"visibility": "private", "users": ["bob"], "groups": ["인사팀"], "follows_folder": True, "folder": None, "folder_scope": None}
+    assert access == {"visibility": "private", "users": ["bob"], "groups": ["인사팀"], "follows_folder": True, "folder": None, "folder_scope": None, "hidden_folder": False}
 
 
 @pytest.mark.parametrize(
@@ -318,10 +318,15 @@ def test_document_individual_scope_hides_folder_and_can_resume_inheritance(db_cl
     login_as(db_client, "bob")
     detail = db_client.get(f"/api/documents/{doc['id']}")
     assert detail.status_code == 200 and detail.json()["folder"] is None
+    assert detail.json()["hidden_folder"] is True
     access = db_client.get(f"/api/documents/{doc['id']}/access").json()
     assert access["folder"] is None and access["folder_scope"] is None
+    assert access["hidden_folder"] is True
     resumed = db_client.put(f"/api/documents/{doc['id']}/access", json={"follows_folder": True})
     assert resumed.status_code == 200 and resumed.json()["follows_folder"] is True
+    ignored = db_client.put(f"/api/documents/{doc['id']}/access", json={"visibility": "public"})
+    assert ignored.status_code == 400
+    assert ignored.json()["detail"].startswith("폴더 범위를 따르는 문서는 개별 지정으로 바꿔야")
 
 
 def test_unfiled_document_cannot_follow_folder(db_client):
