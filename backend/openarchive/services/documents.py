@@ -654,6 +654,36 @@ async def apply_extracted_text(
         )
     return "applied"
 
+DocumentSort = Literal["updated", "title"]
+DOCUMENT_ORDER_BY = {
+    "updated": "d.updated_at DESC, d.id",
+    "title": "d.title, d.id",
+}
+DOCUMENT_FILTERS = f"""
+{VISIBLE_TO_USER}
+AND (%(status)s::text IS NULL OR d.embedding_status = %(status)s)
+AND (%(extraction)s::text IS NULL OR d.extraction_status = %(extraction)s)
+AND (%(tag)s::text IS NULL OR %(tag)s = ANY(d.tags))
+AND (%(title)s::text IS NULL OR d.title ILIKE '%%' || %(title)s || '%%' ESCAPE '\\')
+AND (%(content_type)s::text IS NULL OR d.content_type = %(content_type)s)
+"""
+
+
+def _document_filter_params(
+    user_id, embedding_status, extraction_status, tag, title_query, content_type
+) -> dict:
+    title = title_query.strip() if title_query is not None else None
+    if title:
+        title = title.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return {
+        "user": user_id,
+        "status": embedding_status,
+        "extraction": extraction_status,
+        "tag": tag,
+        "title": title or None,
+        "content_type": content_type,
+    }
+
 
 async def list_documents(
     conn: psycopg.AsyncConnection,
@@ -662,38 +692,73 @@ async def list_documents(
     embedding_status: str | None = None,
     extraction_status: ExtractionStatus | None = None,
     tag: str | None = None,
+    title_query: str | None = None,
+    content_type: str | None = None,
+    sort: DocumentSort = "updated",
     limit: int | None = None,
     offset: int = 0,
 ) -> list[dict]:
     """권한 술어와 선택적 필터를 한 쿼리로 적용한다.
 
+    기본은 명세서의 최근 수정순(updated_at)이다.
     `embedding_status`는 컬럼 그대로다 — 인식 실패 문서는 임베딩 잡이 생기지 않아 'pending'에
     남는다. 곧 임베딩될 문서만 보려면 `extraction_status='done'`을 함께 준다 (#139, ADR-052).
     `limit`이 없으면 전부 반환한다 — 페이지는 화면이 쓰고, export·MCP는 전체를 본다 (#95-d).
     """
+
+    if sort not in DOCUMENT_ORDER_BY:
+        raise ValueError(f"허용되지 않은 문서 정렬: {sort}")
+    params = _document_filter_params(
+        user_id, embedding_status, extraction_status, tag, title_query, content_type
+    )
     cur = conn.cursor(row_factory=dict_row)
     await cur.execute(
         f"""
         SELECT {SUMMARY_COLUMNS}
         FROM documents d
-        WHERE {VISIBLE_TO_USER}
-          AND (%(status)s::text IS NULL OR embedding_status = %(status)s)
-          AND (%(extraction)s::text IS NULL OR extraction_status = %(extraction)s)
-          AND (%(tag)s::text IS NULL OR %(tag)s = ANY(tags))
-        ORDER BY created_at DESC, id
+        WHERE {DOCUMENT_FILTERS}
+        ORDER BY {DOCUMENT_ORDER_BY[sort]}
         LIMIT %(limit)s OFFSET %(offset)s
         """,
-        {
-            "user": user_id,
-            "status": embedding_status,
-            "extraction": extraction_status,
-            "tag": tag,
-            "limit": limit,
-            "offset": offset,
-        },
+        {**params, "limit": limit, "offset": offset},
     )
     return await cur.fetchall()
 
+
+async def count_documents(
+    conn: psycopg.AsyncConnection,
+    *,
+    user_id: str | None = None,
+    embedding_status: str | None = None,
+    extraction_status: ExtractionStatus | None = None,
+    tag: str | None = None,
+    title_query: str | None = None,
+    content_type: str | None = None,
+) -> int:
+    """목록과 같은 열람 범위·필터로 전체 건수를 센다."""
+    cur = await conn.execute(
+        f"SELECT count(*) FROM documents d WHERE {DOCUMENT_FILTERS}",
+        _document_filter_params(
+            user_id, embedding_status, extraction_status, tag, title_query, content_type
+        ),
+    )
+    return (await cur.fetchone())[0]
+
+
+async def list_visible_tags(
+    conn: psycopg.AsyncConnection, *, user_id: str | None = None
+) -> list[str]:
+    """보이는 문서의 태그를 중복 없이 정렬해 반환한다."""
+    cur = await conn.execute(
+        f"""
+        SELECT DISTINCT tag
+        FROM documents d CROSS JOIN LATERAL unnest(d.tags) AS tag
+        WHERE {VISIBLE_TO_USER}
+        ORDER BY tag
+        """,
+        {"user": user_id},
+    )
+    return [row[0] for row in await cur.fetchall()]
 
 async def document_progress(
     conn: psycopg.AsyncConnection, *, user_id: str | None = None
