@@ -30,7 +30,10 @@
       "type": "feat",
       "scope": "frontend",
       "desc": "목록 API 클라이언트와 useDocuments가 찾기 조건과 건수를 다룬다",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-10-06T09:20:56+0900",
+      "summary": "목록·건수·태그 API 클라이언트와 동일 필터·취소 신호의 useDocuments 구현; lib 117개·lint·타입 검사·q 누락 mutant 2개 실패 확인 및 정적 빌드 통과",
+      "completed_at": "2026-10-06T09:23:31+0900"
     },
     {
       "step": 3,
