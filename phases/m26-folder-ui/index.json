@@ -1,0 +1,94 @@
+{
+  "project": "OpenArchive",
+  "phase": "m26-folder-ui",
+  "steps": [
+    {
+      "step": 0,
+      "name": "ask-folder",
+      "type": "feat",
+      "scope": "api",
+      "desc": "답변(ask)도 검색과 같은 폴더 필터를 받는다",
+      "status": "pending"
+    },
+    {
+      "step": 1,
+      "name": "audit-folder-labels",
+      "type": "feat",
+      "scope": "frontend",
+      "desc": "감사 로그 화면에 폴더 열람 범위 변경·상속 전환·폴더 이동 문구를 보인다",
+      "status": "pending"
+    },
+    {
+      "step": 2,
+      "name": "folder-client",
+      "type": "feat",
+      "scope": "frontend",
+      "desc": "폴더 API 클라이언트·useFolders·경로/범위 라벨·FolderSelect",
+      "status": "pending"
+    },
+    {
+      "step": 3,
+      "name": "folder-tree",
+      "type": "feat",
+      "scope": "frontend",
+      "desc": "홈 화면 폴더 트리와 폴더 헤더 — 만들기·하위 폴더·이름 변경·빈 폴더 삭제·폴더별 목록",
+      "status": "pending"
+    },
+    {
+      "step": 4,
+      "name": "folder-access-panel",
+      "type": "feat",
+      "scope": "frontend",
+      "desc": "최상위 폴더 열람 범위 패널",
+      "status": "pending"
+    },
+    {
+      "step": 5,
+      "name": "upload-folder",
+      "type": "feat",
+      "scope": "frontend",
+      "desc": "업로드 폴더 지정과 「폴더 범위 따름」 표시",
+      "status": "pending"
+    },
+    {
+      "step": 6,
+      "name": "document-folder",
+      "type": "feat",
+      "scope": "frontend",
+      "desc": "문서 상세 폴더 경로와 범위가 바뀌는 이동의 확인 안내",
+      "status": "pending"
+    },
+    {
+      "step": 7,
+      "name": "access-inherit",
+      "type": "feat",
+      "scope": "frontend",
+      "desc": "열람 범위 패널의 「폴더 범위 따름 / 개별 지정」 전환",
+      "status": "pending"
+    },
+    {
+      "step": 8,
+      "name": "search-folder-filter",
+      "type": "feat",
+      "scope": "frontend",
+      "desc": "검색·답변 폴더 필터",
+      "status": "pending"
+    },
+    {
+      "step": 9,
+      "name": "static-build",
+      "type": "chore",
+      "scope": "frontend",
+      "desc": "폴더 화면을 동봉 정적 산출물에 반영한다",
+      "status": "pending"
+    },
+    {
+      "step": 10,
+      "name": "folder-ui-docs",
+      "type": "docs",
+      "scope": "adr",
+      "desc": "폴더 화면 규칙을 UI_GUIDE에 채우고 진행 표기를 고친다",
+      "status": "pending"
+    }
+  ]
+}
