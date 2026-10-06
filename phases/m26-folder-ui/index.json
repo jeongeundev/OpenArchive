@@ -8,7 +8,10 @@
       "type": "feat",
       "scope": "api",
       "desc": "답변(ask)도 검색과 같은 폴더 필터를 받는다",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-10-07T00:05:23+0900",
+      "summary": "ask API·근거 수집에 folder_id 전달 추가, 폴더·하위 폴더·비열람 근거 및 mutant 검증, AC 109개 테스트·린트 통과",
+      "completed_at": "2026-10-07T00:10:29+0900"
     },
     {
       "step": 1,
@@ -90,5 +93,6 @@
       "desc": "폴더 화면 규칙을 UI_GUIDE에 채우고 진행 표기를 고친다",
       "status": "pending"
     }
-  ]
+  ],
+  "created_at": "2026-10-07T00:05:23+0900"
 }
