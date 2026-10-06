@@ -107,7 +107,10 @@
       "type": "chore",
       "scope": "frontend",
       "desc": "폴더 화면을 동봉 정적 산출물에 반영한다",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-10-07T00:33:21+0900",
+      "summary": "npm run build:static로 폴더 화면을 backend/openarchive/static에 반영(5 files 변경, 「새 폴더」 포함 확인), tsc·lint(경고만)·테스트 462개·정적 빌드 통과",
+      "completed_at": "2026-10-07T00:34:03+0900"
     },
     {
       "step": 10,
