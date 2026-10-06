@@ -30,7 +30,10 @@
       "type": "feat",
       "scope": "frontend",
       "desc": "폴더 API 클라이언트·useFolders·경로/범위 라벨·FolderSelect",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-10-07T00:12:49+0900",
+      "summary": "폴더 타입·listFolders/createFolder/renameFolder/deleteFolder/getFolderAccess/setFolderAccess/moveDocument 및 폴더 필터·범위 body 추가, folders.ts·useFolders.ts·FolderSelect.tsx 구현, TDD·프론트 AC 408개 테스트·타입 검사·린트 통과",
+      "completed_at": "2026-10-07T00:17:21+0900"
     },
     {
       "step": 3,
