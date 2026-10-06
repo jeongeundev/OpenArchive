@@ -358,6 +358,7 @@ class AskRequest(BaseModel):
     query: str
     tags: list[str] | None = None
     content_type: str | None = None
+    folder_id: UUID | None = None
     k: int = Field(default=ASK_K, ge=1, le=MAX_K)
 
 

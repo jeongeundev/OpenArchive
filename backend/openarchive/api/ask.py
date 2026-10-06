@@ -24,6 +24,7 @@ async def ask(body: AskRequest, request: Request) -> AskResponse:
         evidence = await gather_evidence(
             conn, request.app.state.provider, query=body.query, user_id=user_id,
             tags=body.tags, content_type=body.content_type, k=body.k,
+            folder_id=body.folder_id,
             context_chars=get_settings().answer_context_chars,
         )
     result = await generate_answer(evidence, request.app.state.answer_provider)

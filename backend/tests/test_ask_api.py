@@ -179,3 +179,44 @@ def test_database_retry_generates_only_once(db_client, evidence, monkeypatch):
     assert response.json()["status"] == "answered"
     assert len(attempts) == 2
     assert len(generations) == 1
+
+
+def test_ask_applies_folder_filter_including_descendants(db_client, migrated_db, monkeypatch):
+    import psycopg
+
+    login_as(db_client, "alice")
+    folders = []
+    for name, parent in [("A", None), ("하위", 0), ("B", None)]:
+        response = db_client.post("/api/folders", json={
+            "name": name, "parent_id": folders[parent] if parent is not None else None,
+        })
+        assert response.status_code == 201
+        folders.append(response.json()["id"])
+    ids = seed_documents(migrated_db, [
+        {"title": name, "content": f"OpenSQL 정합성 {name} 근거"}
+        for name in ["A", "하위", "B"]
+    ])
+    with psycopg.connect(migrated_db) as conn:
+        # 관계 확장과 분리해 폴더의 직접 검색 범위를 검증한다.
+        conn.execute("DELETE FROM document_edges")
+        for document_id, folder_id in zip(ids, folders, strict=True):
+            conn.execute("UPDATE documents SET folder_id=%s WHERE id=%s", (folder_id, document_id))
+    monkeypatch.setattr(app.state, "answer_provider", FakeAnswerProvider())
+    for filters, expected in [({}, set(ids)), ({"folder_id": folders[0]}, set(ids[:2]))]:
+        response = db_client.post("/api/ask", json={**QUERY, **filters})
+        assert response.status_code == 200
+        body = response.json()
+        assert body["status"] == "answered"
+        assert {item["document_id"] for item in body["items"] if item["via"] is None} == expected
+        assert {source["document_id"] for source in body["sources"]} == expected
+
+    response = db_client.put(
+        f"/api/folders/{folders[2]}/access", json={"visibility": "private"}
+    )
+    assert response.status_code == 200
+    login_as(db_client, "bob")
+    response = db_client.post("/api/ask", json={**QUERY, "folder_id": folders[2]})
+    assert response.status_code == 200
+    assert response.json()["status"] == "no_evidence"
+    assert response.json()["items"] == []
+    assert response.json()["sources"] == []
