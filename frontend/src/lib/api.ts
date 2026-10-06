@@ -380,22 +380,49 @@ export function revokeShareToken(shareId: string, tokenId: string): Promise<void
   );
 }
 
+export type DocumentSort = "updated" | "title";
+
+export interface DocumentFilters {
+  q?: string;
+  contentType?: ContentType;
+  tag?: string;
+  sort?: DocumentSort;
+  status?: EmbeddingStatus;
+}
+
+function documentFilterQuery(params?: Omit<DocumentFilters, "sort">): URLSearchParams {
+  const query = new URLSearchParams();
+  if (params?.status?.trim()) query.set("status", params.status);
+  if (params?.tag?.trim()) query.set("tag", params.tag);
+  if (params?.q?.trim()) query.set("q", params.q);
+  if (params?.contentType?.trim()) query.set("content_type", params.contentType);
+  return query;
+}
+
 export function listDocuments(
-  params?: {
-    status?: EmbeddingStatus;
-    tag?: string;
-    limit?: number;
-    offset?: number;
-  },
+  params?: DocumentFilters & { limit?: number; offset?: number },
   signal?: AbortSignal,
 ): Promise<DocumentSummary[]> {
-  const query = new URLSearchParams();
-  if (params?.status !== undefined) query.set("status", params.status);
-  if (params?.tag !== undefined) query.set("tag", params.tag);
+  const query = documentFilterQuery(params);
+  if (params?.sort?.trim()) query.set("sort", params.sort);
   if (params?.limit !== undefined) query.set("limit", String(params.limit));
   if (params?.offset !== undefined) query.set("offset", String(params.offset));
   const suffix = query.size > 0 ? `?${query}` : "";
   return request<DocumentSummary[]>(`/api/documents${suffix}`, { signal });
+}
+
+export async function countDocuments(
+  params?: Omit<DocumentFilters, "sort">,
+  signal?: AbortSignal,
+): Promise<number> {
+  const query = documentFilterQuery(params);
+  const suffix = query.size > 0 ? `?${query}` : "";
+  const result = await request<{ total: number }>(`/api/documents/count${suffix}`, { signal });
+  return result.total;
+}
+
+export function listDocumentTags(signal?: AbortSignal): Promise<string[]> {
+  return request<string[]>("/api/documents/tags", { signal });
 }
 
 export function getDocumentProgress(signal?: AbortSignal): Promise<DocumentProgress> {

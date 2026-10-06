@@ -21,6 +21,8 @@ import {
   getDocumentVersion,
   isRetrying,
   listDocuments,
+  countDocuments,
+  listDocumentTags,
   listAudit,
   listGroups,
   listPrincipals,
@@ -166,6 +168,32 @@ describe("API responses", () => {
     await listDocuments({ limit: 50, offset: 100 });
 
     expect(fetchMock.mock.calls[0][0]).toBe("/api/documents?limit=50&offset=100");
+  });
+
+  it("forwards finder filters to list and count without pagination on count", async () => {
+    const fetchMock = vi.fn().mockImplementation((url: string) =>
+      Promise.resolve(new Response(url.includes("/count") ? '{"total":7}' : "[]")),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const params = { q: "출장", contentType: "hwp", tag: "보안", sort: "title", status: "ready", limit: 50, offset: 0 } as const;
+    await listDocuments(params);
+    await expect(countDocuments(params)).resolves.toBe(7);
+    const list = new URL(fetchMock.mock.calls[0][0], "http://localhost");
+    const count = new URL(fetchMock.mock.calls[1][0], "http://localhost");
+    expect(Object.fromEntries(list.searchParams)).toEqual({ q: "출장", content_type: "hwp", tag: "보안", sort: "title", status: "ready", limit: "50", offset: "0" });
+    expect(count.pathname).toBe("/api/documents/count");
+    expect(Object.fromEntries(count.searchParams)).toEqual({ q: "출장", content_type: "hwp", tag: "보안", status: "ready" });
+  });
+
+  it("omits blank finder conditions and reads visible tags", async () => {
+    const fetchMock = vi.fn().mockImplementation((url: string) =>
+      Promise.resolve(new Response(url.includes("/count") ? '{"total":0}' : '[]')),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    await listDocuments({ q: "  ", tag: "" });
+    await countDocuments({ q: "", tag: "  " });
+    await expect(listDocumentTags()).resolves.toEqual([]);
+    expect(fetchMock.mock.calls.map((call) => call[0])).toEqual(["/api/documents", "/api/documents/count", "/api/documents/tags"]);
   });
 
   it("reads pipeline progress from its own path", async () => {
