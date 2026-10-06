@@ -130,7 +130,7 @@ class CreateTextDocumentRequest(BaseModel):
     content: str
     content_type: Literal["txt", "md"] = "md"
     tags: list[str] | None = None
-    visibility: Literal["public", "private"] = "public"
+    visibility: Literal["public", "private"] | None = None
     grant_users: list[str] | None = None
     grant_groups: list[str] | None = None
     folder_id: UUID | None = None

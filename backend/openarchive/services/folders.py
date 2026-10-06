@@ -38,12 +38,6 @@ class NotFolderCreator(Exception):
         super().__init__("폴더를 관리할 권한이 없습니다.")
 
 
-# public 명시와 인자 생략을 구분하면서 최상위 기본값은 public으로 유지한다.
-class _DefaultVisibility(str):
-    pass
-
-
-_DEFAULT_VISIBILITY = _DefaultVisibility("public")
 _SCOPE = """r.visibility,
     COALESCE((SELECT array_agg(u.username ORDER BY u.username)
               FROM folder_grants g JOIN users u ON u.id=g.user_id
@@ -99,27 +93,25 @@ async def create_folder(
     user_id: str,
     name: str,
     parent_id: UUID | None = None,
-    visibility: str = _DEFAULT_VISIBILITY,
+    visibility: str | None = None,
     grant_users: list[str] | None = None,
     grant_groups: list[str] | None = None,
 ) -> dict:
     async with conn.transaction():
         if parent_id is not None:
             await ensure_folder_visible(conn, parent_id, user_id=user_id)
-            if (
-                visibility is not _DEFAULT_VISIBILITY
-                or grant_users is not None
-                or grant_groups is not None
-            ):
+            if visibility is not None or grant_users is not None or grant_groups is not None:
                 raise SubfolderScope
             scope = None
             user_ids, group_ids = [], []
         else:
+            if visibility is None:
+                visibility = "public"
             if visibility not in VISIBILITY_VALUES:
                 raise InvalidVisibility("공개범위는 public, private 중 하나여야 합니다.")
             users, groups = _check_grantees(visibility, user_id, grant_users, grant_groups)
             user_ids, group_ids = await resolve_grantees(conn, users=users, groups=groups)
-            scope = str(visibility)
+            scope = visibility
         cur = conn.cursor(row_factory=dict_row)
         try:
             await cur.execute(

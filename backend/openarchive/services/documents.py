@@ -263,20 +263,12 @@ def text_label(filename: str | None) -> str:
     return "추출 텍스트" if filename else "문서 텍스트"
 
 
-# 폴더 지정 시 명시한 public과 인자 생략을 구분한다.
-class _DefaultVisibility(str):
-    pass
-
-
-_DEFAULT_VISIBILITY = _DefaultVisibility("public")
-
-
 def _creation_scope(folder_id, visibility, users, groups):
     if folder_id is not None:
-        if visibility is not _DEFAULT_VISIBILITY or users is not None or groups is not None:
+        if visibility is not None or users is not None or groups is not None:
             raise ValueError("폴더에 넣는 문서는 폴더의 열람 범위를 따릅니다. 개별 지정은 문서 상세에서 합니다.")
         return "private"
-    return str(visibility)
+    return "public" if visibility is None else visibility
 
 
 async def create_document(
@@ -287,7 +279,7 @@ async def create_document(
     owner_id: str,
     title: str | None = None,
     tags: list[str] | None = None,
-    visibility: str = _DEFAULT_VISIBILITY,
+    visibility: str | None = None,
     folder_id: UUID | None = None,
     idempotency_key: str | None = None,
     grant_users: list[str] | None = None,
@@ -494,7 +486,7 @@ async def create_text_document(
     content_type: str = "md",
     owner_id: str,
     tags: list[str] | None = None,
-    visibility: str = _DEFAULT_VISIBILITY,
+    visibility: str | None = None,
     folder_id: UUID | None = None,
     idempotency_key: str | None = None,
     grant_users: list[str] | None = None,
