@@ -74,7 +74,10 @@
       "type": "feat",
       "scope": "frontend",
       "desc": "문서 상세 폴더 경로와 범위가 바뀌는 이동의 확인 안내",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-10-07T00:27:14+0900",
+      "summary": "DocumentFolderSection 추가 — 상세에 폴더 경로 링크(/?folder=, folder null이면 아무것도 그리지 않음)·소유자 전용 FolderSelect 「옮기기」(폴더 범위 따름 문서의 실효 범위가 바뀔 때만 확인 안내, 개별 지정·같은 범위는 바로 PUT /folder), 이동 뒤 상세·폴더 목록 갱신과 AccessPanel 재조회(key), TDD 및 프론트 AC 452개 테스트·타입 검사·린트·빌드 통과",
+      "completed_at": "2026-10-07T00:29:40+0900"
     },
     {
       "step": 7,
