@@ -73,7 +73,10 @@
       "type": "feat",
       "scope": "api",
       "desc": "폴더 API와 문서 폴더 인자 — 폴더 범위 변경은 세션 전용",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-10-06T19:02:35+0900",
+      "summary": "폴더 REST API·문서 폴더 생성/이동/목록 필터·개별 범위 응답 구현; 실제 pgvector DB 지정 AC 313 passed·백엔드 전체 1765 passed·Ruff 통과, 세션 전용·공유 차단 mutant 및 기존 공유 허용 목록 실패 확인 후 복원.",
+      "completed_at": "2026-10-06T19:49:10+0900"
     },
     {
       "step": 7,
