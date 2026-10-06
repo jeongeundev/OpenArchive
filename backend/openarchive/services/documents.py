@@ -27,21 +27,19 @@ from openarchive.services.visibility import (
     FOLDER_VISIBLE_TO_USER,
     VISIBILITY_VALUES,
     VISIBLE_TO_USER,
+    root_folder_visibility,
 )
 
 # 실제로 적용되는 공개범위. 「폴더 범위 따름」 문서는 최상위 폴더의 값이다 — 폴더로 만든 문서의
 # 자기 visibility는 private로 닫혀 있어(ADR-054), 그대로 보이면 조직 공개 폴더 안 문서가 「제한」으로
-# 보인다. 판정 규칙은 열람 술어의 폴더 분기와 같다(visibility.py). 볼 수 없는 폴더의 최상위는 늘
+# 보인다. 거슬러 오르기는 열람 술어와 같은 조각이다(visibility.py). 볼 수 없는 폴더의 최상위는 늘
 # private라 새로 드러나는 것이 없다. FROM 별칭 없이 쓰이는 RETURNING에도 들어가므로 바깥 컬럼은
 # 한정하지 않는다 — folders에는 folder_id·follows_folder 컬럼이 없어 바깥 행으로 해석된다.
-EFFECTIVE_VISIBILITY = """CASE WHEN folder_id IS NOT NULL AND follows_folder THEN (
-    WITH RECURSIVE root_up AS (
-        SELECT ru.parent_id, ru.visibility FROM folders ru WHERE ru.id = folder_id
-        UNION ALL
-        SELECT rp.parent_id, rp.visibility FROM folders rp JOIN root_up c ON rp.id = c.parent_id
-    )
-    SELECT r.visibility FROM root_up r WHERE r.parent_id IS NULL
-) ELSE visibility END AS effective_visibility"""
+EFFECTIVE_VISIBILITY = (
+    "CASE WHEN folder_id IS NOT NULL AND follows_folder THEN "
+    + root_folder_visibility("folder_id")
+    + " ELSE visibility END AS effective_visibility"
+)
 
 # 목록·요약 응답이 쓰는 컬럼. 네 곳에서 같은 나열을 반복하지 않도록 한 곳에 둔다.
 SUMMARY_COLUMNS = """id, title, filename, content_type, version, owner_id, visibility, tags,
