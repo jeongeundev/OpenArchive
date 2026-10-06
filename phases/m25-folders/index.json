@@ -30,10 +30,9 @@
       "type": "feat",
       "scope": "api",
       "desc": "열람 술어가 최상위 폴더 범위를 상관 재귀로 상속하고 폴더 술어를 같은 판정으로 둔다",
-      "status": "error",
+      "status": "completed",
       "started_at": "2026-10-06T14:12:21+0900",
-      "error_message": "[3회 시도 후 실패] Step did not update status",
-      "failed_at": "2026-10-06T14:16:22+0900"
+      "summary": "Codex가 구현·커밋(5d3f362) 뒤 한도 도달로 상태 갱신 전에 멈춤 — 메인 세션이 AC를 재확인해 완료 처리. AC: 술어 4파일 95 passed, 검색·관계·군집·진단·링크·답변 124 passed, ruff 통과. mutant 4종 전부 test_folder_visibility에서 실패 확인(created_by 분기 제거·follows_folder 조건 제거·직속 폴더만·공유 분기에 폴더 범위 섞음). EXPLAIN 형태 확인(검증 절차 3)은 하지 않았다 — step 5(iterative_scan)에서 검색 계획을 함께 본다."
     },
     {
       "step": 3,
