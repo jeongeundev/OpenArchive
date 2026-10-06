@@ -329,3 +329,20 @@ def test_unfiled_document_cannot_follow_folder(db_client):
     response = db_client.put(f"/api/documents/{doc}/access", json={"follows_folder": True})
     assert response.status_code == 400
     assert response.json()["detail"] == "폴더에 없는 문서는 폴더 범위를 따를 수 없습니다."
+
+
+def test_follow_folder_with_scope_values_is_rejected(db_client):
+    login_as(db_client, "bob")
+    root = db_client.post("/api/folders", json={"name": "공용"}).json()
+    doc = db_client.post("/api/documents/text", json={"title": "자료", "content": "본문"}).json()
+    assert db_client.put(f"/api/documents/{doc['id']}/folder", json={"folder_id": root["id"]}).status_code == 200
+    assert db_client.put(
+        f"/api/documents/{doc['id']}/access", json={"visibility": "private", "follows_folder": False}
+    ).status_code == 200
+    response = db_client.put(
+        f"/api/documents/{doc['id']}/access", json={"visibility": "private", "follows_folder": True}
+    )
+    assert response.status_code == 400
+    assert response.json()["detail"] == "폴더 범위를 따르면 공개범위·부여 대상을 함께 지정할 수 없습니다."
+    access = db_client.get(f"/api/documents/{doc['id']}/access").json()
+    assert access["follows_folder"] is False and access["visibility"] == "private"

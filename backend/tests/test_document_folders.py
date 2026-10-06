@@ -273,3 +273,23 @@ async def test_individual_scope_and_grants_survive_moves_and_return(conn):
     await d.move_document(conn, doc["id"], user_id="owner", folder_id=None)
     access = await d.get_access(conn, doc["id"], user_id="owner")
     assert access["follows_folder"] is False and access["users"] == ["lee"]
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [{"visibility": "private"}, {"users": ["lee"]}, {"groups": ["인사팀"]}],
+)
+async def test_follow_folder_rejects_individual_scope_values(conn, extra):
+    # 함께 보낸 범위를 조용히 버리면, 좁혔다고 믿은 문서가 폴더 범위(조직 공개)를 따른다.
+    await conn.execute("INSERT INTO groups (name) VALUES ('인사팀')")
+    root = await f.create_folder(conn, user_id="kim", name="인사")
+    doc = await make(conn, root["id"])
+    await d.set_access(
+        conn, doc["id"], user_id="owner", follows_folder=False,
+        visibility="private", users=["kim"], groups=[],
+    )
+    with pytest.raises(ValueError, match="폴더 범위를 따르면 공개범위·부여 대상을 함께 지정할 수 없습니다."):
+        await d.set_access(conn, doc["id"], user_id="owner", follows_folder=True, **extra)
+    access = await d.get_access(conn, doc["id"], user_id="owner")
+    assert access["follows_folder"] is False
+    assert access["visibility"] == "private" and access["users"] == ["kim"]
