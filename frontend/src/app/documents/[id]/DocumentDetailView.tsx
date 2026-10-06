@@ -6,6 +6,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import { AccessPanel } from "@/components/AccessPanel";
 import { DocumentActions } from "@/components/DocumentActions";
+import { DocumentFolderSection } from "@/components/DocumentFolderSection";
 import { DocumentMeta } from "@/components/DocumentMeta";
 import { OriginalFiles } from "@/components/OriginalFiles";
 import { RelatedDocuments } from "@/components/RelatedDocuments";
@@ -113,11 +114,20 @@ export function DocumentDetailView(): React.ReactElement {
 
       <DocumentMeta document={document} />
 
+      <DocumentFolderSection
+        key={document.folder?.id ?? "none"}
+        disabled={editing}
+        documentId={document.id}
+        folder={document.folder}
+        isOwner={isOwner}
+        onMoved={refresh}
+      />
+
       {!anonymous ? (
         <>
           <DocumentActions disabled={editing} document={document} onChanged={refresh} />
           {isOwner ? (
-            <AccessPanel disabled={editing} documentId={document.id} onSaved={refresh} />
+            <AccessPanel key={document.folder?.id ?? "none"} disabled={editing} documentId={document.id} onSaved={refresh} />
           ) : null}
           <TagEditor disabled={editing} error={tagError} onChange={setDraftTags} onSave={() => void saveTags(tags)} saving={savingTags} tags={tags} />
         </>
