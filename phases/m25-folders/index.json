@@ -62,7 +62,10 @@
       "type": "feat",
       "scope": "search",
       "desc": "벡터 검색에 iterative_scan strict_order를 켜고 하위 포함 폴더 필터를 더한다",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-10-06T18:57:18+0900",
+      "summary": "strict_order 트랜잭션 튜닝과 상관 재귀 하위 포함 폴더 필터·REST 인자 구현; 실제 pgvector DB 지정 AC 139 passed·Ruff 통과, iterative_scan 제거 시 튜닝·좁은 범위 recall(10→2) 실패 및 직속 폴더 mutant 실패 후 복원, 1200 고유 벡터·열람 1% 폴더 SEARCH_SQL EXPLAIN 후보 CTE HNSW 확인(최종 계획 단언 1 passed).",
+      "completed_at": "2026-10-06T19:02:34+0900"
     },
     {
       "step": 6,
