@@ -524,8 +524,12 @@ class TestInvokeClaude:
         assert "-p" in cmd
         assert "--dangerously-skip-permissions" in cmd
         assert "--output-format" in cmd
-        assert "PREAMBLE" in cmd[-1]
-        assert "UI를 구현하세요" in cmd[-1]
+        # 프롬프트는 argv가 아니라 stdin으로 간다 — 가드레일(docs 전체)을 argv로 넘기면 macOS
+        # ARG_MAX를 넘어 Popen이 OSError(Argument list too long)로 executor째 죽는다(m26 step 3).
+        prompt = mock_run.call_args[1]["input"]
+        assert "PREAMBLE" in prompt
+        assert "UI를 구현하세요" in prompt
+        assert all("PREAMBLE" not in arg for arg in cmd)
 
     def test_saves_output_json(self, executor):
         mock_result = MagicMock(returncode=0, stdout='{"ok": true}', stderr="")

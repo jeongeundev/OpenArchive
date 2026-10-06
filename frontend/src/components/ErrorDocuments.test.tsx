@@ -7,7 +7,7 @@ import { ErrorDocuments } from "./ErrorDocuments";
 
 const document: DocumentSummary = {
   id: "doc-1", title: "실패 문서", filename: "failed.md", content_type: "md", version: 1,
-  owner_id: "alice", visibility: "public", tags: [], embedding_status: "error", extraction_status: "done",
+  owner_id: "alice", visibility: "public", effective_visibility: "public", tags: [], embedding_status: "error", extraction_status: "done",
   created_at: "2026-08-05T10:00:00Z", updated_at: "2026-08-05T11:00:00Z",
 };
 const response = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });

@@ -27,7 +27,7 @@ describe("useSearch", () => {
     const { result } = renderHook(() => useSearch());
 
     await act(async () => {
-      result.current.run({ query: "OpenSQL", tags: ["운영"], contentType: "md", k: 5 });
+      result.current.run({ query: "OpenSQL", tags: ["운영"], contentType: "md", folderId: null, k: 5 });
     });
 
     expect(fetchMock).toHaveBeenCalledWith(
@@ -54,10 +54,10 @@ describe("useSearch", () => {
     const { result } = renderHook(() => useSearch());
 
     await act(async () => {
-      result.current.run({ query: "첫 검색", tags: [], contentType: null, k: 10 });
+      result.current.run({ query: "첫 검색", tags: [], contentType: null, folderId: null, k: 10 });
     });
     await act(async () => {
-      result.current.run({ query: "두 번째 검색", tags: [], contentType: null, k: 10 });
+      result.current.run({ query: "두 번째 검색", tags: [], contentType: null, folderId: null, k: 10 });
     });
 
     expect(result.current.response).toEqual(response);
@@ -70,7 +70,7 @@ describe("useSearch", () => {
     const { result } = renderHook(() => useSearch());
 
     act(() => {
-      result.current.run({ query: "   ", tags: [], contentType: null, k: 10 });
+      result.current.run({ query: "   ", tags: [], contentType: null, folderId: null, k: 10 });
     });
 
     expect(fetchMock).not.toHaveBeenCalled();
@@ -88,7 +88,7 @@ function expectAllAborted(fetchMock: ReturnType<typeof pendingFetch>): void {
 }
 
 describe("useSearch 취소", () => {
-  const input = { query: "정합성", tags: [], contentType: null, k: 10 };
+  const input = { query: "정합성", tags: [], contentType: null, folderId: null, k: 10 };
 
   it("새 검색이 이전 검색을 취소하고, 언마운트하면 마지막 검색도 취소한다", () => {
     const fetchMock = pendingFetch();

@@ -20,6 +20,7 @@ const ACTION_LABEL: Record<AuditAction, string> = {
   text_updated: "텍스트 수정",
   document_deleted: "문서 삭제",
   access_changed: "열람 범위 변경",
+  folder_access_changed: "폴더 열람 범위 변경",
   group_member_changed: "그룹 구성원 변경",
   original_replaced: "원본 교체",
   original_downloaded: "원본 내려받기",
@@ -53,7 +54,17 @@ function actionLabel(entry: AuditEntry): string {
 /** 동작에 덧붙는 설명 — 무엇이 어떻게 바뀌었나. 없으면 null. */
 function actionDescription(entry: AuditEntry): string | null {
   const { detail } = entry;
-  if (entry.action === "access_changed") {
+  if (entry.action === "access_changed" || entry.action === "folder_access_changed") {
+    if (detail.kind === "inherit") {
+      const before = detail.before === "folder" ? "폴더 범위 따름" : "개별 지정";
+      const after = detail.after === "folder" ? "폴더 범위 따름" : "개별 지정";
+      return `${before} → ${after}`;
+    }
+    if (detail.kind === "folder") {
+      const before = detail.before === null ? "폴더 없음" : `폴더 「${text(detail.before)}」`;
+      const after = detail.after === null ? "폴더 없음" : `${detail.before === null ? "폴더 " : ""}「${text(detail.after)}」`;
+      return `${before} → ${after}`;
+    }
     if (detail.kind === "visibility") {
       return `${visibilityLabel(detail.before)} → ${visibilityLabel(detail.after)}`;
     }
@@ -195,7 +206,7 @@ export default function AuditPage(): React.ReactElement {
                       <span>{actionLabel(entry)}</span>
                       {description !== null ? <span className="block text-neutral-500">{description}</span> : null}
                     </td>
-                    <td className="px-4 py-3 text-neutral-300">{entry.document_title ?? "—"}</td>
+                    <td className="px-4 py-3 text-neutral-300">{entry.document_title ?? (typeof entry.detail.folder_name === "string" ? `폴더 「${entry.detail.folder_name}」` : "—")}</td>
                   </tr>
                 );
               })}

@@ -27,11 +27,25 @@ from openarchive.services.visibility import (
     FOLDER_VISIBLE_TO_USER,
     VISIBILITY_VALUES,
     VISIBLE_TO_USER,
+    root_folder_visibility,
+)
+
+# 실제로 적용되는 공개범위. 「폴더 범위 따름」 문서는 최상위 폴더의 값이다 — 폴더로 만든 문서의
+# 자기 visibility는 private로 닫혀 있어(ADR-054), 그대로 보이면 조직 공개 폴더 안 문서가 「제한」으로
+# 보인다. 거슬러 오르기는 열람 술어와 같은 조각이다(visibility.py). 볼 수 없는 폴더의 최상위는 늘
+# private라 새로 드러나는 것이 없다. FROM 별칭 없이 쓰이는 RETURNING에도 들어가므로 바깥 컬럼은
+# 한정하지 않는다 — folders에는 folder_id·follows_folder 컬럼이 없어 바깥 행으로 해석된다.
+EFFECTIVE_VISIBILITY = (
+    "CASE WHEN folder_id IS NOT NULL AND follows_folder THEN "
+    + root_folder_visibility("folder_id")
+    + " ELSE visibility END AS effective_visibility"
 )
 
 # 목록·요약 응답이 쓰는 컬럼. 네 곳에서 같은 나열을 반복하지 않도록 한 곳에 둔다.
 SUMMARY_COLUMNS = """id, title, filename, content_type, version, owner_id, visibility, tags,
-                     embedding_status, extraction_status, created_at, updated_at"""
+                     embedding_status, extraction_status, created_at, updated_at, """ + (
+    EFFECTIVE_VISIBILITY
+)
 
 # 시연 데이터 최대 추출 텍스트(약 90KB)의 5배보다 크고 DB CHECK와 같은 경계다.
 MAX_EXTRACTED_TEXT_LENGTH = 500_000
@@ -853,7 +867,12 @@ async def get_document(
         (document_id,),
     )
     document["versions"] = await cur.fetchall()
-    document["folder"], _ = await _folder_info(conn, document.pop("folder_id"), user_id)
+    folder_id = document.pop("folder_id")
+    document["folder"], _ = await _folder_info(conn, folder_id, user_id)
+    # 소유자에게만 「볼 수 없는 폴더 안」임을 알린다 — 남에게는 폴더의 존재도 새지 않는다 (D5).
+    document["hidden_folder"] = (
+        folder_id is not None and document["folder"] is None and document["owner_id"] == user_id
+    )
 
     # 원본 판은 메타데이터만 싣는다. 상세는 화면이 수시로 부르는 응답이라 바이트를 섞지 않는다.
     await cur.execute(
@@ -1380,7 +1399,10 @@ async def _read_access(conn: psycopg.AsyncConnection, document_id: UUID, user_id
     row = await cur.fetchone()
     if row is None:
         raise DocumentNotFound
-    row["folder"], row["folder_scope"] = await _folder_info(conn, row.pop("folder_id"), user_id)
+    folder_id = row.pop("folder_id")
+    row["folder"], row["folder_scope"] = await _folder_info(conn, folder_id, user_id)
+    # 소유자 전용 응답이다 — 폴더 이름·경로 없이 「볼 수 없는 폴더 안」이라는 사실만 싣는다.
+    row["hidden_folder"] = folder_id is not None and row["folder"] is None
     return row
 
 
@@ -1424,11 +1446,18 @@ async def set_access(
         # 현재 부여 조회와 차이 반영 사이에 동시 교체가 끼지 않게 한다. 워커·024와 같은
         # 수준으로 잠가 FK 확인(FOR KEY SHARE)과는 부딪히지 않게 한다.
         cur = await conn.execute(
-            "SELECT folder_id FROM documents WHERE id = %s FOR NO KEY UPDATE", (document_id,)
+            "SELECT folder_id, follows_folder FROM documents WHERE id = %s FOR NO KEY UPDATE",
+            (document_id,),
         )
         locked = await cur.fetchone()
         if locked is None:
             raise DocumentNotFound
+        # 전환 없이 범위만 받으면 visibility 컬럼만 바뀌고 실효 범위는 폴더 그대로다 — 저장은
+        # 성공인데 아무것도 열리거나 닫히지 않는다. follows_folder 기본값이 true라 folder_id와 함께 본다.
+        if follows_folder is None and locked[0] is not None and locked[1]:
+            raise ValueError(
+                "폴더 범위를 따르는 문서는 개별 지정으로 바꿔야 공개범위·부여 대상을 정할 수 있습니다."
+            )
         if follows_folder is not None:
             if locked[0] is None:
                 raise ValueError("폴더에 없는 문서는 폴더 범위를 따를 수 없습니다.")

@@ -2,6 +2,8 @@
 
 import { useEffect, useRef, useState } from "react";
 
+import { useAuth } from "./AuthProvider";
+import { FolderSelect } from "./FolderSelect";
 import { GranteePicker } from "./GranteePicker";
 import { ApiError, listPrincipals, uploadDocument } from "@/lib/api";
 import {
@@ -11,6 +13,8 @@ import {
   type Visibility,
 } from "@/lib/types";
 import { MAX_UPLOAD_BYTES, UPLOAD_TOO_LARGE } from "@/lib/limits";
+import { scopeLabel } from "@/lib/folders";
+import type { Folder } from "@/lib/types";
 import { expandZip } from "@/lib/zip";
 
 type UploadItemStatus = "대기" | "업로드 중" | "완료" | "실패" | "건너뜀";
@@ -24,10 +28,23 @@ type UploadItem = {
 
 export function UploadDropzone({
   onUploaded,
+  folders = [],
+  defaultFolderId = null,
 }: {
   onUploaded: () => void;
+  folders?: Folder[];
+  defaultFolderId?: string | null;
 }): React.ReactElement {
+  const { auth } = useAuth();
   const inputRef = useRef<HTMLInputElement>(null);
+  // 기본값은 홈에서 고른 폴더다. 고른 폴더가 바뀌면 따라간다.
+  const [folderId, setFolderId] = useState<string | null>(defaultFolderId);
+  const [seenDefaultFolderId, setSeenDefaultFolderId] = useState(defaultFolderId);
+  if (seenDefaultFolderId !== defaultFolderId) {
+    setSeenDefaultFolderId(defaultFolderId);
+    setFolderId(defaultFolderId);
+  }
+  const folder = folderId === null ? null : folders.find((candidate) => candidate.id === folderId) ?? null;
   const [items, setItems] = useState<UploadItem[]>([]);
   const [title, setTitle] = useState("");
   const [tags, setTags] = useState("");
@@ -47,7 +64,7 @@ export function UploadDropzone({
   // 다시 고를 때 재시도한다. 실패를 빈 목록으로 바꾸면 대상이 없다고 오해한 채 소유자만 보는
   // 문서를 올리게 된다.
   useEffect(() => {
-    if (visibility !== "private" || principals !== null) return;
+    if (folder !== null || visibility !== "private" || principals !== null) return;
     const controller = new AbortController();
     listPrincipals(controller.signal)
       .then((directory) => {
@@ -59,7 +76,7 @@ export function UploadDropzone({
         }
       });
     return () => controller.abort();
-  }, [visibility, principals]);
+  }, [folder, visibility, principals]);
 
   function chooseVisibility(next: Visibility): void {
     setVisibility(next);
@@ -134,10 +151,15 @@ export function UploadDropzone({
           // 배치에는 제목이 파일명이다 — 파일이 1개일 때만 입력한 제목을 보낸다.
           title: fileCount === 1 && cleanTitle !== "" ? cleanTitle : undefined,
           tags: cleanTags,
-          visibility,
-          ...(visibility === "private"
-            ? { grantUsers: grantees.users, grantGroups: grantees.groups }
-            : {}),
+          // 폴더 문서는 폴더 범위를 따른다 — 개별 범위를 함께 보내면 서버가 400으로 거부한다.
+          ...(folder !== null
+            ? { folderId: folder.id }
+            : {
+                visibility,
+                ...(visibility === "private"
+                  ? { grantUsers: grantees.users, grantGroups: grantees.groups }
+                  : {}),
+              }),
         });
         patchItem(index, { status: "완료" });
         succeeded += 1;
@@ -250,6 +272,28 @@ export function UploadDropzone({
         </label>
       </div>
 
+      {folders.length > 0 ? (
+        <FolderSelect
+          disabled={disabled}
+          folders={folders}
+          label="폴더"
+          noneLabel="폴더 없음"
+          onChange={setFolderId}
+          value={folder?.id ?? null}
+        />
+      ) : null}
+
+      {folder !== null ? (
+        <div className="text-sm">
+          <p className="text-neutral-400">
+            열람 범위: <span className="text-neutral-300">{`폴더 범위 따름(${scopeLabel(folder.scope)})`}</span>
+          </p>
+          <p className="mt-1 text-neutral-500">개별 지정은 업로드 뒤 문서 상세에서 합니다</p>
+          {auth.username !== null && folder.created_by !== auth.username ? (
+            <p className="mt-1 text-neutral-500">폴더를 만든 사람이 범위를 바꾸면 이 문서에도 적용됩니다</p>
+          ) : null}
+        </div>
+      ) : (
       <fieldset disabled={disabled}>
         <legend className="text-sm text-neutral-400">열람 범위</legend>
         <div className="mt-2 flex gap-4 text-sm text-neutral-300">
@@ -292,6 +336,7 @@ export function UploadDropzone({
           </div>
         ) : null}
       </fieldset>
+      )}
 
       {error !== null ? <p className="text-sm text-[#ef4444]">{error}</p> : null}
       {message !== null ? <p className="text-sm text-neutral-400">{message}</p> : null}

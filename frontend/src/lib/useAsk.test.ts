@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { useAsk } from "./useAsk";
 
-const input = { query: "장애 복구", tags: [], contentType: null, k: 5 };
+const input = { query: "장애 복구", tags: [], contentType: null, folderId: null, k: 5 };
 
 describe("useAsk", () => {
   afterEach(() => vi.unstubAllGlobals());

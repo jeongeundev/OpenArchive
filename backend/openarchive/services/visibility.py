@@ -35,14 +35,16 @@ def share_principal(share_id: UUID) -> str:
 #
 # RLS 전환(#98) 때: folders에 자기 참조 정책을 걸면 이 재귀가 그 정책을 다시 타
 # "infinite recursion detected in policy"가 났다(스파이크) — 판정을 정책 없는 경로로 빼야 한다.
-_ROOT_FOLDER_OPEN = """EXISTS (
-    WITH RECURSIVE folder_up AS (
+_FOLDER_UP = """WITH RECURSIVE folder_up AS (
         SELECT fa.id, fa.parent_id, fa.visibility, fa.created_by
         FROM folders fa WHERE fa.id = {start}
         UNION ALL
         SELECT fp.id, fp.parent_id, fp.visibility, fp.created_by
         FROM folders fp JOIN folder_up c ON fp.id = c.parent_id
-    )
+    )"""
+
+_ROOT_FOLDER_OPEN = """EXISTS (
+    """ + _FOLDER_UP + """
     SELECT 1 FROM folder_up r
     WHERE r.parent_id IS NULL
       AND (r.visibility = 'public' OR r.created_by = %(user)s OR EXISTS (
@@ -53,6 +55,13 @@ _ROOT_FOLDER_OPEN = """EXISTS (
                 WHERE fm.group_id = fg.group_id AND fm.user_id = fu.id))
       ))
 )"""
+
+
+def root_folder_visibility(start: str) -> str:
+    """시작 폴더의 최상위 폴더 공개범위를 내는 스칼라 서브쿼리. 열람 판정과 같은 거슬러 오르기 조각이다."""
+    return "(" + _FOLDER_UP.format(start=start) + """
+    SELECT r.visibility FROM folder_up r WHERE r.parent_id IS NULL)"""
+
 
 # 쿼리에 그대로 끼워 넣는 SQL 조각. 바인딩 이름은 %(user)s로 고정하며, 값은 주체다 —
 # 사용자명 · share:<uuid> · NULL(익명).

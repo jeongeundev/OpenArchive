@@ -191,3 +191,19 @@ async def test_passage_order_and_skipping_oversized_following_passage(conn, monk
         (1, 2, "첫 대목"), (2, 4, "끝"),
     ]
     assert sum(len(source.content) for source in evidence.sources) <= 6
+
+
+async def test_gather_evidence_forwards_folder_filter(conn, monkeypatch):
+    from uuid import uuid4
+
+    folder_id = uuid4()
+    received = []
+
+    async def recording_search(*args, **kwargs):
+        received.append(kwargs["folder_id"])
+        return await search_documents(*args, **kwargs)
+
+    monkeypatch.setattr(answer, "search_documents", recording_search)
+    evidence = await gather(conn, folder_id=folder_id)
+    assert received == [folder_id]
+    assert evidence.hits == [] and evidence.sources == []

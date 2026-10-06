@@ -6,6 +6,7 @@ import type { DocumentDetail } from "./types";
 import { useDocument } from "./useDocument";
 
 const document: DocumentDetail = {
+  folder: null,
   id: "document-1",
   title: "OpenSQL 운영 가이드",
   filename: "guide.md",
@@ -14,6 +15,7 @@ const document: DocumentDetail = {
   version: 1,
   owner_id: "alice",
   visibility: "public",
+  effective_visibility: "public",
   tags: ["OpenSQL"],
   embedding_status: "pending",
   extraction_status: "done",

@@ -11,6 +11,27 @@ export const VISIBILITY_LABEL: Record<Visibility, string> = {
   private: "제한",
 };
 
+export interface FolderScope {
+  visibility: Visibility;
+  users: string[];
+  groups: string[];
+}
+
+export interface Folder {
+  id: string;
+  parent_id: string | null;
+  name: string;
+  created_by: string;
+  document_count: number;
+  scope: FolderScope;
+  inherited: boolean;
+  can_manage: boolean;
+  can_change_access: boolean;
+}
+
+export interface FolderPathItem { id: string; name: string }
+export interface DocumentFolder extends FolderPathItem { path: FolderPathItem[] }
+
 export type TokenScope = "read" | "read_write";
 
 export interface TokenSummary {
@@ -57,7 +78,10 @@ export interface DocumentSummary {
   content_type: ContentType;
   version: number;
   owner_id: string;
+  /** 문서 자신의 공개범위. 폴더로 만든 문서는 private로 닫혀 있다 (ADR-054). */
   visibility: Visibility;
+  /** 실제로 적용되는 공개범위 — 「폴더 범위 따름」이면 최상위 폴더의 값. 화면 표시는 이것을 쓴다. */
+  effective_visibility: Visibility;
   tags: string[];
   embedding_status: EmbeddingStatus;
   extraction_status: ExtractionStatus;
@@ -100,6 +124,9 @@ export interface OriginalFile {
 }
 
 export interface DocumentDetail extends DocumentSummary {
+  folder: DocumentFolder | null;
+  /** 소유자에게만 참 — 볼 수 없는 폴더 안에 든 자기 문서. 폴더 정보는 오지 않는다. */
+  hidden_folder?: boolean;
   content: string;
   versions: TextVersion[];
   files: OriginalFile[];
@@ -248,6 +275,7 @@ export type AuditAction =
   | "text_updated"
   | "document_deleted"
   | "access_changed"
+  | "folder_access_changed"
   | "group_member_changed"
   | "original_replaced"
   | "original_downloaded";
@@ -280,6 +308,10 @@ export interface Principals {
 
 /** 문서의 열람 범위. 소유자만 읽고 바꾼다. public에는 부여 대상을 둘 수 없다. */
 export interface DocumentAccess {
+  follows_folder: boolean;
+  folder: DocumentFolder | null;
+  folder_scope: FolderScope | null;
+  hidden_folder: boolean;
   visibility: Visibility;
   users: string[];
   groups: string[];

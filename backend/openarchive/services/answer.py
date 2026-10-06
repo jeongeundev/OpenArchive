@@ -78,12 +78,13 @@ async def gather_evidence(
     user_id: str | None,
     tags: list[str] | None = None,
     content_type: str | None = None,
+    folder_id: UUID | None = None,
     k: int = ASK_K,
     context_chars: int,
 ) -> Evidence:
     hits = await search_documents(
         conn, embedding_provider, query=query, user_id=user_id,
-        tags=tags, content_type=content_type, k=k,
+        tags=tags, content_type=content_type, k=k, folder_id=folder_id,
     )
     versions, current_chunks = {}, {}
     if hits:

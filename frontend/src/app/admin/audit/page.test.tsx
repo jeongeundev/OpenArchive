@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { AuthProvider } from "@/components/AuthProvider";
 import type { AuditEntry } from "@/lib/types";
@@ -57,6 +57,8 @@ function rows(): HTMLElement[] {
   return screen.getAllByRole("row").slice(1);
 }
 
+afterEach(() => vi.unstubAllGlobals());
+
 describe("감사 로그 화면", () => {
   it("기록을 받은 순서(최신순)대로 시각·사용자·동작·대상 문서 제목과 함께 보여 준다", async () => {
     const items = [
@@ -110,6 +112,40 @@ describe("감사 로그 화면", () => {
     const memberRow = rows()[4];
     expect(within(memberRow).getByText("admin")).toBeInTheDocument();
     expect(within(memberRow).getByText("—")).toBeInTheDocument();
+  });
+
+  it("폴더 범위·부여·상속·이동 기록을 지정 문구와 대상으로 보여 준다", async () => {
+    const items = [
+      entry({ action: "folder_access_changed", document_id: null, document_title: null, detail: { kind: "visibility", folder_name: "RFP", before: "public", after: "private" } }),
+      entry({ action: "folder_access_changed", document_id: null, document_title: null, detail: { kind: "grant", change: "added", grantee_type: "group", grantee: "사업팀", folder_name: "RFP" } }),
+      entry({ action: "folder_access_changed", document_id: null, document_title: null, detail: { kind: "grant", change: "removed", grantee_type: "user", grantee: "lee", folder_name: "RFP" } }),
+      entry({ action: "access_changed", detail: { kind: "inherit", before: "folder", after: "own" } }),
+      entry({ action: "access_changed", detail: { kind: "folder", before: "인사", after: "RFP" } }),
+      entry({ action: "access_changed", detail: { kind: "folder", before: null, after: "RFP" } }),
+    ];
+    vi.stubGlobal("fetch", routedFetch(admin, [{ items, next_before_id: null }]).fetchMock);
+
+    render(<AuthProvider><AuditPage /></AuthProvider>);
+
+    const table = await screen.findByRole("table");
+    expect(within(table).getAllByText("폴더 열람 범위 변경")).toHaveLength(3);
+    expect(within(table).getAllByText("폴더 「RFP」")).toHaveLength(3);
+    for (const description of ["조직 공개 → 제한", "그룹 사업팀 추가", "사용자 lee 제거", "폴더 범위 따름 → 개별 지정", "폴더 「인사」 → 「RFP」", "폴더 없음 → 폴더 「RFP」"]) {
+      expect(within(table).getByText(description)).toBeInTheDocument();
+    }
+    expect(within(rows()[3]).getByText("인사 규정")).toBeInTheDocument();
+  });
+
+  it("폴더 열람 범위 변경을 동작 필터로 요청한다", async () => {
+    const { fetchMock, auditUrls } = routedFetch(admin, [{ items: [], next_before_id: null }]);
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<AuthProvider><AuditPage /></AuthProvider>);
+
+    const option = await screen.findByRole("option", { name: "폴더 열람 범위 변경" });
+    expect(option).toHaveValue("folder_access_changed");
+    fireEvent.change(screen.getByRole("combobox", { name: "동작" }), { target: { value: "folder_access_changed" } });
+    await waitFor(() => expect(auditUrls.at(-1)).toBe("/api/admin/audit?action=folder_access_changed&limit=50"));
   });
 
   it("행위자 이름이 없으면 경로로 사용자를 표기한다", async () => {

@@ -99,7 +99,7 @@ OpenArchive/
 
 `services/visibility.py`의 `VISIBLE_TO_USER`는 **모든 조회 경로가 공유하는 단일 열람 술어**다. 검색·관련 문서·그래프 순회·집계·위키링크 해석이 각자 조건을 쓰면 한 곳만 빠져도 비공개 문서가 새어 나간다 (ADR-018, ADR-027). 규칙은 사용자에게 "public이거나, 소유자이거나, 본인·본인 그룹에 부여가 있다"이고, `share:<공유 uuid>` 주체에게는 "그 공유에 부여가 있다"뿐이며(ADR-044), 테이블과 주체 값 하나만 참조하는 순수 SQL이라 바인딩을 `current_setting('app.principal')`로 바꾸면 그대로 RLS 정책이 된다. 쓰기 경로의 존재 판정(`_load_for_write`)도 이 술어를 쓴다 — 보이는 사람의 쓰기는 403, 안 보이는 사람은 404.
 
-**폴더 범위도 이 술어 안에서 판정한다** (ADR-054). 폴더에 들었고 「폴더 범위 따름」(`folder_id IS NOT NULL AND follows_folder`)인 문서는 문서 자신의 `visibility`·부여 대신 **최상위 폴더**의 범위(조직 공개 · 폴더를 만든 사람 · `folder_grants`의 사용자·그룹)로 판정하고, 「개별 지정」 문서는 지금처럼 문서 자신의 범위로 판정한다. 소유자는 어느 쪽이든 자기 문서를 본다. 최상위 폴더 판정은 문서의 폴더에서 `parent_id`를 따라 올라가는 **상관 재귀 `EXISTS (WITH RECURSIVE …)`** 조각 하나이고, 폴더 술어 `FOLDER_VISIBLE_TO_USER`(트리·폴더 목록·검색 폴더 필터)가 시작 폴더만 바꿔 같은 조각을 쓴다. 실효 범위는 저장하지 않으므로 폴더 범위·그룹 구성원 변경은 다음 조회부터 반영된다. 같은 판정을 비상관 `IN (서브쿼리)`로 쓰면 3천 청크에서 HNSW를 버리고 generic plan에서 15배 느려졌다 — 형태를 바꾸지 않는다(`db.py`의 `prepare_threshold=None`도 그 전제다). 공유 주체는 폴더를 보지 않는다(`FOLDER_VISIBLE_TO_USER`가 거짓). 볼 수 없는 폴더 안의 「개별 지정」 문서는 보이되 폴더 정보는 응답 어디에도 싣지 않는다.
+**폴더 범위도 이 술어 안에서 판정한다** (ADR-054). 폴더에 들었고 「폴더 범위 따름」(`folder_id IS NOT NULL AND follows_folder`)인 문서는 문서 자신의 `visibility`·부여 대신 **최상위 폴더**의 범위(조직 공개 · 폴더를 만든 사람 · `folder_grants`의 사용자·그룹)로 판정하고, 「개별 지정」 문서는 지금처럼 문서 자신의 범위로 판정한다. 소유자는 어느 쪽이든 자기 문서를 본다. 최상위 폴더 판정은 문서의 폴더에서 `parent_id`를 따라 올라가는 **상관 재귀 `EXISTS (WITH RECURSIVE …)`** 조각 하나이고, 폴더 술어 `FOLDER_VISIBLE_TO_USER`(트리·폴더 목록·검색 폴더 필터)가 시작 폴더만 바꿔 같은 조각을 쓴다. 실효 범위는 저장하지 않으므로 폴더 범위·그룹 구성원 변경은 다음 조회부터 반영된다. 같은 판정을 비상관 `IN (서브쿼리)`로 쓰면 3천 청크에서 HNSW를 버리고 generic plan에서 15배 느려졌다 — 형태를 바꾸지 않는다(`db.py`의 `prepare_threshold=None`도 그 전제다). 공유 주체는 폴더를 보지 않는다(`FOLDER_VISIBLE_TO_USER`가 거짓). 볼 수 없는 폴더 안의 「개별 지정」 문서는 보이되 폴더 정보는 응답 어디에도 싣지 않는다. 소유자는 폴더 범위가 좁혀져 자기 문서의 폴더를 못 보게 될 수 있다 — 소유자에게만 상세·열람 범위 응답에 `hidden_folder: true`를 싣고(폴더 id·이름·경로는 여전히 없다) 화면이 이름 없이 알린다.
 
 `services/grants.py`는 그룹·구성원 관리와 부여 대상 이름 해석을 맡는다(#97 b). 문서 열람 범위 조회·교체는 문서 서비스가 소유자 경계를 지키며 이 서비스를 재사용한다(ADR-044 「관리 경로」).
 
@@ -767,7 +767,7 @@ OpenSQL `patroni.yml`의 PostgreSQL 파라미터는 `max_connections: 100`이다
 |---|---|
 | `POST /api/documents` | multipart 업로드. 형식별 파서로 추출 → INSERT. 여기서 트리거가 파이프라인을 자동 기동 — 임베딩 관련 코드 없음. **이미지와 텍스트 레이어가 빈 쪽이 있는 PDF는 추출하지 않고 `extraction_status='pending'`으로 INSERT해 OCR을 워커 잡에 넘긴다** (「추출 잡」). 그 밖의 형식에서 **텍스트 추출 결과가 비면 400** (아래). **원본 파일은 같은 트랜잭션에서 `document_files`에 1판으로 저장한다** — 원본 저장이 실패하면 문서·텍스트 버전·잡도 남지 않는다. 상한 `MAX_UPLOAD_MB`(기본 50) 초과는 413. 선택 헤더 `Idempotency-Key`(아래) |
 | `POST /api/documents/text` | JSON 텍스트 공급(`txt`·`md`). 선택 `folder_id`는 업로드 Form과 같다(아래 「폴더」). `filename`은 NULL이며, 파생 데이터는 업로드 경로와 동일하게 DB 트리거가 만든다. 빈 문서 텍스트와 500,000자 초과는 400. 선택 헤더 `Idempotency-Key`(아래) |
-| `GET /api/documents` | 목록 + `status`(임베딩 상태)/`extraction_status`/`tag`/`q`(제목 부분 일치)/`content_type` 필터. `folder_id`(그 폴더에 **직접** 든 문서만, 하위 폴더 제외) 필터. `sort=updated`(기본, 최근 수정순) 또는 `title`(제목순). embedding_status·extraction_status 포함. 인식 실패 문서는 `status=pending`에 남으므로 곧 임베딩될 문서는 `extraction_status=done`을 함께 준다 (ADR-052 결정 4 보강) |
+| `GET /api/documents` | 목록 + `status`(임베딩 상태)/`extraction_status`/`tag`/`q`(제목 부분 일치)/`content_type` 필터. `folder_id`(그 폴더에 **직접** 든 문서만, 하위 폴더 제외) 필터. `sort=updated`(기본, 최근 수정순) 또는 `title`(제목순). embedding_status·extraction_status 포함. 요약·상세에는 문서 자신의 `visibility`와 함께 실제로 적용되는 공개범위 `effective_visibility`(「폴더 범위 따름」이면 최상위 폴더의 값 — 폴더로 만든 문서의 자기 범위는 `private`로 닫혀 있다)를 싣는다. 인식 실패 문서는 `status=pending`에 남으므로 곧 임베딩될 문서는 `extraction_status=done`을 함께 준다 (ADR-052 결정 4 보강) |
 | `GET /api/documents?limit=&offset=` | 같은 목록의 한 페이지(`limit` 1~100). 빼면 전부 — MCP·export는 전체를 본다. 첫 화면은 50건씩 쓴다 (#95-d) |
 | `GET /api/documents/count` | 목록과 같은 `status`·`extraction_status`·`tag`·`q`·`content_type`·`folder_id` 조건의 전체 건수 `{total}`. 화면은 이 건수로 페이지를 나눈다 |
 | `GET /api/documents/tags` | 열람 가능한 문서의 태그 목록 `string[]`. 중복 없이 태그순이며 보이지 않는 문서의 태그는 포함하지 않는다 |
@@ -786,7 +786,7 @@ OpenSQL `patroni.yml`의 PostgreSQL 파라미터는 `max_connections: 100`이다
 | `GET /api/documents/{id}/links` | **본문이 가리키는 위키링크.** 조회자의 열람 범위에서 해석하며, 대상이 없거나 보이지 않으면 `document_id: null` (ADR-030) |
 | `GET /api/documents/{id}/backlinks` | **이 문서를 가리키는 문서.** 열람 가능한 출발 문서만 |
 | `POST /api/search` | 하이브리드 검색 + 관계 순회 (아래). 선택 `folder_id`는 그 폴더와 **하위 폴더**의 문서로 직접 결과를 좁힌다 |
-| `POST /api/ask` | **근거 기반 답변** — 로그인 필요. 검색과 같은 단일 SQL로 근거를 고른 뒤 답변 프로바이더가 답한다. `ANSWER_PROVIDER=off`(기본)면 `status: "disabled"` (아래 「근거 기반 답변」, ADR-043) |
+| `POST /api/ask` | **근거 기반 답변** — 로그인 필요. 검색과 같은 단일 SQL로 근거를 고른 뒤 답변 프로바이더가 답한다. 선택 `folder_id`는 검색과 같다. `ANSWER_PROVIDER=off`(기본)면 `status: "disabled"` (아래 「근거 기반 답변」, ADR-043) |
 | `POST /api/auth/login` · `logout` · `GET /api/auth/me` | 최소 로그인. 세션 토큰은 `sessions` 테이블에 저장 |
 | `POST /api/auth/tokens` · `GET /api/auth/tokens` · `DELETE /api/auth/tokens/{id}` | **세션 전용** API 토큰 발급·목록·폐기. 원문은 발급 응답에만 반환하며 기본 scope는 `read` |
 | `PUT /api/auth/password` | **세션 전용** 자기 비밀번호 변경. 현재 비밀번호를 확인하고, 바꾼 뒤 그 계정의 세션을 전부 무효화한다. 틀린 현재 비밀번호는 403(세션은 유효하므로 401이 아니다). API 토큰은 폐기하지 않는다 (ADR-040) |
@@ -798,7 +798,7 @@ OpenSQL `patroni.yml`의 PostgreSQL 파라미터는 `max_connections: 100`이다
 | `PUT /api/admin/groups/{id}/members/{username}` · `DELETE /api/admin/groups/{id}/members/{username}` | **관리자·세션 전용**. 구성원 추가·제거 (#97 b) |
 | `GET /api/principals` | **로그인**. 부여 대상 사용자명·그룹명 목록. 익명은 401 (#97 b) |
 | `GET /api/documents/{id}/access` | **로그인·소유자 전용**. 열람 범위 설정 조회. 보이는 비소유자는 403, 안 보이면 404 (#97 b) |
-| `PUT /api/documents/{id}/access` | **소유자·세션 전용**. `{visibility, users, groups, follows_folder}` — 폴더 안 문서는 `follows_folder`로 「폴더 범위 따름」↔「개별 지정」을 바꾼다(개별 지정에는 `visibility` 필수, 「폴더 범위 따름」에는 `visibility`·`users`·`groups`를 함께 보내면 400). `{visibility, users, groups}`로 전체 교체(저장은 바뀐 부여만 DELETE·INSERT — 감사 기록이 실제 변경만 남도록, ADR-055). 보이는 비소유자는 403, 안 보이면 404. 조직 공개로 바꾸면 사용자·그룹 부여만 삭제하고 공유 부여는 유지 (#97 b·c) |
+| `PUT /api/documents/{id}/access` | **소유자·세션 전용**. `{visibility, users, groups, follows_folder}` — 폴더 안 문서는 `follows_folder`로 「폴더 범위 따름」↔「개별 지정」을 바꾼다(개별 지정에는 `visibility` 필수, 「폴더 범위 따름」에는 `visibility`·`users`·`groups`를 함께 보내면 400. 지금 「폴더 범위 따름」인 문서에 `follows_folder` 없이 범위만 보내도 400 — 받으면 `visibility` 컬럼만 바뀌고 실효 범위는 폴더 그대로라 저장이 조용히 무시된다). `{visibility, users, groups}`로 전체 교체(저장은 바뀐 부여만 DELETE·INSERT — 감사 기록이 실제 변경만 남도록, ADR-055). 보이는 비소유자는 403, 안 보이면 404. 조직 공개로 바꾸면 사용자·그룹 부여만 삭제하고 공유 부여는 유지 (#97 b·c) |
 | `GET /api/folders` | **로그인**. 볼 수 있는 폴더 전체(평평한 목록, `parent_id`로 트리를 만든다). 각 폴더에 최상위 범위 요약 `scope`, 직접 든·볼 수 있는 문서 수 `document_count`, `inherited`(하위 폴더), `can_manage`·`can_change_access` (ADR-054) |
 | `POST /api/folders` `{name, parent_id?}` | 폴더 만들기. 쓰기 토큰 허용. 하위 폴더는 볼 수 있는 폴더 아래에 누구나 만든다. 새 최상위 폴더는 조직 공개 |
 | `PATCH /api/folders/{id}` `{name}` · `DELETE /api/folders/{id}` | 이름 변경·삭제 — 폴더를 만든 사람 또는 관리자(볼 수 있는 폴더에 한함). 쓰기 토큰 허용. 삭제는 빈 폴더만(하위 폴더나 문서가 있으면 「폴더가 비어 있지 않습니다.」) |

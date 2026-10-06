@@ -280,10 +280,12 @@ class StepExecutor:
 
         prompt = preamble + step_file.read_text()
         try:
+            # 프롬프트는 stdin으로 넘긴다(`-p`는 인자가 없으면 stdin을 읽는다). argv로 넘기면
+            # 가드레일(docs 전체)이 macOS ARG_MAX를 넘어 Popen이 OSError로 executor째 죽는다(m26 step 3).
             result = subprocess.run(
                 ["claude", "-p", "--dangerously-skip-permissions",
-                 "--model", self._model, "--output-format", "json", prompt],
-                cwd=self._root, capture_output=True, text=True, timeout=1800,
+                 "--model", self._model, "--output-format", "json"],
+                cwd=self._root, input=prompt, capture_output=True, text=True, timeout=1800,
             )
         except subprocess.TimeoutExpired as e:
             # 예외를 그대로 올리면 executor가 통째로 죽어 재시도도 error 기록도 남지 않는다

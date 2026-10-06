@@ -12,6 +12,7 @@ const document: DocumentSummary = {
   version: 1,
   owner_id: "alice",
   visibility: "public",
+  effective_visibility: "public",
   tags: ["OpenSQL"],
   embedding_status: "ready",
   extraction_status: "done",
@@ -43,6 +44,18 @@ describe("useDocuments", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
+  });
+
+  it("폴더를 주면 목록과 건수 모두 folder_id로 조회한다", async () => {
+    const fetchMock = vi.fn().mockImplementation((url: string) => Promise.resolve(jsonResponse(url.includes("/count") ? { total: 1 } : [document])));
+    vi.stubGlobal("fetch", fetchMock);
+    renderHook(() => useDocuments({ folderId: "folder-1" }));
+    await flushRequest();
+    const urls = fetchMock.mock.calls.map(([url]) => String(url));
+    expect(urls).toEqual(expect.arrayContaining([
+      expect.stringMatching(/^\/api\/documents\?folder_id=folder-1/),
+      expect.stringMatching(/^\/api\/documents\/count\?folder_id=folder-1/),
+    ]));
   });
 
   it("마운트 직후 조회하고 기본 2초마다 다시 조회한다", async () => {

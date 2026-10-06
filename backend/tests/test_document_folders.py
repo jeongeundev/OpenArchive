@@ -293,3 +293,103 @@ async def test_follow_folder_rejects_individual_scope_values(conn, extra):
     access = await d.get_access(conn, doc["id"], user_id="owner")
     assert access["follows_folder"] is False
     assert access["visibility"] == "private" and access["users"] == ["kim"]
+
+
+async def test_effective_visibility_follows_root_folder(conn):
+    """화면의 「열람 범위」는 실제로 적용되는 범위다 — 폴더로 만든 문서의 자기 범위(private)가 아니다."""
+    public = await f.create_folder(conn, user_id="kim", name="인사")
+    child = await f.create_folder(conn, user_id="kim", name="채용", parent_id=public["id"])
+    private = await f.create_folder(
+        conn, user_id="kim", name="RFP", visibility="private", grant_users=["owner"]
+    )
+    created = await make(conn, child["id"])
+    assert (created["visibility"], created["effective_visibility"]) == ("private", "public")
+
+    def effective(rows, doc_id):
+        return next(row["effective_visibility"] for row in rows if row["id"] == doc_id)
+
+    assert effective(await d.list_documents(conn, user_id="lee"), created["id"]) == "public"
+    detail = await d.get_document(conn, created["id"], user_id="lee")
+    assert (detail["visibility"], detail["effective_visibility"]) == ("private", "public")
+
+    await d.move_document(conn, created["id"], user_id="owner", folder_id=private["id"])
+    detail = await d.get_document(conn, created["id"], user_id="owner")
+    assert detail["effective_visibility"] == "private"
+
+    await d.set_access(
+        conn, created["id"], user_id="owner", follows_folder=False,
+        visibility="public", users=[], groups=[],
+    )
+    detail = await d.get_document(conn, created["id"], user_id="owner")
+    assert detail["effective_visibility"] == "public"
+
+    outside = await make(conn, visibility="public")
+    assert effective(await d.list_documents(conn, user_id="lee"), outside["id"]) == "public"
+
+
+async def test_owner_learns_folder_is_hidden_without_its_name(conn):
+    """볼 수 없게 된 폴더 안의 자기 문서 — 소유자에게는 그 사실만 알리고 폴더 정보는 싣지 않는다."""
+    hidden = await f.create_folder(conn, user_id="kim", name="인사")
+    shown = await f.create_folder(conn, user_id="owner", name="공개")
+    following = await make(conn, hidden["id"])
+    individual = await make(conn, hidden["id"])
+    await d.set_access(
+        conn, individual["id"], user_id="owner", follows_folder=False,
+        visibility="public", users=[], groups=[],
+    )
+    await f.set_folder_access(
+        conn, hidden["id"], user_id="kim", visibility="private", users=[], groups=[]
+    )
+    for doc in (following, individual):
+        detail = await d.get_document(conn, doc["id"], user_id="owner")
+        access = await d.get_access(conn, doc["id"], user_id="owner")
+        assert (detail["folder"], detail["hidden_folder"]) == (None, True)
+        assert (access["folder"], access["folder_scope"], access["hidden_folder"]) == (None, None, True)
+    # 개별 지정으로 보는 남에게는 숨은 폴더가 있다는 사실도 새지 않는다 (D5).
+    seen_by_lee = await d.get_document(conn, individual["id"], user_id="lee")
+    assert (seen_by_lee["folder"], seen_by_lee["hidden_folder"]) == (None, False)
+
+    in_shown = await make(conn, shown["id"])
+    unfiled = await make(conn, visibility="private")
+    for doc in (in_shown, unfiled):
+        assert (await d.get_document(conn, doc["id"], user_id="owner"))["hidden_folder"] is False
+        assert (await d.get_access(conn, doc["id"], user_id="owner"))["hidden_folder"] is False
+
+
+@pytest.mark.parametrize("hide", [False, True])
+async def test_scope_without_switch_rejected_while_following_folder(conn, hide):
+    # follows_folder 없이 범위만 받으면 visibility 컬럼만 바뀌고 실효 범위는 폴더 그대로다 — 저장은
+    # 성공으로 보이는데 아무것도 열리거나 닫히지 않는다.
+    folder = await f.create_folder(conn, user_id="kim", name="인사")
+    doc = await make(conn, folder["id"])
+    if hide:
+        await f.set_folder_access(
+            conn, folder["id"], user_id="kim", visibility="private", users=[], groups=[]
+        )
+    with pytest.raises(ValueError, match="폴더 범위를 따르는 문서는 개별 지정으로 바꿔야"):
+        await d.set_access(conn, doc["id"], user_id="owner", visibility="public", users=[], groups=[])
+    access = await d.get_access(conn, doc["id"], user_id="owner")
+    assert (access["follows_folder"], access["visibility"]) == (True, "private")
+
+    switched = await d.set_access(
+        conn, doc["id"], user_id="owner", follows_folder=False,
+        visibility="public", users=[], groups=[],
+    )
+    assert (switched["follows_folder"], switched["visibility"]) == (False, "public")
+    assert await d.count_documents(conn, user_id="lee") == 1
+
+
+async def test_scope_without_switch_allowed_outside_folder_and_for_individual(conn):
+    # 폴더 밖 문서도 follows_folder 기본값이 true다 — 판정은 folder_id와 함께 봐야 한다.
+    unfiled = await make(conn, visibility="private")
+    saved = await d.set_access(conn, unfiled["id"], user_id="owner", visibility="public", users=[], groups=[])
+    assert saved["visibility"] == "public"
+
+    folder = await f.create_folder(conn, user_id="kim", name="인사")
+    doc = await make(conn, folder["id"])
+    await d.set_access(
+        conn, doc["id"], user_id="owner", follows_folder=False,
+        visibility="private", users=[], groups=[],
+    )
+    saved = await d.set_access(conn, doc["id"], user_id="owner", visibility="public", users=[], groups=[])
+    assert (saved["follows_folder"], saved["visibility"]) == (False, "public")

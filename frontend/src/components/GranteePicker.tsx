@@ -10,18 +10,19 @@ export function GranteePicker({
   groups,
   onChange,
   disabled = false,
+  description = "선택한 사용자와 그룹 구성원만 이 문서를 봅니다. 대상을 고르지 않으면 소유자만 봅니다.",
 }: {
   principals: Principals;
   users: string[];
   groups: string[];
   onChange: (next: { users: string[]; groups: string[] }) => void;
   disabled?: boolean;
+  /** 대상 선택 안내. 문서가 기본이고, 폴더 범위 패널은 폴더용 문구를 넘긴다. */
+  description?: string;
 }): React.ReactElement {
   return (
     <div className="space-y-4 text-sm">
-      <p className="text-neutral-500">
-        선택한 사용자와 그룹 구성원만 이 문서를 봅니다. 대상을 고르지 않으면 소유자만 봅니다.
-      </p>
+      <p className="text-neutral-500">{description}</p>
 
       <GranteeList
         candidates={principals.users}

@@ -13,9 +13,11 @@ import {
   removeShareDocument,
   setDocumentAccess,
 } from "@/lib/api";
+import { scopeLabel } from "@/lib/folders";
 import {
   VISIBILITY_LABEL,
   type DocumentAccess,
+  type FolderScope,
   type Principals,
   type ShareSummary,
   type Visibility,
@@ -42,6 +44,7 @@ export function AccessPanel({
   const [visibility, setVisibility] = useState<Visibility>("public");
   const [users, setUsers] = useState<string[]>([]);
   const [groups, setGroups] = useState<string[]>([]);
+  const [followsFolder, setFollowsFolder] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -78,6 +81,7 @@ export function AccessPanel({
         setVisibility(access.visibility);
         setUsers(access.users);
         setGroups(access.groups);
+        setFollowsFolder((access.folder != null || access.hidden_folder) && access.follows_folder);
         setPrincipals(directory);
         setLoadError(null);
       })
@@ -90,18 +94,26 @@ export function AccessPanel({
     return () => controller.abort();
   }, [documentId]);
 
+  const folderScope = loaded?.folder != null ? loaded.folder_scope : null;
+  // 볼 수 없게 된 폴더 안 문서도 폴더 안이다 — 이름·범위 없이 그 사실만 보인다 (ADR-054 D5).
+  const inFolder = loaded !== null && (loaded.folder != null || loaded.hidden_folder);
+
   async function save(): Promise<void> {
     if (saving) return;
     setSaving(true);
     setError(null);
     setMessage(null);
     // 조직 공개에는 부여 대상을 둘 수 없다 — 서버도 400으로 거부한다.
-    const next: DocumentAccess =
+    const next: FolderScope =
       visibility === "public"
         ? { visibility, users: [], groups: [] }
         : { visibility, users, groups };
+    // 폴더 밖 문서는 follows_folder를 보내지 않는다. 「폴더 범위 따름」에는 공개범위를 함께 보내면 서버가 400으로 거부한다.
     try {
-      const saved = await setDocumentAccess(documentId, next);
+      const saved = await setDocumentAccess(
+        documentId,
+        !inFolder ? next : followsFolder ? { followsFolder: true } : { ...next, followsFolder: false },
+      );
       setLoaded(saved);
       setUsers(saved.users);
       setGroups(saved.groups);
@@ -116,7 +128,7 @@ export function AccessPanel({
   }
 
   const controlsDisabled = disabled || saving || loaded === null;
-  const sharedOutside = visibility === "public" && (shares ?? []).some((share) => share.included);
+  const sharedOutside = !(inFolder && followsFolder) && visibility === "public" && (shares ?? []).some((share) => share.included);
 
   const clearsGrants =
     visibility === "public" &&
@@ -132,39 +144,73 @@ export function AccessPanel({
         <p className="text-sm text-neutral-500">불러오는 중…</p>
       ) : (
         <>
-          <fieldset disabled={controlsDisabled}>
-            <legend className="sr-only">열람 범위</legend>
-            <div className="flex gap-4 text-sm text-neutral-300">
-              {(["public", "private"] as const).map((value) => (
-                <label className="flex items-center gap-2" key={value}>
+          {inFolder ? (
+            <fieldset disabled={controlsDisabled}>
+              <legend className="sr-only">폴더 범위 상속</legend>
+              <div className="flex flex-wrap gap-4 text-sm text-neutral-300">
+                <label className="flex items-center gap-2">
                   <input
-                    checked={visibility === value}
-                    name="document-visibility"
-                    onChange={() => setVisibility(value)}
+                    checked={followsFolder}
+                    name="document-inherit"
+                    onChange={() => setFollowsFolder(true)}
                     type="radio"
-                    value={value}
                   />
-                  {VISIBILITY_LABEL[value]}
+                  폴더 범위 따름({folderScope !== null ? scopeLabel(folderScope) : "볼 수 없는 폴더"})
                 </label>
-              ))}
-            </div>
-          </fieldset>
-          {visibility === "private" ? (
-            <GranteePicker
-              disabled={controlsDisabled}
-              groups={groups}
-              onChange={(next) => {
-                setUsers(next.users);
-                setGroups(next.groups);
-              }}
-              principals={principals}
-              users={users}
-            />
-          ) : (
-            <p className="text-sm text-neutral-500">
-              조직 공개 문서는 로그인한 모든 사용자가 봅니다.
-              {clearsGrants ? " 저장하면 지정한 부여 대상도 함께 지워집니다. 외부 공유 포함은 유지됩니다." : ""}
-            </p>
+                <label className="flex items-center gap-2">
+                  <input
+                    checked={!followsFolder}
+                    name="document-inherit"
+                    onChange={() => setFollowsFolder(false)}
+                    type="radio"
+                  />
+                  개별 지정
+                </label>
+              </div>
+              <p className="mt-2 text-sm text-neutral-500">
+                {followsFolder
+                  ? "폴더를 만든 사람이 범위를 바꾸면 이 문서에도 적용됩니다."
+                  : "폴더 범위와 상관없이 이 문서만의 열람 범위를 씁니다."}
+              </p>
+            </fieldset>
+          ) : null}
+          {inFolder && followsFolder ? null : (
+            <>
+              <fieldset disabled={controlsDisabled}>
+                <legend className="sr-only">열람 범위</legend>
+                <div className="flex gap-4 text-sm text-neutral-300">
+                  {(["public", "private"] as const).map((value) => (
+                    <label className="flex items-center gap-2" key={value}>
+                      <input
+                        checked={visibility === value}
+                        name="document-visibility"
+                        onChange={() => setVisibility(value)}
+                        type="radio"
+                        value={value}
+                      />
+                      {VISIBILITY_LABEL[value]}
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
+              {visibility === "private" ? (
+                <GranteePicker
+                  disabled={controlsDisabled}
+                  groups={groups}
+                  onChange={(next) => {
+                    setUsers(next.users);
+                    setGroups(next.groups);
+                  }}
+                  principals={principals}
+                  users={users}
+                />
+              ) : (
+                <p className="text-sm text-neutral-500">
+                  조직 공개 문서는 로그인한 모든 사용자가 봅니다.
+                  {clearsGrants ? " 저장하면 지정한 부여 대상도 함께 지워집니다. 외부 공유 포함은 유지됩니다." : ""}
+                </p>
+              )}
+            </>
           )}
           <button
             className="rounded-lg bg-white px-4 py-2 text-sm text-black hover:bg-neutral-200 disabled:bg-neutral-700 disabled:text-neutral-400"

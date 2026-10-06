@@ -13,6 +13,8 @@ import type {
   DiagnosticsResponse,
   EmbeddingStatus,
   GroupSummary,
+  Folder,
+  FolderScope,
   Principals,
   RelatedResponse,
   ResolvedLink,
@@ -383,6 +385,7 @@ export function revokeShareToken(shareId: string, tokenId: string): Promise<void
 export type DocumentSort = "updated" | "title";
 
 export interface DocumentFilters {
+  folderId?: string;
   q?: string;
   contentType?: ContentType;
   tag?: string;
@@ -392,6 +395,7 @@ export interface DocumentFilters {
 
 function documentFilterQuery(params?: Omit<DocumentFilters, "sort">): URLSearchParams {
   const query = new URLSearchParams();
+  if (params?.folderId) query.set("folder_id", params.folderId);
   if (params?.status?.trim()) query.set("status", params.status);
   if (params?.tag?.trim()) query.set("tag", params.tag);
   if (params?.q?.trim()) query.set("q", params.q);
@@ -459,7 +463,9 @@ export function uploadDocument(input: {
   file: File;
   title?: string;
   tags: string[];
-  visibility: Visibility;
+  folderId?: string;
+  // 폴더 문서에는 개별 범위를 싣지 않는다 — 폴더 밖 문서만 쓴다.
+  visibility?: Visibility;
   grantUsers?: string[];
   grantGroups?: string[];
 }): Promise<DocumentSummary> {
@@ -467,9 +473,13 @@ export function uploadDocument(input: {
   body.append("file", input.file);
   if (input.title !== undefined) body.append("title", input.title);
   for (const tag of input.tags) body.append("tags", tag);
-  body.append("visibility", input.visibility);
-  for (const user of input.grantUsers ?? []) body.append("grant_users", user);
-  for (const group of input.grantGroups ?? []) body.append("grant_groups", group);
+  if (input.folderId) {
+    body.append("folder_id", input.folderId);
+  } else {
+    if (input.visibility !== undefined) body.append("visibility", input.visibility);
+    for (const user of input.grantUsers ?? []) body.append("grant_users", user);
+    for (const group of input.grantGroups ?? []) body.append("grant_groups", group);
+  }
 
   return request<DocumentSummary>("/api/documents", {
     method: "POST",
@@ -570,11 +580,17 @@ export function getDocumentAccess(id: string, signal?: AbortSignal): Promise<Doc
   return request<DocumentAccess>(`/api/documents/${encodeURIComponent(id)}/access`, { signal });
 }
 
-export function setDocumentAccess(id: string, access: DocumentAccess): Promise<DocumentAccess> {
+type DocumentAccessInput = { followsFolder: true } | (FolderScope & { followsFolder?: false });
+
+export function setDocumentAccess(id: string, access: DocumentAccessInput): Promise<DocumentAccess> {
+  const body = access.followsFolder === true
+    ? { follows_folder: true }
+    : { visibility: access.visibility, users: access.users, groups: access.groups,
+        ...(access.followsFolder === false ? { follows_folder: false } : {}) };
   return request<DocumentAccess>(`/api/documents/${encodeURIComponent(id)}/access`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(access),
+    body: JSON.stringify(body),
   });
 }
 
@@ -592,7 +608,8 @@ export function reembedDocument(id: string): Promise<DocumentSummary> {
   });
 }
 
-interface SearchRequestInput {
+export interface SearchRequestInput {
+  folderId?: string | null;
   query: string;
   tags?: string[];
   contentType?: ContentType | null;
@@ -602,6 +619,7 @@ interface SearchRequestInput {
 function searchBody(input: SearchRequestInput): string {
   const body: {
     query: string;
+    folder_id?: string;
     tags?: string[];
     content_type?: ContentType;
     k?: number;
@@ -610,6 +628,7 @@ function searchBody(input: SearchRequestInput): string {
   // 빈 배열을 넘기면 d.tags && '{}' 가 항상 거짓이 되어 결과가 0건이 된다.
   if (input.tags !== undefined && input.tags.length > 0) body.tags = input.tags;
   if (input.contentType != null) body.content_type = input.contentType;
+  if (input.folderId) body.folder_id = input.folderId;
   if (input.k !== undefined) body.k = input.k;
   return JSON.stringify(body);
 }
@@ -647,4 +666,42 @@ export function getDiagnostics(signal?: AbortSignal): Promise<DiagnosticsRespons
 
 export function getClusters(signal?: AbortSignal): Promise<ClustersResponse> {
   return request<ClustersResponse>("/api/clusters", { signal });
+}
+
+
+export function listFolders(signal?: AbortSignal): Promise<Folder[]> {
+  return request<Folder[]>("/api/folders", { signal });
+}
+
+export function createFolder(input: { name: string; parentId?: string | null }): Promise<Folder> {
+  return request<Folder>("/api/folders", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name: input.name, ...(input.parentId !== undefined ? { parent_id: input.parentId } : {}) }),
+  });
+}
+
+export function renameFolder(id: string, name: string): Promise<Folder> {
+  return request<Folder>(`/api/folders/${encodeURIComponent(id)}`, {
+    method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }),
+  });
+}
+
+export function deleteFolder(id: string): Promise<void> {
+  return request<void>(`/api/folders/${encodeURIComponent(id)}`, { method: "DELETE" }, { parse: false });
+}
+
+export function getFolderAccess(id: string, signal?: AbortSignal): Promise<FolderScope> {
+  return request<FolderScope>(`/api/folders/${encodeURIComponent(id)}/access`, { signal });
+}
+
+export function setFolderAccess(id: string, scope: FolderScope): Promise<FolderScope> {
+  return request<FolderScope>(`/api/folders/${encodeURIComponent(id)}/access`, {
+    method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(scope),
+  });
+}
+
+export function moveDocument(id: string, folderId: string | null): Promise<DocumentDetail> {
+  return request<DocumentDetail>(`/api/documents/${encodeURIComponent(id)}/folder`, {
+    method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ folder_id: folderId }),
+  });
 }

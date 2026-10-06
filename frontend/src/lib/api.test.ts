@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   ApiError,
+  listFolders, createFolder, renameFolder, deleteFolder, getFolderAccess, setFolderAccess, moveDocument,
   addGroupMember,
   addShareDocument,
   ask,
@@ -220,7 +221,7 @@ describe("API responses", () => {
       .mockResolvedValue(new Response(JSON.stringify({ items: [], sql: "" })));
     vi.stubGlobal("fetch", fetchMock);
 
-    await search({ query: "OpenSQL", tags: [], contentType: null, k: 10 });
+    await search({ query: "OpenSQL", tags: [], contentType: null, folderId: null, k: 10 });
 
     const body = JSON.parse(fetchMock.mock.calls[0][1]?.body as string);
     expect(body).not.toHaveProperty("tags");
@@ -825,5 +826,78 @@ describe("shares", () => {
     await addShareDocument("s1", "d1").catch(() => undefined);
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+
+describe("folder client contracts", () => {
+  afterEach(() => vi.unstubAllGlobals());
+  it("sends folder methods, encoded paths, bodies and signals", async () => {
+    const fetchMock = vi.fn().mockImplementation((_url, init) => Promise.resolve(
+      init.method === "DELETE" ? new Response(null, { status: 204 }) : new Response(JSON.stringify({ id: "f" })),
+    ));
+    vi.stubGlobal("fetch", fetchMock);
+    const signal = new AbortController().signal;
+    const scope = { visibility: "private" as const, users: ["kim"], groups: ["사업팀"] };
+    await listFolders(signal);
+    await createFolder({ name: "채용", parentId: "parent" });
+    await createFolder({ name: "인사" });
+    await renameFolder("a/b", "RFP");
+    await deleteFolder("a/b");
+    await getFolderAccess("a/b", signal);
+    await setFolderAccess("a/b", scope);
+    await moveDocument("a/b", "f");
+    await moveDocument("a/b", null);
+    const calls = fetchMock.mock.calls;
+    expect(calls.map(([url]) => url)).toEqual([
+      "/api/folders", "/api/folders", "/api/folders", "/api/folders/a%2Fb", "/api/folders/a%2Fb",
+      "/api/folders/a%2Fb/access", "/api/folders/a%2Fb/access", "/api/documents/a%2Fb/folder", "/api/documents/a%2Fb/folder",
+    ]);
+    expect(calls[0][1].signal).toBe(signal);
+    expect(calls[5][1].signal).toBe(signal);
+    for (const [index, method, body] of [
+      [1, "POST", {name: "채용", parent_id: "parent"}], [2, "POST", {name: "인사"}],
+      [3, "PATCH", {name: "RFP"}], [6, "PUT", scope],
+      [7, "PUT", {folder_id: "f"}], [8, "PUT", {folder_id: null}],
+    ] as const) {
+      expect(calls[index][1].method).toBe(method);
+      expect(new Headers(calls[index][1].headers).get("Content-Type")).toBe("application/json");
+      expect(JSON.parse(calls[index][1].body)).toEqual(body);
+    }
+    expect(calls[4][1].method).toBe("DELETE");
+  });
+  it("passes folder filters to lists, counts, search and ask", async () => {
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(new Response(JSON.stringify({total: 0}))));
+    vi.stubGlobal("fetch", fetchMock);
+    await listDocuments({folderId: "f"});
+    await countDocuments({folderId: "f"});
+    await search({query: "질문", folderId: "f"});
+    await ask({query: "질문", folderId: "f"});
+    await search({query: "질문", folderId: null});
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/documents?folder_id=f");
+    expect(fetchMock.mock.calls[1][0]).toBe("/api/documents/count?folder_id=f");
+    for (const index of [2, 3]) expect(JSON.parse(fetchMock.mock.calls[index][1].body)).toEqual({query: "질문", folder_id: "f"});
+    expect(JSON.parse(fetchMock.mock.calls[4][1].body)).toEqual({query: "질문"});
+  });
+  it("omits individual access fields from folder uploads", async () => {
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(new Response("{}")));
+    vi.stubGlobal("fetch", fetchMock);
+    await uploadDocument({file: new File(["text"], "a.txt"), tags: ["tag"], visibility: "private", grantUsers: ["kim"], grantGroups: ["team"], folderId: "f"});
+    const body = fetchMock.mock.calls[0][1].body as FormData;
+    expect(body.get("folder_id")).toBe("f");
+    for (const field of ["visibility", "grant_users", "grant_groups"]) expect(body.has(field)).toBe(false);
+    expect(body.getAll("tags")).toEqual(["tag"]);
+    expect(body.get("file")).toBeInstanceOf(File);
+  });
+  it("sends only the appropriate document access shape", async () => {
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(new Response("{}")));
+    vi.stubGlobal("fetch", fetchMock);
+    const scope = {visibility: "private" as const, users: ["kim"], groups: []};
+    await setDocumentAccess("d", {followsFolder: true});
+    await setDocumentAccess("d", {followsFolder: false, ...scope});
+    await setDocumentAccess("d", scope);
+    expect(fetchMock.mock.calls.map(([, init]) => JSON.parse(init.body))).toEqual([
+      {follows_folder: true}, {follows_folder: false, ...scope}, scope,
+    ]);
   });
 });

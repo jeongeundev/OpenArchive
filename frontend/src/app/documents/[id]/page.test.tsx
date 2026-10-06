@@ -15,6 +15,7 @@ vi.mock("next/navigation", () => ({
 }));
 
 const detail: DocumentDetail = {
+  folder: null,
   id: "document-1",
   title: "OpenSQL 운영 가이드",
   filename: "guide.md",
@@ -23,6 +24,7 @@ const detail: DocumentDetail = {
   version: 2,
   owner_id: "alice",
   visibility: "public",
+  effective_visibility: "public",
   tags: ["OpenSQL"],
   embedding_status: "ready",
   extraction_status: "done",
@@ -55,6 +57,7 @@ function stubFetch(tagsResponse: () => Response) {
     if (url.endsWith("/related")) return Promise.resolve(jsonResponse(related));
     if (url.endsWith("/tag-suggestions")) return Promise.resolve(jsonResponse(suggestions));
     if (url === "/api/shares") return Promise.resolve(jsonResponse([]));
+    if (url === "/api/folders") return Promise.resolve(jsonResponse([]));
     if (url === "/api/principals") return Promise.resolve(jsonResponse({ users: ["alice", "bob"], groups: [] }));
     if (url.endsWith("/access")) return Promise.resolve(jsonResponse({ visibility: "public", users: [], groups: [] }));
     if (url.endsWith("/tags") && init?.method === "PUT") {
@@ -146,6 +149,7 @@ describe("문서 상세 페이지의 위키링크", () => {
       if (url.endsWith("/links")) return Promise.resolve(jsonResponse([{ title: "대상 문서", document_id: "target-1" }]));
       if (url.endsWith("/backlinks")) return Promise.resolve(jsonResponse([{ document_id: "source-1", title: "출발 문서" }]));
       if (url === "/api/shares") return Promise.resolve(jsonResponse([]));
+      if (url === "/api/folders") return Promise.resolve(jsonResponse([]));
       if (url === "/api/principals") return Promise.resolve(jsonResponse({ users: [], groups: [] }));
       if (url.endsWith("/access")) return Promise.resolve(jsonResponse({ visibility: "public", users: [], groups: [] }));
       if (url.endsWith("/related")) return Promise.resolve(jsonResponse(related));
@@ -176,6 +180,7 @@ describe("문서 상세 페이지의 위키링크", () => {
         return Promise.resolve(jsonResponse({ detail: "링크를 불러오지 못했습니다." }, 500));
       }
       if (url === "/api/shares") return Promise.resolve(jsonResponse([]));
+      if (url === "/api/folders") return Promise.resolve(jsonResponse([]));
       if (url === "/api/principals") return Promise.resolve(jsonResponse({ users: [], groups: [] }));
       if (url.endsWith("/access")) return Promise.resolve(jsonResponse({ visibility: "public", users: [], groups: [] }));
       if (url.endsWith("/related")) return Promise.resolve(jsonResponse(related));
@@ -197,6 +202,7 @@ describe("문서 상세 페이지의 위키링크", () => {
       if (url === "/api/auth/me") return Promise.resolve(jsonResponse({ authenticated: true, username: "alice", is_admin: false }));
       if (url.endsWith("/links") || url.endsWith("/backlinks")) return Promise.resolve(jsonResponse([]));
       if (url === "/api/shares") return Promise.resolve(jsonResponse([]));
+      if (url === "/api/folders") return Promise.resolve(jsonResponse([]));
       if (url === "/api/principals") return Promise.resolve(jsonResponse({ users: [], groups: [] }));
       if (url.endsWith("/access")) return Promise.resolve(jsonResponse({ visibility: "public", users: [], groups: [] }));
       if (url.endsWith("/related")) return Promise.resolve(jsonResponse(related));
@@ -265,6 +271,7 @@ describe("텍스트 인식에 실패한 문서", () => {
           return Promise.resolve(jsonResponse([]));
         }
         if (url === "/api/shares") return Promise.resolve(jsonResponse([]));
+        if (url === "/api/folders") return Promise.resolve(jsonResponse([]));
         if (url === "/api/principals") {
           return Promise.resolve(jsonResponse({ users: [], groups: [] }));
         }
@@ -308,12 +315,14 @@ describe("문서 상세의 열람 범위 패널", () => {
       if (url.endsWith("/related")) return Promise.resolve(jsonResponse(related));
       if (url.endsWith("/tag-suggestions")) return Promise.resolve(jsonResponse(suggestions));
       if (url === "/api/shares") return Promise.resolve(jsonResponse([]));
+      if (url === "/api/folders") return Promise.resolve(jsonResponse([]));
       if (url === "/api/principals") {
         return Promise.resolve(jsonResponse({ users: ["alice", "bob"], groups: ["인사팀"] }));
       }
       if (url.endsWith("/access") && init?.method === "PUT") {
         const body = JSON.parse(String(init.body)) as DocumentAccess;
-        current = { ...current, visibility: body.visibility };
+        // 폴더 밖 문서라 서버가 돌려주는 실제 적용 범위도 자기 범위와 같다.
+        current = { ...current, visibility: body.visibility, effective_visibility: body.visibility };
         return Promise.resolve(jsonResponse(body));
       }
       if (url.endsWith("/access")) {
@@ -369,6 +378,7 @@ describe("문서 상세 페이지의 인용 위치", () => {
       if (url.endsWith("/links") || url.endsWith("/backlinks")) return Promise.resolve(jsonResponse([]));
       if (url.endsWith("/related")) return Promise.resolve(jsonResponse(related));
       if (url.endsWith("/tag-suggestions")) return Promise.resolve(jsonResponse(suggestions));
+      if (url === "/api/folders") return Promise.resolve(jsonResponse([]));
       if (url.endsWith("/access")) return Promise.resolve(jsonResponse({ visibility: "public", users: [], groups: [] }));
       if (url.includes("/versions/1")) {
         return Promise.resolve(jsonResponse({
@@ -393,5 +403,34 @@ describe("문서 상세 페이지의 인용 위치", () => {
     expect(fetchMock.mock.calls.map(([url]) => url)).toContain(
       "/api/documents/document-1/versions/1?chunk=0",
     );
+  });
+});
+
+describe("볼 수 없는 폴더 안 자기 문서", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("폴더 이름 없이 그 사실을 알리고 열람 범위 패널도 폴더 안으로 다룬다", async () => {
+    const access: DocumentAccess = {
+      visibility: "private", users: [], groups: [], follows_folder: true,
+      folder: null, folder_scope: null, hidden_folder: true,
+    };
+    vi.stubGlobal("fetch", vi.fn((url: string) => {
+      if (url === "/api/auth/me") return Promise.resolve(jsonResponse({ authenticated: true, username: "alice", is_admin: false }));
+      if (url.endsWith("/links") || url.endsWith("/backlinks")) return Promise.resolve(jsonResponse([]));
+      if (url.endsWith("/related")) return Promise.resolve(jsonResponse(related));
+      if (url.endsWith("/tag-suggestions")) return Promise.resolve(jsonResponse(suggestions));
+      if (url === "/api/shares") return Promise.resolve(jsonResponse([]));
+      if (url === "/api/folders") return Promise.resolve(jsonResponse([]));
+      if (url === "/api/principals") return Promise.resolve(jsonResponse({ users: [], groups: [] }));
+      if (url.endsWith("/access")) return Promise.resolve(jsonResponse(access));
+      return Promise.resolve(jsonResponse({ ...detail, hidden_folder: true }));
+    }));
+
+    await renderPage();
+
+    expect(await screen.findByText("볼 수 없는 폴더")).toBeInTheDocument();
+    expect(await screen.findByRole("radio", { name: "폴더 범위 따름(볼 수 없는 폴더)" })).toBeChecked();
   });
 });

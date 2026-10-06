@@ -5,6 +5,7 @@ import { EXTRACTING_NOTICE, type DocumentDetail } from "@/lib/types";
 import { OriginalFiles } from "./OriginalFiles";
 
 const document: DocumentDetail = {
+  folder: null,
   id: "document-1",
   title: "OpenSQL 운영 가이드",
   filename: "guide-v2.pdf",
@@ -13,6 +14,7 @@ const document: DocumentDetail = {
   version: 3,
   owner_id: "alice",
   visibility: "public",
+  effective_visibility: "public",
   tags: [],
   embedding_status: "ready",
   extraction_status: "done",
