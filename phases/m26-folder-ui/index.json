@@ -63,7 +63,10 @@
       "type": "feat",
       "scope": "frontend",
       "desc": "업로드 폴더 지정과 「폴더 범위 따름」 표시",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-10-07T00:25:35+0900",
+      "summary": "UploadDropzone에 FolderSelect(「폴더」/「폴더 없음」, 기본값=홈 선택 폴더·변경 추종) 추가 — 폴더 선택 시 라디오·GranteePicker 대신 「폴더 범위 따름(…)」·개별 지정 안내·남의 폴더 안내를 보이고 folder_id만 전송(개별 범위 미전송), 홈이 folders·defaultFolderId 전달, TDD 및 프론트 AC 443개 테스트·타입 검사·린트·빌드 통과",
+      "completed_at": "2026-10-07T00:27:14+0900"
     },
     {
       "step": 6,
