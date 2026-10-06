@@ -51,7 +51,10 @@
       "name": "finder-docs",
       "type": "docs",
       "desc": "목록 찾기를 ARCHITECTURE·UI_GUIDE·OPERATIONS에 반영한다",
-      "status": "pending"
+      "status": "completed",
+      "summary": "목록 SQL 필터·정렬·건수·태그 API와 화면 찾기·빈 결과 안내를 ARCHITECTURE·UI_GUIDE·PRD에 반영; 코드 대조·AC 3개·git diff --check 통과",
+      "started_at": "2026-10-06T09:27:44+0900",
+      "completed_at": "2026-10-06T09:29:30+0900"
     }
   ],
   "created_at": "2026-10-06T09:13:34+0900"
