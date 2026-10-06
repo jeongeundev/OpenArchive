@@ -41,7 +41,10 @@
       "type": "feat",
       "scope": "frontend",
       "desc": "홈 화면 폴더 트리와 폴더 헤더 — 만들기·하위 폴더·이름 변경·빈 폴더 삭제·폴더별 목록",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-10-07T00:17:21+0900",
+      "summary": "FolderTree(전체 문서·새 폴더·계층·문서 수)·FolderHeader(경로·범위 표시·하위 폴더·이름 변경·삭제, 권한 없어도 버튼 노출·서버 403 표시)와 홈 ?folder= 선택(Suspense)·useDocuments folderId 연결, TDD 및 프론트 AC 429개 테스트·타입 검사·린트·빌드 통과",
+      "completed_at": "2026-10-07T00:23:40+0900"
     },
     {
       "step": 4,
