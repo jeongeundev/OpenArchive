@@ -118,7 +118,10 @@
       "type": "docs",
       "scope": "adr",
       "desc": "폴더 화면 규칙을 UI_GUIDE에 채우고 진행 표기를 고친다",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-10-07T00:34:03+0900",
+      "summary": "UI_GUIDE에 「폴더」 절(범위 라벨·트리·헤더·서버 거부 노출·범위 패널·업로드·상세·이동 확인·검색·감사 라벨) 추가, PRD·ROADMAP·ADR(054·044 3곳)의 「화면은 다음 phase/진행 중」을 화면 구현(#187 c)·CLI 진행 중으로 갱신, ARCHITECTURE ask folder_id 기존 반영 확인, AC 3개 통과",
+      "completed_at": "2026-10-07T00:35:12+0900"
     }
   ],
   "created_at": "2026-10-07T00:05:23+0900"
