@@ -85,7 +85,10 @@
       "type": "feat",
       "scope": "frontend",
       "desc": "열람 범위 패널의 「폴더 범위 따름 / 개별 지정」 전환",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-10-07T00:29:40+0900",
+      "summary": "AccessPanel에 폴더 안 문서 전용 「폴더 범위 따름(scopeLabel) / 개별 지정」 라디오 추가 — 따름이면 공개범위 칸을 감추고 {follows_folder:true}만, 개별 지정이면 {follows_folder:false,visibility,users,groups} 저장, 폴더 밖 문서는 기존 body 유지, TDD 및 프론트 AC 457개 테스트·타입 검사·린트·빌드 통과",
+      "completed_at": "2026-10-07T00:31:28+0900"
     },
     {
       "step": 8,
