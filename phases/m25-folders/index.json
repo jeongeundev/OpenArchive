@@ -8,7 +8,10 @@
       "type": "feat",
       "scope": "db",
       "desc": "폴더·폴더 부여 테이블과 문서의 폴더 컬럼을 만든다",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-10-06T14:06:15+0900",
+      "summary": "030 폴더·부여 테이블과 문서 폴더 컬럼·인덱스 구현, 지정 AC 242개 테스트·Ruff 및 범위 CHECK·하위 이름 유일성 mutant 검증 통과",
+      "completed_at": "2026-10-06T14:08:56+0900"
     },
     {
       "step": 1,
@@ -66,5 +69,6 @@
       "desc": "ADR-054 구현 확정·ADR-011 iterative_scan 개정과 아키텍처·규칙 문서 반영",
       "status": "pending"
     }
-  ]
+  ],
+  "created_at": "2026-10-06T14:06:15+0900"
 }
