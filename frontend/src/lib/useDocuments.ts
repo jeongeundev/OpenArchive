@@ -18,6 +18,7 @@ export function useDocuments(params?: DocumentFilters & {
   error: string | null;
   refresh: () => void;
 } {
+  const folderId = params?.folderId;
   const status = params?.status;
   const q = params?.q;
   const contentType = params?.contentType;
@@ -39,7 +40,7 @@ export function useDocuments(params?: DocumentFilters & {
     if (controller === null || inFlightRef.current) return;
 
     inFlightRef.current = true;
-    const filters = { status, q, contentType, tag };
+    const filters = { folderId, status, q, contentType, tag };
     void Promise.allSettled([
       listDocuments({ ...filters, sort, limit, offset }, controller.signal),
       countDocuments(filters, controller.signal),
@@ -56,7 +57,7 @@ export function useDocuments(params?: DocumentFilters & {
         inFlightRef.current = false;
         setLoading(false);
       });
-  }, [status, q, contentType, tag, sort, limit, offset]);
+  }, [folderId, status, q, contentType, tag, sort, limit, offset]);
 
   useEffect(() => {
     const controller = new AbortController();
