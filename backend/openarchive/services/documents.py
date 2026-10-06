@@ -867,7 +867,12 @@ async def get_document(
         (document_id,),
     )
     document["versions"] = await cur.fetchall()
-    document["folder"], _ = await _folder_info(conn, document.pop("folder_id"), user_id)
+    folder_id = document.pop("folder_id")
+    document["folder"], _ = await _folder_info(conn, folder_id, user_id)
+    # 소유자에게만 「볼 수 없는 폴더 안」임을 알린다 — 남에게는 폴더의 존재도 새지 않는다 (D5).
+    document["hidden_folder"] = (
+        folder_id is not None and document["folder"] is None and document["owner_id"] == user_id
+    )
 
     # 원본 판은 메타데이터만 싣는다. 상세는 화면이 수시로 부르는 응답이라 바이트를 섞지 않는다.
     await cur.execute(
@@ -1394,7 +1399,10 @@ async def _read_access(conn: psycopg.AsyncConnection, document_id: UUID, user_id
     row = await cur.fetchone()
     if row is None:
         raise DocumentNotFound
-    row["folder"], row["folder_scope"] = await _folder_info(conn, row.pop("folder_id"), user_id)
+    folder_id = row.pop("folder_id")
+    row["folder"], row["folder_scope"] = await _folder_info(conn, folder_id, user_id)
+    # 소유자 전용 응답이다 — 폴더 이름·경로 없이 「볼 수 없는 폴더 안」이라는 사실만 싣는다.
+    row["hidden_folder"] = folder_id is not None and row["folder"] is None
     return row
 
 
@@ -1438,11 +1446,18 @@ async def set_access(
         # 현재 부여 조회와 차이 반영 사이에 동시 교체가 끼지 않게 한다. 워커·024와 같은
         # 수준으로 잠가 FK 확인(FOR KEY SHARE)과는 부딪히지 않게 한다.
         cur = await conn.execute(
-            "SELECT folder_id FROM documents WHERE id = %s FOR NO KEY UPDATE", (document_id,)
+            "SELECT folder_id, follows_folder FROM documents WHERE id = %s FOR NO KEY UPDATE",
+            (document_id,),
         )
         locked = await cur.fetchone()
         if locked is None:
             raise DocumentNotFound
+        # 전환 없이 범위만 받으면 visibility 컬럼만 바뀌고 실효 범위는 폴더 그대로다 — 저장은
+        # 성공인데 아무것도 열리거나 닫히지 않는다. follows_folder 기본값이 true라 folder_id와 함께 본다.
+        if follows_folder is None and locked[0] is not None and locked[1]:
+            raise ValueError(
+                "폴더 범위를 따르는 문서는 개별 지정으로 바꿔야 공개범위·부여 대상을 정할 수 있습니다."
+            )
         if follows_folder is not None:
             if locked[0] is None:
                 raise ValueError("폴더에 없는 문서는 폴더 범위를 따를 수 없습니다.")

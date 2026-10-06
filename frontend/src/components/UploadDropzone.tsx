@@ -153,7 +153,7 @@ export function UploadDropzone({
           tags: cleanTags,
           // 폴더 문서는 폴더 범위를 따른다 — 개별 범위를 함께 보내면 서버가 400으로 거부한다.
           ...(folder !== null
-            ? { visibility, folderId: folder.id }
+            ? { folderId: folder.id }
             : {
                 visibility,
                 ...(visibility === "private"

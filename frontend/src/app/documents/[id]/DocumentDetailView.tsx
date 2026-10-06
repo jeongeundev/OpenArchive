@@ -84,6 +84,8 @@ export function DocumentDetailView(): React.ReactElement {
   // 화면에 보이는 태그 목록. 저장 전 편집분이 있으면 그쪽이 기준이다 — 추천 적용도
   // 이 목록 위에 얹어야 편집 중이던 태그가 조용히 사라지지 않는다.
   const tags = draftTags ?? document.tags;
+  // 폴더가 바뀌면(숨은 폴더에서 빠질 때 포함) 폴더 영역과 열람 범위 패널을 새로 그린다.
+  const folderKey = document.folder?.id ?? (document.hidden_folder ? "hidden" : "none");
 
   // 태그 저장은 여기 한 곳에서만 한다. 편집 저장과 추천 적용이 각자 updateTags를
   // 부르면 서로 다른 목록을 기준으로 삼게 된다.
@@ -115,10 +117,11 @@ export function DocumentDetailView(): React.ReactElement {
       <DocumentMeta document={document} />
 
       <DocumentFolderSection
-        key={document.folder?.id ?? "none"}
+        key={folderKey}
         disabled={editing}
         documentId={document.id}
         folder={document.folder}
+        hiddenFolder={document.hidden_folder ?? false}
         isOwner={isOwner}
         onMoved={refresh}
       />
@@ -127,7 +130,7 @@ export function DocumentDetailView(): React.ReactElement {
         <>
           <DocumentActions disabled={editing} document={document} onChanged={refresh} />
           {isOwner ? (
-            <AccessPanel key={document.folder?.id ?? "none"} disabled={editing} documentId={document.id} onSaved={refresh} />
+            <AccessPanel key={folderKey} disabled={editing} documentId={document.id} onSaved={refresh} />
           ) : null}
           <TagEditor disabled={editing} error={tagError} onChange={setDraftTags} onSave={() => void saveTags(tags)} saving={savingTags} tags={tags} />
         </>

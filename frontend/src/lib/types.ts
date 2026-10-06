@@ -125,6 +125,8 @@ export interface OriginalFile {
 
 export interface DocumentDetail extends DocumentSummary {
   folder: DocumentFolder | null;
+  /** 소유자에게만 참 — 볼 수 없는 폴더 안에 든 자기 문서. 폴더 정보는 오지 않는다. */
+  hidden_folder?: boolean;
   content: string;
   versions: TextVersion[];
   files: OriginalFile[];
@@ -309,6 +311,7 @@ export interface DocumentAccess {
   follows_folder: boolean;
   folder: DocumentFolder | null;
   folder_scope: FolderScope | null;
+  hidden_folder: boolean;
   visibility: Visibility;
   users: string[];
   groups: string[];

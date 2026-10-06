@@ -463,8 +463,9 @@ export function uploadDocument(input: {
   file: File;
   title?: string;
   tags: string[];
-  visibility: Visibility;
   folderId?: string;
+  // 폴더 문서에는 개별 범위를 싣지 않는다 — 폴더 밖 문서만 쓴다.
+  visibility?: Visibility;
   grantUsers?: string[];
   grantGroups?: string[];
 }): Promise<DocumentSummary> {
@@ -475,7 +476,7 @@ export function uploadDocument(input: {
   if (input.folderId) {
     body.append("folder_id", input.folderId);
   } else {
-    body.append("visibility", input.visibility);
+    if (input.visibility !== undefined) body.append("visibility", input.visibility);
     for (const user of input.grantUsers ?? []) body.append("grant_users", user);
     for (const group of input.grantGroups ?? []) body.append("grant_groups", group);
   }

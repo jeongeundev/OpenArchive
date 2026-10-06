@@ -125,6 +125,8 @@ class DocumentDetail(DocumentSummary):
     chunk_count: int
     chunk_version: int | None
     folder: DocumentFolder | None = None
+    # 소유자에게만 참이다 — 볼 수 없는 폴더 안에 든 자기 문서 (ADR-054, 폴더 정보는 싣지 않는다).
+    hidden_folder: bool = False
 
 
 class CreateTextDocumentRequest(BaseModel):
@@ -147,6 +149,7 @@ class DocumentAccess(BaseModel):
     follows_folder: bool
     folder: DocumentFolder | None
     folder_scope: FolderScope | None
+    hidden_folder: bool
 
 
 class UpdateAccessRequest(BaseModel):

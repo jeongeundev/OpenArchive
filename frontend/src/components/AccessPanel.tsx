@@ -81,7 +81,7 @@ export function AccessPanel({
         setVisibility(access.visibility);
         setUsers(access.users);
         setGroups(access.groups);
-        setFollowsFolder(access.folder != null && access.follows_folder);
+        setFollowsFolder((access.folder != null || access.hidden_folder) && access.follows_folder);
         setPrincipals(directory);
         setLoadError(null);
       })
@@ -94,6 +94,10 @@ export function AccessPanel({
     return () => controller.abort();
   }, [documentId]);
 
+  const folderScope = loaded?.folder != null ? loaded.folder_scope : null;
+  // 볼 수 없게 된 폴더 안 문서도 폴더 안이다 — 이름·범위 없이 그 사실만 보인다 (ADR-054 D5).
+  const inFolder = loaded !== null && (loaded.folder != null || loaded.hidden_folder);
+
   async function save(): Promise<void> {
     if (saving) return;
     setSaving(true);
@@ -105,7 +109,6 @@ export function AccessPanel({
         ? { visibility, users: [], groups: [] }
         : { visibility, users, groups };
     // 폴더 밖 문서는 follows_folder를 보내지 않는다. 「폴더 범위 따름」에는 공개범위를 함께 보내면 서버가 400으로 거부한다.
-    const inFolder = loaded?.folder != null;
     try {
       const saved = await setDocumentAccess(
         documentId,
@@ -125,8 +128,6 @@ export function AccessPanel({
   }
 
   const controlsDisabled = disabled || saving || loaded === null;
-  const folderScope = loaded?.folder != null ? loaded.folder_scope : null;
-  const inFolder = loaded?.folder != null;
   const sharedOutside = !(inFolder && followsFolder) && visibility === "public" && (shares ?? []).some((share) => share.included);
 
   const clearsGrants =
@@ -154,7 +155,7 @@ export function AccessPanel({
                     onChange={() => setFollowsFolder(true)}
                     type="radio"
                   />
-                  폴더 범위 따름({folderScope !== null ? scopeLabel(folderScope) : ""})
+                  폴더 범위 따름({folderScope !== null ? scopeLabel(folderScope) : "볼 수 없는 폴더"})
                 </label>
                 <label className="flex items-center gap-2">
                   <input
