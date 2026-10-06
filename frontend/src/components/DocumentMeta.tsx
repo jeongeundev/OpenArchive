@@ -40,7 +40,7 @@ export function DocumentMeta({
         <div>
           <dt className="text-neutral-500">열람 범위</dt>
           <dd className="mt-1 text-neutral-300">
-            {VISIBILITY_LABEL[document.visibility]}
+            {VISIBILITY_LABEL[document.effective_visibility]}
           </dd>
         </div>
         <div>

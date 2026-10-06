@@ -56,7 +56,7 @@ export function DocumentTable({
                   {document.tags.length > 0 ? document.tags.join(", ") : "—"}
                 </td>
                 <td className="px-4 py-3">
-                  {VISIBILITY_LABEL[document.visibility]}
+                  {VISIBILITY_LABEL[document.effective_visibility]}
                 </td>
                 <td className="px-4 py-3">
                   <DocumentStatusBadge document={document} />

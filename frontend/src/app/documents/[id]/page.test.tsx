@@ -24,6 +24,7 @@ const detail: DocumentDetail = {
   version: 2,
   owner_id: "alice",
   visibility: "public",
+  effective_visibility: "public",
   tags: ["OpenSQL"],
   embedding_status: "ready",
   extraction_status: "done",
@@ -320,7 +321,8 @@ describe("문서 상세의 열람 범위 패널", () => {
       }
       if (url.endsWith("/access") && init?.method === "PUT") {
         const body = JSON.parse(String(init.body)) as DocumentAccess;
-        current = { ...current, visibility: body.visibility };
+        // 폴더 밖 문서라 서버가 돌려주는 실제 적용 범위도 자기 범위와 같다.
+        current = { ...current, visibility: body.visibility, effective_visibility: body.visibility };
         return Promise.resolve(jsonResponse(body));
       }
       if (url.endsWith("/access")) {

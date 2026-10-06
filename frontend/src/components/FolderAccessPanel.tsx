@@ -96,6 +96,7 @@ export function FolderAccessPanel({ folder, onSaved }: {
       {visibility === "private" ? (
         <>
           <GranteePicker disabled={disabled} groups={groups} principals={principals} users={users}
+            description="선택한 사용자와 그룹 구성원만 이 폴더와 폴더 범위를 따르는 문서를 봅니다."
             onChange={next => { setUsers(next.users); setGroups(next.groups); }} />
           {users.length === 0 && groups.length === 0 ? (
             <p className="text-sm text-neutral-500">대상을 고르지 않으면 폴더를 만든 사람만 봅니다</p>

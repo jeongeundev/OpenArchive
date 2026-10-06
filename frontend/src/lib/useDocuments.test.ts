@@ -12,6 +12,7 @@ const document: DocumentSummary = {
   version: 1,
   owner_id: "alice",
   visibility: "public",
+  effective_visibility: "public",
   tags: ["OpenSQL"],
   embedding_status: "ready",
   extraction_status: "done",

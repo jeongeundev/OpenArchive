@@ -63,6 +63,8 @@ class DocumentSummary(BaseModel):
     version: int
     owner_id: str
     visibility: str
+    # 실제로 적용되는 공개범위 — 「폴더 범위 따름」이면 최상위 폴더의 값 (ADR-054)
+    effective_visibility: Literal["public", "private"]
     tags: list[str]
     embedding_status: str
     # pending = 텍스트 인식 중, failed = 인식 실패, done = 문서 텍스트 확정 (ADR-052)

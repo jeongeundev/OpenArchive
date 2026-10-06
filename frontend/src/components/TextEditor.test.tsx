@@ -14,6 +14,7 @@ const document: DocumentDetail = {
   version: 2,
   owner_id: "alice",
   visibility: "public",
+  effective_visibility: "public",
   tags: [],
   embedding_status: "ready",
   extraction_status: "done",

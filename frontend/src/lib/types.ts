@@ -78,7 +78,10 @@ export interface DocumentSummary {
   content_type: ContentType;
   version: number;
   owner_id: string;
+  /** 문서 자신의 공개범위. 폴더로 만든 문서는 private로 닫혀 있다 (ADR-054). */
   visibility: Visibility;
+  /** 실제로 적용되는 공개범위 — 「폴더 범위 따름」이면 최상위 폴더의 값. 화면 표시는 이것을 쓴다. */
+  effective_visibility: Visibility;
   tags: string[];
   embedding_status: EmbeddingStatus;
   extraction_status: ExtractionStatus;
