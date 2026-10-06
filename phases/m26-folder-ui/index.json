@@ -96,7 +96,10 @@
       "type": "feat",
       "scope": "frontend",
       "desc": "검색·답변 폴더 필터",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-10-07T00:31:29+0900",
+      "summary": "SearchInput에 folderId 추가, SearchForm에 FolderSelect(「폴더」/「전체 폴더」, 폴더 목록이 비면 미표시)·직접 결과 한정 안내, 검색 화면이 로그인 시에만 useFolders로 목록을 불러와(403이면 조용히 미표시) 검색·답변 요청에 같은 folder_id 전송, TDD 및 프론트 AC 462개 테스트·타입 검사·린트·빌드 통과",
+      "completed_at": "2026-10-07T00:33:21+0900"
     },
     {
       "step": 9,
