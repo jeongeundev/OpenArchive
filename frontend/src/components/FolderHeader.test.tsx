@@ -115,4 +115,25 @@ describe("FolderHeader", () => {
     render(<FolderHeader folder={root} folders={[root]} onChanged={vi.fn()} onDeleted={vi.fn()} />);
     expect(screen.queryByText("폴더를 만든 사람만 바꿀 수 있습니다")).not.toBeInTheDocument();
   });
+  it("최상위 폴더는 「열람 범위」로 패널을 펼치고 저장 뒤 갱신을 알리며, 하위 폴더에는 버튼이 없다", async () => {
+    const fetchMock = vi.fn((url: string, init?: RequestInit) => {
+      if (url === "/api/principals") return respond(200, { users: [], groups: [] });
+      if (url === "/api/folders/a/access" && init?.method === "PUT") return respond(200, JSON.parse(String(init.body)));
+      if (url === "/api/folders/a/access") return respond(200, scope);
+      return Promise.reject(new Error(`unexpected ${url}`));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const onAccessSaved = vi.fn();
+    const { rerender } = render(<FolderHeader folder={root} folders={[root, child]} onChanged={vi.fn()}
+      onDeleted={vi.fn()} onAccessSaved={onAccessSaved} />);
+    expect(screen.queryByRole("button", { name: "열람 범위 저장" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "열람 범위" }));
+    fireEvent.click(await screen.findByRole("radio", { name: "제한" }));
+    fireEvent.click(screen.getByRole("button", { name: "열람 범위 저장" }));
+    await waitFor(() => expect(onAccessSaved).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole("button", { name: "열람 범위" }));
+    expect(screen.queryByRole("button", { name: "열람 범위 저장" })).not.toBeInTheDocument();
+    rerender(<FolderHeader folder={child} folders={[root, child]} onChanged={vi.fn()} onDeleted={vi.fn()} />);
+    expect(screen.queryByRole("button", { name: "열람 범위" })).not.toBeInTheDocument();
+  });
 });

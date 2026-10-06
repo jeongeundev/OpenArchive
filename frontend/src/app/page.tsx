@@ -98,6 +98,13 @@ function HomeView(): React.ReactElement {
     setTagsRevision((revision) => revision + 1);
   }, [refresh, refreshProgress, refreshFolders]);
 
+  // 폴더 범위가 바뀌면 문서 수·목록도 바뀔 수 있다.
+  const onFolderAccessSaved = useCallback(() => {
+    refresh();
+    refreshProgress();
+    refreshFolders();
+  }, [refresh, refreshProgress, refreshFolders]);
+
   return (
     <section className="space-y-8">
       <div>
@@ -116,7 +123,7 @@ function HomeView(): React.ReactElement {
       <div className="min-w-0 space-y-8">
       {selectedFolder !== null ? (
         <FolderHeader key={selectedFolder.id} folder={selectedFolder} folders={folders}
-          onChanged={refreshFolders} onDeleted={onFolderDeleted} />
+          onChanged={refreshFolders} onDeleted={onFolderDeleted} onAccessSaved={onFolderAccessSaved} />
       ) : null}
 
       {auth.authenticated ? <UploadDropzone onUploaded={onUploaded} /> : null}
