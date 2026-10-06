@@ -3986,7 +3986,7 @@ OpenProxy 풀 연결에도 적용된다(실측).
 ### ADR-054: 폴더 트리를 두고, 열람 범위는 폴더에서 상속하며 예외만 문서에 개별 지정한다
 **상태**: 2026-10-05 신규 — 채택(결정) · **2026-10-06 구현 #187(m25-folders, 백엔드)** — `030_folders_tables.sql`·
 `031_folder_audit_triggers.sql`, `services/folders.py`·`services/visibility.py`, `/api/folders`. 아래 「구현 때 정함」은 끝의
-「2026-10-06 구현 결정」 블록이 정했다. 2026-10-07 화면 구현(#187 c) — 트리·폴더 헤더·범위 패널·업로드·이동·검색 폴더 필터(`UI_GUIDE.md` 「폴더」). CLI `import --keep-folders --grant-group`은 진행 중이다. ADR-044 결정 2(태그·컬렉션 단위 부여 없음)와 기각한 대안(컬렉션
+「2026-10-06 구현 결정」 블록이 정했다. 2026-10-07 화면 구현(#187 c) — 트리·폴더 헤더·범위 패널·업로드·이동·검색 폴더 필터(`UI_GUIDE.md` 「폴더」). 2026-10-07 CLI `import --keep-folders --grant-group`(#187 d) — 재import 때 폴더 재사용, `--keep-folders` 없는 `--grant-group`, frontmatter `visibility`와 폴더 범위가 겹칠 때의 규칙은 `OPERATIONS.md` import 절. ADR-044 결정 2(태그·컬렉션 단위 부여 없음)와 기각한 대안(컬렉션
 트리)을 **폴더에 한해** 개정한다. 태그 단위 부여 금지·역할 4단 기각·"관리자 권한만으로는 문서를 열람하지 못한다"
 (ADR-040·044)는 그대로다. ADR-044 #97 d(CLI `import --grant`·확정)는 이 ADR과 합쳐 #187에서 구현한다.
 

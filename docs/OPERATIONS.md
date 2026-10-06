@@ -168,6 +168,7 @@ docker run --rm -e ADMIN_PASSWORD='change-me' openarchive \
 ```bash
 openarchive import ./docs --user alice                        # 하위 폴더까지
 openarchive import ./docs --user alice --tag 회의 --visibility private
+openarchive import ./RFP --user lead --keep-folders --grant-group 사업팀   # 폴더 트리 + 「제한 · 사업팀」
 openarchive export ./backup --user alice                      # 비어 있거나 없는 폴더
 openarchive search "설치 절차" --user alice --tag 운영 -k 5
 ANSWER_PROVIDER=ollama openarchive ask "설치 절차가 뭐야?" --user alice
@@ -184,6 +185,16 @@ ANSWER_PROVIDER=ollama openarchive ask "설치 절차가 뭐야?" --user alice
   실패가 하나라도 있으면 종료 코드가 1입니다.
 - 임베딩과 관계 판정은 워커가 합니다. `openarchive serve`가 돌고 있어야 검색에 나타나고, 이미지·스캔은
   워커가 텍스트를 인식한 뒤 채워집니다. 많이 넣었다면 워커가 다 처리한 뒤 `rebuild-edges`를 한 번 돌립니다.
+- **`--keep-folders`** — 가져오는 폴더 자신이 최상위 폴더가 되고(`./RFP` → 「RFP」), 하위 폴더는 같은 이름의
+  하위 폴더로 만들어 각 문서를 원래 있던 폴더에 넣습니다. 문서는 **폴더 범위를 따르고**, `--visibility`·
+  `--grant-group`은 최상위 폴더의 열람 범위가 됩니다(기본 조직 공개). 파일이 없는 빈 폴더는 만들지 않습니다.
+- **`--grant-group 그룹`**(여러 번) — 그 그룹에만 보이게 합니다(「제한 · 그룹」). `--keep-folders`면 최상위 폴더에,
+  없으면 **문서마다** 겁니다. `--visibility public`과 함께 주면 거부합니다. 모르는 그룹이면 아무것도 만들지 않습니다.
+- **다시 실행하면 같은 폴더를 다시 씁니다** — `--user`가 만든 같은 이름의 최상위 폴더와 그 아래 같은 이름의
+  하위 폴더입니다(남이 만든 같은 이름의 폴더는 쓰지 않음). 기존 폴더의 열람 범위는 바꾸지 않으며, 범위 옵션을
+  직접 줬는데 기존 범위와 다르면 **아무것도 넣지 않고 거부**합니다. 폴더 범위는 만든 사람이 웹 화면에서 바꿉니다.
+- frontmatter `visibility`와 폴더 범위·`--grant-group`이 겹치면 **더 좁은 쪽**을 따릅니다. `private`는 소유자 전용
+  (폴더 안이면 「개별 지정」)이 되고, `public`은 폴더·그룹 범위를 넓히지 못해 무시됩니다.
 
 **export**
 - `--user` **소유 문서만** 문서 텍스트 + frontmatter(`title`·`tags`·`visibility`) 마크다운으로 씁니다.
