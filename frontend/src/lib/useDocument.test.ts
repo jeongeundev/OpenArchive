@@ -6,6 +6,7 @@ import type { DocumentDetail } from "./types";
 import { useDocument } from "./useDocument";
 
 const document: DocumentDetail = {
+  folder: null,
   id: "document-1",
   title: "OpenSQL 운영 가이드",
   filename: "guide.md",

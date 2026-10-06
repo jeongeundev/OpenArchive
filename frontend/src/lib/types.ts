@@ -11,6 +11,27 @@ export const VISIBILITY_LABEL: Record<Visibility, string> = {
   private: "제한",
 };
 
+export interface FolderScope {
+  visibility: Visibility;
+  users: string[];
+  groups: string[];
+}
+
+export interface Folder {
+  id: string;
+  parent_id: string | null;
+  name: string;
+  created_by: string;
+  document_count: number;
+  scope: FolderScope;
+  inherited: boolean;
+  can_manage: boolean;
+  can_change_access: boolean;
+}
+
+export interface FolderPathItem { id: string; name: string }
+export interface DocumentFolder extends FolderPathItem { path: FolderPathItem[] }
+
 export type TokenScope = "read" | "read_write";
 
 export interface TokenSummary {
@@ -100,6 +121,7 @@ export interface OriginalFile {
 }
 
 export interface DocumentDetail extends DocumentSummary {
+  folder: DocumentFolder | null;
   content: string;
   versions: TextVersion[];
   files: OriginalFile[];
@@ -281,6 +303,9 @@ export interface Principals {
 
 /** 문서의 열람 범위. 소유자만 읽고 바꾼다. public에는 부여 대상을 둘 수 없다. */
 export interface DocumentAccess {
+  follows_folder: boolean;
+  folder: DocumentFolder | null;
+  folder_scope: FolderScope | null;
   visibility: Visibility;
   users: string[];
   groups: string[];

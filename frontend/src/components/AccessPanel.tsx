@@ -16,6 +16,7 @@ import {
 import {
   VISIBILITY_LABEL,
   type DocumentAccess,
+  type FolderScope,
   type Principals,
   type ShareSummary,
   type Visibility,
@@ -96,7 +97,7 @@ export function AccessPanel({
     setError(null);
     setMessage(null);
     // 조직 공개에는 부여 대상을 둘 수 없다 — 서버도 400으로 거부한다.
-    const next: DocumentAccess =
+    const next: FolderScope =
       visibility === "public"
         ? { visibility, users: [], groups: [] }
         : { visibility, users, groups };

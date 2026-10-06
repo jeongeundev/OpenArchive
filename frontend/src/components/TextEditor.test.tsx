@@ -5,6 +5,7 @@ import { EXTRACTING_NOTICE, type DocumentDetail } from "@/lib/types";
 import { TextEditor } from "./TextEditor";
 
 const document: DocumentDetail = {
+  folder: null,
   id: "document-1",
   title: "OpenSQL 운영 가이드",
   filename: "guide.pdf",
