@@ -27,6 +27,7 @@ from openarchive.api.schemas import (
     BacklinkItem,
     CreateTextDocumentRequest,
     DocumentAccess,
+    DocumentCount,
     DocumentDetail,
     DocumentProgress,
     DocumentSummary,
@@ -50,6 +51,8 @@ from openarchive.services.related import find_related, suggest_tags
 from openarchive.services.search import MAX_K
 
 router = APIRouter(prefix="/api/documents", tags=["documents"])
+
+ContentTypeFilter = Literal[*SUPPORTED_CONTENT_TYPES]
 
 # 문서 생성 요청의 선택 헤더 (ADR-047). 같은 키로 다시 오면 처음 문서를 돌려준다.
 IdempotencyKey = Annotated[str | None, Header(min_length=1, max_length=255)]
@@ -138,6 +141,9 @@ async def list_documents(
     status_filter: Annotated[str | None, Query(alias="status")] = None,
     extraction_status: service.ExtractionStatus | None = None,
     tag: str | None = None,
+    q: str | None = None,
+    content_type: ContentTypeFilter | None = None,
+    sort: Literal["updated", "title"] = "updated",
     limit: Annotated[int | None, Query(ge=1, le=100)] = None,
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> list[DocumentSummary]:
@@ -147,6 +153,9 @@ async def list_documents(
         embedding_status=status_filter,
         extraction_status=extraction_status,
         tag=tag,
+        title_query=q,
+        content_type=content_type,
+        sort=sort,
         limit=limit,
         offset=offset,
     )
@@ -162,6 +171,37 @@ async def get_document_progress(
     return DocumentProgress.model_validate(
         await service.document_progress(conn, user_id=user_id)
     )
+
+
+# 고정 경로는 문서 UUID 경로보다 먼저 등록한다.
+@router.get("/count", response_model=DocumentCount)
+async def count_documents(
+    conn: Connection,
+    user_id: Annotated[str, Depends(require_reader)],
+    status_filter: Annotated[str | None, Query(alias="status")] = None,
+    extraction_status: service.ExtractionStatus | None = None,
+    tag: str | None = None,
+    q: str | None = None,
+    content_type: ContentTypeFilter | None = None,
+) -> DocumentCount:
+    total = await service.count_documents(
+        conn,
+        user_id=user_id,
+        embedding_status=status_filter,
+        extraction_status=extraction_status,
+        tag=tag,
+        title_query=q,
+        content_type=content_type,
+    )
+    return DocumentCount(total=total)
+
+
+@router.get("/tags", response_model=list[str])
+async def list_visible_tags(
+    conn: Connection,
+    user_id: Annotated[str, Depends(require_reader)],
+) -> list[str]:
+    return await service.list_visible_tags(conn, user_id=user_id)
 
 
 @router.get("/{document_id}", response_model=DocumentDetail)

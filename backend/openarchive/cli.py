@@ -1126,8 +1126,8 @@ async def _export(dsn: str, folder: Path, *, username: str) -> tuple[int, int]:
         ]
         folder.mkdir(parents=True, exist_ok=True)
         taken: set[str] = set()
-        # 목록은 최신순이다. 오래된 문서부터 이름을 잡아야 제목이 겹칠 때 번호가 매번 같다.
-        for summary in reversed(summaries):
+        # 목록은 최근 수정순이다. 만든 순서로 이름을 잡아야 제목이 겹칠 때 번호가 매번 같다.
+        for summary in sorted(summaries, key=lambda s: (s["created_at"], str(s["id"]))):
             # 인식 중·인식 실패 문서는 문서 텍스트가 비어 있다. 빈 파일은 다시 넣을 때 실패한다.
             if summary["extraction_status"] != "done":
                 skipped += 1

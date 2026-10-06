@@ -725,12 +725,21 @@ OpenSQL `patroni.yml`의 PostgreSQL 파라미터는 `max_connections: 100`이다
 
 ## API 설계
 
+문서 목록은 `services/documents.py`의 `list_documents`가 열람 술어와 상태·유형·태그 필터,
+제목 부분 일치(`ILIKE`)를 한 SQL에 적용한다. 제목 검색어는 앞뒤 공백을 제거하고 `\`·`%`·`_`를
+이스케이프해 와일드카드가 아닌 문자로 찾는다. 기본 정렬은 `updated_at DESC, id`이며,
+`sort=title`은 `title, id` 순이다. `count_documents`는 목록과 같은 WHERE 조각과 필터 값을
+사용해 페이지 제한 없이 별도 SQL로 센다 — 조건 건수에도 열람 범위가 적용된다.
+`list_visible_tags`는 열람 가능한 문서의 태그만 중복 없이 태그순으로 반환한다.
+
 | 엔드포인트 | 내용 |
 |---|---|
 | `POST /api/documents` | multipart 업로드. 형식별 파서로 추출 → INSERT. 여기서 트리거가 파이프라인을 자동 기동 — 임베딩 관련 코드 없음. **이미지와 텍스트 레이어가 빈 쪽이 있는 PDF는 추출하지 않고 `extraction_status='pending'`으로 INSERT해 OCR을 워커 잡에 넘긴다** (「추출 잡」). 그 밖의 형식에서 **텍스트 추출 결과가 비면 400** (아래). **원본 파일은 같은 트랜잭션에서 `document_files`에 1판으로 저장한다** — 원본 저장이 실패하면 문서·텍스트 버전·잡도 남지 않는다. 상한 `MAX_UPLOAD_MB`(기본 50) 초과는 413. 선택 헤더 `Idempotency-Key`(아래) |
 | `POST /api/documents/text` | JSON 텍스트 공급(`txt`·`md`). `filename`은 NULL이며, 파생 데이터는 업로드 경로와 동일하게 DB 트리거가 만든다. 빈 문서 텍스트와 500,000자 초과는 400. 선택 헤더 `Idempotency-Key`(아래) |
-| `GET /api/documents` | 목록 + `status`(임베딩 상태)/`extraction_status`/`tag` 필터, embedding_status·extraction_status 포함. 인식 실패 문서는 `status=pending`에 남으므로 곧 임베딩될 문서는 `extraction_status=done`을 함께 준다 (ADR-052 결정 4 보강) |
+| `GET /api/documents` | 목록 + `status`(임베딩 상태)/`extraction_status`/`tag`/`q`(제목 부분 일치)/`content_type` 필터. `sort=updated`(기본, 최근 수정순) 또는 `title`(제목순). embedding_status·extraction_status 포함. 인식 실패 문서는 `status=pending`에 남으므로 곧 임베딩될 문서는 `extraction_status=done`을 함께 준다 (ADR-052 결정 4 보강) |
 | `GET /api/documents?limit=&offset=` | 같은 목록의 한 페이지(`limit` 1~100). 빼면 전부 — MCP·export는 전체를 본다. 첫 화면은 50건씩 쓴다 (#95-d) |
+| `GET /api/documents/count` | 목록과 같은 `status`·`extraction_status`·`tag`·`q`·`content_type` 조건의 전체 건수 `{total}`. 화면은 이 건수로 페이지를 나눈다 |
+| `GET /api/documents/tags` | 열람 가능한 문서의 태그 목록 `string[]`. 중복 없이 태그순이며 보이지 않는 문서의 태그는 포함하지 않는다 |
 | `GET /api/documents/progress` | 열람 범위 안 문서의 파이프라인 단계별 수(`extracting`·`extraction_failed`·`pending`·`processing`·`ready`·`error`). 인식이 끝난 문서만 임베딩 단계로 센다. 합이 목록의 전체 수다 (#95-d) |
 | `GET /api/documents/{id}` | 상세 + 텍스트 버전 목록 + 청크 수 + 청크 기준 버전 + `files`(원본 판 목록 — 메타데이터만, 바이트는 싣지 않는다) |
 | `GET /api/documents/{id}/file` · `GET /api/documents/{id}/files/{n}` | **원본 내려받기** — 최신 판 · 특정 판. 항상 `Content-Disposition: attachment` + `X-Content-Type-Options: nosniff`, 미디어 타입은 확장자 고정 매핑. 볼 수 없는 문서·원본 없음·없는 판은 404 (ADR-046) |

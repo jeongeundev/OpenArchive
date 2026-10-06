@@ -986,3 +986,114 @@ async def test_find_same_text_matches_recognized_documents_of_the_owner(document
         for content in ("같은 본문", "파일 본문", "", "남의 본문")
     ]
     assert found == [text_doc["id"], file_doc["id"], None, None]
+
+
+@pytest.mark.parametrize(
+    "query, matching, other",
+    [
+        ("출장", "출장 신청", "휴가"),
+        ("Report", "report draft", "memo"),
+        ("50%", "50% 할인", "500 할인"),
+        ("a_b", "a_b", "axb"),
+        ("a\\b", "a\\b", "ab"),
+    ],
+)
+async def test_finder_literal_title(documents_conn, query, matching, other):
+    expected = await insert_test_document(documents_conn, title=matching, content="본문")
+    await insert_test_document(documents_conn, title=other, content="다른 본문")
+    rows = await list_documents(documents_conn, title_query=query)
+    assert [d["id"] for d in rows] == [expected]
+
+
+@pytest.mark.parametrize("query", ["", "  \t ", None])
+async def test_finder_blank_title(documents_conn, query):
+    expected = await insert_test_document(documents_conn, title="출장", content="본문")
+    assert [d["id"] for d in await list_documents(documents_conn, title_query=query)] == [expected]
+
+
+@pytest.mark.parametrize(
+    "filters, expected",
+    [
+        ({}, 3),
+        ({"title_query": "출장"}, 2),
+        ({"content_type": "hwp"}, 2),
+        ({"tag": "보안"}, 2),
+        ({"title_query": " 출장 ", "content_type": "hwp", "tag": "보안"}, 1),
+        ({"title_query": "없음"}, 0),
+        ({"embedding_status": "ready"}, 0),
+        ({"extraction_status": "failed"}, 0),
+    ],
+)
+async def test_finder_filters_and_count(documents_conn, filters, expected):
+    from openarchive.services.documents import count_documents
+
+    ids = []
+    for title, kind, tags in [
+        ("출장", "hwp", ["보안"]),
+        ("출장", "hwpx", []),
+        ("휴가", "hwp", ["보안"]),
+    ]:
+        ids.append(
+            await insert_test_document(
+                documents_conn, title=title, content="본문", content_type=kind, tags=tags
+            )
+        )
+    await insert_test_document(
+        documents_conn,
+        title="출장",
+        content="숨김",
+        content_type="hwp",
+        tags=["보안"],
+        owner_id="bob",
+        visibility="private",
+    )
+    rows = await list_documents(documents_conn, user_id="alice", **filters)
+    assert len(rows) == expected
+    assert await count_documents(documents_conn, user_id="alice", **filters) == len(rows)
+    if filters == {"content_type": "hwp"}:
+        assert {d["id"] for d in rows} == {ids[0], ids[2]}
+    if "tag" in filters and "title_query" in filters:
+        assert [d["id"] for d in rows] == [ids[0]]
+
+
+async def test_finder_title_sort(documents_conn):
+    ids = []
+    for title in ["다", "가", "나", "가"]:
+        ids.append(await insert_test_document(documents_conn, title=title, content="본문"))
+    rows = await list_documents(documents_conn, sort="title")
+    assert [d["title"] for d in rows] == ["가", "가", "나", "다"]
+    assert [d["id"] for d in rows[:2]] == sorted([ids[1], ids[3]])
+
+
+async def test_finder_updated_sort(documents_conn):
+    from openarchive.services.documents import update_tags
+
+    older = await insert_test_document(documents_conn, title="먼저", content="본문")
+    newer = await insert_test_document(documents_conn, title="나중", content="본문")
+    assert [d["id"] for d in await list_documents(documents_conn)] == [newer, older]
+    await update_tags(documents_conn, older, tags=["수정"], user_id="alice")
+    assert [d["id"] for d in await list_documents(documents_conn)] == [older, newer]
+
+
+async def test_finder_visible_tags(documents_conn):
+    from openarchive.services.documents import list_visible_tags
+
+    await insert_test_document(documents_conn, title="공개", content="본문", tags=["보안", "출장"])
+    await insert_test_document(
+        documents_conn, title="내 제한", content="본문", tags=["보안", "가"], visibility="private"
+    )
+    await insert_test_document(
+        documents_conn,
+        title="남의 제한",
+        content="본문",
+        tags=["비밀"],
+        owner_id="bob",
+        visibility="private",
+    )
+    assert await list_visible_tags(documents_conn, user_id="alice") == ["가", "보안", "출장"]
+    assert await list_visible_tags(documents_conn) == ["보안", "출장"]
+
+
+async def test_finder_invalid_sort(documents_conn):
+    with pytest.raises(ValueError):
+        await list_documents(documents_conn, sort="title; DROP TABLE documents")

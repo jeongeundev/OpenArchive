@@ -601,6 +601,89 @@ def test_list_filters_by_tag_and_status(db_client: TestClient):
     assert "content" not in response.json()[0]
 
 
+def test_finder_title_query(db_client: TestClient):
+    matching = upload(db_client, data={"title": "출장 안내"}).json()["id"]
+    upload(db_client, data={"title": "보안 안내"})
+
+    response = db_client.get("/api/documents", params={"q": "출장"})
+
+    assert response.status_code == 200
+    assert [item["id"] for item in response.json()] == [matching]
+
+
+def test_finder_combined_filters_and_count(db_client: TestClient, migrated_db: str):
+    matching = upload(db_client, data={"title": "출장 보안", "tags": "보안"}).json()["id"]
+    hidden = upload(
+        db_client, user_id="bob",
+        data={"title": "출장 제한", "tags": "보안", "visibility": "private"},
+    ).json()["id"]
+    upload(db_client, data={"title": "출장 txt", "tags": "보안"})
+    wrong_tag = upload(db_client, data={"title": "출장 기타", "tags": "기타"}).json()["id"]
+    wrong_title = upload(db_client, data={"title": "다른 제목", "tags": "보안"}).json()["id"]
+    with psycopg.connect(migrated_db) as conn:
+        conn.execute(
+            "UPDATE documents SET content_type = 'hwp' WHERE id = ANY(%s::uuid[])",
+            ([matching, hidden, wrong_tag, wrong_title],),
+        )
+    login_as(db_client, "alice")
+    params = {"q": "출장", "content_type": "hwp", "tag": "보안",
+              "status": "pending", "extraction_status": "done"}
+
+    listing = db_client.get("/api/documents", params=params)
+    count = db_client.get("/api/documents/count", params=params)
+
+    assert listing.status_code == count.status_code == 200
+    assert [item["id"] for item in listing.json()] == [matching]
+    assert count.json() == {"total": len(listing.json())} == {"total": 1}
+    for key, value in [("status", "ready"), ("extraction_status", "failed")]:
+        assert db_client.get("/api/documents/count", params={**params, key: value}).json() == {
+            "total": 0
+        }
+
+
+def test_finder_sort_title_and_default_updated(db_client: TestClient, migrated_db: str):
+    first = upload(db_client, data={"title": "Beta"}).json()["id"]
+    second = upload(db_client, data={"title": "Alpha"}).json()["id"]
+    with psycopg.connect(migrated_db) as conn:
+        conn.execute(
+            "UPDATE documents SET updated_at = now() + interval '1 day' WHERE id = %s",
+            (first,),
+        )
+    for params, expected in [({}, [first, second]),
+                             ({"sort": "updated"}, [first, second]),
+                             ({"sort": "title"}, [second, first])]:
+        response = db_client.get("/api/documents", params=params)
+        assert response.status_code == 200
+        assert [item["id"] for item in response.json()] == expected
+
+
+@pytest.mark.parametrize("path,params", [
+    ("", {"sort": "bogus"}), ("", {"content_type": "exe"}),
+    ("/count", {"content_type": "exe"}),
+])
+def test_finder_rejects_invalid_filters(db_client: TestClient, path: str, params: dict):
+    login_as(db_client, "alice")
+    assert db_client.get(f"/api/documents{path}", params=params).status_code == 422
+
+
+def test_finder_tags_fixed_route_and_visibility(db_client: TestClient):
+    upload(db_client, data={"tags": ["zeta", "alpha"]})
+    upload(db_client, data={"tags": "alpha", "visibility": "private"})
+    upload(db_client, user_id="bob", data={"tags": "hidden", "visibility": "private"})
+    login_as(db_client, "alice")
+
+    response = db_client.get("/api/documents/tags")
+
+    assert response.status_code == 200
+    assert response.json() == ["alpha", "zeta"]
+
+
+@pytest.mark.parametrize("path", ["count", "tags"])
+def test_finder_fixed_routes_require_login(db_client: TestClient, path: str):
+    db_client.post("/api/auth/logout")
+    assert db_client.get(f"/api/documents/{path}").status_code == 401
+
+
 def test_list_pages_with_limit_and_offset(db_client: TestClient):
     ids = [
         upload(db_client, filename=f"page-{index}.txt", content=f"본문 {index}".encode()).json()["id"]

@@ -1,0 +1,62 @@
+{
+  "project": "OpenArchive",
+  "phase": "m24-doc-finder",
+  "steps": [
+    {
+      "step": 0,
+      "name": "finder-service",
+      "type": "feat",
+      "scope": "api",
+      "desc": "문서 목록에 제목 검색·유형 필터·정렬과 같은 조건의 건수·보이는 태그 목록을 더한다",
+      "status": "completed",
+      "summary": "제목·유형·태그 SQL 필터와 최근 수정순·제목순 정렬, 동일 조건 건수·열람 범위 태그 조회 구현; AC 177개·Ruff 및 mutant 3종 검증 통과",
+      "started_at": "2026-10-06T09:13:34+0900",
+      "completed_at": "2026-10-06T09:17:50+0900"
+    },
+    {
+      "step": 1,
+      "name": "finder-api",
+      "type": "feat",
+      "scope": "api",
+      "desc": "목록 API에 q·content_type·sort와 건수·태그 엔드포인트를 연다",
+      "status": "completed",
+      "started_at": "2026-10-06T09:17:50+0900",
+      "summary": "목록 API에 q·content_type·sort와 동일 조건 건수·열람 범위 태그 엔드포인트 구현; AC 207개·Ruff 및 mutant 2종 검증 통과",
+      "completed_at": "2026-10-06T09:20:56+0900"
+    },
+    {
+      "step": 2,
+      "name": "finder-client",
+      "type": "feat",
+      "scope": "frontend",
+      "desc": "목록 API 클라이언트와 useDocuments가 찾기 조건과 건수를 다룬다",
+      "status": "completed",
+      "started_at": "2026-10-06T09:20:56+0900",
+      "summary": "목록·건수·태그 API 클라이언트와 동일 필터·취소 신호의 useDocuments 구현; lib 117개·lint·타입 검사·q 누락 mutant 2개 실패 확인 및 정적 빌드 통과",
+      "completed_at": "2026-10-06T09:23:31+0900"
+    },
+    {
+      "step": 3,
+      "name": "finder-ui",
+      "type": "feat",
+      "scope": "frontend",
+      "desc": "문서 목록 상단에 제목 검색·유형·태그·정렬을 두고 조건 건수로 페이지를 나눈다",
+      "status": "completed",
+      "started_at": "2026-10-06T09:23:32+0900",
+      "summary": "제목 검색(300ms 디바운스)·유형·태그·정렬 UI와 조건 건수 페이지 나눔·빈 결과 안내 구현; 프론트 394개·lint·타입 검사·정적 빌드 및 mutant 2종 검증 통과",
+      "completed_at": "2026-10-06T09:27:44+0900"
+    },
+    {
+      "step": 4,
+      "name": "finder-docs",
+      "type": "docs",
+      "desc": "목록 찾기를 ARCHITECTURE·UI_GUIDE·OPERATIONS에 반영한다",
+      "status": "completed",
+      "summary": "목록 SQL 필터·정렬·건수·태그 API와 화면 찾기·빈 결과 안내를 ARCHITECTURE·UI_GUIDE·PRD에 반영; 코드 대조·AC 3개·git diff --check 통과",
+      "started_at": "2026-10-06T09:27:44+0900",
+      "completed_at": "2026-10-06T09:29:30+0900"
+    }
+  ],
+  "created_at": "2026-10-06T09:13:34+0900",
+  "completed_at": "2026-10-06T09:29:30+0900"
+}
