@@ -2,11 +2,57 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from openarchive.services.answer import ASK_K
 from openarchive.services.auth import SCOPE_READ, TokenScope
 from openarchive.services.search import MAX_K
+
+
+class FolderScope(BaseModel):
+    visibility: Literal["public", "private"]
+    users: list[str]
+    groups: list[str]
+
+
+class Folder(BaseModel):
+    id: UUID
+    parent_id: UUID | None
+    name: str
+    created_by: str
+    document_count: int
+    scope: FolderScope
+    inherited: bool
+    can_manage: bool
+    can_change_access: bool
+
+
+class CreateFolderRequest(BaseModel):
+    name: str
+    parent_id: UUID | None = None
+
+
+class RenameFolderRequest(BaseModel):
+    name: str
+
+
+class UpdateFolderAccessRequest(BaseModel):
+    visibility: Literal["public", "private"]
+    users: list[str] = []
+    groups: list[str] = []
+
+
+class FolderPathItem(BaseModel):
+    id: UUID
+    name: str
+
+
+class DocumentFolder(FolderPathItem):
+    path: list[FolderPathItem]
+
+
+class MoveDocumentRequest(BaseModel):
+    folder_id: UUID | None
 
 
 class DocumentSummary(BaseModel):
@@ -76,6 +122,7 @@ class DocumentDetail(DocumentSummary):
     files: list[OriginalFile]
     chunk_count: int
     chunk_version: int | None
+    folder: DocumentFolder | None = None
 
 
 class CreateTextDocumentRequest(BaseModel):
@@ -86,6 +133,7 @@ class CreateTextDocumentRequest(BaseModel):
     visibility: Literal["public", "private"] = "public"
     grant_users: list[str] | None = None
     grant_groups: list[str] | None = None
+    folder_id: UUID | None = None
 
 
 class DocumentAccess(BaseModel):
@@ -94,12 +142,22 @@ class DocumentAccess(BaseModel):
     visibility: Literal["public", "private"]
     users: list[str]
     groups: list[str]
+    follows_folder: bool
+    folder: DocumentFolder | None
+    folder_scope: FolderScope | None
 
 
 class UpdateAccessRequest(BaseModel):
-    visibility: Literal["public", "private"]
+    visibility: Literal["public", "private"] | None = None
     users: list[str] = []
     groups: list[str] = []
+    follows_folder: bool | None = None
+
+    @model_validator(mode="after")
+    def require_individual_visibility(self):
+        if self.follows_folder is not True and self.visibility is None:
+            raise ValueError("개별 지정에는 공개범위가 필요합니다.")
+        return self
 
 
 class EditDocumentRequest(BaseModel):

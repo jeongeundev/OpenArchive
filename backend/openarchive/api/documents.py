@@ -33,6 +33,7 @@ from openarchive.api.schemas import (
     DocumentSummary,
     EditDocumentRequest,
     EditDocumentResponse,
+    MoveDocumentRequest,
     ReextractRequest,
     ReextractResponse,
     RelatedResponse,
@@ -83,7 +84,8 @@ async def upload_document(
     file: Annotated[UploadFile, File()],
     title: Annotated[str | None, Form()] = None,
     tags: Annotated[list[str] | None, Form()] = None,
-    visibility: Annotated[Literal["public", "private"], Form()] = "public",
+    visibility: Annotated[Literal["public", "private"] | None, Form()] = None,
+    folder_id: Annotated[UUID | None, Form()] = None,
     grant_users: Annotated[list[str] | None, Form()] = None,
     grant_groups: Annotated[list[str] | None, Form()] = None,
     idempotency_key: IdempotencyKey = None,
@@ -97,7 +99,8 @@ async def upload_document(
             owner_id=user_id,
             title=title,
             tags=tags,
-            visibility=visibility,
+            **({"visibility": visibility} if visibility is not None else {}),
+            folder_id=folder_id,
             grant_users=grant_users,
             grant_groups=grant_groups,
             idempotency_key=idempotency_key,
@@ -119,18 +122,22 @@ async def create_text_document(
     user_id: Annotated[str, Depends(require_write_user_id)],
     idempotency_key: IdempotencyKey = None,
 ) -> DocumentSummary:
-    document = await service.create_text_document(
-        conn,
-        title=body.title,
-        content=body.content,
-        content_type=body.content_type,
-        owner_id=user_id,
-        tags=body.tags,
-        visibility=body.visibility,
-        grant_users=body.grant_users,
-        grant_groups=body.grant_groups,
-        idempotency_key=idempotency_key,
-    )
+    try:
+        document = await service.create_text_document(
+            conn,
+            title=body.title,
+            content=body.content,
+            content_type=body.content_type,
+            owner_id=user_id,
+            tags=body.tags,
+            **({"visibility": body.visibility} if "visibility" in body.model_fields_set else {}),
+            folder_id=body.folder_id,
+            grant_users=body.grant_users,
+            grant_groups=body.grant_groups,
+            idempotency_key=idempotency_key,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
     return DocumentSummary.model_validate(document)
 
 
@@ -143,6 +150,7 @@ async def list_documents(
     tag: str | None = None,
     q: str | None = None,
     content_type: ContentTypeFilter | None = None,
+    folder_id: UUID | None = None,
     sort: Literal["updated", "title"] = "updated",
     limit: Annotated[int | None, Query(ge=1, le=100)] = None,
     offset: Annotated[int, Query(ge=0)] = 0,
@@ -155,6 +163,7 @@ async def list_documents(
         tag=tag,
         title_query=q,
         content_type=content_type,
+        folder_id=folder_id,
         sort=sort,
         limit=limit,
         offset=offset,
@@ -183,6 +192,7 @@ async def count_documents(
     tag: str | None = None,
     q: str | None = None,
     content_type: ContentTypeFilter | None = None,
+    folder_id: UUID | None = None,
 ) -> DocumentCount:
     total = await service.count_documents(
         conn,
@@ -192,6 +202,7 @@ async def count_documents(
         tag=tag,
         title_query=q,
         content_type=content_type,
+        folder_id=folder_id,
     )
     return DocumentCount(total=total)
 
@@ -234,15 +245,30 @@ async def update_document_access(
     conn: Connection,
     user: Annotated[dict, Depends(require_session_user)],
 ) -> DocumentAccess:
-    return DocumentAccess.model_validate(
-        await service.set_access(
+    try:
+        access = await service.set_access(
             conn,
             document_id,
             user_id=user["username"],
             visibility=body.visibility,
             users=body.users,
             groups=body.groups,
+            follows_folder=body.follows_folder,
         )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    return DocumentAccess.model_validate(access)
+
+
+@router.put("/{document_id}/folder", response_model=DocumentDetail)
+async def move_document(
+    document_id: UUID,
+    body: MoveDocumentRequest,
+    conn: Connection,
+    user_id: Annotated[str, Depends(require_write_user_id)],
+) -> DocumentDetail:
+    return DocumentDetail.model_validate(
+        await service.move_document(conn, document_id, user_id=user_id, folder_id=body.folder_id)
     )
 
 

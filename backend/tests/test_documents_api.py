@@ -2213,3 +2213,76 @@ def test_list_rejects_an_unknown_extraction_status(db_client: TestClient):
     response = db_client.get("/api/documents", params={"extraction_status": "ocr"})
 
     assert response.status_code == 422
+
+
+def test_folder_creation_filters_detail_and_move(db_client):
+    login_as(db_client, "alice")
+    root = db_client.post("/api/folders", json={"name": "자료"}).json()
+    child = db_client.post("/api/folders", json={"name": "하위", "parent_id": root["id"]}).json()
+    text = db_client.post("/api/documents/text", json={"title": "직접", "content": "본문", "folder_id": root["id"]})
+    assert text.status_code == 201
+    uploaded = db_client.post("/api/documents", files={"file": ("guide.txt", b"guide")}, data={"folder_id": child["id"]})
+    assert uploaded.status_code == 201
+    doc_id = text.json()["id"]
+    detail = db_client.get(f"/api/documents/{doc_id}").json()
+    assert detail["folder"] == {"id": root["id"], "name": "자료", "path": [{"id": root["id"], "name": "자료"}]}
+    rows = db_client.get("/api/documents", params={"folder_id": root["id"]})
+    assert rows.status_code == 200 and [row["id"] for row in rows.json()] == [doc_id]
+    assert db_client.get("/api/documents/count", params={"folder_id": root["id"]}).json() == {"total": 1}
+    assert [f["document_count"] for f in db_client.get("/api/folders").json()] == [1, 1]
+    nonempty = db_client.delete(f"/api/folders/{child['id']}")
+    assert nonempty.status_code == 409 and nonempty.json()["detail"] == "폴더가 비어 있지 않습니다."
+    login_as(db_client, "bob")
+    denied = db_client.put(f"/api/documents/{doc_id}/folder", json={"folder_id": child["id"]})
+    assert denied.status_code == 403
+    login_as(db_client, "alice")
+    moved = db_client.put(f"/api/documents/{doc_id}/folder", json={"folder_id": child["id"]})
+    assert moved.status_code == 200 and moved.json()["folder"]["path"] == [
+        {"id": root["id"], "name": "자료"}, {"id": child["id"], "name": "하위"},
+    ]
+    removed = db_client.put(f"/api/documents/{doc_id}/folder", json={"folder_id": None})
+    assert removed.status_code == 200 and removed.json()["folder"] is None
+    assert removed.json()["version"] == 1
+
+
+@pytest.mark.parametrize("kind", ["text", "upload"])
+@pytest.mark.parametrize("scope", [{"visibility": "private"}, {"visibility": "public"}, {"grant_users": ["bob"]}])
+def test_folder_and_explicit_creation_scope_is_400(db_client, kind, scope):
+    login_as(db_client, "alice")
+    root = db_client.post("/api/folders", json={"name": "자료"}).json()
+    if kind == "text":
+        response = db_client.post("/api/documents/text", json={"title": "자료", "content": "본문", "folder_id": root["id"], **scope})
+    else:
+        response = db_client.post("/api/documents", files={"file": ("guide.txt", b"guide")}, data={"folder_id": root["id"], **scope})
+    assert response.status_code == 400
+    assert response.json()["detail"] == "폴더에 넣는 문서는 폴더의 열람 범위를 따릅니다. 개별 지정은 문서 상세에서 합니다."
+    assert db_client.get("/api/documents/count").json() == {"total": 0}
+
+
+def test_hidden_folder_creation_and_move_is_404(db_client):
+    login_as(db_client, "alice")
+    root = db_client.post("/api/folders", json={"name": "비밀"}).json()
+    assert db_client.put(f"/api/folders/{root['id']}/access", json={"visibility": "private"}).status_code == 200
+    login_as(db_client, "bob")
+    doc = db_client.post("/api/documents/text", json={"title": "내 문서", "content": "본문"}).json()
+    responses = [
+        db_client.post("/api/documents/text", json={"title": "자료", "content": "본문", "folder_id": root["id"]}),
+        db_client.post("/api/documents", files={"file": ("guide.txt", b"guide")}, data={"folder_id": root["id"]}),
+        db_client.put(f"/api/documents/{doc['id']}/folder", json={"folder_id": root["id"]}),
+    ]
+    for response in responses:
+        assert response.status_code == 404
+        assert response.json()["detail"] == "폴더를 찾을 수 없습니다."
+    assert db_client.get(f"/api/documents/{doc['id']}").json()["folder"] is None
+
+
+def test_move_missing_document_and_invalid_folder_input(db_client):
+    login_as(db_client, "alice")
+    missing = db_client.put("/api/documents/00000000-0000-0000-0000-000000000000/folder", json={"folder_id": None})
+    assert missing.status_code == 404
+    assert missing.json()["detail"] == "문서를 찾을 수 없습니다."
+    doc = db_client.post("/api/documents/text", json={"title": "자료", "content": "본문"}).json()
+    for body in ({}, {"folder_id": "invalid"}):
+        assert db_client.put(f"/api/documents/{doc['id']}/folder", json=body).status_code == 422
+    for path in ("/api/documents", "/api/documents/count"):
+        assert db_client.get(path, params={"folder_id": "invalid"}).status_code == 422
