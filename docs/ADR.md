@@ -4275,7 +4275,7 @@ OpenProxy 풀 연결에도 적용된다(실측).
 ---
 
 ### ADR-056: 원격 MCP는 Streamable HTTP `/mcp`에 API 토큰 Bearer로 붙는다 — stdio는 로컬용으로 남긴다
-**상태**: 2026-10-05 신규 — 채택(결정), 구현 #188. ADR-008·025·036이 미뤄 둔 원격 transport를 **추가**한다(대체가 아니다).
+**상태**: 2026-10-05 신규 — 채택(결정), 구현 #188 · **2026-10-07 구현 완료(#188)**. ADR-008·025·036이 미뤄 둔 원격 transport를 **추가**한다(대체가 아니다).
 ADR-032 결정 4가 미뤄 둔 "원격 MCP transport"를 정한다.
 
 **맥락**: stdio MCP는 `DATABASE_URL`을 쥔 프로세스가 사용자 컴퓨터에서 뜨고, 주체는 그 프로세스의 `MCP_USER_ID`다.
@@ -4314,9 +4314,43 @@ MCP로 붙을 수 있게 되는 것도 이 경로가 생겨서다 — stdio는 D
 2. MCP 쓰기는 여전히 생성 하나다(ADR-036 결정 4) — 원격이 생겼다고 편집·삭제 도구를 더하지 않는다.
 
 **구현 때 정함**
-- 배치 — API와 같은 ASGI 앱에 마운트할지, 같은 주소 뒤의 별도 프로세스로 둘지(명세서 계약은 `:8000/mcp`).
-- MCP 명세의 Streamable HTTP 보안 권고(`Origin` 헤더 검증 등) 적용 방식.
-- DB 일시 불가용 때의 응답·재시도(ADR-048)와 원격 `create_document`의 멱등키(ADR-047) 연결.
+- 배치 — API와 같은 ASGI 앱에 마운트할지, 같은 주소 뒤의 별도 프로세스로 둘지(명세서 계약은 `:8000/mcp`). → 2026-10-07 결정(아래)
+- MCP 명세의 Streamable HTTP 보안 권고(`Origin` 헤더 검증 등) 적용 방식. → 2026-10-07 결정(아래)
+- DB 일시 불가용 때의 응답·재시도(ADR-048)와 원격 `create_document`의 멱등키(ADR-047) 연결. → 2026-10-07 결정(아래)
+
+
+**2026-10-07 구현 결정 (#188)**
+
+1. **배치**: API 앱의 `/mcp`를 프론트 catch-all보다 앞에 연결한다. `openarchive serve`로 함께 뜨고,
+   API의 DB 풀과 예열된 `app.state.provider`를 공유한다. 별도 프로세스·포트는 운영 부담과 모델 중복 적재를
+   늘려 기각했다. 원격 경로는 stdio 모듈 전역 프로바이더를 쓰지 않는다.
+2. **세션**: `stateless_http=True`·`json_response=True`. 도구는 요청 하나에 응답 하나이며 서버 알림이 없다.
+   매 요청 토큰을 검증하며 서버 재시작 뒤 복원할 MCP 세션 상태가 없다. API lifespan마다 새 매니저를 만든다.
+3. **인증**: 자체 ASGI Bearer 미들웨어가 REST와 같은 `services/auth.validate_token`을 호출한다.
+   토큰 누락·Bearer 아닌 스킴·잘못된 토큰·폐기 토큰은 **401 + `WWW-Authenticate: Bearer`**다.
+   SDK `token_verifier`·`AuthSettings`는 OAuth issuer·보호 리소스 메타데이터를 광고하므로 쓰지 않는다 —
+   기각한 OAuth 인가 서버가 있는 것처럼 알리지 않는다.
+4. **인스턴스**: transport별 FastMCP 인스턴스를 `build_server`로 만들고 도구 본체를 공유한다.
+   stdio만 `MCP_USER_ID`와 풀을 여닫는 lifespan을 쓴다. 원격은 ContextVar의 토큰 주체만 읽고,
+   없으면 오류이며 환경변수로 떨어지지 않는다. SDK는 stateless 요청마다 서버 lifespan을 실행하므로
+   원격에 풀 lifespan을 주면 요청마다 공유 풀이 닫힌다. 풀 수명은 API가 맡는다.
+5. **Host·Origin**: `TransportSecuritySettings(enable_dns_rebinding_protection=False)`로 SDK 검사를 끈다.
+   localhost 기본 허용 목록은 다른 PC의 Host를 거부한다. Bearer 필수·CORS 없음으로 인증 없는 로컬
+   서버를 노리는 DNS rebinding의 전제를 막으며, 주소와 토큰만 등록하는 계약에 맞춰 Host 허용 목록을 두지 않는다.
+   대가는 SDK의 Host·Origin 검사 자체를 잃는 것이다. **평문 HTTP는 토큰을 노출하므로 다른 PC에서 쓸 때는
+   TLS 종단 프록시 뒤에 둔다.**
+6. **scope·감사**: 유효 토큰에는 4개 도구가 노출되지만 생성은 `read_write` 사용자 토큰만 허용한다.
+   `read`·공유 토큰은 도구의 DB 연결 전에 「쓰기 권한이 필요합니다.」로 거부된다.
+   생성과 같은 트랜잭션에서 `set_actor(conn, actor=<토큰 주인 사용자명>, via="mcp")`를 부른다.
+   읽기는 감사 대상이 아니며 열람 술어·검색 SQL·스키마는 바꾸지 않는다.
+7. **불가용·멱등키**: 원격 도구도 stdio와 같은 `with_backoff`(지수 백오프·전체 지터·60초 예산)를 쓴다.
+   `create_document` 호출당 멱등키 하나를 만들어 내부 재시도에 재사용한다. 도구 내부 실패는 MCP 오류로
+   전달하고, 인증 단계의 DB 일시 불가용은 API의 `RetryOnUnavailable`이 HTTP **503 + Retry-After**로 바꾼다.
+   원격 매니저가 실행 중이 아니어도 503이다.
+
+**검증 근거**: `test_mcp_http.py`는 인증 거부·외부 Host/Origin·반복 lifespan·주체와 주입 프로바이더를,
+`test_mcp_remote.py`는 실제 SDK의 4개 도구·열람 범위·scope·공유·생성 소유자와 감사 행위자를 고정한다.
+실제 MCP 클라이언트 등록과 HA VIP 경유 점검은 머지 전 별도 검증이다(`needs_vm=true`).
 
 ---
 

@@ -50,7 +50,7 @@ EMBEDDING_PROVIDER=local uvicorn openarchive.main:app --reload # API — 검색 
 EMBEDDING_PROVIDER=local python -m openarchive.worker      # 워커 — 문서를 임베딩한다
 ```
 
-**API·워커·MCP 서버는 각자 프로바이더를 생성하므로 세 프로세스에 같은 값을 주어야 합니다.**
+**API·워커·stdio MCP 서버는 각자 프로바이더를 생성하므로 세 프로세스에 같은 값을 주어야 합니다. 원격 MCP는 API 프로바이더를 공유합니다.**
 값이 엇갈리면 질의 벡터와 문서 벡터가 다른 공간에 놓여, 에러 없이 검색 결과만 무의미해집니다.
 모델은 API·워커가 **기동할 때** 내려받아 캐시하므로 최초 1회는 기동이 오래 걸리고, 대신 첫
 검색·첫 업로드가 로딩을 기다리지 않습니다 (ADR-003 보강).
@@ -598,7 +598,9 @@ openarchive reset-password alice     # 새 비밀번호는 화면에 남지 않�
 
 ### MCP 서버
 
-MCP 서버는 HTTP를 거치지 않고 서비스를 직접 호출하므로 API 인증 경계와 무관하며, 열람 범위는
+#### 로컬(stdio)
+
+stdio MCP 서버는 HTTP를 거치지 않고 서비스를 직접 호출하므로 API 인증 경계와 무관하며, 열람 범위는
 `MCP_USER_ID`가 정합니다. `DATABASE_URL`·`EMBEDDING_PROVIDER`·`MCP_USER_ID`를 MCP 프로세스에
 함께 전달해야 하고, MCP 서버는 마이그레이션을 실행하지 않으므로 스키마가 적용된 상태여야
 합니다 (ADR-012·036).
@@ -607,6 +609,41 @@ MCP 서버는 HTTP를 거치지 않고 서비스를 직접 호출하므로 API �
 > 검사를 통과한 이름은 `users` 테이블에 없어도 그대로 문서 소유자가 됩니다 (ADR-036). 실제
 > 계정명과 정확히 같게 적어야 `create_document`로 만든 문서가 Web UI에서 자기 문서로 보입니다.
 > 생략하면 public 문서 읽기만 가능하고 `create_document`는 거부됩니다.
+
+#### 원격(HTTP)
+
+`openarchive serve`를 띄우면 API의 `/mcp`가 함께 열리므로 별도 프로세스를 띄우지 않습니다.
+설정 화면(`/settings`)에서 API 토큰을 발급합니다. 4개 도구가 노출되지만 `read`는 읽기 3개만
+실행할 수 있고, `create_document`에는 `read_write` 사용자 토큰이 필요합니다. 주체와 생성 소유자는
+토큰 주인입니다. 클라이언트에는 DB 접속 정보나 `MCP_USER_ID`를 주지 않습니다.
+
+Claude Code 등록:
+
+```bash
+claude mcp add --transport http openarchive http://<서버>:8000/mcp --header "Authorization: Bearer <토큰>"
+```
+
+HTTP 설정을 지원하는 클라이언트의 JSON 등록 예시:
+
+```json
+{
+  "mcpServers": {
+    "openarchive": {
+      "type": "http",
+      "url": "http://<서버>:8000/mcp",
+      "headers": {
+        "Authorization": "Bearer <토큰>"
+      }
+    }
+  }
+}
+```
+
+공유 토큰도 같은 방식으로 등록할 수 있으며 공유에 넣은 문서만 검색·조회하고 생성은 거부됩니다.
+401이면 Bearer 헤더의 누락·스킴·토큰 오타와 폐기 여부를 확인합니다.
+평문 HTTP에서는 토큰이 그대로 흐르므로 **다른 PC에서 쓸 때는 TLS 종단 프록시 뒤에 두고 HTTPS 주소를 등록합니다.**
+Bearer 필수·CORS 없음과 주소·토큰만 등록하는 계약에 따라 Host 허용 목록은 두지 않습니다
+([ADR-056](ADR.md#adr-056-원격-mcp는-streamable-http-mcp에-api-토큰-bearer로-붙는다--stdio는-로컬용으로-남긴다)).
 
 ## 감사 로그
 

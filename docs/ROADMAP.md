@@ -31,7 +31,7 @@ DB 계층에 있고, 애플리케이션 코드에는 파이프라인을 조율�
 | **Processing** (변환·임베딩) | DB 트리거(잡 생성·코얼레싱) + 워커(청킹·임베딩) + edge 트리거(관계 생성) | 견고 — 조율이 전부 DB 안에 있다 |
 | **Storage** (저장·정합성) | 문서·텍스트 버전·청크·잡 큐·관계·원본 판 테이블과 인증·열람 부여 테이블, 제약·CASCADE·`vector(1024)` 타입, 정합성 관측 쿼리 | 코어 계약(ADR-015)의 자리 |
 | **Retrieval** (검색·관계) | 단일 SQL 검색(정형+벡터+그래프) · 저장 edge · 위키링크 · 진단·클러스터 | 전 경로가 같은 열람 술어를 공유 (ADR-027) |
-| **Interface** (소비·공급) | Web UI · REST API · MCP(로컬 stdio) · 운영자 CLI — 같은 services 계층을 사용하는 대등한 인터페이스 (ADR-031 결정 3) | REST 위임 API 토큰과 MCP `create_document`로 비대화형 공급 가능 (ADR-034·036). 원격 MCP·사용자 CLI는 채택됨 → PRD §5 C4 (ADR-056·057). 커넥터는 다음 확장 |
+| **Interface** (소비·공급) | Web UI · REST API · MCP(로컬 stdio·원격 HTTP) · 운영자 CLI — 같은 services 계층을 사용하는 대등한 인터페이스 (ADR-031 결정 3) | REST 위임 API 토큰과 MCP `create_document`로 비대화형 공급 가능 (ADR-034·036). 원격 MCP는 구현(#188) · 사용자 CLI는 채택됨 → PRD §5 C4 (ADR-056·057). 커넥터는 다음 확장 |
 
 ## 확장점과 후보
 
@@ -111,7 +111,7 @@ DB 계층에 있고, 애플리케이션 코드에는 파이프라인을 조율�
 
 - **현재**: MCP는 읽기 3개와 쓰기 `create_document` 1개를 제공한다. 쓰기는 `MCP_USER_ID`가
   없으면 거부하고 기존 텍스트 진입점을 재사용한다 (ADR-025·036).
-- **원격 transport**: 채택됨 → PRD §5 C4 (Streamable HTTP + Bearer API 토큰, ADR-056, #188).
+- **원격 transport**: 구현됨(#188) → PRD §5 C4 (Streamable HTTP + Bearer API 토큰, ADR-056, #188).
 - update/delete 도구 (후보): 수정의 동시성과 삭제 승인을 각각 결정한 뒤 추가한다.
 - 이벤트 웹훅 (장기): "임베딩 완료" 등 이벤트 발행 — 서드파티 통합의 진입로.
 
