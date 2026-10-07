@@ -1,0 +1,20 @@
+{
+  "findings": [
+    {
+      "severity": "medium",
+      "class": "decision",
+      "file": "backend/openarchive/mcp_server/http.py",
+      "line": 86,
+      "summary": "원격 MCP 도구가 HTTP 요청 안에서 with_backoff(최대 60초)로 버텨, ADR-048 결정 4 「서버는 요청을 붙잡고 버티지 않는다」와 어긋나는데 ADR-048은 개정되지 않았다",
+      "reason": "ADR-048 결정 4(docs/ADR.md:3572·3585)는 서버가 40초씩 요청을 붙잡으면 복구 직후 오히려 느려진다는 이유로 긴 재시도를 클라이언트 몫으로 정했다. stdio에서는 클라이언트와 서버가 같은 프로세스라 문제가 없었지만, 원격에서는 build_server가 공유하는 도구 본체가 그대로 API 서버 안에서 백오프한다. 장애 구간에 원격 에이전트가 여럿이면 요청이 60초까지 묶인다. ADR-056 구현 결정 7과 ARCHITECTURE.md는 이 동작을 '그동안 기다린다'로 적었지만 ADR-048 쪽에는 예외 개정이 없어 두 ADR이 서로 반대로 읽힌다. 선택지: (a) 원격 인스턴스는 백오프 없이 즉시 MCP 오류를 돌려주고 재시도는 클라이언트에 맡긴다, (b) 서버 쪽 백오프를 유지하고 ADR-048 결정 4에 원격 MCP 예외와 근거를 개정으로 적는다. 사람이 정할 일이다."
+    },
+    {
+      "severity": "low",
+      "class": "fix",
+      "file": "backend/openarchive/main.py",
+      "line": 167,
+      "summary": "mount_frontend용 주석(「반드시 API 라우트를 전부 등록한 뒤에 호출」)과 mount_frontend(app) 호출 사이에 /mcp 라우트 코드가 끼어들어, 주석이 엉뚱한 코드를 설명하게 됐다",
+      "reason": "CLAUDE.md 「외과적 변경」 원칙과 기존 주석의 의미 유지. ADR-041 주석은 바로 아래 mount_frontend 호출을 설명하는데, 지금은 바로 아래에 mcp_route 생성이 있다. /mcp 블록(주석 포함)을 ADR-041 주석 위로 옮기면 /mcp가 catch-all보다 먼저 등록된다는 순서도 그대로 지켜진다."
+    }
+  ]
+}

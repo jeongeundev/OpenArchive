@@ -85,7 +85,8 @@ OpenArchive/
 │   │   ├── embeddings/           # base.py(Protocol), local.py(bge-m3), fake.py
 │   │   ├── worker.py             # 워커 진입점 — 임베딩 잡과 관계 잡을 같은 큐에서 처리
 │   │   ├── demo.py · demo_corpus/ # `openarchive demo` 예제 문서
-│   │   └── mcp_server/server.py  # FastMCP stdio — search_documents, get_document, list_documents, create_document
+│   │   ├── mcp_server/server.py  # FastMCP 도구 4개 — stdio 인스턴스·build_server
+│   │   └── mcp_server/http.py    # Bearer 인증·원격 Streamable HTTP
 │   └── tests/                    # test_chunking.py, test_triggers.py, test_worker.py, test_search_api.py ...
 └── frontend/
     └── src/
@@ -103,7 +104,9 @@ OpenArchive/
 
 `services/grants.py`는 그룹·구성원 관리와 부여 대상 이름 해석을 맡는다(#97 b). 문서 열람 범위 조회·교체는 문서 서비스가 소유자 경계를 지키며 이 서비스를 재사용한다(ADR-044 「관리 경로」).
 
-MCP 서버는 `openarchive.services`를 직접 재사용한다. `search_documents`는 발췌(`excerpt`)·출처(`document_id`, `title`, `filename`)·기준 버전(`based_on_version`)을 반환하고, `get_document`는 문서 텍스트와 텍스트 버전·청크 상태를, `list_documents`는 접근 가능한 문서 메타데이터를 반환한다. `create_document`는 `title`·`content`·`content_type`(`txt`·`md`)·`tags`·`visibility`·`grant_users`·`grant_groups`를 받아 기존 텍스트 진입점으로 공급한다. 사용자 컨텍스트는 툴 인자가 아니라 `MCP_USER_ID` 환경변수로 고정한다. 미설정 시 public 문서 읽기는 허용하지만 소유자를 확정할 수 없어 쓰기는 거부한다 (ADR-025, ADR-036).
+MCP 서버는 `openarchive.services`를 직접 재사용한다. `search_documents`는 발췌(`excerpt`)·출처(`document_id`, `title`, `filename`)·기준 버전(`based_on_version`)을 반환하고, `get_document`는 문서 텍스트와 텍스트 버전·청크 상태를, `list_documents`는 접근 가능한 문서 메타데이터를 반환한다. `create_document`는 `title`·`content`·`content_type`(`txt`·`md`)·`tags`·`visibility`·`grant_users`·`grant_groups`를 받아 기존 텍스트 진입점으로 공급한다. stdio의 사용자 컨텍스트는 툴 인자가 아니라 `MCP_USER_ID` 환경변수로 고정한다. 미설정 시 public 문서 읽기는 허용하지만 소유자를 확정할 수 없어 쓰기는 거부한다 (ADR-025, ADR-036).
+
+원격 MCP는 API 앱의 `/mcp`에서 Streamable HTTP로 동작한다(ADR-056, 구현 #188). 주체는 매 요청 검증한 Bearer 토큰에서만 정하며 `MCP_USER_ID`는 stdio 전용이다. 읽기 3개는 모든 유효 토큰에, 생성은 `read_write` 사용자 토큰에만 열린다. 공유 토큰은 공유에 넣은 문서만 읽는다. 두 transport는 같은 서비스·열람 술어·도구 본체를 사용하며, 원격은 API 풀과 예열된 프로바이더를 공유한다.
 
 `POST /api/search`도 같은 근거 필드(`filename`·`based_on_version`)를 함께 내려준다. 서비스가 하나여도 두 경로의 응답 스키마가 갈라지면 "REST와 MCP의 결과가 같다"가 깨진다 — `tests/test_mcp_server.py`가 두 응답을 직접 비교해 이를 지킨다.
 
@@ -440,6 +443,7 @@ CREATE TRIGGER trg_documents_content_changed
 | REST — 세션 / 사용자 API 토큰 (`api/deps.py` `current_user`) | 사용자명 | `session` / `token` |
 | REST — 공유 토큰 | NULL (`detail`에 `share_id`·`share_name`) | `share` |
 | stdio MCP `create_document` | `MCP_USER_ID` | `mcp` |
+| 원격 MCP `create_document` | Bearer 토큰 주인 | `mcp` |
 | 운영자 CLI `import`·`demo` | `--user` | `cli` |
 | 운영자 CLI `reextract` | NULL | `cli` |
 | 워커 — OCR 결과 반영(재추출 v2 이상) | NULL | `worker` |
@@ -699,7 +703,7 @@ DATABASE_URL="postgresql://app@<vip>:6432/<pool_name>"
 
 - **API**: `psycopg_pool.AsyncConnectionPool(check=AsyncConnectionPool.check_connection)` — 죽은 연결을 대여 시점에 감지·폐기·재수립. 처리 도중 끊긴 요청은 미들웨어가 **1회 재시도**하되 대상은 **읽기 전용 요청**뿐이다(`GET`·`HEAD`·`POST /api/search`·`POST /api/ask` — ask는 DB 단계가 생성 전에 끝나 재시도가 생성을 두 번 돌리지 않는다). 쓰기는 커밋 도달 여부를 구분할 수 없어 재시도 시 중복 생성 위험이 있다 (ADR-023).
 - **일시 불가용은 503 + `Retry-After`**: 기다리면 풀리는 DB 오류를 `openarchive.db.is_unavailable` 하나로 가른다 — 연결 유실·풀 대여 시간 초과(SQLSTATE 없는 `OperationalError`), 연결 예외 `08xxx`, OpenProxy `AllServersDown`과 서버 소켓 오류가 올라오는 `58000`, 서버 종료·기동 중인 `57P01`·`57P02`·`57P03`, 승격 직후 쓰기가 replica로 간 `25006`. **나열한 것만** 일시 불가용이다 — `OperationalError`에는 디스크 가득 참(`53100`)·인증 실패(`28P01`)·statement timeout(`57014`)처럼 기다려도 풀리지 않는 것도 섞여 있어, 그것을 503으로 주면 결함이 가려진다. 한계: 잘못된 DSN·비밀번호는 풀에서 `PoolTimeout`으로 보여 장애와 구별되지 않는다. 미들웨어(`api/retry.py`)의 즉시 1회 재시도도 이 기준을 따르고, 끝내 풀리지 않으면 **503 + `Retry-After: 1`**로 응답한다. 쓰기도 503은 받지만 즉시 재시도는 `Idempotency-Key`가 있는 문서 생성(`POST /api/documents`·`/api/documents/text`)만 한다 — 다른 쓰기는 헤더가 붙어 와도 키를 지키지 않는다. 그 밖의 오류는 500이며, 500은 코드 결함에만 남는다. #110 B에서는 장애 구간 응답이 전부 500이었다(B-5) (ADR-048 결정 3).
-- **긴 재시도는 클라이언트가 한다**: 즉시 1회로는 7~42초 중단을 덮지 못한다. 웹 UI(`lib/api.ts`)의 읽기와 업로드, MCP 도구 4개(읽기 3개와 `create_document`)가 503·네트워크 오류(MCP는 분류된 DB 오류)를 **지수 백오프(1초 시작·상한 8초) + 전체 지터, 총 60초**로 다시 시도한다. 웹 UI는 503의 `Retry-After`보다 일찍 보내지 않는다 — 간격은 `max(Retry-After, 지터 백오프)`이고, 알린 값이 남은 예산을 넘으면 바로 포기한다(RFC 9110 §10.2.3). MCP는 HTTP를 거치지 않고 서비스를 직접 불러 받을 헤더가 없다. 쓰기는 멱등키가 있는 것만 재시도한다 — 웹 UI는 업로드 동작마다, MCP는 `create_document` 호출마다 키를 하나 만들어 그 요청의 모든 재시도에 쓴다(ADR-047). 편집·태그·삭제 등 다른 쓰기는 재시도하지 않는다. 서버는 요청을 붙잡고 버티지 않는다 (ADR-048 결정 4).
+- **긴 재시도는 클라이언트가 한다**: 즉시 1회로는 7~42초 중단을 덮지 못한다. 웹 UI(`lib/api.ts`)의 읽기와 업로드, MCP 도구 4개(읽기 3개와 `create_document`)가 503·네트워크 오류(MCP는 분류된 DB 오류)를 **지수 백오프(1초 시작·상한 8초) + 전체 지터, 총 60초**로 다시 시도한다. 웹 UI는 503의 `Retry-After`보다 일찍 보내지 않는다 — 간격은 `max(Retry-After, 지터 백오프)`이고, 알린 값이 남은 예산을 넘으면 바로 포기한다(RFC 9110 §10.2.3). stdio·원격 MCP 도구는 REST를 거치지 않고 서비스를 직접 부르며 같은 `with_backoff`를 쓴다. 도구 내부의 DB 실패는 MCP 오류로 전달된다. DB 불가용을 HTTP 503으로 받는 것은 토큰 인증 단계뿐이며 `RetryOnUnavailable`이 변환한다(매니저 미기동도 별도로 503). 쓰기는 멱등키가 있는 것만 재시도한다 — 웹 UI는 업로드 동작마다, MCP는 `create_document` 호출마다 키를 하나 만들어 그 요청의 모든 재시도에 쓴다(ADR-047). 편집·태그·삭제 등 다른 쓰기는 재시도하지 않는다. REST 서버는 긴 백오프 동안 요청을 붙잡지 않는다. 원격 MCP는 예외로 공유 도구 본체가 서버 안에서 백오프하므로 장애 구간의 도구 응답은 그동안 기다린다 — MCP 도구 호출에는 클라이언트가 멱등키를 실을 자리가 없어 같은 키로 재시도할 수 있는 곳이 서버뿐이고, 대기는 연결을 반납한 뒤라 풀을 묶지 않는다 (ADR-048 결정 4·「2026-10-07 개정」, ADR-056 구현 결정 7).
 - **워커 (잡 처리)**: 동일한 풀 정책. 처리 중 연결이 끊기면 트랜잭션이 롤백되고, 잡은 `processing` 상태로 남았다가 좀비 회수 스윕이 `pending`으로 되돌린다.
 - **죽은 연결 감지 (keepalive)**: 풀과 워커 `LISTEN` 연결은 TCP keepalive(`keepalives_idle=30`·`interval=10`·`count=3`)와 `tcp_user_timeout=60000`을 **코드 기본값**으로 연다(`openarchive/db.py`). VIP가 원래 노드로 돌아가는 순간(선점) 응답을 기다리던 연결은 FIN도 RST도 받지 못하는데, OS 기본값으로는 약 2시간 뒤에야 풀려 워커가 멈춰 있었다(#110 B-1). 감지는 약 60초 안에 된다. DSN에 같은 키를 적으면 그 값이 이기며, DSN 문자열 자체는 바꾸지 않는다 — 환경변수 하나·호스트 하나(ADR-006) 그대로다 (ADR-048 결정 1).
 - **오류가 난 연결은 풀에 돌려보내지 않는다**: API 요청·MCP 도구 호출이 DB 오류로 끝나면(`openarchive.db.connection`), 워커 처리 루프는 어떤 오류로든 끝나면 그 연결을 닫아 풀이 버리게 한다. OpenProxy가 `BEGIN`에 `AllServersDown`을 돌려주면 psycopg의 `transaction()` 카운터가 되돌려지지 않은 채 연결이 IDLE로 남고, 풀은 IDLE만 보고 받아들여 그 연결의 다음 `transaction()`마다 `AssertionError`가 났다(#110 B-2, 한때 워커 풀 4개 중 3개). 요청 경로는 HTTP 거절(401·404)로는 닫지 않는다. 워커는 좁히지 않는다 — 잡 처리 중 오염되면 `process_once`가 첫 DB 오류를 잡아 `fail_job`으로 넘기고, 루프에 올라오는 것은 `fail_job`의 `AssertionError`다 (ADR-048 결정 2).
@@ -1290,7 +1294,7 @@ class EmbeddingProvider(Protocol):
 - **상용 API 기반 프로바이더는 구현하지 않는다** (ADR-003). 대회 규정 [별표2]가 "외부 API 호출을 통해서만 작동하는 API 전용 모델 사용 불가"를 명시한다.
 - 배칭·캐싱·폴백 체인은 만들지 않는다.
 - **프로바이더를 만드는 프로세스는 기동 시 `warm_up()`으로 예열한다** — API(lifespan)와 워커다. `LocalProvider`가 첫 `embed()`까지 모델 로딩을 미루므로, 예열이 없으면 그 지연이 통째로 첫 요청에 붙는다: API는 **첫 검색 12.5초**(2026-08-21 실측, 예열 후 0.2초), 워커는 첫 업로드의 처리 지연이다. 예열 실패는 삼킨다 — 최적화이지 새 실패 지점이 아니며, 모델을 받을 수 없으면 기존 실패 경로가 더 정확히 알린다.
-- **MCP 서버는 예열하지 않는다.** stdio 서버라 기동이 12초 늦어지면 클라이언트의 기동 타임아웃에 걸릴 수 있고, 첫 호출을 기다리는 것은 사람이 아니라 에이전트다. 첫 `search_documents` 호출이 로딩을 떠안는 것을 한계로 받아들인다.
+- **stdio MCP는 예열하지 않는다. 원격은 API가 예열한 프로바이더를 쓴다.** stdio 서버라 기동이 12초 늦어지면 클라이언트의 기동 타임아웃에 걸릴 수 있고, 첫 호출을 기다리는 것은 사람이 아니라 에이전트다. 첫 `search_documents` 호출이 로딩을 떠안는 것을 한계로 받아들인다.
 
 ### 청킹 (services/chunking.py)
 

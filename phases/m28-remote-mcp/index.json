@@ -1,0 +1,54 @@
+{
+  "project": "OpenArchive",
+  "phase": "m28-remote-mcp",
+  "issue": 188,
+  "title": "feat(mcp): 원격 MCP — Streamable HTTP /mcp + API 토큰 Bearer (#188)",
+  "needs_vm": true,
+  "steps": [
+    {
+      "step": 0,
+      "name": "mcp-principal",
+      "type": "feat",
+      "scope": "mcp",
+      "desc": "MCP 도구가 주입받은 주체·scope로 동작하도록 구조를 바꾼다",
+      "status": "completed",
+      "started_at": "2026-10-07T21:41:30+0900",
+      "summary": "McpPrincipal·build_server·principal_from_token·WriteNotAllowed로 주체·scope 주입을 분리하고 stdio mcp 인스턴스 계약 유지; AC 48개 테스트·ruff 및 mutant 3종 검증 통과",
+      "completed_at": "2026-10-07T21:45:32+0900"
+    },
+    {
+      "step": 1,
+      "name": "mcp-http",
+      "type": "feat",
+      "scope": "mcp",
+      "desc": "Bearer 토큰 미들웨어와 원격 Streamable HTTP MCP 진입점",
+      "status": "completed",
+      "started_at": "2026-10-07T21:45:32+0900",
+      "summary": "remote_mcp.asgi를 마운트하고 lifespan에서 remote_mcp.running(provider)에 진입; Bearer validate_token 주체를 ContextVar로 전달하며 매 lifespan 새 stateless JSON 매니저 사용; AC 58개 테스트·ruff와 mutant 3종 검증 통과",
+      "completed_at": "2026-10-07T21:49:40+0900"
+    },
+    {
+      "step": 2,
+      "name": "mount-mcp",
+      "type": "feat",
+      "scope": "api",
+      "desc": "API 앱의 /mcp에 원격 MCP를 붙이고 SDK 클라이언트로 시험항목을 고정한다",
+      "status": "completed",
+      "started_at": "2026-10-07T21:49:40+0900",
+      "summary": "API /mcp를 프론트 catch-all 앞에 연결하고 예열된 프로바이더·풀을 공유; 실제 SDK로 인증·열람·scope·공유·감사 시험 고정, AC 133개·ruff 통과, 로컬 uvicorn curl 401/200 및 마운트 순서 mutant 실패 확인",
+      "completed_at": "2026-10-07T21:55:48+0900"
+    },
+    {
+      "step": 3,
+      "name": "remote-mcp-docs",
+      "type": "docs",
+      "desc": "원격 MCP 구현 결정과 클라이언트 등록 절차를 문서에 반영한다",
+      "status": "completed",
+      "started_at": "2026-10-07T21:55:48+0900",
+      "summary": "ADR-056 구현 결정·원격 MCP 등록/TLS 운영 절차·제품 문서 상태 반영; 코드에 맞춰 매니저 미기동 503과 원격 도구 서버 내 백오프 명시; 문서 AC·MCP 테스트 54개 통과",
+      "completed_at": "2026-10-07T21:59:08+0900"
+    }
+  ],
+  "created_at": "2026-10-07T21:41:30+0900",
+  "completed_at": "2026-10-07T21:59:08+0900"
+}

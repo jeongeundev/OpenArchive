@@ -266,6 +266,16 @@ Claude Desktop / Claude Code의 MCP 설정에 stdio 서버로 등록합니다. `
 (실존 여부는 검증되지 않습니다 — [ADR-036](docs/ADR.md)). `EMBEDDING_PROVIDER`는 `serve`에
 준 값과 같아야 합니다 — 다르면 에러 없이 검색 결과만 무의미해집니다.
 
+원격 MCP는 `openarchive serve`의 `/mcp`에 주소와 설정 화면에서 발급한 API 토큰만 등록합니다:
+
+```bash
+claude mcp add --transport http openarchive http://<서버>:8000/mcp --header "Authorization: Bearer <토큰>"
+```
+
+읽기는 `read`·공유 토큰도 가능하고 생성은 `read_write` 사용자 토큰만 가능합니다.
+다른 PC에서는 토큰 보호를 위해 TLS 프록시 뒤의 HTTPS 주소를 쓰세요.
+[원격 등록 절차](docs/OPERATIONS.md#원격http)에 JSON 설정 예시와 인증 점검 방법이 있습니다.
+
 ### 계정과 토큰
 
 - `/settings` — 내 비밀번호 변경 · API 토큰 발급·폐기 · 외부 공유와 읽기 전용 공유 토큰 관리.
@@ -356,7 +366,7 @@ replica에 닿지 않은 커밋은 사라질 수 있고, 복구 구간에는 쓰
 | 임베딩 | [`BAAI/bge-m3`](https://huggingface.co/BAAI/bge-m3) (MIT, 1024차원) — `sentence-transformers`로 로컬 구동 |
 | 프론트엔드 | Next.js (App Router) · TypeScript · Tailwind CSS · JSZip — 정적 빌드를 백엔드에 동봉 |
 | 군집 | `networkx` Louvain |
-| MCP | Python `mcp` SDK (FastMCP, stdio) |
+| MCP | Python `mcp` SDK (FastMCP, stdio·Streamable HTTP) |
 
 ---
 

@@ -27,7 +27,7 @@
 - DB: Tmax OpenSQL v3 (PostgreSQL **17.8** + **pgvector 0.8.1** · pgvectorscale 0.9.0 번들). 애플리케이션은 **OpenProxy:6432** 경유. 2차 평가 환경은 **HA 3노드**(node1~3, Patroni·etcd·OpenProxy VRRP VIP)이며 복제는 공식 구성대로 **비동기**다. 백업은 별도 서버 node4의 **Barman**(WAL 스트리밍·PITR)이 맡는다 (ADR-020 2026-09-28 개정, ADR-049 개정, ADR-053). 1차 제출은 대회 지시에 따른 single 구성이었다
 - 개발 환경 2단: 일상 개발은 `pgvector/pgvector:pg17` 컨테이너, OpenSQL 고유 동작 확인은 Rocky Linux 9.7 **x86-64 VM** — HA 3노드 + node4(Barman) (`docs/SETUP_OPENSQL.md` §16·§17). 백업 복원은 Replica 노드의 격리 인스턴스(포트 5433)로 한다 — single VM은 개발·OpenSQL 고유 동작 확인용이다. OpenSQL은 x86-64 전용이라 Apple Silicon에서는 에뮬레이션이 필요하므로 **DB만 VM에 두고 API·워커·프론트는 맥 네이티브로** 돌린다
 - 임베딩: sentence-transformers **`BAAI/bge-m3`** (MIT, 1024차원) 단일. 테스트용 `FakeProvider`만 예외. **상용 API 모델 금지** — 대회 규정 (ADR-003)
-- MCP 서버: Python `mcp` SDK (FastMCP). 로컬은 stdio, 원격은 Streamable HTTP `/mcp` + API 토큰 — 원격은 결정·미구현(#188, ADR-056)
+- MCP 서버: Python `mcp` SDK (FastMCP). 로컬은 stdio, 원격은 Streamable HTTP `/mcp` + API 토큰 — 원격 구현 완료(#188, ADR-056)
 - 답변 생성(옵션, 기본 꺼짐): 로컬 Ollama `qwen3:8b` (ADR-043, 한국어 품질 확정은 #96 c). 임베딩과 같은 이유로 **상용 API 금지**
 - OCR: tesseract 5 + kor/eng (ADR-052) · 주제 덩어리: networkx Louvain (ADR-042)
 

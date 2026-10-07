@@ -145,6 +145,11 @@
       "dir": "m27-trash",
       "status": "completed",
       "completed_at": "2026-10-07T10:50:47+0900"
+    },
+    {
+      "dir": "m28-remote-mcp",
+      "status": "completed",
+      "completed_at": "2026-10-07T21:59:08+0900"
     }
   ]
 }
