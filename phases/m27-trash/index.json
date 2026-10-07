@@ -63,7 +63,10 @@
       "type": "feat",
       "scope": "api",
       "desc": "휴지통 이동·영구 삭제·목록·복원 REST 엔드포인트",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-10-07T10:41:01+0900",
+      "summary": "휴지통 이동·목록·복원·영구 삭제 REST와 세션·토큰 권한 및 감사 테스트를 추가하고 기존 하드 삭제 서비스를 정리해 지정 AC 186개·Ruff·아키텍처 테스트 9개를 통과했다",
+      "completed_at": "2026-10-07T10:45:11+0900"
     },
     {
       "step": 6,
