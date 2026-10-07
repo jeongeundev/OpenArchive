@@ -73,6 +73,23 @@ def test_get_settings_is_cached():
     assert get_settings() is get_settings()
 
 
+def test_trash_retention_defaults_to_30_days(monkeypatch):
+    monkeypatch.delenv("TRASH_RETENTION_DAYS", raising=False)
+    assert Settings(**NO_ENV_FILE).trash_retention_days == 30
+
+
+def test_trash_retention_is_injected_from_environment(monkeypatch):
+    monkeypatch.setenv("TRASH_RETENTION_DAYS", "7")
+    assert Settings(**NO_ENV_FILE).trash_retention_days == 7
+
+
+@pytest.mark.parametrize("value", ["0", "-1"])
+def test_trash_retention_must_be_positive(monkeypatch, value):
+    monkeypatch.setenv("TRASH_RETENTION_DAYS", value)
+    with pytest.raises(ValidationError):
+        Settings(**NO_ENV_FILE)
+
+
 def test_env_file_is_read_from_openarchive_home_not_the_cwd(tmp_path, monkeypatch):
     """설정 파일 위치는 실행 디렉토리에 좌우되지 않는다.
 

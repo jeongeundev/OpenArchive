@@ -45,6 +45,7 @@ import psycopg
 from openarchive.config import get_settings
 from openarchive.db import close_pool, connection, get_pool, keepalive_kwargs
 from openarchive.embeddings import EmbeddingProvider, get_provider, warm_up
+from openarchive.services import trash
 from openarchive.services.audit import set_actor
 from openarchive.services.chunking import chunk_text
 from openarchive.services.documents import apply_extracted_text
@@ -958,6 +959,11 @@ async def run_worker() -> None:
                         purged = await purge_expired_idempotency_keys(conn)
                         if purged:
                             logger.info("만료된 멱등키 %d건 정리", purged)
+                        purged_trash = await trash.purge_expired(
+                            conn, retention_days=get_settings().trash_retention_days
+                        )
+                        if purged_trash:
+                            logger.info("보존 기간이 지난 휴지통 문서 %d건 영구 삭제", purged_trash)
                         processed = await drain(
                             conn,
                             provider,
