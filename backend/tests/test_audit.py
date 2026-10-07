@@ -114,7 +114,12 @@ def test_session_creation_edit_access_and_delete(db_client, migrated_db):
     before = rows(migrated_db, doc)
     assert db_client.delete(f"/api/documents/{doc}").status_code == 204
     assert rows(migrated_db, doc) == before + [
-        ("document_deleted", "alice", "session", "사건 제목", {})
+        ("document_trashed", "alice", "session", "사건 제목", {})
+    ]
+    assert db_client.delete(f"/api/documents/{doc}?permanent=true").status_code == 204
+    assert rows(migrated_db, doc) == before + [
+        ("document_trashed", "alice", "session", "사건 제목", {}),
+        ("document_deleted", "alice", "session", "사건 제목", {}),
     ]
 
 
