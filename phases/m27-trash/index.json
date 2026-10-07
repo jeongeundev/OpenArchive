@@ -1,0 +1,70 @@
+{
+  "project": "OpenArchive",
+  "phase": "m27-trash",
+  "steps": [
+    {
+      "step": 0,
+      "name": "trash-tables",
+      "type": "feat",
+      "scope": "db",
+      "desc": "문서에 휴지통 이동 시각 컬럼과 휴지통 조회 인덱스를 더한다",
+      "status": "pending"
+    },
+    {
+      "step": 1,
+      "name": "trash-audit",
+      "type": "feat",
+      "scope": "db",
+      "desc": "휴지통 이동·복원을 트리거가 감사 로그에 남긴다",
+      "status": "pending"
+    },
+    {
+      "step": 2,
+      "name": "trash-predicate",
+      "type": "feat",
+      "scope": "search",
+      "desc": "열람 술어가 휴지통 문서를 전 경로에서 제외한다",
+      "status": "pending"
+    },
+    {
+      "step": 3,
+      "name": "trash-service",
+      "type": "feat",
+      "scope": "api",
+      "desc": "휴지통 이동·목록·복원·영구 삭제·만료 비우기 서비스",
+      "status": "pending"
+    },
+    {
+      "step": 4,
+      "name": "trash-worker",
+      "type": "feat",
+      "scope": "worker",
+      "desc": "워커가 보존 기간이 지난 휴지통 문서를 영구 삭제한다",
+      "status": "pending"
+    },
+    {
+      "step": 5,
+      "name": "trash-api",
+      "type": "feat",
+      "scope": "api",
+      "desc": "휴지통 이동·영구 삭제·목록·복원 REST 엔드포인트",
+      "status": "pending"
+    },
+    {
+      "step": 6,
+      "name": "trash-ui",
+      "type": "feat",
+      "scope": "frontend",
+      "desc": "휴지통 화면·삭제 확인 문구·감사 표기",
+      "status": "pending"
+    },
+    {
+      "step": 7,
+      "name": "trash-docs",
+      "type": "docs",
+      "scope": "adr",
+      "desc": "ADR-060 구현 결정과 운영·아키텍처 문서에 휴지통 반영",
+      "status": "pending"
+    }
+  ]
+}
