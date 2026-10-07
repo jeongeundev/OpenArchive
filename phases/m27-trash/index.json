@@ -30,7 +30,10 @@
       "type": "feat",
       "scope": "search",
       "desc": "열람 술어가 휴지통 문서를 전 경로에서 제외한다",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-10-07T10:27:20+0900",
+      "summary": "공통 열람 술어·공유 관리·가져오기 중복 판정에서 휴지통을 제외하고 격리·검색·아키텍처 테스트를 추가해 지정 AC 478개·Ruff 및 4개 mutant 검증을 통과했으며 1200 고유 벡터의 후보 CTE에서 HNSW idx_chunks_embedding 사용을 확인했다",
+      "completed_at": "2026-10-07T10:34:05+0900"
     },
     {
       "step": 3,
