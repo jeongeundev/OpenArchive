@@ -137,7 +137,9 @@ CREATE TABLE documents (
     CHECK (extraction_status <> 'done' OR length(btrim(content, E' \t\r\n\f')) > 0),
   -- 030 (ADR-054): 폴더와 범위 상속. 기존 문서는 folder_id NULL이라 자기 범위 그대로다
   folder_id      uuid REFERENCES folders(id) ON DELETE RESTRICT,   -- 빈 폴더만 지운다
-  follows_folder boolean NOT NULL DEFAULT true  -- true = 「폴더 범위 따름」, false = 「개별 지정」
+  follows_folder boolean NOT NULL DEFAULT true,  -- true = 「폴더 범위 따름」, false = 「개별 지정」
+  -- 032 (ADR-060): 휴지통. 값이 있으면 열람 술어가 전 경로에서 뺀다. 청크·관계·버전·잡은 그대로라 복원은 이 값을 지우는 것뿐
+  deleted_at     timestamptz                    -- 휴지통 이동 시각. TRASH_RETENTION_DAYS가 지나면 워커가 영구 삭제(하드 DELETE)
 );
 
 -- document_versions: 문서 텍스트의 버전 이력 (append-only)
@@ -314,7 +316,7 @@ CREATE TABLE api_tokens (
 CREATE TABLE audit_log (
   id             bigserial PRIMARY KEY,        -- 정렬·커서 기준 (같은 트랜잭션의 행은 occurred_at이 같다)
   occurred_at    timestamptz NOT NULL DEFAULT now(),
-  action         text NOT NULL,                -- CHECK 7종 (아래 「감사 로그」 절)
+  action         text NOT NULL,                -- CHECK 10종 (아래 「감사 로그」 절 — 029 7종 + 031·033)
   actor          text,                         -- 사용자명 스냅샷. 앱 행위자가 없으면 NULL
   actor_via      text,                         -- session|token|mcp|cli|share|worker, 직접 SQL이면 NULL
   db_role        text NOT NULL DEFAULT current_user,
@@ -415,6 +417,7 @@ CREATE TRIGGER trg_documents_content_changed
 | 트리거 · 함수 | 대상 · 조건 | `action` · `detail` |
 |---|---|---|
 | `trg_audit_document_created` / `trg_audit_document_deleted` | `documents` INSERT / DELETE | `document_created` / `document_deleted` · `{}` |
+| `trg_audit_document_trash_changed` | `documents` UPDATE OF `deleted_at`, NULL↔값 전이일 때 (033) | NULL→값 `document_trashed`(휴지통 이동) / 값→NULL `document_restored`(복원) · `{}`. 영구 삭제는 위 `document_deleted`다 |
 | `trg_audit_visibility_changed` | `documents` UPDATE OF `visibility`, 값이 바뀔 때 | `access_changed` · `{kind: visibility, before, after}` |
 | `trg_audit_text_updated` | `document_versions` INSERT, v2 이상 | `text_updated` · `{version}` |
 | `trg_audit_original_replaced` | `document_files` INSERT, 2판 이상 | `original_replaced` · `{file_version}` |
@@ -598,6 +601,8 @@ COMMIT;
 
    남는 한계는 상태 표시다. 워커가 죽어 있는 동안 `/api/system/status`의 `jobs.processing`은 방치된 잡을 계속 세므로, **처리 중이 아닌 잡이 처리 중으로 보인다.** lease가 지나면 회수되므로 데이터 문제는 아니지만, 그 구간에는 화면이 사실과 다르다. `recovery_pending`(lease가 만료된 `processing`)이 그 구간을 따로 세므로 구분은 가능하다.
 
+   **휴지통 비우기도 루프 머리에서 한다** (ADR-060). 스윕·멱등키 정리 다음에 `services/trash.py`의 `purge_expired`가 `deleted_at`이 `TRASH_RETENTION_DAYS`(기본 30일)보다 오래된 문서를 영구 삭제한다 — 잡 종류를 늘리지 않고, 행위자는 `actor_via='worker'`로 감사에 `document_deleted`가 남는다. 휴지통 문서의 잡은 다른 문서처럼 처리한다.
+
 6. 정상 종료: `SIGTERM`(배포의 `systemctl stop`)·`SIGINT`(Ctrl-C)를 받으면 **처리 중인 잡을 마치고** 루프를 빠져나온다. 임베딩을 시작하기 전이었다면 선점을 반납한다 — `pending` 복귀 + **`attempts` 원복**. 배포로 워커를 세우는 것은 잡의 실패가 아니므로 예산을 소비하면 안 된다. 원복하지 않으면 배포를 3회 반복하는 것만으로 멀쩡한 문서가 5번의 소진 판정에 걸려 `error`가 된다. 반납은 백오프를 걸지 않아 다음 워커가 곧바로 이어받는다.
 
    반납하지 못하고 죽어도(SIGKILL·OOM) 정합성은 깨지지 않는다. 잡이 좀비로 남아 5번이 lease 만료 후에 회수할 뿐이다. 반납은 그 대기를 없애는 최적화다.
@@ -779,7 +784,8 @@ OpenSQL `patroni.yml`의 PostgreSQL 파라미터는 `max_connections: 100`이다
 | `POST /api/documents/{id}/reextract` | **재추출.** `{current_version}`. 최신 판에서 다시 추출해 결과가 다르면 새 텍스트 버전, 같으면 무변경(`changed: false`). 새 판은 만들지 않는다. 최신 판이 OCR 대상이면 추출 잡으로 넘기고 `changed: false`와 `extraction_status: "pending"`으로 응답한다. 원본 없는 문서·추출 중 문서는 409 |
 | `PUT /api/documents/{id}` | 편집된 문서 텍스트(`{content, version}` JSON) → `version`+1, `content`, `content_hash` UPDATE. **버전 이력 기록과 재임베딩 잡 생성은 트리거가 수행.** 요청의 `version`이 현재 버전과 다르면 **409** (아래) |
 | `PUT /api/documents/{id}/tags` | `{tags: string[]}`로 태그 전체 교체. 트리거는 `UPDATE OF content_hash`에만 걸려 있으므로 **재임베딩을 유발하지 않는다** |
-| `DELETE /api/documents/{id}` | CASCADE로 벡터까지 원자 삭제 |
+| `DELETE /api/documents/{id}` | **휴지통 이동** — `deleted_at`을 채운다. 소유자만, 쓰기 토큰 허용. `?permanent=true`면 영구 삭제(CASCADE로 벡터·잡·원본 판까지 원자 삭제, 휴지통 밖 문서도 가능) (ADR-060) |
+| `GET /api/documents/trash` · `POST /api/documents/{id}/restore` | 내 휴지통 목록(제목·삭제 일시·영구 삭제 예정일) · 복원(`deleted_at`을 지운다, 재임베딩 없음). 소유자만 — 남의 문서는 관리자에게도 404 |
 | `POST /api/documents/{id}/reembed` | **임베딩 실패 복구.** 아래 참조 |
 | `GET /api/documents/{id}/related` | **관련 문서.** 저장된 관계(`document_edges`)를 읽는다 (ADR-018 개정 · ADR-029). 청크가 없으면 `not_indexed`, edge가 없으면 `no_edges` |
 | `GET /api/documents/{id}/tag-suggestions` | **태그 추천.** 관계 이웃의 태그 빈도 (ADR-019). 청크가 없으면 `not_indexed` |
@@ -793,7 +799,7 @@ OpenSQL `patroni.yml`의 PostgreSQL 파라미터는 `max_connections: 100`이다
 | `GET /api/diagnostics` | **진단.** 고아 문서·깨진 링크·중복 후보 등을 **열람 범위 기준**으로 집계 (ADR-027) |
 | `GET /api/clusters` | **관계 지도.** 관계 그래프의 Louvain 군집. 조회 시점 계산, 열람 범위 기준. 이름은 (군집 안 빈도 − 밖 빈도)가 양수인 태그 중 최대, 없으면 중심 문서 제목 (ADR-042 개정) |
 | `GET /api/admin/users` 등 | 관리자 전용 |
-| `GET /api/admin/audit` | **관리자·세션 전용** 감사 로그 조회. 쿼리 `actor`·`action`(7종, 그 밖은 422)·`limit`(기본 50, 1~200)·`before_id`(id 커서). 응답 `{items, next_before_id}`, id 내림차순. 열람 술어를 걸지 않고 대상 문서 **제목**까지만 보인다(ADR-055 결정 8). 조회 자체는 기록하지 않는다 |
+| `GET /api/admin/audit` | **관리자·세션 전용** 감사 로그 조회. 쿼리 `actor`·`action`(10종, 그 밖은 422)·`limit`(기본 50, 1~200)·`before_id`(id 커서). 응답 `{items, next_before_id}`, id 내림차순. 열람 술어를 걸지 않고 대상 문서 **제목**까지만 보인다(ADR-055 결정 8). 조회 자체는 기록하지 않는다 |
 | `POST /api/admin/groups` · `GET /api/admin/groups` · `DELETE /api/admin/groups/{id}` | **관리자·세션 전용**. 그룹 생성·목록·삭제. 이름 변경 없음 (#97 b) |
 | `PUT /api/admin/groups/{id}/members/{username}` · `DELETE /api/admin/groups/{id}/members/{username}` | **관리자·세션 전용**. 구성원 추가·제거 (#97 b) |
 | `GET /api/principals` | **로그인**. 부여 대상 사용자명·그룹명 목록. 익명은 401 (#97 b) |

@@ -29,6 +29,7 @@ mkdir -p ~/.openarchive && cp backend/.env.example ~/.openarchive/.env   # 예�
 | `DATABASE_URL` | 로컬 컨테이너 | 실 OpenSQL은 OpenProxy 단일 엔드포인트 `postgresql://app@<vip>:6432/<pool_name>` (ADR-006). 앱은 여기에 없는 TCP keepalive 설정(`keepalives_idle=30`·`keepalives_interval=10`·`keepalives_count=3`·`tcp_user_timeout=60000`)을 기본값으로 채워, 죽은 연결을 약 60초 안에 감지합니다. 바꾸려면 DSN에 같은 키를 적습니다 — 적은 값이 이깁니다 (ADR-048) |
 | `EMBEDDING_PROVIDER` | `fake` | `local` — `BAAI/bge-m3` · `fake` — 테스트용. 아래 「임베딩 프로바이더」 |
 | `JOB_LEASE_SECONDS` | `60` | 잡 선점 lease. 워커가 처리 중 1/3마다 연장하고, 연장이 끊긴 잡(워커 사망·연결 끊김)은 이만큼 뒤에 회수됩니다. 스윕도 drain 중 이 주기로 돕니다 (ADR-050). 옛 `ZOMBIE_TIMEOUT_MINUTES`는 없어졌습니다 — 남아 있어도 무시됩니다 |
+| `TRASH_RETENTION_DAYS` | `30` | 휴지통 보존 기간(일). 워커가 폴링마다 이 기간이 지난 휴지통 문서를 영구 삭제합니다(청크·잡·원본 판 연쇄). 양의 정수만 받으며 0 이하는 기동을 거부합니다. 웹 삭제 확인창의 "30일 뒤 영구 삭제됩니다"는 기본값 고정 문구라, 값을 바꾸면 화면 문구와 달라집니다 — 휴지통 목록의 영구 삭제 예정일은 실제 값을 따릅니다 (ADR-060) |
 | `SESSION_LIFETIME_HOURS` | `24` | 서버 세션과 로그인 쿠키의 수명 |
 | `SESSION_COOKIE_SECURE` | `false` | 로컬 HTTP에서는 `false`. HTTPS 상시 배포에서는 반드시 `true` |
 | `MAX_UPLOAD_MB` | `50` | 업로드·원본 교체 한 건의 상한(십진 MB). 원본 한 판이 DB에 차지하는 크기의 상한이기도 하다 — 아래 「원본 파일 보관」 |
@@ -477,6 +478,7 @@ $PY scripts/dr_restore.py drop                                     # 복원 인�
 - `verify`·`rpo`·`converge`는 위반이 있으면 종료 코드 1입니다. `rpo`는 끊기 전에 응답 성공한 업로드의 유실·내용 불일치와,
   끊은 뒤 업로드가 복원본에 있는지(= 끊기가 안 걸렸다)를 봅니다.
 - 끝나면 시험 계정의 문서를 지우고 계정을 삭제한 뒤, 복원용 SSH 키를 지웁니다.
+- 휴지통(ADR-060) 이후 `break`의 문서 삭제 요청(`DELETE /api/documents/{id}`)은 **영구 삭제가 아니라 휴지통 이동**입니다. 아래 재실측(10/4)은 휴지통 전의 영구 삭제로 쟀습니다 — 「복원 지점 뒤에 영구 삭제한 문서가 되살아난다」를 다시 재려면 `break`가 `?permanent=true`로 지워야 합니다.
 
 **재실측 (2026-10-04 13시, 이 도구)**
 
