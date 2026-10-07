@@ -282,6 +282,393 @@ def test_import_reports_a_connection_failure_without_traceback(tmp_path: Path, c
     assert "연결하지 못했습니다" in capsys.readouterr().out
 
 
+# ── import --keep-folders · --grant-group (#187 d) ─────────────────────
+
+
+def add_group(dsn: str, name: str, *members: str) -> None:
+    with psycopg.connect(dsn) as conn:
+        for member in members:
+            conn.execute(
+                "INSERT INTO users (username, password_hash) VALUES (%s, %s) "
+                "ON CONFLICT (username) DO NOTHING",
+                (member, hash_password("test-password")),
+            )
+        group_id = conn.execute(
+            "INSERT INTO groups (name) VALUES (%s) RETURNING id", (name,)
+        ).fetchone()[0]
+        conn.execute(
+            "INSERT INTO group_members (group_id, user_id) "
+            "SELECT %s, id FROM users WHERE username = ANY(%s)",
+            (group_id, list(members)),
+        )
+
+
+def folders(dsn: str) -> dict[str, dict]:
+    """폴더 경로("RFP/2026") → 범위·부여 그룹·만든 사람. 범위는 최상위만 갖는다."""
+    with psycopg.connect(dsn) as conn:
+        rows = conn.execute(
+            """
+            WITH RECURSIVE tree AS (
+                SELECT id, name AS path, visibility, created_by FROM folders WHERE parent_id IS NULL
+                UNION ALL
+                SELECT f.id, t.path || '/' || f.name, f.visibility, f.created_by
+                FROM folders f JOIN tree t ON f.parent_id = t.id)
+            SELECT t.path, t.visibility, t.created_by,
+                   COALESCE((SELECT array_agg(g.name ORDER BY g.name) FROM folder_grants fg
+                             JOIN groups g ON g.id = fg.group_id WHERE fg.folder_id = t.id),
+                            ARRAY[]::text[])
+            FROM tree t
+            """
+        ).fetchall()
+    return {
+        path: {"visibility": visibility, "created_by": creator, "groups": groups}
+        for path, visibility, creator, groups in rows
+    }
+
+
+def placement(dsn: str) -> dict[str, dict]:
+    """문서 제목 → 든 폴더 경로·폴더 범위 따름 여부·자기 범위·문서 부여 그룹."""
+    with psycopg.connect(dsn) as conn:
+        rows = conn.execute(
+            """
+            WITH RECURSIVE tree AS (
+                SELECT id, name AS path FROM folders WHERE parent_id IS NULL
+                UNION ALL
+                SELECT f.id, t.path || '/' || f.name FROM folders f JOIN tree t ON f.parent_id = t.id)
+            SELECT d.title, t.path, d.follows_folder, d.visibility,
+                   COALESCE((SELECT array_agg(g.name ORDER BY g.name) FROM document_grants dg
+                             JOIN groups g ON g.id = dg.group_id WHERE dg.document_id = d.id),
+                            ARRAY[]::text[])
+            FROM documents d LEFT JOIN tree t ON t.id = d.folder_id
+            """
+        ).fetchall()
+    return {
+        title: {"folder": path, "follows": follows, "visibility": visibility, "groups": groups}
+        for title, path, follows, visibility, groups in rows
+    }
+
+
+def rfp_tree(root: Path) -> Path:
+    folder = root / "RFP"
+    write(folder, "공고.md", "OpenSQL 제안 공고")
+    write(folder, "2026/요구사항.txt", "OpenSQL 제안 요구사항")
+    write(folder, "2026/평가/배점.md", "OpenSQL 제안 배점")
+    return folder
+
+
+def test_import_keep_folders_rebuilds_the_tree_and_files_each_document_where_it_was(
+    archive_db: str, tmp_path: Path
+):
+    """명세서 「import 폴더 구조」 — 하위 폴더 구조가 같은 이름의 폴더 트리가 되고 문서가 제자리에 든다."""
+    source = rfp_tree(tmp_path)
+
+    exit_code = main(
+        ["import", str(source), "--user", "bob", "--keep-folders", "--dsn", archive_db]
+    )
+
+    assert exit_code == 0
+    tree = folders(archive_db)
+    assert set(tree) == {"RFP", "RFP/2026", "RFP/2026/평가"}
+    # 새 최상위 폴더의 기본값은 화면과 같은 조직 공개, 하위 폴더는 범위를 갖지 않는다.
+    assert tree["RFP"]["visibility"] == "public"
+    assert tree["RFP/2026"]["visibility"] is None
+    assert {path: f["created_by"] for path, f in tree.items()} == dict.fromkeys(tree, "bob")
+    docs = placement(archive_db)
+    assert {title: d["folder"] for title, d in docs.items()} == {
+        "공고": "RFP",
+        "요구사항": "RFP/2026",
+        "배점": "RFP/2026/평가",
+    }
+    assert all(d["follows"] for d in docs.values())
+
+
+def test_import_without_keep_folders_still_makes_no_folders(archive_db: str, tmp_path: Path):
+    source = rfp_tree(tmp_path)
+
+    assert main(["import", str(source), "--user", "bob", "--dsn", archive_db]) == 0
+
+    assert folders(archive_db) == {}
+    assert {d["folder"] for d in placement(archive_db).values()} == {None}
+
+
+def test_import_grant_group_restricts_the_top_folder_and_hides_it_from_outsiders(
+    archive_db: str, tmp_path: Path, capsys, monkeypatch
+):
+    """명세서 「import 열람 범위」 — 최상위 「RFP」가 「제한 · 사업팀」이 되고 안의 것은 따르며,
+    사업팀이 아닌 사용자의 `search`에는 나오지 않는다."""
+    monkeypatch.setenv("EMBEDDING_PROVIDER", "fake")
+    add_group(archive_db, "사업팀", "alice")
+    add_group(archive_db, "개발팀", "dev")
+    source = rfp_tree(tmp_path)
+
+    exit_code = main(
+        [
+            "import", str(source), "--user", "bob", "--keep-folders",
+            "--grant-group", "사업팀", "--dsn", archive_db,
+        ]
+    )
+
+    assert exit_code == 0
+    tree = folders(archive_db)
+    assert tree["RFP"]["visibility"] == "private"
+    assert tree["RFP"]["groups"] == ["사업팀"]
+    assert tree["RFP/2026"]["groups"] == []
+    assert all(d["follows"] and d["groups"] == [] for d in placement(archive_db).values())
+
+    run_embedding_worker(archive_db)
+    capsys.readouterr()
+    assert main(["search", "OpenSQL 제안", "--user", "dev", "--dsn", archive_db]) == 0
+    outsider = capsys.readouterr().out
+    assert "결과가 없습니다" in outsider
+    assert main(["search", "OpenSQL 제안", "--user", "alice", "--dsn", archive_db]) == 0
+    member = capsys.readouterr().out
+    assert "공고" in member and "요구사항" in member and "배점" in member
+
+
+def test_import_visibility_option_sets_the_top_folder_scope_with_keep_folders(
+    archive_db: str, tmp_path: Path
+):
+    source = rfp_tree(tmp_path)
+
+    exit_code = main(
+        [
+            "import", str(source), "--user", "bob", "--keep-folders",
+            "--visibility", "private", "--dsn", archive_db,
+        ]
+    )
+
+    assert exit_code == 0
+    assert folders(archive_db)["RFP"] == {"visibility": "private", "created_by": "bob", "groups": []}
+
+
+def test_import_refuses_grant_group_with_an_explicit_public_scope(
+    archive_db: str, tmp_path: Path, capsys
+):
+    add_group(archive_db, "사업팀", "alice")
+    source = rfp_tree(tmp_path)
+
+    exit_code = main(
+        [
+            "import", str(source), "--user", "bob", "--keep-folders", "--visibility", "public",
+            "--grant-group", "사업팀", "--dsn", archive_db,
+        ]
+    )
+
+    assert exit_code == 2
+    assert "조직 공개" in capsys.readouterr().out
+    assert placement(archive_db) == {}
+    assert folders(archive_db) == {}
+
+
+def test_import_refuses_an_unknown_group_before_making_anything(
+    archive_db: str, tmp_path: Path, capsys
+):
+    source = rfp_tree(tmp_path)
+
+    exit_code = main(
+        [
+            "import", str(source), "--user", "bob", "--keep-folders",
+            "--grant-group", "없는팀", "--dsn", archive_db,
+        ]
+    )
+
+    assert exit_code == 1
+    assert "없는팀" in capsys.readouterr().out
+    assert placement(archive_db) == {}
+    assert folders(archive_db) == {}
+
+
+# 결정 ① 재import의 폴더 재사용 기준 — 같은 사용자가 만든 같은 이름의 최상위 폴더를 다시 쓴다.
+
+
+def test_import_keep_folders_again_reuses_the_same_folders(
+    archive_db: str, tmp_path: Path, capsys
+):
+    source = rfp_tree(tmp_path)
+    args = ["import", str(source), "--user", "bob", "--keep-folders", "--dsn", archive_db]
+    assert main(args) == 0
+    write(source, "2026/추가.md", "OpenSQL 제안 추가")
+    capsys.readouterr()
+
+    assert main(args) == 0
+
+    assert set(folders(archive_db)) == {"RFP", "RFP/2026", "RFP/2026/평가"}
+    assert placement(archive_db)["추가"]["folder"] == "RFP/2026"
+    out = capsys.readouterr().out
+    assert "가져옴 1건 · 이미 있음 3건" in out
+    assert "기존 폴더" in out
+
+
+def test_import_keep_folders_does_not_reuse_someone_elses_folder_of_the_same_name(
+    archive_db: str, tmp_path: Path
+):
+    source = rfp_tree(tmp_path)
+    assert main(["import", str(source), "--user", "alice", "--keep-folders", "--dsn", archive_db]) == 0
+
+    assert main(["import", str(source), "--user", "bob", "--keep-folders", "--dsn", archive_db]) == 0
+
+    with psycopg.connect(archive_db) as conn:
+        roots = conn.execute(
+            "SELECT created_by FROM folders WHERE parent_id IS NULL AND name = 'RFP' ORDER BY 1"
+        ).fetchall()
+    assert roots == [("alice",), ("bob",)]
+
+
+def test_import_again_with_a_different_scope_refuses_instead_of_changing_the_folder(
+    archive_db: str, tmp_path: Path, capsys
+):
+    """폴더 범위 변경은 만든 사람의 세션 전용이다(ADR-054 결정 4) — CLI가 기존 폴더 범위를 바꾸지도,
+    다른 범위를 기대한 문서를 그 폴더에 조용히 넣지도 않는다."""
+    add_group(archive_db, "사업팀", "alice")
+    source = rfp_tree(tmp_path)
+    assert main(["import", str(source), "--user", "bob", "--keep-folders", "--dsn", archive_db]) == 0
+    write(source, "추가.md", "OpenSQL 제안 추가")
+    capsys.readouterr()
+
+    exit_code = main(
+        [
+            "import", str(source), "--user", "bob", "--keep-folders",
+            "--grant-group", "사업팀", "--dsn", archive_db,
+        ]
+    )
+
+    assert exit_code == 2
+    assert "열람 범위" in capsys.readouterr().out
+    assert folders(archive_db)["RFP"]["visibility"] == "public"
+    assert "추가" not in placement(archive_db)
+
+
+def test_import_again_without_scope_options_keeps_the_existing_folder_scope(
+    archive_db: str, tmp_path: Path
+):
+    add_group(archive_db, "사업팀", "alice")
+    source = rfp_tree(tmp_path)
+    assert main(
+        [
+            "import", str(source), "--user", "bob", "--keep-folders",
+            "--grant-group", "사업팀", "--dsn", archive_db,
+        ]
+    ) == 0
+    write(source, "추가.md", "OpenSQL 제안 추가")
+
+    assert main(["import", str(source), "--user", "bob", "--keep-folders", "--dsn", archive_db]) == 0
+
+    assert folders(archive_db)["RFP"]["groups"] == ["사업팀"]
+    assert placement(archive_db)["추가"] == {
+        "folder": "RFP", "follows": True, "visibility": "private", "groups": []
+    }
+
+
+# 결정 ② --keep-folders 없이 --grant-group — 문서마다 「제한 · 그룹」으로 만든다.
+
+
+def test_import_grant_group_without_keep_folders_restricts_each_document(
+    archive_db: str, tmp_path: Path
+):
+    add_group(archive_db, "사업팀", "alice")
+    source = rfp_tree(tmp_path)
+
+    exit_code = main(
+        ["import", str(source), "--user", "bob", "--grant-group", "사업팀", "--dsn", archive_db]
+    )
+
+    assert exit_code == 0
+    assert folders(archive_db) == {}
+    docs = placement(archive_db)
+    assert set(docs) == {"공고", "요구사항", "배점"}
+    assert all(
+        d == {"folder": None, "follows": True, "visibility": "private", "groups": ["사업팀"]}
+        for d in docs.values()
+    )
+
+
+# 결정 ③ 폴더에 넣는 문서는 frontmatter visibility와 상관없이 폴더 범위를 따른다 — 들어간 자리의 권한을
+# 따르는 것이 실무 이관 도구의 기본이고(SPMT 권한 보존 꺼짐·Drive 폴더 상속), 폴더를 지정해 만든 문서는 개별
+# 범위를 받지 않는다(ADR-054). export가 쓰는 `private`은 소유자 전용인지 폴더·그룹 범위인지 구분하지 못한다.
+
+
+def test_import_keep_folders_follows_the_folder_and_says_frontmatter_visibility_was_not_used(
+    archive_db: str, tmp_path: Path, capsys
+):
+    from test_audit import rows
+
+    source = tmp_path / "팀"
+    write(source, "비밀.md", "---\ntitle: 비밀 메모\nvisibility: private\n---\n비밀 본문\n")
+    write(source, "공개.md", "---\ntitle: 공개 메모\nvisibility: public\n---\n공개 본문\n")
+    write(source, "보통.md", "---\ntitle: 보통 메모\n---\n보통 본문\n")
+
+    assert main(["import", str(source), "--user", "bob", "--keep-folders", "--dsn", archive_db]) == 0
+
+    docs = placement(archive_db)
+    assert all(d["folder"] == "팀" and d["follows"] for d in docs.values())
+    assert "frontmatter의 visibility를 쓰지 않음 2건" in capsys.readouterr().out
+    # 생성 뒤에 범위를 바꾸지 않는다 — 열람 범위 변경은 세션 전용이다.
+    assert {row[0] for row in rows(archive_db)} == {"document_created"}
+
+
+def test_import_checks_existing_folders_inside_a_transaction_so_ha_reads_the_primary(
+    archive_db: str, tmp_path: Path, monkeypatch
+):
+    """#180과 같은 함정 — 트랜잭션 밖 폴더 조회는 HA에서 Replica로 가 방금 만든 폴더를 못 보고 두 벌을 만든다."""
+    from openarchive import cli
+
+    statuses = []
+    real = cli.find_folder
+
+    async def checked(conn, **kwargs):
+        statuses.append(conn.info.transaction_status)
+        return await real(conn, **kwargs)
+
+    monkeypatch.setattr(cli, "find_folder", checked)
+    source = rfp_tree(tmp_path)
+    args = ["import", str(source), "--user", "bob", "--keep-folders", "--dsn", archive_db]
+    assert main(args) == 0
+    write(source, "2026/추가.md", "OpenSQL 제안 추가")
+
+    assert main(args) == 0
+
+    assert statuses and set(statuses) == {psycopg.pq.TransactionStatus.INTRANS}
+    assert set(folders(archive_db)) == {"RFP", "RFP/2026", "RFP/2026/평가"}
+
+
+def test_import_keep_folders_makes_no_folder_without_a_document_in_it(
+    archive_db: str, tmp_path: Path
+):
+    """문서가 들어가지 않은 폴더는 남기지 않는다 — 지원하지 않는 형식뿐이거나 넣다가 실패한 폴더도."""
+    source = tmp_path / "RFP"
+    write(source, "공고.md", "OpenSQL 제안 공고")
+    write(source, "그림/로고.xyz", "지원하지 않는 형식")
+    write(source, "빈칸/blank.txt", "   \n")
+    empty = tmp_path / "빈곳"
+    write(empty, "로고.xyz", "지원하지 않는 형식")
+
+    assert main(["import", str(source), "--user", "bob", "--keep-folders", "--dsn", archive_db]) == 1
+    assert main(["import", str(empty), "--user", "bob", "--keep-folders", "--dsn", archive_db]) == 0
+
+    assert set(folders(archive_db)) == {"RFP"}
+
+
+# 폴더 없이 --grant-group이면 범위는 문서를 만들 때 정한다 — frontmatter private는 소유자 전용으로 남는다.
+
+
+def test_import_grant_group_without_folders_keeps_frontmatter_private_owner_only(
+    archive_db: str, tmp_path: Path
+):
+    add_group(archive_db, "사업팀", "alice")
+    write(tmp_path, "비밀.md", "---\ntitle: 비밀 메모\nvisibility: private\n---\n비밀 본문\n")
+    write(tmp_path, "공개.md", "---\ntitle: 공개 메모\nvisibility: public\n---\n공개 본문\n")
+
+    assert main(
+        ["import", str(tmp_path), "--user", "bob", "--grant-group", "사업팀", "--dsn", archive_db]
+    ) == 0
+
+    docs = placement(archive_db)
+    assert docs["비밀 메모"]["groups"] == []
+    assert docs["비밀 메모"]["visibility"] == "private"
+    assert docs["공개 메모"]["groups"] == ["사업팀"]
+    assert docs["공개 메모"]["visibility"] == "private"
+
+
 # ── export ─────────────────────────────────────────────────────────────
 
 
