@@ -3,7 +3,12 @@ from uuid import uuid4
 import httpx
 import psycopg
 import pytest
-from conftest import insert_test_document, process_all_embedding_jobs, seed_extraction_states
+from conftest import (
+    insert_test_document,
+    process_all_embedding_jobs,
+    running_app,
+    seed_extraction_states,
+)
 
 from openarchive.config import get_settings
 from openarchive.db import close_pool, get_pool
@@ -26,7 +31,7 @@ async def rest_client(monkeypatch, migrated_db: str):
     monkeypatch.delenv("MCP_USER_ID", raising=False)
     get_settings.cache_clear()
     async with (
-        app.router.lifespan_context(app),
+        running_app(app),
         httpx.AsyncClient(
             transport=httpx.ASGITransport(app=app), base_url="http://test"
         ) as client,

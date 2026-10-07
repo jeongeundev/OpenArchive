@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+from starlette.routing import Route
 
 from openarchive.answers import OllamaProvider, get_answer_provider
 from openarchive.api.admin import router as admin_router
@@ -23,6 +24,7 @@ from openarchive.config import get_settings
 from openarchive.db import close_pool, get_pool
 from openarchive.embeddings import get_provider, warm_up
 from openarchive.frontend import mount_frontend
+from openarchive.mcp_server.http import remote_mcp
 from openarchive.migrations import run_migrations
 from openarchive.services import documents as documents_service
 from openarchive.services import folders as folders_service
@@ -48,7 +50,8 @@ async def lifespan(app: FastAPI):
     # 예열하지 않으면 이 로딩이 통째로 첫 검색 요청에 붙는다 (실측 12.5초).
     await warm_up(app.state.provider)
     try:
-        yield
+        async with remote_mcp.running(app.state.provider):
+            yield
     finally:
         await close_pool()
 
@@ -164,4 +167,9 @@ def health() -> dict[str, str]:
 # 빌드된 프론트를 같은 오리진에서 내려준다 (ADR-041). catch-all 라우트를 더하므로
 # 반드시 API 라우트를 전부 등록한 **뒤에** 호출해야 한다 — 먼저 부르면 /api/*까지
 # 삼킨다. 산출물이 없는 개발 환경에서는 아무것도 하지 않는다.
+# ASGI endpoint는 정확히 /mcp에서 처리한다. Mount의 끝 슬래시 리다이렉트를 피한다.
+mcp_route = Route("/mcp", endpoint=remote_mcp.asgi, methods=["GET", "POST", "DELETE"])
+# Route는 bound method를 Request 핸들러로 감싼다. 원래 ASGI 앱을 직접 연결한다.
+mcp_route.app = remote_mcp.asgi
+app.router.routes.append(mcp_route)
 mount_frontend(app)

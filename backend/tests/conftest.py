@@ -327,3 +327,27 @@ def recording_provider() -> RecordingProvider:
 @pytest.fixture
 def warmup_failing_provider() -> WarmupFailingProvider:
     return WarmupFailingProvider()
+
+
+@contextlib.asynccontextmanager
+async def running_app(app):
+    """SDK cancel scope는 lifespan 시작·종료가 같은 태스크여야 한다."""
+    ready = asyncio.Event()
+    stop = asyncio.Event()
+
+    async def run():
+        async with app.router.lifespan_context(app):
+            ready.set()
+            await stop.wait()
+
+    task = asyncio.create_task(run())
+    waiter = asyncio.create_task(ready.wait())
+    try:
+        await asyncio.wait((task, waiter), return_when=asyncio.FIRST_COMPLETED)
+        if task.done():
+            await task
+        yield
+    finally:
+        stop.set()
+        waiter.cancel()
+        await task
