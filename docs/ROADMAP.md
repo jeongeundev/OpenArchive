@@ -177,6 +177,13 @@ DB 계층에 있고, 애플리케이션 코드에는 파이프라인을 조율�
 
 ## 운영 메모
 
+- **Barman 분기 수신 자동 복구** (후보, #192): 네트워크 분리 뒤 Barman이 갈라진 이력의 `.partial`에 묶여 멈추면 지금은
+  `barman check` 경보를 보고 사람이 복구한다(`OPERATIONS.md` 「네트워크 분리 뒤 수신 정지」). Agent 콜백 뒤 `.partial`의
+  타임라인·위치를 새 Leader의 분기점과 비교해 1안을 자동으로 하는 스크립트를 둘 수 있으나, 공식 Agent 밖의 사용자 스크립트라
+  `OPENSQL_DEVIATIONS.md`에 실측 이유가 필요하고 오판하면 정상 `.partial`을 치운다. 분리가 반복되는 환경이면 다시 본다.
+  Barman이 Replica에서 받게 바꾸는 안은 공식 모델(Primary 스트리밍)과 다르고 RPO가 나빠져 두지 않는다.
+
+
 실 DB 환경은 OpenSQL HA 3노드(node1~3, Patroni·etcd·OpenProxy VIP)와 Barman 백업 전용 node4다 —
 구성·라이선스·재구성 절차는 `docs/SETUP_OPENSQL.md`가 정본이다. 일상 개발과 전체 테스트는 공개
 `pgvector/pgvector:pg17` 컨테이너에서 하고(ADR-026), OpenSQL 고유 동작(OpenProxy·failover·백업 복원)은

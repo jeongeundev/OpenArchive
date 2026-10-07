@@ -1049,7 +1049,7 @@ python scripts/ha_failover.py run part $H --load 240 --inject "$SSH <Leader> 'su
 - 앱 전용 롤은 `pg_stat_replication`을 볼 수 없어 측정기의 「복제 지연」 줄이 0으로 찍힌다. 지연은 Patroni REST(`/cluster`의 `lag`)로 본다
 - 원시 기록은 `notes/ha110/runs/h165-*.jsonl`·`fspec-*.jsonl`·`s3-150-1.jsonl`(로컬). 측정 문서를 지운 뒤라 `report`로 장부를 다시 대조할 수는 없다 — 위 장부 열은 측정 당시 출력이다
 
-**검증하지 않은 것**: watchdog 펜싱 · Patroni 프로세스 정지 상태의 Primary · OpenProxy 노드가 낀 비대칭 분리(VIP 이중 보유) · 동시 다중 장애(etcd 과반 상실 중 Primary 사망 등) · 디스크 가득 참 · 백업/DR(별도 이슈). 각 시나리오는 1회씩이라 시간 수치는 범위가 아니라 관측값이다.
+**검증하지 않은 것**: watchdog 펜싱 · Patroni 프로세스 정지 상태의 Primary · OpenProxy 노드가 낀 비대칭 분리(VIP 이중 보유) · 동시 다중 장애(etcd 과반 상실 중 Primary 사망 등) · 디스크 가득 참 · 백업/DR(§17 — 분리 회차 포함). 각 시나리오는 1회씩이라 시간 수치는 범위가 아니라 관측값이다.
 
 ### 장애 주입 측정 (#122, 2026-09-28) — 동기 복제 시절 기록
 
@@ -1193,6 +1193,18 @@ $B check opensql                            # 종료 코드 0
 
 **검증** — switchover를 한 번 걸어 Agent 로그에 `Applying model '<새 Leader>'`, `ps`의 `pg_receivewal`이 새 Primary를
 가리키는지 본다(실측 17~18초). 복원 시험은 `OPERATIONS.md` 「복원 절차」.
+
+**네트워크 분리 회차 (#192)** — Leader 하나를 다른 DB 노드에서만 끊고 node4 경로는 살린 분리. §16 h165-part와 같은
+형태이고, Barman을 붙인 뒤에 처음 쟀다.
+
+| 회차 | 조건 | Barman | 복구 |
+|---|---|---|---|
+| 10/5 (#185 실측) | node1을 node2·3에서 90초 차단 | 옛 Primary(TL 46)에서 분기 WAL을 받아 `1/16000000`까지 감 → 새 Leader(TL 47)에 `1/16000000 (TL46)` 요청이 매분 거부, 17:21~18:40 백업 공백 | 슬롯이 지워진 WAL을 가리켜 2안(slot advance → `--reset` → 새 백업). 공백 구간 PITR 불가 |
+| 10/7 재현 | 같은 차단 + 분리 중 node1에 직결 쓰기(분기 WAL을 확실히 만들기 위해) | 분리부터 새 Leader 콜백까지 29초 동안 옛 Primary에서 TL51 세그먼트 36·37·38을 받음. 분기점 TL51 `1/35B3D690`. 같은 오류로 정지, 분기 세그먼트가 `wals/`에 보관됨 | 1안(`.partial` 격리) — 슬롯 `restart_lsn 1/35000000`부터 받아 TL52로 스스로 전환, **공백 없음** |
+
+원인: Barman은 노드 주소로 직접 스트리밍하고 주소 전환은 새 Leader의 `on_role_change` 콜백 한 번뿐이다. 옛 Primary는
+Patroni가 강등시키기 전(10/7 ~22초)까지 쓰기를 받는다. `pg_receivewal`은 시작 위치를 슬롯이 아니라 로컬 `.partial`에서
+정한다. 감지·복구 절차는 `OPERATIONS.md` 「네트워크 분리 뒤 수신 정지」. 자동 복구는 두지 않았다(ROADMAP 후보).
 
 **6. 복원 재현 준비** — 복원 대상 노드(예: node2)에 rsync와 Barman 클라이언트를 깔아 둔다. SSH 키는 재현할 때만
 양방향으로 넣고 끝나면 지운다. 재현 명령은 `scripts/dr_restore.py`(`OPERATIONS.md` 「복원 재현」)이다.
