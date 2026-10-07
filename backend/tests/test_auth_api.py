@@ -1,8 +1,10 @@
 import hashlib
 import json
+from datetime import datetime
 from uuid import uuid4
 
 import psycopg
+import pytest
 from fastapi.testclient import TestClient
 
 from openarchive.api.deps import SESSION_COOKIE
@@ -40,7 +42,13 @@ def test_login_sets_httponly_cookie_and_returns_only_public_user_fields(
     )
 
     assert response.status_code == 200
-    assert response.json() == {"authenticated": True, "username": "alice", "is_admin": False}
+    assert response.json() == {
+        "authenticated": True,
+        "username": "alice",
+        "is_admin": False,
+        "scope": None,
+        "expires_at": None,
+    }
     cookie = response.headers["set-cookie"].lower()
     assert "httponly" in cookie
     assert "samesite=lax" in cookie
@@ -57,11 +65,19 @@ def test_me_uses_the_login_cookie_and_ignores_x_user_id(
     db_client.post("/api/auth/login", json={"username": "alice", "password": "secret"})
     authenticated = db_client.get("/api/auth/me")
 
-    assert anonymous.json() == {"authenticated": False, "username": None, "is_admin": False}
+    assert anonymous.json() == {
+        "authenticated": False,
+        "username": None,
+        "is_admin": False,
+        "scope": None,
+        "expires_at": None,
+    }
     assert authenticated.json() == {
         "authenticated": True,
         "username": "alice",
         "is_admin": False,
+        "scope": None,
+        "expires_at": None,
     }
 
 
@@ -80,6 +96,8 @@ def test_logout_invalidates_the_cookie_backed_session(
         "authenticated": False,
         "username": None,
         "is_admin": False,
+        "scope": None,
+        "expires_at": None,
     }
 
 
@@ -110,6 +128,8 @@ def test_me_accepts_a_valid_bearer_token_without_a_cookie(
         "authenticated": True,
         "username": "alice",
         "is_admin": False,
+        "scope": "read",
+        "expires_at": None,
     }
 
 
@@ -142,6 +162,8 @@ def test_invalid_bearer_does_not_fall_back_to_a_valid_cookie(
         "authenticated": False,
         "username": None,
         "is_admin": False,
+        "scope": None,
+        "expires_at": None,
     }
 
 
@@ -320,7 +342,13 @@ def test_password_change_expires_the_cookie_and_only_the_new_password_logs_in(
     )
 
     assert changed.status_code == 200
-    assert changed.json() == {"authenticated": False, "username": None, "is_admin": False}
+    assert changed.json() == {
+        "authenticated": False,
+        "username": None,
+        "is_admin": False,
+        "scope": None,
+        "expires_at": None,
+    }
     assert db_client.get("/api/auth/me").json()["authenticated"] is False
     assert (
         db_client.post(
@@ -431,3 +459,78 @@ def test_password_change_leaves_the_api_tokens_usable(
         "/api/auth/me", headers={"Authorization": f"Bearer {issued['token']}"}
     )
     assert me.json()["username"] == "alice"
+
+
+@pytest.mark.parametrize("scope", ["read", "read_write"])
+def test_me_reports_the_scope_of_the_bearer_token(
+    db_client: TestClient, migrated_db: str, scope: str
+):
+    """사용자 CLI의 login·whoami가 /me 한 번으로 토큰 범위를 안다 (#189 D2)."""
+    create_user(migrated_db)
+    token = issue_token(migrated_db, "alice", scope)
+
+    body = db_client.get("/api/auth/me", headers={"Authorization": f"Bearer {token}"}).json()
+
+    assert body["scope"] == scope
+    assert body["expires_at"] is None
+
+
+def test_me_reports_the_expiry_the_token_was_issued_with(
+    db_client: TestClient, migrated_db: str
+):
+    create_user(migrated_db)
+    db_client.post("/api/auth/login", json={"username": "alice", "password": "secret"})
+    issued = db_client.post(
+        "/api/auth/tokens", json={"name": "만료", "expires_at": "2099-01-01T00:00:00+09:00"}
+    ).json()
+    db_client.cookies.clear()
+
+    body = db_client.get(
+        "/api/auth/me", headers={"Authorization": f"Bearer {issued['token']}"}
+    ).json()
+
+    assert body["username"] == "alice"
+    assert datetime.fromisoformat(body["expires_at"]) == datetime.fromisoformat(
+        issued["expires_at"]
+    )
+
+
+def test_me_leaves_scope_and_expiry_empty_for_a_cookie_session(
+    db_client: TestClient, migrated_db: str
+):
+    """세션 dict의 scope는 쓰기 판정용 내부 값이라 /me에 내지 않는다 (#189 D2)."""
+    create_user(migrated_db)
+    db_client.post("/api/auth/login", json={"username": "alice", "password": "secret"})
+
+    assert db_client.get("/api/auth/me").json() == {
+        "authenticated": True,
+        "username": "alice",
+        "is_admin": False,
+        "scope": None,
+        "expires_at": None,
+    }
+
+
+@pytest.mark.parametrize("state", ["expired", "revoked"])
+def test_me_is_anonymous_for_an_expired_or_revoked_token(
+    db_client: TestClient, migrated_db: str, state: str
+):
+    create_user(migrated_db)
+    token = issue_token(migrated_db, "alice", "read_write")
+    with psycopg.connect(migrated_db) as conn:
+        if state == "expired":
+            conn.execute(
+                "UPDATE api_tokens SET expires_at = now() - interval '1 second'"
+            )
+        else:
+            conn.execute("DELETE FROM api_tokens")
+
+    body = db_client.get("/api/auth/me", headers={"Authorization": f"Bearer {token}"}).json()
+
+    assert body == {
+        "authenticated": False,
+        "username": None,
+        "is_admin": False,
+        "scope": None,
+        "expires_at": None,
+    }
