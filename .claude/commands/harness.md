@@ -75,6 +75,9 @@
 - `steps[].step`: 0부터 시작하는 순번.
 - `steps[].name`: kebab-case slug. 파일명(`step{N}.md`)과 대응한다.
 - `steps[].status`: 초기값은 모두 `"pending"`.
+- `issue`: 이 phase가 닫는 GitHub 이슈 번호. `ship.py`가 PR 본문의 `Closes #N`과 리뷰 스펙으로 쓴다 (ship.py로 돌릴 때 필수).
+- `title`: PR 제목. 예: `feat: 휴지통 — 소프트 삭제·복원 (#198)` (ship.py로 돌릴 때 필수).
+- `needs_vm`: OpenSQL VM 실측이 필요한 phase면 `true`. ship.py가 머지 대기에서 G3로 멈춘다 (기본 `false`).
 
 **커밋 메시지를 만드는 세 필드** — execute.py가 `<type>(<scope>): <desc>`로 조립한다.
 
@@ -171,9 +174,47 @@ execute.py가 자동으로 처리하는 것:
 
 > **step 세션은 직접 커밋하지 않는다.** 커밋 메시지 규칙을 한 곳(execute.py)에서만 관리하기 위해서다. step 세션은 파일 저장과 `index.json` status 갱신까지만 한다.
 
+### F. 머지 대기까지 잇기 — `scripts/ship.py`
+
+설계를 승인받아 커밋했으면(G1) `execute.py` 대신 `ship.py`로 머지 대기까지 한 번에 돌릴 수 있다.
+execute.py는 그대로 두고 그 바깥에서 단계를 넘기는 오케스트레이션 레이어다.
+
+**전제**: 설계(`phases/{task}/`)를 `feat/{task}` 브랜치에 커밋하고 그 브랜치에서 실행한다. execute.py와
+달리 ship.py는 브랜치를 만들지 않는다 — 다른 브랜치면 멈춘다. `backend/.venv`가 있는 checkout에서 돌린다.
+
+```bash
+python3 scripts/ship.py {task-name}                # execute → verify → pr → review ⇄ fix → ci → ready
+python3 scripts/ship.py {task-name} --from review  # 그 단계부터 다시 (리뷰·수정 횟수 초기화)
+python3 scripts/ship.py {task-name} --merge        # G4: squash 머지 + 이슈 닫힘 확인
+python3 scripts/ship.py {task-name} --merge --vm-verified  # needs_vm phase: G3 실측을 마쳤을 때만
+```
+
+| 단계 | 하는 일 |
+|---|---|
+| execute | pending step이 있으면 `execute.py`를 부른다. phase 디렉토리에 커밋 안 된 변경이 있으면 G1로 멈춘다 |
+| verify | PR 전 검증 — 전 step completed, working tree 깨끗함, 구현 변경에 테스트 변경 동반, 바뀐 테스트 파일 재실행 |
+| pr | push 후 PR 생성(이미 있으면 재사용). 본문 첫 줄 `Closes #N` |
+| review | **새 `claude -p` 프로세스**가 `phases/{task}/review-N.json`을 쓴다. 지적은 `fix`·`decision`·`follow-up`. 결과는 커밋하고 PR 코멘트로 남긴다 |
+| fix | `fix` 지적만 같은 PR 브랜치에 수정 커밋으로 추가한다. 최대 2회, 리뷰 최대 3회 — 두 번째 수정 뒤에도 독립 리뷰로 확인한다 |
+| ci | `gh pr checks --watch`. 실패하면 로그를 넘겨 1회 자동 수정한다 (재리뷰 없음 — ready 요약에 따로 표시) |
+| ready | 요약·이슈 후보·알림을 내고 멈춘다 |
+
+멈추는 곳:
+
+- **G1** 설계 미커밋 · **G2** `decision` 지적 · **G3** `needs_vm` phase(`--vm-verified` 없이는 머지 거부) · **G4** 머지(`--merge`)
+- 자동 수정 한도 초과, CI 재실패, CI 대기 시간 초과(자동 수정하지 않음), PR 전 테스트 실패, 리뷰어가 결과 파일 밖을 바꿈
+- **변조 검사** — 모든 자동 수정(리뷰 fix·CI fix)은 테스트 파일 삭제, 테스트 함수 삭제(`def test_…`·`it(`·`test(` 이름이 다시 추가되지 않음), `skip`·`xfail` 추가가 있으면 커밋하지 않고 working tree에 남긴 채 멈춘다. 단언 약화는 잡지 못한다 — 사람이 diff로 본다
+- 에이전트 세션은 권한 확인 없이 돌지만 `gh issue create`·`gh api`·`gh pr merge`·`git commit`·`git push`는 `--disallowedTools`로 막는다 — 커밋·push는 변조 검사를 거쳐 ship.py만 한다
+
+`--from review`는 리뷰·수정 횟수를 0으로 되돌린다. 의도된 동작이다 — G2·한도로 멈춘 뒤 사람이 반영·커밋했으면 그 판을 새로 리뷰한다. 한도는 무인 구간의 상한이지 PR 전체의 상한이 아니다.
+
+`follow-up` 지적은 **이슈를 만들지 않는다.** review JSON과 ready 요약에 이슈 후보(title·reason·severity)로만 남고, 등록은 사람이 판단한다.
+
+상태는 `.git/ship/{task}.json`(작업 트리 밖)에 stage·issue·branch·pr·리뷰/수정 횟수·last_commit·review artifact를 남긴다. 멈춘 뒤 다시 실행하면 그 단계부터 재개한다.
+
 ### 머지
 
-phase가 끝나면 PR을 열고 **squash merge**한다 (ADR-013).
+phase가 끝나면 PR을 열고 **squash merge**한다 (ADR-013). `ship.py`를 쓰면 PR 생성부터 머지 대기까지가 자동이고, 머지는 `--merge`로 사람이 한다.
 
 - step별 커밋·산출물·검증 이력은 **PR에 보존**된다
 - `main`에는 **검토가 끝난 phase 단위 결과**만 남는다
