@@ -366,6 +366,53 @@ psql -c "SELECT active, pg_size_pretty(pg_current_wal_lsn() - restart_lsn) FROM 
 - 쓰기가 거의 없는 시간에 `barman backup --wait`는 마지막 세그먼트가 닫힐 때까지 기다립니다. `barman switch-wal
   opensql`로 닫거나 `--wait` 없이 받습니다.
 
+### 네트워크 분리 뒤 수신 정지 — 갈라진 이력 (#192)
+
+노드끼리만 끊기고 node4 → 옛 Primary 경로는 살아 있는 분리에서, Barman이 강등 전의 옛 Primary에서 **클러스터가 나중에
+버리는 WAL**(갈라진 이력)을 받는다. 새 Leader로 옮겨 붙은 뒤에도 `pg_receivewal`은 슬롯이 아니라 `streaming/`에 남은
+마지막 파일(`.partial`) 위치에서 시작하려 하고, 그 위치는 새 Leader의 이력에 없어 **매분 거부되며 스스로 회복하지 않는다.**
+전원 차단·switchover·재부팅에서는 생기지 않는다(실측 `SETUP_OPENSQL.md` §17).
+
+**감지**: `barman check`의 `replication slot`·`receive-wal running`이 FAILED이고, `barman.log`에 다음이 매분 찍힌다.
+
+```text
+요청된 1/38000000 시작 위치(타임라인 51)가 이 서버 내역에 없습니다.
+상세정보: 이 서버의 시작 위치: 타임라인 51, 위치 1/35B3D690
+```
+
+**멈춰 있는 동안 `--target-tli latest`로 복원하지 않는다.** Barman이 아는 최신 타임라인이 갈라진 쪽이라, 클러스터가 버린
+쓰기를 되살린 DB가 나올 수 있다(추론 — 정지 상태에서 복원은 실행하지 않았다). 복원이 급하면 `--target-tli`에 지금
+클러스터의 타임라인(`patronictl list`의 TL)을 숫자로 준다.
+
+**1안 — 공백 없이 복구 (먼저 시도)**
+
+```bash
+B="sudo -u barman -i /usr/local/bin/barman"
+$B receive-wal --stop opensql
+sudo -u barman ls /var/lib/barman/opensql/streaming/            # 갈라진 타임라인의 *.partial 확인
+sudo -u barman mv /var/lib/barman/opensql/streaming/<그 .partial> /var/lib/barman/<격리 디렉터리>/
+# 다음 barman cron(매분)이 receive-wal을 다시 띄운다 → 슬롯 위치부터 받아 새 타임라인으로 스스로 넘어간다
+sudo -u barman ls /var/lib/barman/opensql/wals/ | grep history  # 새 타임라인의 .history가 보관됐는지
+$B check opensql                                                 # 전 항목 OK. 격리한 파일은 그 뒤 지운다
+```
+
+실측(10/7)에서 슬롯이 분기점 앞(`restart_lsn`)을 가리키고 WAL이 남아 있어 공백 없이 이어졌다. 보관소의 갈라진 세그먼트는
+그대로 둔다 — 새 타임라인의 `.history`가 생기면 `latest` 복원이 그 세그먼트를 읽지 않는다. 지우려면 Barman 카탈로그를 손으로
+고쳐야 하므로 하지 않는다.
+
+**2안 — 1안이 「WAL 조각 파일은 이미 지워졌음」으로 실패할 때** (슬롯이 이미 지워진 WAL을 가리키는 경우, 10/5 실측)
+
+```bash
+# Primary에서
+psql -c "SELECT pg_replication_slot_advance('barman', pg_current_wal_lsn())"
+# node4에서
+$B receive-wal --reset opensql      # 버려진 이력의 .partial을 지우고 새 위치에서 재개
+$B backup --wait opensql            # 공백 이후의 새 기준 백업 (쓰기가 없으면 switch-wal --force로 세그먼트를 닫는다)
+$B check opensql
+```
+
+2안은 분리 시점부터 새 기준 백업까지 **시점 복원(PITR)을 할 수 없는 공백**을 남긴다.
+
 ### 시점 지정 — 복원 지점을 미리 찍어 두기
 
 위험한 작업(대량 삭제·마이그레이션) 전에 이름 붙은 복원 지점을 남기면 시각보다 정확하게 돌아갈 수 있습니다.
@@ -395,7 +442,8 @@ sudo -u barman -i barman recover \
 ```
 
 - **`--target-tli latest`** — 없으면 백업 시점 타임라인의 WAL만 복사됩니다. failover·switchover가 한 번이라도 있었으면
-  `recover`는 성공하고 기동에서 "recovery target 도달 전에 복구 끝남"으로 죽습니다.
+  `recover`는 성공하고 기동에서 "recovery target 도달 전에 복구 끝남"으로 죽습니다. 단, 네트워크 분리 뒤 `barman check`가
+  FAILED인 채라면 `latest`를 쓰지 않습니다(위 「네트워크 분리 뒤 수신 정지」).
 - **`--get-wal`** — 없으면 닫히지 않은 마지막 세그먼트(`.partial`)를 버립니다. 실측에서 끊기 직전까지 응답 성공한
   업로드 120건이 전부 사라졌습니다(`--get-wal`로는 0건).
 - 대상 시점을 주지 않으면 받은 WAL의 끝까지 복원합니다.
