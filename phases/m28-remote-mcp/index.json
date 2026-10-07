@@ -1,0 +1,40 @@
+{
+  "project": "OpenArchive",
+  "phase": "m28-remote-mcp",
+  "issue": 188,
+  "title": "feat(mcp): 원격 MCP — Streamable HTTP /mcp + API 토큰 Bearer (#188)",
+  "needs_vm": true,
+  "steps": [
+    {
+      "step": 0,
+      "name": "mcp-principal",
+      "type": "feat",
+      "scope": "mcp",
+      "desc": "MCP 도구가 주입받은 주체·scope로 동작하도록 구조를 바꾼다",
+      "status": "pending"
+    },
+    {
+      "step": 1,
+      "name": "mcp-http",
+      "type": "feat",
+      "scope": "mcp",
+      "desc": "Bearer 토큰 미들웨어와 원격 Streamable HTTP MCP 진입점",
+      "status": "pending"
+    },
+    {
+      "step": 2,
+      "name": "mount-mcp",
+      "type": "feat",
+      "scope": "api",
+      "desc": "API 앱의 /mcp에 원격 MCP를 붙이고 SDK 클라이언트로 시험항목을 고정한다",
+      "status": "pending"
+    },
+    {
+      "step": 3,
+      "name": "remote-mcp-docs",
+      "type": "docs",
+      "desc": "원격 MCP 구현 결정과 클라이언트 등록 절차를 문서에 반영한다",
+      "status": "pending"
+    }
+  ]
+}
