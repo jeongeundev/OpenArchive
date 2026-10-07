@@ -52,7 +52,10 @@
       "type": "feat",
       "scope": "worker",
       "desc": "워커가 보존 기간이 지난 휴지통 문서를 영구 삭제한다",
-      "status": "pending"
+      "status": "completed",
+      "summary": "양의 보존 기간 설정(기본 30일)과 폴링 루프의 휴지통 자동 영구 삭제를 추가하고 LISTEN 없는 삭제·감사·오류 연결 폐기를 검증해 지정 AC 131개·Ruff 및 아키텍처 테스트를 통과했다",
+      "started_at": "2026-10-07T10:37:18+0900",
+      "completed_at": "2026-10-07T10:41:01+0900"
     },
     {
       "step": 5,
