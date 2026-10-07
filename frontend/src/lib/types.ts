@@ -39,6 +39,12 @@ export interface TokenSummary {
   name: string;
   scope: TokenScope;
   created_at: string;
+  /** 만료 시각. null이면 만료 없음 (ADR-061 결정 1). */
+  expires_at: string | null;
+  /** 성공한 요청의 마지막 사용 시각(1분 단위로 갱신). 없으면 null. */
+  last_used_at: string | null;
+  /** 서버가 DB 시각으로 판정한 만료 여부 — 브라우저 시계로 다시 계산하지 않는다. */
+  expired: boolean;
 }
 
 /** 원문 `token`은 발급 응답에만 있다. 목록에는 없다. */
@@ -57,6 +63,9 @@ export interface ShareTokenSummary {
   name: string;
   scope: "read";
   created_at: string;
+  expires_at: string | null;
+  last_used_at: string | null;
+  expired: boolean;
 }
 
 /** 원문 `token`은 발급 응답에만 있다. 공유 목록의 토큰에는 없다. */

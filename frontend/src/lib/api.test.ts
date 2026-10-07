@@ -312,6 +312,43 @@ describe("API responses", () => {
     expect(issued.token).toBe("plaintext-once");
   });
 
+  it("만료일을 정해 발급하면 body에 expires_at을 싣고, 없으면 생략한다", async () => {
+    const created = {
+      id: "token-1",
+      name: "CLI",
+      scope: "read",
+      created_at: "2026-10-08T00:00:00Z",
+      expires_at: "2026-11-01T00:00:00Z",
+      last_used_at: null,
+      expired: false,
+      token: "plaintext-once",
+    };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify(created), { status: 201 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(created), { status: 201 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(created), { status: 201 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await createToken({ name: "CLI", scope: "read", expires_at: "2026-11-01T00:00:00Z" });
+    await createToken({ name: "CLI", scope: "read", expires_at: null });
+    await createShareToken("s1", "B사 연동", "2026-11-01T00:00:00Z");
+
+    expect(JSON.parse(fetchMock.mock.calls[0][1]?.body as string)).toEqual({
+      name: "CLI",
+      scope: "read",
+      expires_at: "2026-11-01T00:00:00Z",
+    });
+    expect(JSON.parse(fetchMock.mock.calls[1][1]?.body as string)).toEqual({
+      name: "CLI",
+      scope: "read",
+    });
+    expect(JSON.parse(fetchMock.mock.calls[2][1]?.body as string)).toEqual({
+      name: "B사 연동",
+      expires_at: "2026-11-01T00:00:00Z",
+    });
+  });
+
   it("lists tokens and revokes one by id", async () => {
     const fetchMock = vi
       .fn()

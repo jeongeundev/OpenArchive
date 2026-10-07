@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { AuthProvider } from "@/components/AuthProvider";
@@ -24,7 +24,7 @@ const tokens = [
     id: "token-1",
     name: "노트북 CLI",
     scope: "read",
-    created_at: "2026-08-21T00:00:00Z",
+    created_at: "2026-08-21T00:00:00Z", expires_at: null, last_used_at: null, expired: false,
   },
 ];
 
@@ -40,7 +40,7 @@ describe("계정 설정 화면", () => {
             id: "token-2",
             name: "배치 투입",
             scope: "read_write",
-            created_at: "2026-08-21T01:00:00Z",
+            created_at: "2026-08-21T01:00:00Z", expires_at: null, last_used_at: null, expired: false,
             token: "plaintext-shown-once",
           },
           201,
@@ -53,7 +53,7 @@ describe("계정 설정 화면", () => {
             id: "token-2",
             name: "배치 투입",
             scope: "read_write",
-            created_at: "2026-08-21T01:00:00Z",
+            created_at: "2026-08-21T01:00:00Z", expires_at: null, last_used_at: null, expired: false,
           },
         ]),
       );
@@ -235,7 +235,7 @@ describe("계정 설정 화면 — 동작 뒤 조회 취소", () => {
             id: "token-2",
             name: "배치 투입",
             scope: "read",
-            created_at: "2026-08-21T01:00:00Z",
+            created_at: "2026-08-21T01:00:00Z", expires_at: null, last_used_at: null, expired: false,
             token: "plaintext-shown-once",
           },
           201,
@@ -254,5 +254,158 @@ describe("계정 설정 화면 — 동작 뒤 조회 취소", () => {
     expect(fetchMock.mock.calls[2][1]?.signal).toBeFalsy();
     expect(fetchMock.mock.calls[3][1]?.signal?.aborted).toBe(true);
     vi.unstubAllGlobals();
+  });
+});
+
+describe("계정 설정 화면 — 토큰 만료·마지막 사용", () => {
+  const listed = [
+    {
+      id: "token-1",
+      name: "옛 연동",
+      scope: "read",
+      created_at: "2026-08-21T00:00:00Z",
+      expires_at: "2026-09-01T00:00:00Z",
+      last_used_at: "2026-08-30T03:00:00Z",
+      expired: true,
+    },
+    {
+      id: "token-2",
+      name: "상시 연동",
+      scope: "read_write",
+      created_at: "2026-08-22T00:00:00Z",
+      expires_at: null,
+      last_used_at: null,
+      expired: false,
+    },
+  ];
+
+  function row(name: string): HTMLElement {
+    const cell = screen.getByText(name);
+    const tr = cell.closest("tr");
+    if (tr === null) throw new Error(`${name} 행이 없다`);
+    return tr;
+  }
+
+  it("만료일을 고르면 그날 끝까지 유효한 시각으로 발급을 요청한다", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(response(alice))
+      .mockResolvedValueOnce(response([]))
+      .mockResolvedValueOnce(
+        response(
+          {
+            id: "token-3",
+            name: "기한부",
+            scope: "read",
+            created_at: "2026-10-08T00:00:00Z",
+            expires_at: new Date(2026, 10, 1).toISOString(),
+            last_used_at: null,
+            expired: false,
+            token: "plaintext-once",
+          },
+          201,
+        ),
+      )
+      .mockResolvedValueOnce(response([]));
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<AuthProvider><SettingsPage /></AuthProvider>);
+    fireEvent.change(await screen.findByRole("textbox", { name: "토큰 이름" }), {
+      target: { value: "기한부" },
+    });
+    const date = screen.getByLabelText("만료일 (선택)");
+    expect(date).toHaveAttribute("type", "date");
+    fireEvent.change(date, { target: { value: "2026-10-31" } });
+    fireEvent.click(screen.getByRole("button", { name: "토큰 발급" }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(4));
+    expect(JSON.parse(fetchMock.mock.calls[2][1]?.body as string)).toEqual({
+      name: "기한부",
+      scope: "read",
+      expires_at: new Date(2026, 10, 1).toISOString(),
+    });
+    await waitFor(() => expect(screen.getByLabelText("만료일 (선택)")).toHaveValue(""));
+  });
+
+  it("만료일을 비우면 만료 없이 발급한다", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(response(alice))
+      .mockResolvedValueOnce(response([]))
+      .mockResolvedValueOnce(
+        response(
+          {
+            id: "token-3",
+            name: "무기한",
+            scope: "read",
+            created_at: "2026-10-08T00:00:00Z",
+            expires_at: null,
+            last_used_at: null,
+            expired: false,
+            token: "plaintext-once",
+          },
+          201,
+        ),
+      )
+      .mockResolvedValueOnce(response([]));
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<AuthProvider><SettingsPage /></AuthProvider>);
+    fireEvent.change(await screen.findByRole("textbox", { name: "토큰 이름" }), {
+      target: { value: "무기한" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "토큰 발급" }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+    expect(JSON.parse(fetchMock.mock.calls[2][1]?.body as string)).toEqual({
+      name: "무기한",
+      scope: "read",
+    });
+  });
+
+  it("표에 「만료」·「마지막 사용」 열이 있고, 서버가 만료로 판정한 행에만 「만료」를 보인다", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValueOnce(response(alice)).mockResolvedValueOnce(response(listed)),
+    );
+
+    render(<AuthProvider><SettingsPage /></AuthProvider>);
+    await screen.findByText("옛 연동");
+
+    expect(screen.getByRole("columnheader", { name: "만료" })).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "마지막 사용" })).toBeInTheDocument();
+
+    const expiredRow = row("옛 연동");
+    expect(within(expiredRow).getByText("만료")).toBeInTheDocument();
+    expect(within(expiredRow).queryByText("사용 기록 없음")).not.toBeInTheDocument();
+
+    const liveRow = row("상시 연동");
+    expect(within(liveRow).queryByText("만료")).not.toBeInTheDocument();
+    expect(within(liveRow).getByText("없음")).toBeInTheDocument();
+    expect(within(liveRow).getByText("사용 기록 없음")).toBeInTheDocument();
+    // 목록에는 원문 토큰이 없다 (TC 270)
+    expect(screen.queryByText(/plaintext/)).not.toBeInTheDocument();
+  });
+
+  it("과거 만료일 거부의 detail을 오류 자리에 보인다", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(response(alice))
+        .mockResolvedValueOnce(response([]))
+        .mockResolvedValueOnce(response({ detail: "만료일은 지금 이후여야 합니다." }, 400)),
+    );
+
+    render(<AuthProvider><SettingsPage /></AuthProvider>);
+    fireEvent.change(await screen.findByRole("textbox", { name: "토큰 이름" }), {
+      target: { value: "기한부" },
+    });
+    // 오늘보다 이른 날짜는 입력의 min이 제출 전에 막는다. 서버 판정(DB now)과 브라우저
+    // 날짜가 어긋난 경우의 400을 흉내 내려고 통과하는 날짜를 넣는다.
+    fireEvent.change(screen.getByLabelText("만료일 (선택)"), { target: { value: "2099-01-01" } });
+    fireEvent.click(screen.getByRole("button", { name: "토큰 발급" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("만료일은 지금 이후여야 합니다.");
   });
 });
