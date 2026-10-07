@@ -8,14 +8,16 @@ CLI 요청은 lifespan이 돈 앱의 트랜스포트로 간다(`openarchive.clie
 from __future__ import annotations
 
 import ast
+import hashlib
 import json
 import stat
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import httpx
+import psycopg
 import pytest
-from conftest import login_as
+from conftest import login_as, upload_document
 from fastapi.testclient import TestClient
 from starlette import testclient as starlette_testclient
 
@@ -201,3 +203,196 @@ def test_user_cli_modules_do_not_import_the_database(module):
         assert not name.startswith("psycopg"), name
         assert not name.startswith("openarchive.services"), name
         assert not name.startswith("openarchive.db"), name
+
+
+# ── doc list · doc show · doc download (step 2) ─────────────────────────────
+
+
+def put_text(client: TestClient, username: str, title: str, content: str, **extra) -> str:
+    """세션으로 텍스트 문서를 만들고 ID를 돌려준다."""
+    login_as(client, username)
+    response = client.post(
+        "/api/documents/text",
+        json={"title": title, "content": content, "content_type": "md", **extra},
+    )
+    assert response.status_code == 201, response.text
+    return response.json()["id"]
+
+
+def login_cli(client: TestClient, username: str, *, scope: str = "read_write") -> None:
+    assert login(issue_token(client, username, scope=scope)["token"]) == 0
+
+
+def test_doc_list_matches_web_order_and_visibility(cli, capsys):
+    mine_private = put_text(cli, "alice", "내 비공개", "a", visibility="private")
+    mine_public = put_text(cli, "alice", "내 공개", "b")
+    others_public = put_text(cli, "bob", "밥 공개", "c")
+    others_private = put_text(cli, "bob", "밥 비밀 문서", "d", visibility="private")
+    login_as(cli, "alice")
+    web = [item["id"] for item in cli.get("/api/documents", params={"sort": "updated"}).json()]
+    login_cli(cli, "alice")
+    capsys.readouterr()
+
+    assert main(["doc", "list"]) == 0
+
+    out = capsys.readouterr().out
+    every = {mine_private, mine_public, others_public, others_private}
+    listed = [word for word in (line.split()[0] for line in out.splitlines() if line.strip()) if word in every]
+    assert listed == web
+    assert set(web) == {mine_private, mine_public, others_public}
+    assert others_private not in out
+    assert "밥 비밀 문서" not in out
+    assert "내 공개" in out and "md" in out and "v1" in out
+
+
+def test_doc_list_shows_processing_labels(cli, migrated_db, capsys):
+    states = {
+        ("pending", "pending"): "텍스트 인식 중",
+        ("failed", "pending"): "텍스트 인식 실패",
+        ("done", "pending"): "대기 중",
+        ("done", "processing"): "처리 중…",
+        ("done", "ready"): "완료",
+        ("done", "error"): "실패",
+    }
+    ids = {key: put_text(cli, "alice", f"상태 {key}", f"본문 {key}") for key in states}
+    with psycopg.connect(migrated_db) as conn:
+        for (extraction, embedding), document_id in ids.items():
+            conn.execute(
+                "UPDATE documents SET extraction_status = %s, embedding_status = %s WHERE id = %s",
+                (extraction, embedding, document_id),
+            )
+    login_cli(cli, "alice")
+    capsys.readouterr()
+
+    assert main(["doc", "list"]) == 0
+
+    lines = capsys.readouterr().out.splitlines()
+    for key, label in states.items():
+        (line,) = [line for line in lines if line.startswith(ids[key])]
+        assert line.rstrip().endswith(label), (key, line)
+
+
+def test_doc_list_reads_every_page(cli, migrated_db, capsys):
+    login_cli(cli, "alice")
+    with psycopg.connect(migrated_db) as conn:
+        for index in range(101):
+            content = f"문서 {index}"
+            conn.execute(
+                "INSERT INTO documents (title, content, content_hash, content_type, owner_id)"
+                " VALUES (%s, %s, md5(%s), 'md', 'alice')",
+                (f"문서 {index}", content, content),
+            )
+            # 트리거가 남긴 잡은 이 테스트와 무관하다.
+    capsys.readouterr()
+
+    assert main(["doc", "list"]) == 0
+
+    out = capsys.readouterr().out
+    with psycopg.connect(migrated_db) as conn:
+        ids = [str(row[0]) for row in conn.execute("SELECT id FROM documents")]
+    assert len(ids) == 101
+    assert all(document_id in out for document_id in ids)
+
+
+def test_doc_list_without_documents(cli, capsys):
+    login_cli(cli, "alice")
+    capsys.readouterr()
+
+    assert main(["doc", "list"]) == 0
+
+    assert "문서가 없습니다." in capsys.readouterr().out
+
+
+def test_doc_show_prints_current_or_requested_version(cli, capsys):
+    document_id = put_text(cli, "alice", "버전 문서", "첫 번째 본문")
+    edited = cli.put(f"/api/documents/{document_id}", json={"content": "두 번째 본문", "version": 1})
+    assert edited.status_code == 200
+    login_cli(cli, "alice")
+    capsys.readouterr()
+
+    assert main(["doc", "show", document_id]) == 0
+    assert capsys.readouterr().out.strip() == "두 번째 본문"
+
+    assert main(["doc", "show", document_id, "--version", "1"]) == 0
+    assert capsys.readouterr().out.strip() == "첫 번째 본문"
+
+
+@pytest.mark.parametrize("command", ["show", "download"])
+def test_invisible_or_unknown_documents_are_not_found(cli, capsys, tmp_path, command):
+    secret = put_text(cli, "bob", "밥 비밀", "비밀 본문", visibility="private")
+    login_cli(cli, "alice")
+    capsys.readouterr()
+
+    for target in (secret, "00000000-0000-0000-0000-000000000000", "not-a-uuid"):
+        argv = ["doc", command, target]
+        if command == "download":
+            argv += ["-o", str(tmp_path / "out.bin")]
+        assert main(argv) == 1
+        out = capsys.readouterr().out
+        assert "문서를 찾을 수 없습니다" in out
+        assert "비밀 본문" not in out
+    assert not (tmp_path / "out.bin").exists()
+
+
+FIXTURES = Path(__file__).parent / "fixtures"
+
+
+def test_doc_download_saves_identical_original(cli, capsys, tmp_path, monkeypatch):
+    original = (FIXTURES / "committee_result.hwp").read_bytes()
+    response = upload_document(cli, filename="위원회 결과.hwp", content=original)
+    assert response.status_code == 201, response.text
+    document_id = response.json()["id"]
+    login_cli(cli, "alice", scope="read")
+    capsys.readouterr()
+
+    target = tmp_path / "받은파일.hwp"
+    assert main(["doc", "download", document_id, "-o", str(target)]) == 0
+    assert hashlib.sha256(target.read_bytes()).hexdigest() == hashlib.sha256(original).hexdigest()
+    assert str(target) in capsys.readouterr().out
+
+    workdir = tmp_path / "work"
+    workdir.mkdir()
+    monkeypatch.chdir(workdir)
+    assert main(["doc", "download", document_id]) == 0
+    assert (workdir / "위원회 결과.hwp").read_bytes() == original
+
+    target.write_bytes(b"keep")
+    assert main(["doc", "download", document_id, "-o", str(target)]) == 1
+    assert "이미 있는 파일입니다" in capsys.readouterr().out
+    assert target.read_bytes() == b"keep"
+
+
+def test_doc_download_strips_path_from_server_filename(cli, tmp_path, monkeypatch):
+    response = upload_document(cli, filename="../../탈출.txt", content=b"escape")
+    assert response.status_code == 201, response.text
+    login_cli(cli, "alice")
+    workdir = tmp_path / "work"
+    workdir.mkdir()
+    monkeypatch.chdir(workdir)
+
+    assert main(["doc", "download", response.json()["id"]]) == 0
+
+    saved = [path.name for path in workdir.iterdir()]
+    assert len(saved) == 1 and "/" not in saved[0] and saved[0] != ".."
+    assert not (tmp_path / "탈출.txt").exists()
+
+
+def test_doc_download_without_original(cli, capsys, tmp_path):
+    document_id = put_text(cli, "alice", "텍스트만", "본문")
+    login_cli(cli, "alice")
+    capsys.readouterr()
+
+    assert main(["doc", "download", document_id, "-o", str(tmp_path / "x")]) == 1
+
+    assert "원본 파일이 없습니다" in capsys.readouterr().out
+
+
+def test_read_token_can_list_and_show(cli, capsys):
+    document_id = put_text(cli, "alice", "읽기 문서", "읽기 본문")
+    login_cli(cli, "alice", scope="read")
+    capsys.readouterr()
+
+    assert main(["doc", "list"]) == 0
+    assert document_id in capsys.readouterr().out
+    assert main(["doc", "show", document_id]) == 0
+    assert "읽기 본문" in capsys.readouterr().out

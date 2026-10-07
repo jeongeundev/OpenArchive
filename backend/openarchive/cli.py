@@ -1490,6 +1490,17 @@ def main(argv: list[str] | None = None) -> int:
     login.add_argument("--url", required=True, help="서버 주소 (예: http://localhost:8000)")
     login.add_argument("--token", required=True, help="웹 계정 설정에서 발급한 API 토큰")
     subcommands.add_parser("whoami", help="로그인한 사용자와 토큰 범위를 보입니다.")
+    doc = subcommands.add_parser("doc", help="문서를 다룹니다 (로그인한 API 토큰으로).")
+    doc_commands = doc.add_subparsers(dest="doc_command", required=True)
+    doc_commands.add_parser("list", help="볼 수 있는 문서를 최근 수정순으로 보입니다.")
+    doc_show = doc_commands.add_parser("show", help="문서 텍스트를 출력합니다.")
+    doc_show.add_argument("document_id", help="문서 ID")
+    doc_show.add_argument("--version", type=int, help="텍스트 버전 (생략하면 현재 버전)")
+    doc_download = doc_commands.add_parser("download", help="최신 원본 파일을 내려받습니다.")
+    doc_download.add_argument("document_id", help="문서 ID")
+    doc_download.add_argument(
+        "-o", "--output", type=Path, help="저장할 경로 (생략하면 현재 디렉터리에 원본 파일명으로)"
+    )
     init = subcommands.add_parser("init", help="DB를 확인하고 스키마를 준비합니다.")
     init.add_argument("--dsn", help="DB 연결 문자열. 생략하면 대화형으로 묻습니다.")
     init.add_argument("--yes", action="store_true", help="확인 없이 진행합니다.")
@@ -1611,6 +1622,13 @@ def main(argv: list[str] | None = None) -> int:
         return user_cli.run_login(url=args.url, token=args.token)
     if args.command == "whoami":
         return user_cli.run_whoami()
+    if args.command == "doc":
+        if args.doc_command == "list":
+            return user_cli.run_doc_list()
+        if args.doc_command == "show":
+            return user_cli.run_doc_show(document_id=args.document_id, version=args.version)
+        if args.doc_command == "download":
+            return user_cli.run_doc_download(document_id=args.document_id, output=args.output)
     if args.command == "demo":
         return run_demo(
             dsn=args.dsn, username=args.user, wait=not args.no_wait, timeout=args.timeout
