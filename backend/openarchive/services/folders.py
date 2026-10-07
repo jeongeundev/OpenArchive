@@ -127,9 +127,14 @@ async def create_folder(
 
 
 async def find_folder(
-    conn, *, name: str, parent_id: UUID | None = None, created_by: str | None = None
+    conn,
+    *,
+    user_id: str | None,
+    name: str,
+    parent_id: UUID | None = None,
+    created_by: str | None = None,
 ) -> dict | None:
-    """import 재실행이 다시 쓸 폴더의 id와 범위. 열람 확인을 하지 않는다 — 운영자 CLI 전용.
+    """import 재실행이 다시 쓸, `user_id`가 볼 수 있는 폴더의 id와 범위.
 
     최상위 이름은 유일하지 않으므로(030) `created_by`로 좁히고, 여럿이면 가장 오래된 것을 준다.
     """
@@ -138,8 +143,9 @@ async def find_folder(
         f"""SELECT r.id, {_SCOPE} FROM folders r
         WHERE r.name=%(name)s AND r.parent_id IS NOT DISTINCT FROM %(parent)s
           AND (%(by)s::text IS NULL OR r.created_by=%(by)s)
+          AND EXISTS (SELECT 1 FROM folders f WHERE f.id=r.id AND {FOLDER_VISIBLE_TO_USER})
         ORDER BY r.created_at, r.id LIMIT 1""",
-        {"name": name, "parent": parent_id, "by": created_by},
+        {"name": name, "parent": parent_id, "by": created_by, "user": user_id},
     )
     return await cur.fetchone()
 

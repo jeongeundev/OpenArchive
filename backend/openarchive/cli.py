@@ -944,7 +944,7 @@ async def _existing_root_folder(
     """
     # 밖의 SELECT는 HA에서 Replica로 가 방금 만든 폴더를 못 본다 (ADR-010, #180).
     async with conn.transaction():
-        existing = await find_folder(conn, name=name, created_by=username)
+        existing = await find_folder(conn, user_id=username, name=name, created_by=username)
     if existing is None:
         return None
     if scope.explicit and (
@@ -984,9 +984,9 @@ async def _ensure_folders(
         else:
             parent_id = known[parts[: depth - 1]]
             name = parts[depth - 1]
-            row = await find_folder(conn, name=name, parent_id=parent_id) or await create_folder(
+            row = await find_folder(
                 conn, user_id=username, name=name, parent_id=parent_id
-            )
+            ) or await create_folder(conn, user_id=username, name=name, parent_id=parent_id)
         known[parts[:depth]] = row["id"]
     return known[parts]
 
