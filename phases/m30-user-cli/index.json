@@ -22,7 +22,10 @@
       "type": "feat",
       "scope": "cli",
       "desc": "사용자 CLI REST 클라이언트와 login·whoami",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-10-08T01:37:12+0900",
+      "summary": "openarchive/client.py(Credentials·credentials_path·load_credentials·save_credentials(0600, 디렉터리 없을 때만 0700)·ApiError(message,status,body)·NotLoggedIn·ApiClient(credentials, sleep=, timeout=).from_saved()/.request(method,path,json,params,files,data,headers,timeout) — D3 재시도·오류 문구 LOGIN_AGAIN/UNAVAILABLE) + 주입 지점 client.TRANSPORT, user_cli.py run_login·run_whoami, cli.py에 login·whoami 등록, httpx 런타임 의존 명시. 테스트: test_client.py(MockTransport는 재시도만), test_user_cli.py의 fixture `cli`(db_client + OPENARCHIVE_HOME=tmp) — starlette 1.3 TestClient가 httpx2라 AppTransport 어댑터로 db_client._transport를 잇는다, issue_token 헬퍼는 파일 안에 있음",
+      "completed_at": "2026-10-08T01:42:10+0900"
     },
     {
       "step": 2,
