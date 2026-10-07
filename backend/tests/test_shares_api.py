@@ -277,3 +277,49 @@ def test_share_endpoints_reject_anonymous(db_client: TestClient, migrated_db: st
         assert call(db_client, method, path, body).status_code == 401, (method, path)
 
     assert table_counts(migrated_db) == before
+
+
+# --- 공유 토큰 만료일·마지막 사용 (ADR-061 결정 1, #199) ---
+
+
+def test_share_token_expiry_rules(db_client: TestClient, migrated_db: str):
+    login_as(db_client, "alice")
+    share = create_share(db_client)
+    path = f"/api/shares/{share['id']}/tokens"
+
+    plain = db_client.post(path, json={"name": "기본"}).json()
+    assert (plain["expires_at"], plain["last_used_at"], plain["expired"]) == (None, None, False)
+
+    future = db_client.post(path, json={"name": "미래", "expires_at": "2099-01-01T00:00:00+09:00"})
+    assert future.status_code == 201
+    assert future.json()["expires_at"] is not None
+
+    past = db_client.post(path, json={"name": "과거", "expires_at": "2000-01-01T00:00:00+09:00"})
+    assert past.status_code == 400
+    assert past.json()["detail"] == "만료일은 지금 이후여야 합니다."
+    naive = db_client.post(path, json={"name": "시간대 없음", "expires_at": "2099-01-01T00:00:00"})
+    assert naive.status_code == 422
+    assert len(db_client.get("/api/shares").json()[0]["tokens"]) == 2
+
+
+def test_expired_share_token_is_401_and_listed_as_expired(db_client: TestClient, migrated_db: str):
+    login_as(db_client, "alice")
+    share = create_share(db_client)
+    issued = db_client.post(f"/api/shares/{share['id']}/tokens", json={"name": "연동"}).json()
+    db_client.cookies.clear()
+
+    used = db_client.get("/api/documents", headers={"Authorization": f"Bearer {issued['token']}"})
+    assert used.status_code == 200
+    with psycopg.connect(migrated_db) as conn:
+        conn.execute(
+            "UPDATE api_tokens SET expires_at = now() - interval '1 minute' WHERE id = %s",
+            (issued["id"],),
+        )
+    expired = db_client.get("/api/documents", headers={"Authorization": f"Bearer {issued['token']}"})
+    assert expired.status_code == 401
+
+    login_as(db_client, "alice")
+    [token] = db_client.get("/api/shares").json()[0]["tokens"]
+    assert token["expired"] is True
+    assert token["last_used_at"] is not None
+    assert "token" not in token and "token_hash" not in token

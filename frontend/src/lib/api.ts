@@ -238,14 +238,17 @@ export function listTokens(signal?: AbortSignal): Promise<TokenSummary[]> {
   return request<TokenSummary[]>("/api/auth/tokens", { signal });
 }
 
+/** `expires_at`이 없거나 null이면 body에서 뺀다 — 만료 없음 (ADR-061 결정 1). */
 export function createToken(input: {
   name: string;
   scope: TokenScope;
+  expires_at?: string | null;
 }): Promise<TokenCreated> {
+  const { expires_at, ...rest } = input;
   return request<TokenCreated>("/api/auth/tokens", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(input),
+    body: JSON.stringify(expires_at == null ? rest : { ...rest, expires_at }),
   });
 }
 
@@ -367,11 +370,15 @@ export function removeShareDocument(shareId: string, documentId: string): Promis
 }
 
 /** 원문 토큰은 이 응답에서만 보인다 — 저장하지 않는다 (ADR-034). */
-export function createShareToken(shareId: string, name: string): Promise<ShareTokenCreated> {
+export function createShareToken(
+  shareId: string,
+  name: string,
+  expiresAt: string | null = null,
+): Promise<ShareTokenCreated> {
   return request<ShareTokenCreated>(`${sharePath(shareId)}/tokens`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name }),
+    body: JSON.stringify(expiresAt === null ? { name } : { name, expires_at: expiresAt }),
   });
 }
 

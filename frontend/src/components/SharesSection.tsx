@@ -12,8 +12,15 @@ import {
   removeShareDocument,
   revokeShareToken,
 } from "@/lib/api";
+import { expiresAtFromDate, formatExpiry, todayInputValue } from "@/lib/tokenExpiry";
 import type { ShareSummary, ShareTokenCreated } from "@/lib/types";
 import { useUnmountSignal } from "@/lib/useUnmountSignal";
+
+function formatDate(value: string): string {
+  return new Intl.DateTimeFormat("ko-KR", { dateStyle: "medium", timeStyle: "short" }).format(
+    new Date(value),
+  );
+}
 
 function detail(reason: unknown, fallback: string): string {
   return reason instanceof ApiError ? reason.detail : fallback;
@@ -24,6 +31,7 @@ export function SharesSection(): React.ReactElement {
   const [shares, setShares] = useState<ShareSummary[] | null>(null);
   const [name, setName] = useState("");
   const [tokenNames, setTokenNames] = useState<Record<string, string>>({});
+  const [tokenExpiries, setTokenExpiries] = useState<Record<string, string>>({});
   const [issued, setIssued] = useState<{ shareId: string; token: ShareTokenCreated } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [working, setWorking] = useState(false);
@@ -70,8 +78,13 @@ export function SharesSection(): React.ReactElement {
   function issue(event: React.FormEvent<HTMLFormElement>, share: ShareSummary): void {
     event.preventDefault();
     void run(async () => {
-      const token = await createShareToken(share.id, tokenNames[share.id] ?? "");
+      const token = await createShareToken(
+        share.id,
+        tokenNames[share.id] ?? "",
+        expiresAtFromDate(tokenExpiries[share.id] ?? ""),
+      );
       setTokenNames((current) => ({ ...current, [share.id]: "" }));
+      setTokenExpiries((current) => ({ ...current, [share.id]: "" }));
       // run이 시작할 때 원문을 지우므로, 발급 결과는 동작 안에서 세운다.
       setIssued({ shareId: share.id, token });
     }, "공유 토큰을 발급하지 못했습니다.");
@@ -198,7 +211,22 @@ export function SharesSection(): React.ReactElement {
                 <ul className="mt-2 space-y-1">
                   {share.tokens.map((token) => (
                     <li className="flex items-center justify-between gap-4 text-sm" key={token.id}>
-                      <span className="text-neutral-300">{token.name}</span>
+                      <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                        <span className="text-neutral-300">{token.name}</span>
+                        {token.expired ? (
+                          <span className="rounded bg-[#ef4444]/10 px-2 py-0.5 text-xs font-medium text-[#ef4444]">
+                            만료
+                          </span>
+                        ) : null}
+                        <span className="text-xs text-neutral-500">
+                          {token.expires_at === null ? "만료 없음" : `만료 ${formatExpiry(token.expires_at)}`}
+                        </span>
+                        <span className="text-xs text-neutral-500">
+                          {token.last_used_at === null
+                            ? "사용 기록 없음"
+                            : `마지막 사용 ${formatDate(token.last_used_at)}`}
+                        </span>
+                      </span>
                       <button
                         aria-label={`${token.name} 폐기`}
                         className="text-neutral-500 hover:text-neutral-300 disabled:text-neutral-600"
@@ -236,6 +264,17 @@ export function SharesSection(): React.ReactElement {
                     required
                     type="text"
                     value={tokenNames[share.id] ?? ""}
+                  />
+                </label>
+                <label className="text-sm text-neutral-400">만료일 (선택)
+                  <input
+                    className="mt-2 w-full rounded-lg border border-neutral-800 bg-neutral-900 px-4 py-3 text-neutral-300"
+                    min={todayInputValue()}
+                    onChange={(event) =>
+                      setTokenExpiries((current) => ({ ...current, [share.id]: event.target.value }))
+                    }
+                    type="date"
+                    value={tokenExpiries[share.id] ?? ""}
                   />
                 </label>
                 <button

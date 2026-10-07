@@ -150,6 +150,11 @@
       "dir": "m28-remote-mcp",
       "status": "completed",
       "completed_at": "2026-10-07T21:59:08+0900"
+    },
+    {
+      "dir": "m29-token-expiry",
+      "status": "completed",
+      "completed_at": "2026-10-08T00:16:21+0900"
     }
   ]
 }

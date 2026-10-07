@@ -427,6 +427,8 @@ def test_api_token_columns_and_constraints_match_the_delegated_token_model(
         ("scope", "text", "NO", None),
         ("created_at", "timestamp with time zone", "NO", "now()"),
         ("share_id", "uuid", "YES", None),
+        ("expires_at", "timestamp with time zone", "YES", None),
+        ("last_used_at", "timestamp with time zone", "YES", None),
     ]
 
     constraints = conn.execute(
@@ -1234,6 +1236,34 @@ def test_api_token_names_exactly_one_principal(conn: psycopg.Connection, princip
                      (owner if principal == "both" else None,
                       share if principal == "both" else None))
     assert error.value.diag.constraint_name == "api_tokens_one_principal"
+
+
+@pytest.mark.parametrize("principal", ["user", "share"])
+def test_api_token_expiry_and_last_use_default_to_null(conn: psycopg.Connection, principal: str):
+    owner = insert_user(conn, "owner")
+    user_id = owner if principal == "user" else None
+    share_id = insert_share(conn, owner) if principal == "share" else None
+    row = conn.execute(
+        "INSERT INTO api_tokens (user_id, share_id, name, token_hash, scope) "
+        "VALUES (%s, %s, 'ci', 'token-hash', 'read') RETURNING expires_at, last_used_at",
+        (user_id, share_id),
+    ).fetchone()
+    assert row == (None, None)
+
+
+def test_api_token_expiry_can_be_updated_before_creation(conn: psycopg.Connection):
+    owner = insert_user(conn, "owner")
+    (token_id,) = conn.execute(
+        "INSERT INTO api_tokens (user_id, name, token_hash, scope) "
+        "VALUES (%s, 'ci', 'token-hash', 'read') RETURNING id",
+        (owner,),
+    ).fetchone()
+    (is_past,) = conn.execute(
+        "UPDATE api_tokens SET expires_at = created_at - interval '1 day' "
+        "WHERE id = %s RETURNING expires_at < created_at",
+        (token_id,),
+    ).fetchone()
+    assert is_past is True
 
 
 def test_share_token_cannot_have_write_scope(conn: psycopg.Connection):

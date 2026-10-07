@@ -13,6 +13,7 @@ import {
   revokeToken,
 } from "@/lib/api";
 import { markPasswordChanged } from "@/lib/passwordChangeNotice";
+import { expiresAtFromDate, formatExpiry, todayInputValue } from "@/lib/tokenExpiry";
 import type { TokenCreated, TokenScope, TokenSummary } from "@/lib/types";
 import { useUnmountSignal } from "@/lib/useUnmountSignal";
 
@@ -34,6 +35,7 @@ export default function SettingsPage(): React.ReactElement {
   const [tokens, setTokens] = useState<TokenSummary[]>([]);
   const [name, setName] = useState("");
   const [scope, setScope] = useState<TokenScope>("read");
+  const [expiryDate, setExpiryDate] = useState("");
   const [issued, setIssued] = useState<TokenCreated | null>(null);
   const [tokenError, setTokenError] = useState<string | null>(null);
   const [tokenWorking, setTokenWorking] = useState(false);
@@ -67,8 +69,11 @@ export default function SettingsPage(): React.ReactElement {
     setTokenWorking(true);
     setTokenError(null);
     try {
-      setIssued(await createToken({ name, scope }));
+      setIssued(
+        await createToken({ name, scope, expires_at: expiresAtFromDate(expiryDate) }),
+      );
       setName("");
+      setExpiryDate("");
       setTokens(await listTokens(unmountSignal()));
     } catch (reason: unknown) {
       setTokenError(reason instanceof ApiError ? reason.detail : "토큰을 발급하지 못했습니다.");
@@ -163,6 +168,18 @@ export default function SettingsPage(): React.ReactElement {
               <option value="read_write">읽기·쓰기 — 문서 등록·수정까지</option>
             </select>
           </label>
+          <label className="text-sm text-neutral-400">만료일 (선택)
+            <input
+              className="mt-2 w-full rounded-lg border border-neutral-800 bg-neutral-900 px-4 py-3 text-neutral-300"
+              min={todayInputValue()}
+              onChange={(event) => setExpiryDate(event.target.value)}
+              type="date"
+              value={expiryDate}
+            />
+          </label>
+          <p className="self-end pb-3 text-xs text-neutral-500">
+            만료일을 비우면 만료 없이 발급합니다. 고른 날짜가 끝날 때까지 쓸 수 있습니다.
+          </p>
           <div className="sm:col-span-2">
             <button
               className="rounded-lg bg-white px-4 py-2 text-sm text-black hover:bg-neutral-200 disabled:bg-neutral-700 disabled:text-neutral-400"
@@ -196,17 +213,30 @@ export default function SettingsPage(): React.ReactElement {
                 <th className="px-4 py-3 font-medium">이름</th>
                 <th className="px-4 py-3 font-medium">범위</th>
                 <th className="px-4 py-3 font-medium">발급일</th>
+                <th className="px-4 py-3 font-medium">만료</th>
+                <th className="px-4 py-3 font-medium">마지막 사용</th>
                 <th className="px-4 py-3"><span className="sr-only">작업</span></th>
               </tr>
             </thead>
             <tbody>
               {tokens.length === 0 ? (
-                <tr><td className="px-4 py-3 text-neutral-500" colSpan={4}>발급한 토큰이 없습니다.</td></tr>
+                <tr><td className="px-4 py-3 text-neutral-500" colSpan={6}>발급한 토큰이 없습니다.</td></tr>
               ) : tokens.map((token) => (
                 <tr className="border-b border-neutral-800 last:border-0" key={token.id}>
                   <td className="px-4 py-3 text-white">{token.name}</td>
                   <td className="px-4 py-3 text-neutral-400">{SCOPE_LABEL[token.scope]}</td>
                   <td className="px-4 py-3 text-neutral-400">{formatDate(token.created_at)}</td>
+                  <td className="px-4 py-3 text-neutral-400">
+                    {token.expired ? (
+                      <span className="mr-2 rounded bg-[#ef4444]/10 px-2 py-0.5 text-xs font-medium text-[#ef4444]">
+                        만료
+                      </span>
+                    ) : null}
+                    <span>{formatExpiry(token.expires_at)}</span>
+                  </td>
+                  <td className="px-4 py-3 text-neutral-400">
+                    {token.last_used_at === null ? "사용 기록 없음" : formatDate(token.last_used_at)}
+                  </td>
                   <td className="px-4 py-3 text-right">
                     <button
                       className="text-neutral-500 hover:text-neutral-300 disabled:text-neutral-600"
@@ -222,6 +252,10 @@ export default function SettingsPage(): React.ReactElement {
             </tbody>
           </table>
         </div>
+        <p className="text-xs text-neutral-500">
+          「마지막 사용」은 성공한 요청 기준이며 1분 단위로 기록됩니다. 만료된 토큰은 401을 받고, 목록에서
+          지우려면 폐기하세요.
+        </p>
         {tokenError !== null ? <p className="text-sm text-[#ef4444]" role="alert">{tokenError}</p> : null}
       </div>
 

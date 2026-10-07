@@ -54,6 +54,13 @@ class AuthenticationFailed(Exception):
         super().__init__("인증에 실패했습니다.")
 
 
+class InvalidTokenExpiry(ValueError):
+    """만료일이 지금 이후가 아니다."""
+
+    def __init__(self) -> None:
+        super().__init__("만료일은 지금 이후여야 합니다.")
+
+
 class TokenNotFound(Exception):
     """폐기할 토큰이 없거나 요청한 주체의 것이 아니다."""
 
@@ -267,9 +274,12 @@ async def create_token(
     *,
     name: str,
     scope: TokenScope = SCOPE_READ,
+    expires_at: datetime | None = None,
 ) -> dict:
     """토큰을 발급하고 원문을 포함해 반환한다. DB에는 해시만 남는다."""
-    return await insert_token(conn, user_id=user_id, share_id=None, name=name, scope=scope)
+    return await insert_token(
+        conn, user_id=user_id, share_id=None, name=name, scope=scope, expires_at=expires_at
+    )
 
 
 async def insert_token(
@@ -279,19 +289,24 @@ async def insert_token(
     share_id: UUID | None,
     name: str,
     scope: TokenScope,
+    expires_at: datetime | None = None,
 ) -> dict:
     """사용자 토큰과 공유 토큰의 공통 발급부. 주체는 정확히 하나다(026 CHECK)."""
     token = secrets.token_urlsafe(32)
     cur = conn.cursor(row_factory=dict_row)
     await cur.execute(
         """
-        INSERT INTO api_tokens (user_id, share_id, name, token_hash, scope)
-        VALUES (%s, %s, %s, %s, %s)
-        RETURNING id, name, scope, created_at
+        INSERT INTO api_tokens (user_id, share_id, name, token_hash, scope, expires_at)
+        SELECT %s, %s, %s, %s, %s, %s
+        WHERE %s::timestamptz IS NULL OR %s::timestamptz > now()
+        RETURNING id, name, scope, created_at, expires_at, last_used_at,
+                  expires_at IS NOT NULL AND expires_at <= now() AS expired
         """,
-        (user_id, share_id, name, hash_token(token), scope),
+        (user_id, share_id, name, hash_token(token), scope, expires_at, expires_at, expires_at),
     )
     issued = await cur.fetchone()
+    if issued is None:
+        raise InvalidTokenExpiry
     issued["token"] = token
     return issued
 
@@ -307,16 +322,29 @@ async def validate_token(conn: psycopg.AsyncConnection, token: str) -> dict:
     cur = conn.cursor(row_factory=dict_row)
     await cur.execute(
         """
-        SELECT u.id, u.username, u.is_admin, t.share_id, t.scope
+        SELECT u.id, u.username, u.is_admin, t.share_id, t.scope, t.id AS token_id
         FROM api_tokens t
         LEFT JOIN users u ON u.id = t.user_id
         WHERE t.token_hash = %s
+          AND (t.expires_at IS NULL OR t.expires_at > now())
         """,
         (hash_token(token),),
     )
     row = await cur.fetchone()
     if row is None:
         raise AuthenticationFailed
+    await conn.execute(
+        """
+        UPDATE api_tokens SET last_used_at = now()
+        WHERE id = (
+            SELECT id FROM api_tokens
+            WHERE id = %s
+              AND (last_used_at IS NULL OR last_used_at < now() - interval '1 minute')
+            FOR UPDATE SKIP LOCKED
+        )
+        """,
+        (row.pop("token_id"),),
+    )
     if row["share_id"] is not None:
         return {
             "kind": PRINCIPAL_SHARE,
@@ -339,7 +367,8 @@ async def list_tokens(conn: psycopg.AsyncConnection, user_id: UUID) -> list[dict
     cur = conn.cursor(row_factory=dict_row)
     await cur.execute(
         """
-        SELECT id, name, scope, created_at
+        SELECT id, name, scope, created_at, expires_at, last_used_at,
+               expires_at IS NOT NULL AND expires_at <= now() AS expired
         FROM api_tokens
         WHERE user_id = %s
         ORDER BY created_at, id

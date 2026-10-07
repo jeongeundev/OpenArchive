@@ -1,5 +1,7 @@
 """API 토큰의 발급부터 공급·검색·열람·폐기까지 전 구간 계약."""
 
+from datetime import datetime
+
 import psycopg
 from conftest import login_as, run_embedding_worker
 from fastapi.testclient import TestClient
@@ -228,3 +230,96 @@ def test_admin_read_write_token_cannot_cross_session_only_management_boundaries(
     assert second_user.status_code == 201
     assert db_client.get("/api/admin/users").status_code == 200
     assert db_client.delete(f"/api/admin/users/{second_user.json()['id']}").status_code == 204
+
+
+# --- 만료일·마지막 사용 (ADR-061 결정 1, #199) ---
+
+FUTURE = "2099-01-01T00:00:00+09:00"
+
+
+def expire_token(dsn: str, token_id: str) -> None:
+    with psycopg.connect(dsn) as conn:
+        conn.execute(
+            "UPDATE api_tokens SET expires_at = now() - interval '1 minute' WHERE id = %s",
+            (token_id,),
+        )
+
+
+def listed_token(client: TestClient, token_id: str) -> dict:
+    [token] = [t for t in client.get("/api/auth/tokens").json() if t["id"] == token_id]
+    return token
+
+
+def test_issue_without_expiry_has_no_expiry_and_no_last_use(db_client: TestClient, migrated_db: str):
+    issued = issue_token(db_client, "alice")
+
+    assert issued["expires_at"] is None
+    assert issued["last_used_at"] is None
+    assert issued["expired"] is False
+    assert issued["token"]
+
+
+def test_issue_with_future_expiry_returns_the_same_instant(db_client: TestClient, migrated_db: str):
+    login_as(db_client, "alice")
+    response = db_client.post("/api/auth/tokens", json={"name": "만료", "expires_at": FUTURE})
+
+    assert response.status_code == 201
+    body = response.json()
+    assert datetime.fromisoformat(body["expires_at"]) == datetime.fromisoformat(FUTURE)
+    assert body["expired"] is False
+
+
+def test_past_expiry_is_400_and_creates_nothing(db_client: TestClient, migrated_db: str):
+    login_as(db_client, "alice")
+    response = db_client.post(
+        "/api/auth/tokens", json={"name": "과거", "expires_at": "2000-01-01T00:00:00+09:00"}
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "만료일은 지금 이후여야 합니다."
+    assert db_client.get("/api/auth/tokens").json() == []
+
+
+def test_expiry_without_timezone_is_422(db_client: TestClient, migrated_db: str):
+    login_as(db_client, "alice")
+    response = db_client.post(
+        "/api/auth/tokens", json={"name": "시간대 없음", "expires_at": "2099-01-01T00:00:00"}
+    )
+
+    assert response.status_code == 422
+    assert db_client.get("/api/auth/tokens").json() == []
+
+
+def test_expired_token_is_401_even_with_a_session_cookie_and_is_listed_as_expired(
+    db_client: TestClient, migrated_db: str
+):
+    issued = issue_token(db_client, "alice")
+    expire_token(migrated_db, issued["id"])
+
+    with_cookie = db_client.get("/api/documents", headers=bearer(issued["token"]))
+    assert with_cookie.status_code == 401
+    db_client.cookies.clear()
+    assert db_client.get("/api/documents", headers=bearer(issued["token"])).status_code == 401
+
+    login_as(db_client, "alice")
+    assert listed_token(db_client, issued["id"])["expired"] is True
+
+
+def test_rest_request_records_last_use(db_client: TestClient, migrated_db: str):
+    issued = issue_token(db_client, "alice")
+    assert listed_token(db_client, issued["id"])["last_used_at"] is None
+    db_client.cookies.clear()
+
+    assert db_client.get("/api/documents", headers=bearer(issued["token"])).status_code == 200
+
+    login_as(db_client, "alice")
+    assert listed_token(db_client, issued["id"])["last_used_at"] is not None
+
+
+def test_token_list_never_contains_the_raw_token_or_its_hash(db_client: TestClient, migrated_db: str):
+    issued = issue_token(db_client, "alice")
+    listed = db_client.get("/api/auth/tokens")
+
+    [token] = listed.json()
+    assert set(token) == {"id", "name", "scope", "created_at", "expires_at", "last_used_at", "expired"}
+    assert issued["token"] not in listed.text

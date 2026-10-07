@@ -11,7 +11,7 @@ from openarchive.api.schemas import (
     TokenCreated,
 )
 from openarchive.services import shares as service
-from openarchive.services.auth import TokenNotFound
+from openarchive.services.auth import InvalidTokenExpiry, TokenNotFound
 
 # 공유 관리는 세션 전용이다 — 토큰이 공유 토큰을 발급하면 폐기 뒤에도
 # 자격증명을 재생할 수 있다 (ADR-034 결정 6, ADR-044 「공유」)
@@ -84,10 +84,12 @@ async def issue_token(
 ) -> TokenCreated:
     try:
         token = await service.issue_share_token(
-            conn, share_id, owner=user["username"], name=body.name
+            conn, share_id, owner=user["username"], name=body.name, expires_at=body.expires_at
         )
     except service.ShareNotFound as error:
         raise _share_not_found() from error
+    except InvalidTokenExpiry as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
     return TokenCreated.model_validate(token)
 
 

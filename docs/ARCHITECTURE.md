@@ -108,6 +108,8 @@ MCP 서버는 `openarchive.services`를 직접 재사용한다. `search_document
 
 원격 MCP는 API 앱의 `/mcp`에서 Streamable HTTP로 동작한다(ADR-056, 구현 #188). 주체는 매 요청 검증한 Bearer 토큰에서만 정하며 `MCP_USER_ID`는 stdio 전용이다. 읽기 3개는 모든 유효 토큰에, 생성은 `read_write` 사용자 토큰에만 열린다. 공유 토큰은 공유에 넣은 문서만 읽는다. 두 transport는 같은 서비스·열람 술어·도구 본체를 사용하며, 원격은 API 풀과 예열된 프로바이더를 공유한다.
 
+API 토큰(위임·공유)의 해석은 `services/auth.py`의 `validate_token` 한 곳이다 — REST(`api/deps.py current_user`)와 원격 MCP의 Bearer 미들웨어가 같은 함수를 쓴다. 조회 SQL이 `expires_at IS NULL OR expires_at > now()`로 만료를 판정하므로 만료 토큰은 폐기·틀린 값과 같은 `AuthenticationFailed`(401)다. 인증에 성공하면 같은 트랜잭션에서 `last_used_at`을 갱신하되 1분 안의 중복 갱신은 건너뛰고 잠긴 행은 기다리지 않는다(`FOR UPDATE SKIP LOCKED`) — REST 요청 트랜잭션이 응답 직전까지 열려 있어, 기다리면 같은 토큰의 동시 요청이 줄을 선다. 롤백된 요청의 사용은 남지 않는다 (034, ADR-061 결정 1).
+
 `POST /api/search`도 같은 근거 필드(`filename`·`based_on_version`)를 함께 내려준다. 서비스가 하나여도 두 경로의 응답 스키마가 갈라지면 "REST와 MCP의 결과가 같다"가 깨진다 — `tests/test_mcp_server.py`가 두 응답을 직접 비교해 이를 지킨다.
 
 ## DB 스키마
@@ -310,6 +312,8 @@ CREATE TABLE api_tokens (
   token_hash text NOT NULL UNIQUE,   -- sha256(원문). 원문은 발급 응답에만 반환
   scope      text NOT NULL CHECK (scope IN ('read', 'read_write')),
   created_at timestamptz NOT NULL DEFAULT now(),
+  expires_at   timestamptz,          -- 034: NULL = 만료 없음. 과거 값 거부는 발급 서비스가 한다 (ADR-061 결정 1)
+  last_used_at timestamptz,          -- 034: 인증에 성공한 요청이 1분 단위로 갱신한다
   CHECK (num_nonnulls(user_id, share_id) = 1), -- 026: 사용자 또는 공유 하나
   CHECK (share_id IS NULL OR scope = 'read')
 );

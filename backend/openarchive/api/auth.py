@@ -102,7 +102,12 @@ async def create_token(
     conn: Connection,
     user: Annotated[dict, Depends(require_session_user)],
 ) -> TokenCreated:
-    token = await service.create_token(conn, user["id"], name=body.name, scope=body.scope)
+    try:
+        token = await service.create_token(
+            conn, user["id"], name=body.name, scope=body.scope, expires_at=body.expires_at
+        )
+    except service.InvalidTokenExpiry as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
     return TokenCreated.model_validate(token)
 
 

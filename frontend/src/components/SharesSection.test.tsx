@@ -15,7 +15,7 @@ const partner = {
   name: "B사 협업",
   created_at: "2026-10-02T00:00:00Z",
   documents: [{ id: "d-1", title: "제품 소개서" }],
-  tokens: [{ id: "t-1", name: "B사 MCP", scope: "read", created_at: "2026-10-02T00:00:00Z" }],
+  tokens: [{ id: "t-1", name: "B사 MCP", scope: "read", created_at: "2026-10-02T00:00:00Z", expires_at: null, last_used_at: null, expired: false }],
 };
 
 type Route = (url: string, method: string, init?: RequestInit) => Response | undefined;
@@ -137,12 +137,12 @@ describe("외부 공유 절", () => {
       id: "t-2",
       name: "C사 연동",
       scope: "read",
-      created_at: "2026-10-02T01:00:00Z",
+      created_at: "2026-10-02T01:00:00Z", expires_at: null, last_used_at: null, expired: false,
       token: "share-plaintext-once",
     };
     const withNew = {
       ...partner,
-      tokens: [...partner.tokens, { id: "t-2", name: "C사 연동", scope: "read", created_at: issued.created_at }],
+      tokens: [...partner.tokens, { id: "t-2", name: "C사 연동", scope: "read", created_at: issued.created_at, expires_at: null, last_used_at: null, expired: false }],
     };
     const fetchMock = routedFetch([[partner], [withNew], [{ ...withNew, documents: [] }]], (url, method) =>
       url === "/api/shares/s-1/tokens" && method === "POST" ? response(issued, 201) : undefined,
@@ -168,6 +168,80 @@ describe("외부 공유 절", () => {
     );
     // 목록에는 원문 없이 이름만 남는다
     expect(within(card).getByText("C사 연동")).toBeInTheDocument();
+  });
+
+  it("공유 토큰도 만료일을 골라 발급하면 그날 끝까지 유효한 시각을 보낸다", async () => {
+    const issued = {
+      id: "t-2",
+      name: "기한부",
+      scope: "read",
+      created_at: "2026-10-08T00:00:00Z",
+      expires_at: new Date(2026, 10, 1).toISOString(),
+      last_used_at: null,
+      expired: false,
+      token: "share-plaintext-once",
+    };
+    const fetchMock = routedFetch([[partner]], (url, method) =>
+      url === "/api/shares/s-1/tokens" && method === "POST" ? response(issued, 201) : undefined,
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<SharesSection />);
+    const card = await screen.findByRole("region", { name: "B사 협업" });
+    fireEvent.change(within(card).getByRole("textbox", { name: "토큰 이름" }), {
+      target: { value: "기한부" },
+    });
+    const date = within(card).getByLabelText("만료일 (선택)");
+    expect(date).toHaveAttribute("type", "date");
+    fireEvent.change(date, { target: { value: "2026-10-31" } });
+    fireEvent.click(within(card).getByRole("button", { name: "공유 토큰 발급" }));
+
+    expect(await screen.findByText("share-plaintext-once")).toBeInTheDocument();
+    const [post] = calls(fetchMock, "POST", "/api/shares/s-1/tokens");
+    expect(JSON.parse(post[1]?.body as string)).toEqual({
+      name: "기한부",
+      expires_at: new Date(2026, 10, 1).toISOString(),
+    });
+  });
+
+  it("토큰 줄에 서버가 판정한 「만료」와 마지막 사용을 보인다 (TC 276)", async () => {
+    const share = {
+      ...partner,
+      tokens: [
+        {
+          id: "t-1",
+          name: "B사 MCP",
+          scope: "read",
+          created_at: "2026-10-02T00:00:00Z",
+          expires_at: "2026-10-05T00:00:00Z",
+          last_used_at: "2026-10-04T03:00:00Z",
+          expired: true,
+        },
+        {
+          id: "t-2",
+          name: "B사 REST",
+          scope: "read",
+          created_at: "2026-10-02T00:00:00Z",
+          expires_at: null,
+          last_used_at: null,
+          expired: false,
+        },
+      ],
+    };
+    vi.stubGlobal("fetch", routedFetch([[share]]));
+
+    render(<SharesSection />);
+    const card = await screen.findByRole("region", { name: "B사 협업" });
+
+    const expiredItem = within(card).getByText("B사 MCP").closest("li");
+    const liveItem = within(card).getByText("B사 REST").closest("li");
+    if (expiredItem === null || liveItem === null) throw new Error("토큰 줄이 없다");
+    expect(within(expiredItem).getByText("만료")).toBeInTheDocument();
+    expect(within(expiredItem).getByText(/마지막 사용/)).toBeInTheDocument();
+    expect(within(expiredItem).queryByText(/사용 기록 없음/)).not.toBeInTheDocument();
+    expect(within(liveItem).queryByText("만료")).not.toBeInTheDocument();
+    expect(within(liveItem).getByText(/만료 없음/)).toBeInTheDocument();
+    expect(within(liveItem).getByText(/사용 기록 없음/)).toBeInTheDocument();
   });
 
   it("토큰을 폐기하면 목록에서 사라진다", async () => {

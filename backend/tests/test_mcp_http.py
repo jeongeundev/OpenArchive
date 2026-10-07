@@ -176,3 +176,32 @@ async def test_search_token_principal_and_injected_provider(database, monkeypatc
     # 요청이 끝난 뒤에도 원격 resolver는 stdio 환경으로 대체하지 않는다.
     with pytest.raises(RuntimeError):
         remote._resolve_principal()
+
+
+async def last_used_at(dsn, token_id):
+    async with await psycopg.AsyncConnection.connect(dsn) as conn:
+        row = await (
+            await conn.execute("SELECT last_used_at FROM api_tokens WHERE id = %s", (token_id,))
+        ).fetchone()
+    return row[0]
+
+
+async def test_remote_request_records_last_use(database):
+    _, token = await issue(database)
+    assert await last_used_at(database, token["id"]) is None
+    async with client_for(RemoteMcp()) as client:
+        await tools(client, token["token"])
+    assert await last_used_at(database, token["id"]) is not None
+
+
+async def test_expired_token_is_401(database):
+    _, token = await issue(database)
+    async with await psycopg.AsyncConnection.connect(database) as conn:
+        await conn.execute(
+            "UPDATE api_tokens SET expires_at = now() - interval '1 minute' WHERE id = %s",
+            (token["id"],),
+        )
+    async with client_for(RemoteMcp()) as client:
+        response = await rpc(client, token["token"], "tools/list")
+    assert response.status_code == 401
+    assert response.headers["www-authenticate"].startswith("Bearer")
