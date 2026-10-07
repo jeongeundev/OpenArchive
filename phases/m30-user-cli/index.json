@@ -11,7 +11,10 @@
       "type": "feat",
       "scope": "api",
       "desc": "/api/auth/me에 토큰 범위·만료일",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-10-08T01:34:12+0900",
+      "summary": "GET /api/auth/me의 AuthStatus에 scope·expires_at 추가 — 토큰 주체만 값(validate_token이 expires_at 반환), 세션·익명은 둘 다 null. 기존 dict 전체 일치 단언은 두 키를 포함하도록 확장, 새 테스트 6건(범위·만료일·세션·만료/폐기)",
+      "completed_at": "2026-10-08T01:37:12+0900"
     },
     {
       "step": 1,
@@ -53,5 +56,6 @@
       "desc": "사용자 CLI 구현을 ADR·운영 문서에 반영",
       "status": "pending"
     }
-  ]
+  ],
+  "created_at": "2026-10-08T01:34:12+0900"
 }
