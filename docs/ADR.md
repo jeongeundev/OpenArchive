@@ -3986,7 +3986,7 @@ OpenProxy 풀 연결에도 적용된다(실측).
 ### ADR-054: 폴더 트리를 두고, 열람 범위는 폴더에서 상속하며 예외만 문서에 개별 지정한다
 **상태**: 2026-10-05 신규 — 채택(결정) · **2026-10-06 구현 #187(m25-folders, 백엔드)** — `030_folders_tables.sql`·
 `031_folder_audit_triggers.sql`, `services/folders.py`·`services/visibility.py`, `/api/folders`. 아래 「구현 때 정함」은 끝의
-「2026-10-06 구현 결정」 블록이 정했다. 2026-10-07 화면 구현(#187 c) — 트리·폴더 헤더·범위 패널·업로드·이동·검색 폴더 필터(`UI_GUIDE.md` 「폴더」). 2026-10-07 CLI `import --keep-folders --grant-group`(#187 d) — 재import 때 폴더 재사용, `--keep-folders` 없는 `--grant-group`, frontmatter `visibility`와 폴더 범위가 겹칠 때의 규칙은 `OPERATIONS.md` import 절. ADR-044 결정 2(태그·컬렉션 단위 부여 없음)와 기각한 대안(컬렉션
+「2026-10-06 구현 결정」 블록이 정했다. 2026-10-07 화면 구현(#187 c) — 트리·폴더 헤더·범위 패널·업로드·이동·검색 폴더 필터(`UI_GUIDE.md` 「폴더」). 2026-10-07 CLI `import --keep-folders --grant-group`(#187 d) — 재import 때 폴더 재사용, `--keep-folders` 없는 `--grant-group`, frontmatter `visibility`와 폴더 범위가 겹칠 때의 규칙은 끝의 「2026-10-07 import 결정」 블록, 사용법은 `OPERATIONS.md` import 절. ADR-044 결정 2(태그·컬렉션 단위 부여 없음)와 기각한 대안(컬렉션
 트리)을 **폴더에 한해** 개정한다. 태그 단위 부여 금지·역할 4단 기각·"관리자 권한만으로는 문서를 열람하지 못한다"
 (ADR-040·044)는 그대로다. ADR-044 #97 d(CLI `import --grant`·확정)는 이 ADR과 합쳐 #187에서 구현한다.
 
@@ -4104,6 +4104,44 @@ OpenProxy 풀 연결에도 적용된다(실측).
 > - **폴더를 지정해 만든 문서의 자기 범위는 `private`로 닫힌다.** 업로드·텍스트 공급에서 폴더를 고르면 개별 범위
 >   인자를 받지 않고(「개별 지정은 문서 상세에서 합니다」), 문서 자신의 `visibility`는 `private`로 저장된다. 나중에 「개별
 >   지정」으로 끊어도 넓게 열린 상태로 시작하지 않게 하려는 것이다.
+>
+> **2026-10-07 import 결정 (#187 d, PR #207).** CLI `import --keep-folders --grant-group`을 구현하며 세 가지를 정했다.
+> ①②는 작성자 부재 중 권고안으로 구현했고 리뷰에서 맞다는 판정을 받았다(별도 승인 절차는 없었다). ③은 리뷰 뒤
+> 사용자가 실무 근거를 확인하고 승인했다(2026-10-07).
+>
+> - **① 재import 때 폴더를 다시 쓴다 — 범위가 다르면 바꾸지 않고 거부한다.** `--user`가 **만든** 같은 이름의 최상위
+>   폴더(여럿이면 가장 오래된 것)와 그 아래 같은 부모·같은 이름의 하위 폴더를 다시 쓴다. 문서 import가 이미 멱등이라
+>   폴더도 멱등이어야 두 번 돌려도 트리가 두 벌이 안 된다. 최상위 이름은 유일하지 않으므로(위 「구현 중 함께 정한 것」)
+>   만든 사람으로 좁혀야 남이 범위를 정한 폴더에 문서를 붓지 않는다. 폴더 범위 변경은 만든 사람의 세션 전용(결정 4)이라
+>   CLI는 바꾸지 않고, 범위 옵션(`--visibility`·`--grant-group`)을 직접 줬는데 기존 범위와 다르면 아무것도 넣지 않고
+>   종료 2로 거부한다 — 좁힐 생각으로 준 옵션이 넓은 기존 폴더에 조용히 묻히면 누출이다. 옵션을 안 주면 기존 범위
+>   그대로 넣는다. 조회는 열람 술어를 건 `find_folder`로, 문서 생성과 같은 트랜잭션에서 한다(ADR-010).
+>   기각: 항상 새 폴더(재실행마다 트리 중복), 범위가 다르면 경고만(누출 가능).
+> - **② `--keep-folders` 없는 `--grant-group`은 문서마다 「제한 · 그룹」으로 만든다.** ADR-044 #97 d(`import --grant`)가
+>   이 이슈로 합쳐졌고, 생성 시 부여 대상 지정은 CLI에 허용된 경계다. 사용자의 의도(그 그룹에만 보이게)를 지키고 결과가
+>   닫히는 쪽이다. 기각: `--keep-folders`를 요구(「장소에 권한」 관례에 더 가깝지만 폴더를 원치 않는 import를 막는다),
+>   무시(누출).
+> - **③ 폴더에 넣는 문서는 frontmatter `visibility`와 상관없이 폴더 범위를 따른다.** 무시한 건수는 끝에 출력한다.
+>   `--keep-folders` 없이 `--grant-group`을 쓰면 frontmatter `private` 문서는 소유자 전용으로 남는다.
+>   - 첫 안은 「더 좁은 쪽을 따른다」였으나, CLI가 생성 뒤 `set_access`를 부르는 것이 「열람 범위 변경은 세션 전용」
+>     규칙과 충돌했다.
+>   - 실무 이관 도구의 기본은 **들어간 자리의 권한 상속**이고, 원래 권한 보존은 일부러 켜는 옵션이다. SharePoint
+>     Migration Tool은 권한 보존이 기본 꺼짐이고 끄면 대상 라이브러리 권한을 물려받으며, 켜도 원본의 고유 권한만
+>     옮긴다([SPMT settings](https://learn.microsoft.com/en-us/sharepointmigration/spmt-settings),
+>     [Understanding permissions when migrating](https://learn.microsoft.com/cs-cz/sharepointmigration/understanding-permissions-when-migrating)).
+>     ShareGate는 파일 공유 권한 가져오기가 별도로 고르는 기능이다([Import from file share permissions](https://help.sharegate.com/en/articles/10261621-import-from-file-share-permissions)).
+>     Google Drive는 폴더에 넣은 파일이 폴더 공유 설정을 물려받는다([Share folders](https://support.google.com/drive/answer/7166529)).
+>   - frontmatter `private`은 정보가 빠진 값이다. `export`는 저장된 `visibility`를 그대로 쓰는데, 폴더 범위를 따르는
+>     문서(위 「자기 범위는 `private`로 닫힌다」)와 그룹에 부여한 문서도 `private`이라 소유자 전용과 구분되지 않는다.
+>     실무의 「권한 보존」은 실제 접근 목록을 옮기는 것이고, 첫 안은 export→import 왕복에서 공유되던 문서를 전부 소유자
+>     전용으로 잘랐다. 보존 옵션을 두려면 export가 실제 부여 대상을 내보내야 한다(범위 밖).
+>   - 「폴더를 지정해 만든 문서는 개별 범위 인자를 받지 않는다」(위)와 맞고, 화면에서 확인 안내가 동의인 것처럼 CLI에서는
+>     `--keep-folders`를 직접 주는 것이 동의다. `set_access`가 빠져 감사 로그에는 `document_created`만 남는다.
+>   - 위 「넓게 열린 상태로 시작하지 않게」와 충돌하지 않는다 — 그 문장은 문서 자신의 `visibility`를 `private`로 저장하는
+>     이유이고, import도 그렇게 저장한다.
+>   - 감수: 사람이 직접 `visibility: private`라고 쓴 메모를 조직 공개 폴더에 넣으면 조직에 열린다. 무시 건수 출력과
+>     `OPERATIONS.md`의 「개별 지정」·`--grant-group` 안내로 줄인다. 기각: 생성 시 개별 지정 허용(이 ADR 개정이 필요하고
+>     왕복에서 범위가 잘리는 문제가 남는다), `private` 문서 거부(export 결과 대부분이 `private`이라 왕복이 막힌다).
 
 ---
 
