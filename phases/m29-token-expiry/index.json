@@ -22,7 +22,10 @@
       "type": "feat",
       "scope": "api",
       "desc": "토큰 만료 판정·마지막 사용 갱신·만료일 발급",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-10-08T00:00:24+0900",
+      "summary": "create_token·insert_token·issue_share_token에 expires_at 선택 인자와 InvalidTokenExpiry 추가, validate_token DB 만료 판정·SKIP LOCKED 1분 사용 갱신 및 발급·목록 dict expires_at·last_used_at·expired 제공; AC 173개·ruff 및 mutant 4종 검증 통과",
+      "completed_at": "2026-10-08T00:05:19+0900"
     },
     {
       "step": 2,
