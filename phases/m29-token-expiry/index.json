@@ -55,7 +55,10 @@
       "type": "docs",
       "scope": "adr",
       "desc": "토큰 만료일·마지막 사용 운영·설계 문서 반영",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-10-08T00:14:56+0900",
+      "summary": "OPERATIONS(API 토큰 만료·마지막 사용·SKIP LOCKED·1분 만료 curl 예시)·ARCHITECTURE(api_tokens 034 컬럼, validate_token 판정·갱신)·ADR-034/044/061 구현 #199 표기·PRD #199 구현 사실·UI_GUIDE /settings·외부 공유 만료 표시 규칙 반영; AC grep·test_architecture 10개 통과",
+      "completed_at": "2026-10-08T00:16:21+0900"
     }
   ],
   "created_at": "2026-10-07T23:57:59+0900"
