@@ -158,7 +158,8 @@
     },
     {
       "dir": "m30-user-cli",
-      "status": "pending"
+      "status": "completed",
+      "completed_at": "2026-10-08T01:55:05+0900"
     }
   ]
 }
