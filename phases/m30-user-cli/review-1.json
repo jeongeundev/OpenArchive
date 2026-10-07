@@ -1,0 +1,20 @@
+{
+  "findings": [
+    {
+      "severity": "medium",
+      "class": "fix",
+      "file": "backend/openarchive/cli.py",
+      "line": 1495,
+      "summary": "'-'로 시작하는 API 토큰은 명세서 그대로의 `openarchive login --url … --token <토큰>`으로 로그인할 수 없다 — argparse가 값을 옵션으로 읽어 「argument --token: expected one argument」로 끝난다",
+      "reason": "토큰은 `secrets.token_urlsafe(32)`(services/auth.py:295)라 약 1/64 확률로 '-'로 시작한다. 실측: `main(['login','--url',U,'--token','-Abc_def'])` → 종료 2·usage 오류. 이슈 #189 「토큰 로그인」 TC와 OPERATIONS 「사용자 CLI」 예시가 모두 공백 구분 `--token <API 토큰>` 형태라 그 토큰을 받은 사용자에게는 TC가 실패한다(명세서 TC는 계약). step 3이 테스트 헬퍼를 `--token=<값>`으로 바꿔 간헐 실패를 없앴는데, 이는 제품 결함을 테스트에서만 우회한 것이다(CLAUDE.md: 테스트를 통과시키려고 검증을 약화하지 마라). 고칠 곳은 CLI 쪽 하나로 충분하다 — 예: `main()`에서 parse 전에 `--token` 바로 뒤 값을 `--token=<값>`으로 합치기. 헬퍼를 공백 구분 형태로 되돌리고 '-'로 시작하는 토큰 테스트를 고정할 것."
+    },
+    {
+      "severity": "low",
+      "class": "fix",
+      "file": "backend/openarchive/client.py",
+      "line": 186,
+      "summary": "재시도하지 않는 쓰기(edit·restore·tag·delete·trash restore)가 응답 대기 중 시간 초과(httpx.ReadTimeout)를 만나면 「서버에 연결하지 못했습니다」로 끝나 이미 커밋됐을 수 있다는 사실을 숨긴다",
+      "reason": "`except httpx.TransportError`가 ConnectError와 ReadTimeout을 구분하지 않는다. ReadTimeout은 요청이 서버에 도달한 뒤라 쓰기가 반영됐을 수 있는데 '연결하지 못했다'고 말하면 사용자는 다시 실행한다 — `--base-version` 없는 edit·restore는 같은 내용의 버전을 한 번 더 쌓는다. ADR-057 「구현 때 정함」과 OPERATIONS는 바로 이 이유(커밋 뒤 응답만 잃은 요청)로 이 쓰기들을 재시도하지 않는다고 적고 503에는 「doc show로 반영 확인 후 다시 실행」을 안내하지만, 시간 초과 경로에는 같은 안내가 없다. 연결 수립 실패(ConnectError 등)만 '연결하지 못했습니다'로 두고, 그 밖의 TransportError는 '응답을 받지 못했습니다 — 반영됐는지 확인 후 다시 실행' 류의 문구로 구분하면 된다."
+    }
+  ]
+}

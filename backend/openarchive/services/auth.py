@@ -322,7 +322,8 @@ async def validate_token(conn: psycopg.AsyncConnection, token: str) -> dict:
     cur = conn.cursor(row_factory=dict_row)
     await cur.execute(
         """
-        SELECT u.id, u.username, u.is_admin, t.share_id, t.scope, t.id AS token_id
+        SELECT u.id, u.username, u.is_admin, t.share_id, t.scope, t.expires_at,
+               t.id AS token_id
         FROM api_tokens t
         LEFT JOIN users u ON u.id = t.user_id
         WHERE t.token_hash = %s
@@ -354,6 +355,7 @@ async def validate_token(conn: psycopg.AsyncConnection, token: str) -> dict:
             "is_admin": False,
             "scope": row["scope"],
             "credential": CREDENTIAL_TOKEN,
+            "expires_at": row["expires_at"],
         }
     del row["share_id"]
     row["credential"] = CREDENTIAL_TOKEN

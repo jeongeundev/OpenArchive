@@ -126,6 +126,9 @@ def test_trash_condition_is_confined_to_visibility_and_trash_service():
         if path == root / "api" / "schemas.py":
             # 응답 필드 선언만 예외다. SQL 조건이나 다른 사용은 계속 검사한다.
             source = re.sub(r"(?m)^\s*deleted_at:[^\n]*\n", "", source)
+        if path == root / "user_cli.py":
+            # REST 클라이언트가 휴지통 응답의 필드를 읽는 것만 예외다 (ADR-057). DB 조건이 아니다.
+            source = source.replace('["deleted_at"]', "")
         if "deleted_at" in source:
             uses.add(path.relative_to(root).as_posix())
     assert uses <= {"services/visibility.py", "services/trash.py"}, uses

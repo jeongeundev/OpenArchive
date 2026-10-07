@@ -69,7 +69,12 @@ async def me(user: Annotated[dict | None, Depends(current_user)]) -> AuthStatus:
         return AuthStatus(authenticated=False, username=None, is_admin=False)
     # 공유 주체는 사람 계정이 아니다 (ADR-044 「공유」 결정 5).
     reject_share(user)
-    return AuthStatus(authenticated=True, username=user["username"], is_admin=user["is_admin"])
+    result = AuthStatus(authenticated=True, username=user["username"], is_admin=user["is_admin"])
+    # 세션 dict의 scope는 쓰기 판정용 내부 값이다 — 토큰 범위만 낸다 (#189 D2).
+    if user["credential"] == service.CREDENTIAL_TOKEN:
+        result.scope = user["scope"]
+        result.expires_at = user["expires_at"]
+    return result
 
 
 @router.put("/password", response_model=AuthStatus)

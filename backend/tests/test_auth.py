@@ -177,6 +177,7 @@ async def test_valid_api_token_returns_its_user_scope_and_credential(conn, scope
         "credential": "token",
         "kind": "user",
         "principal": "alice",
+        "expires_at": None,
     }
 
 
@@ -202,6 +203,7 @@ async def test_a_share_token_resolves_to_the_share_principal(conn):
         "is_admin": False,
         "scope": "read",
         "credential": "token",
+        "expires_at": None,
     }
 
 

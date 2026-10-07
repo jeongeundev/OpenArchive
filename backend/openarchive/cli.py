@@ -1,5 +1,8 @@
 """`openarchive` 명령 — 설치와 계정 복구를 담당하는 운영자 CLI (ADR-039·ADR-040).
 
+사용자 명령(`login`·`whoami`·`doc`, `--user` 없는 `search`·`ask`)은 REST 클라이언트이며
+DB에 붙지 않는다(ADR-057) — `user_cli.py`. 여기서는 등록과 분기만 한다.
+
 Web UI·REST·MCP와 같은 자리의 인터페이스이며, 로직을 새로 쓰지 않고 코어를 재사용한다.
 마이그레이션 적용은 `openarchive.migrations.run_migrations`, 준비 상태 판정은
 `openarchive.services.system.get_system_status`가 그대로 한다.
@@ -41,6 +44,7 @@ from uuid import UUID
 import psycopg
 import yaml
 
+from openarchive import user_cli
 from openarchive.answers import AnswerProvider, get_answer_provider
 from openarchive.config import ENV_FILE, get_settings
 from openarchive.demo import EdgeJobsTimeout, converge, load_seed_documents, seed_documents
@@ -1474,9 +1478,71 @@ def run_ask(
     return 0
 
 
+OPERATOR_DSN_ONLY = "--dsn은 --user와 함께 쓰는 운영자 옵션입니다."
+
+
+def _join_token_value(argv: list[str]) -> list[str]:
+    """`--token <토큰>`을 `--token=<토큰>`으로 합친다. 토큰은 token_urlsafe라 "-"로 시작할 수
+    있고, 그러면 argparse가 값을 옵션으로 읽어 로그인이 usage 오류로 끝난다."""
+    joined = list(argv)
+    if joined[:1] == ["login"] and "--token" in joined:
+        index = joined.index("--token")
+        if index + 1 < len(joined):
+            joined[index : index + 2] = [f"--token={joined[index + 1]}"]
+    return joined
+
+
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="openarchive", description="OpenArchive 운영 CLI")
+    parser = argparse.ArgumentParser(
+        prog="openarchive",
+        description="OpenArchive CLI — 운영자 명령(DB 직결)과 사용자 명령(REST, API 토큰)",
+    )
     subcommands = parser.add_subparsers(dest="command", required=True)
+    login = subcommands.add_parser(
+        "login", help="서버에 API 토큰으로 로그인합니다. DB 접속 정보는 쓰지 않습니다."
+    )
+    login.add_argument("--url", required=True, help="서버 주소 (예: http://localhost:8000)")
+    login.add_argument("--token", required=True, help="웹 계정 설정에서 발급한 API 토큰")
+    subcommands.add_parser("whoami", help="로그인한 사용자와 토큰 범위를 보입니다.")
+    doc = subcommands.add_parser("doc", help="문서를 다룹니다 (로그인한 API 토큰으로).")
+    doc_commands = doc.add_subparsers(dest="doc_command", required=True)
+    doc_commands.add_parser("list", help="볼 수 있는 문서를 최근 수정순으로 보입니다.")
+    doc_show = doc_commands.add_parser("show", help="문서 텍스트를 출력합니다.")
+    doc_show.add_argument("document_id", help="문서 ID")
+    doc_show.add_argument("--version", type=int, help="텍스트 버전 (생략하면 현재 버전)")
+    doc_download = doc_commands.add_parser("download", help="최신 원본 파일을 내려받습니다.")
+    doc_download.add_argument("document_id", help="문서 ID")
+    doc_download.add_argument(
+        "-o", "--output", type=Path, help="저장할 경로 (생략하면 현재 디렉터리에 원본 파일명으로)"
+    )
+    doc_upload = doc_commands.add_parser("upload", help="파일을 올려 새 문서를 만듭니다.")
+    doc_upload.add_argument("path", type=Path, help="올릴 파일")
+    doc_upload.add_argument("--title", help="문서 제목 (생략하면 파일명)")
+    doc_upload.add_argument("--tag", action="append", default=[], help="태그 (여러 번 줄 수 있음)")
+    doc_edit = doc_commands.add_parser("edit", help="문서 텍스트를 파일 내용으로 바꿉니다.")
+    doc_edit.add_argument("document_id", help="문서 ID")
+    doc_edit.add_argument("--file", type=Path, required=True, help="새 문서 텍스트 (UTF-8)")
+    doc_edit.add_argument(
+        "--base-version", type=int, help="고치기 시작한 버전 (다르면 거부, 생략하면 현재 버전)"
+    )
+    doc_restore = doc_commands.add_parser(
+        "restore", help="과거 텍스트 버전의 내용으로 새 버전을 만듭니다."
+    )
+    doc_restore.add_argument("document_id", help="문서 ID")
+    doc_restore.add_argument("version", type=int, help="되돌릴 텍스트 버전")
+    doc_tag = doc_commands.add_parser("tag", help="태그를 통째로 바꿉니다.")
+    doc_tag.add_argument("document_id", help="문서 ID")
+    doc_tag.add_argument("--set", dest="tags", required=True, help="쉼표로 구분한 태그")
+    doc_delete = doc_commands.add_parser("delete", help="문서를 휴지통으로 옮깁니다.")
+    doc_delete.add_argument("document_id", help="문서 ID")
+    doc_delete.add_argument(
+        "--permanent", action="store_true", help="되돌릴 수 없게 영구 삭제합니다 (확인을 묻습니다)"
+    )
+    doc_trash = doc_commands.add_parser("trash", help="내 휴지통을 다룹니다.")
+    trash_commands = doc_trash.add_subparsers(dest="trash_command", required=True)
+    trash_commands.add_parser("list", help="휴지통에 있는 내 문서를 보입니다.")
+    trash_restore = trash_commands.add_parser("restore", help="휴지통에서 문서를 복원합니다.")
+    trash_restore.add_argument("document_id", help="문서 ID")
     init = subcommands.add_parser("init", help="DB를 확인하고 스키마를 준비합니다.")
     init.add_argument("--dsn", help="DB 연결 문자열. 생략하면 대화형으로 묻습니다.")
     init.add_argument("--yes", action="store_true", help="확인 없이 진행합니다.")
@@ -1562,24 +1628,29 @@ def main(argv: list[str] | None = None) -> int:
     exporter.add_argument("folder", type=Path, help="비어 있거나 없는 폴더")
     exporter.add_argument("--user", required=True, help=f"{user_help} 이 계정 소유 문서만 내보냅니다.")
     exporter.add_argument("--dsn", help="DB 연결 문자열. 생략하면 DATABASE_URL을 씁니다.")
+    operator_user_help = (
+        "이 계정의 권한으로 DB에 직접 붙습니다(운영자). 생략하면 openarchive login한 토큰으로"
+        " 서버에 붙습니다."
+    )
+    operator_dsn_help = "DB 연결 문자열 — --user와 함께만 씁니다. 생략하면 DATABASE_URL을 씁니다."
     searcher = subcommands.add_parser(
         "search", help="문서를 검색합니다. 질의 임베딩은 EMBEDDING_PROVIDER를 따릅니다."
     )
     searcher.add_argument("query")
-    searcher.add_argument("--user", required=True, help=f"{user_help} 볼 수 있는 문서만 찾습니다.")
+    searcher.add_argument("--user", help=f"{operator_user_help} 볼 수 있는 문서만 찾습니다.")
     searcher.add_argument("--tag", action="append", default=[], help="이 태그 중 하나가 붙은 문서만")
     searcher.add_argument("--type", choices=SUPPORTED_CONTENT_TYPES, help="이 형식의 문서만")
     searcher.add_argument("-k", type=int, default=10, help=f"결과 수 (1~{MAX_K}, 기본: 10)")
-    searcher.add_argument("--dsn", help="DB 연결 문자열. 생략하면 DATABASE_URL을 씁니다.")
+    searcher.add_argument("--dsn", help=operator_dsn_help)
     asker = subcommands.add_parser(
         "ask", help="문서를 근거로 답합니다. ANSWER_PROVIDER가 켜져 있어야 합니다(기본: off)."
     )
     asker.add_argument("query")
-    asker.add_argument("--user", required=True, help=f"{user_help} 볼 수 있는 문서만 근거로 씁니다.")
+    asker.add_argument("--user", help=f"{operator_user_help} 볼 수 있는 문서만 근거로 씁니다.")
     asker.add_argument("--tag", action="append", default=[], help="이 태그 중 하나가 붙은 문서만")
     asker.add_argument("--type", choices=SUPPORTED_CONTENT_TYPES, help="이 형식의 문서만")
     asker.add_argument("-k", type=int, default=ASK_K, help=f"근거를 찾을 문서 수 (1~{MAX_K}, 기본: {ASK_K})")
-    asker.add_argument("--dsn", help="DB 연결 문자열. 생략하면 DATABASE_URL을 씁니다.")
+    asker.add_argument("--dsn", help=operator_dsn_help)
     demo = subcommands.add_parser(
         "demo", help="예제 문서(가상 회사의 사내 규정)를 넣어 봅니다. 이미 있는 제목은 건너뜁니다."
     )
@@ -1593,7 +1664,36 @@ def main(argv: list[str] | None = None) -> int:
         "--timeout", type=float, default=600, help="임베딩과 관계 잡을 각각 기다리는 시간(초, 기본: 600)"
     )
     demo.add_argument("--dsn", help="DB 연결 문자열. 생략하면 DATABASE_URL을 씁니다.")
-    args = parser.parse_args(argv)
+    args = parser.parse_args(_join_token_value(sys.argv[1:] if argv is None else argv))
+    if args.command == "login":
+        return user_cli.run_login(url=args.url, token=args.token)
+    if args.command == "whoami":
+        return user_cli.run_whoami()
+    if args.command == "doc":
+        if args.doc_command == "list":
+            return user_cli.run_doc_list()
+        if args.doc_command == "show":
+            return user_cli.run_doc_show(document_id=args.document_id, version=args.version)
+        if args.doc_command == "download":
+            return user_cli.run_doc_download(document_id=args.document_id, output=args.output)
+        if args.doc_command == "upload":
+            return user_cli.run_doc_upload(path=args.path, title=args.title, tags=args.tag)
+        if args.doc_command == "edit":
+            return user_cli.run_doc_edit(
+                document_id=args.document_id, file=args.file, base_version=args.base_version
+            )
+        if args.doc_command == "restore":
+            return user_cli.run_doc_restore(document_id=args.document_id, version=args.version)
+        if args.doc_command == "tag":
+            return user_cli.run_doc_tag(document_id=args.document_id, tags_csv=args.tags)
+        if args.doc_command == "delete":
+            return user_cli.run_doc_delete(
+                document_id=args.document_id, permanent=args.permanent
+            )
+        if args.doc_command == "trash":
+            if args.trash_command == "list":
+                return user_cli.run_trash_list()
+            return user_cli.run_trash_restore(document_id=args.document_id)
     if args.command == "demo":
         return run_demo(
             dsn=args.dsn, username=args.user, wait=not args.no_wait, timeout=args.timeout
@@ -1611,6 +1711,13 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "export":
         return run_export(dsn=args.dsn, folder=args.folder, username=args.user)
     if args.command == "search":
+        if args.user is None:
+            if args.dsn is not None:
+                print(OPERATOR_DSN_ONLY)
+                return 2
+            return user_cli.run_search(
+                query=args.query, tags=args.tag, content_type=args.type, k=args.k
+            )
         return run_search(
             dsn=args.dsn,
             query=args.query,
@@ -1620,6 +1727,13 @@ def main(argv: list[str] | None = None) -> int:
             k=args.k,
         )
     if args.command == "ask":
+        if args.user is None:
+            if args.dsn is not None:
+                print(OPERATOR_DSN_ONLY)
+                return 2
+            return user_cli.run_ask(
+                query=args.query, tags=args.tag, content_type=args.type, k=args.k
+            )
         return run_ask(
             dsn=args.dsn,
             query=args.query,

@@ -205,6 +205,9 @@ class AuthStatus(BaseModel):
     authenticated: bool
     username: str | None
     is_admin: bool
+    # 토큰 주체일 때만 채운다. 세션·익명이면 null (#189 D2 — 사용자 CLI의 whoami)
+    scope: str | None = None
+    expires_at: datetime | None = None
 
 
 class ChangePasswordRequest(BaseModel):
