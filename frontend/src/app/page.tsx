@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useState } from "react";
 
@@ -118,6 +119,7 @@ function HomeView(): React.ReactElement {
       {auth.authenticated ? (
         <aside>
           <FolderTree folders={folders} selectedId={folderId} onSelect={selectFolder} onCreate={onCreateFolder} />
+          <Link href="/trash" className="mt-6 block px-2 text-sm text-neutral-400 hover:text-white">휴지통</Link>
         </aside>
       ) : null}
       <div className="min-w-0 space-y-8">

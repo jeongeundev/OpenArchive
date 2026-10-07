@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 
 import { ApiError, deleteDocument, reembedDocument } from "@/lib/api";
+import { TRASH_NOTICE } from "@/lib/limits";
 import type { DocumentSummary } from "@/lib/types";
 
 export function DocumentActions({
@@ -20,7 +21,7 @@ export function DocumentActions({
   const [error, setError] = useState<string | null>(null);
 
   async function remove(): Promise<void> {
-    if (!window.confirm("문서를 삭제하시겠습니까? 청크와 벡터도 함께 삭제됩니다.")) return;
+    if (!window.confirm(TRASH_NOTICE)) return;
 
     setWorking(true);
     setError(null);

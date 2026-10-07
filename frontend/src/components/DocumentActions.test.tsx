@@ -31,7 +31,7 @@ describe("DocumentActions", () => {
     push.mockReset();
   });
 
-  it("확인 후 문서와 청크·벡터 삭제를 요청하고 목록으로 이동한다", async () => {
+  it("확인 후 휴지통 이동을 요청하고 목록으로 이동한다", async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
     vi.stubGlobal("fetch", fetchMock);
     vi.spyOn(window, "confirm").mockReturnValue(true);
@@ -40,11 +40,24 @@ describe("DocumentActions", () => {
     fireEvent.click(screen.getByRole("button", { name: "삭제" }));
 
     expect(window.confirm).toHaveBeenCalledWith(
-      "문서를 삭제하시겠습니까? 청크와 벡터도 함께 삭제됩니다.",
+      "휴지통으로 옮깁니다. 30일 뒤 영구 삭제됩니다.",
     );
     await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/documents/document-1");
     expect(fetchMock.mock.calls[0][1]?.method).toBe("DELETE");
     expect(push).toHaveBeenCalledWith("/");
+  });
+
+  it("확인창에서 취소하면 아무것도 요청하지 않는다", () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    vi.spyOn(window, "confirm").mockReturnValue(false);
+
+    render(<DocumentActions disabled={false} document={document} onChanged={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "삭제" }));
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(push).not.toHaveBeenCalled();
   });
 
   it("임베딩 오류 상태에서만 재임베딩을 제공한다", () => {

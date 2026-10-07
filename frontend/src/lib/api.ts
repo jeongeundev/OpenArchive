@@ -27,6 +27,7 @@ import type {
   TokenCreated,
   TokenScope,
   TokenSummary,
+  TrashItem,
   Visibility,
   UserSummary,
 } from "./types";
@@ -597,6 +598,25 @@ export function setDocumentAccess(id: string, access: DocumentAccessInput): Prom
 export function deleteDocument(id: string): Promise<void> {
   return request<void>(
     `/api/documents/${encodeURIComponent(id)}`,
+    { method: "DELETE" },
+    { parse: false },
+  );
+}
+
+export function listTrash(signal?: AbortSignal): Promise<TrashItem[]> {
+  return request<TrashItem[]>("/api/documents/trash", { signal });
+}
+
+export function restoreDocument(id: string): Promise<DocumentSummary> {
+  return request<DocumentSummary>(`/api/documents/${encodeURIComponent(id)}/restore`, {
+    method: "POST",
+  });
+}
+
+/** 영구 삭제 — 청크·벡터·원본 파일까지 지운다. 되돌릴 수 없다. */
+export function purgeDocument(id: string): Promise<void> {
+  return request<void>(
+    `/api/documents/${encodeURIComponent(id)}?permanent=true`,
     { method: "DELETE" },
     { parse: false },
   );

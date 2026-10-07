@@ -18,7 +18,9 @@ const PAGE_SIZE = 50;
 const ACTION_LABEL: Record<AuditAction, string> = {
   document_created: "문서 생성",
   text_updated: "텍스트 수정",
-  document_deleted: "문서 삭제",
+  document_deleted: "영구 삭제",
+  document_trashed: "휴지통 이동",
+  document_restored: "복원",
   access_changed: "열람 범위 변경",
   folder_access_changed: "폴더 열람 범위 변경",
   group_member_changed: "그룹 구성원 변경",
