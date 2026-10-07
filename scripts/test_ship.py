@@ -26,7 +26,7 @@ PR_URL = "https://github.com/o/r/pull/7"
 # ---------------------------------------------------------------------------
 
 def git(cwd, *args) -> str:
-    r = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True)
+    r = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, check=False)
     assert r.returncode == 0, r.stderr
     return r.stdout.strip()
 
@@ -112,11 +112,11 @@ class FakeRunner:
     def on(self, match, result):
         self.handlers.append((match, result))
 
-    def __call__(self, cmd, *, cwd, input=None, timeout=None):
+    def __call__(self, cmd, *, cwd, input=None, timeout=None, stream=False):
         self.calls.append(list(cmd))
         self.inputs.append(input)
         if cmd[0] == "git":
-            return subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
+            return subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, check=False)
         for match, result in reversed(self.handlers):
             if match(cmd):
                 return result(cmd, input) if callable(result) else result
@@ -187,7 +187,7 @@ class TestFindTampering:
         assert v == ["테스트 파일 삭제: backend/tests/test_foo.py"]
 
     def test_test_renamed_to_non_test(self):
-        v = ship.find_tampering("R100\tbackend/tests/test_foo.py\tbackend/tests/foo_old.py\n", "")
+        v = ship.find_tampering("R100\tbackend/tests/test_foo.py\tbackend/openarchive/foo_old.py\n", "")
         assert v == ["테스트 파일 삭제: backend/tests/test_foo.py"]
 
     def test_added_skip_markers_in_tests(self):
@@ -287,7 +287,7 @@ class TestHappyPath:
         make(repo, r).run()
         i = next(i for i, c in enumerate(r.calls) if c[:3] == ["gh", "pr", "create"])
         body = r.inputs[i]
-        assert re.search(r"^Closes #42$", body, re.M)
+        assert re.search(r"^Closes #42$", body, re.MULTILINE)
         assert "`Closes" not in body
         assert "foo 상수 추가" in body  # step summary
         assert "backend/tests/test_foo.py" in body  # PR 전 검증에서 돌린 테스트
@@ -411,6 +411,13 @@ class TestVerify:
         r = FakeRunner(repo)
         assert make(repo, r).run() == ship.EXIT_GATE
         assert f"feat/{PHASE}" in ship.load_state(repo, PHASE)["gate"]
+
+    def test_other_branch_with_same_phase_files_gates(self, repo):
+        git(repo, "checkout", "-q", "-b", "feat/other")
+        r = FakeRunner(repo)
+        assert make(repo, r).run() == ship.EXIT_GATE
+        assert "feat/other" in ship.load_state(repo, PHASE)["gate"]
+        assert r.count(lambda c: c[0] in ("gh", "claude")) == 0
 
 
 # ---------------------------------------------------------------------------
@@ -583,6 +590,13 @@ class TestResumeAndGates:
         assert st["reviews"] == 1  # --from review는 횟수를 초기화한다
         assert st["review_artifacts"][-1] == f"phases/{PHASE}/review-2.json"
 
+    def test_rerun_from_pr_reuses_recorded_pr(self, repo):
+        make(repo, FakeRunner(repo)).run()
+        r = FakeRunner(repo)
+        assert make(repo, r).run(from_stage="pr") == ship.EXIT_OK
+        assert r.count(lambda c: c[:3] == ["gh", "pr", "create"]) == 0
+        assert ship.load_state(repo, PHASE)["pr"] == 7
+
     def test_resume_continues_from_saved_stage(self, repo):
         r = FakeRunner(repo)
         r.on(lambda c: c[:3] == ["gh", "pr", "checks"], ok("boom", code=1))
@@ -639,7 +653,8 @@ class TestMerge:
         r.on(lambda c: c[:3] == ["gh", "pr", "merge"], ok())
         r.on(lambda c: c[:3] == ["gh", "issue", "view"], ok("OPEN\n"))
         assert make(repo, r).merge() == ship.EXIT_OK
-        assert "#42" in capsys.readouterr().out
+        out = capsys.readouterr().out
+        assert "#42가 아직 열려 있다" in out and "닫힘" not in out
 
     def test_merge_refuses_when_checks_not_green(self, repo):
         self._ready(repo)
