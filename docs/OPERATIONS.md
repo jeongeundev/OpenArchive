@@ -166,6 +166,10 @@ docker run --rm -e ADMIN_PASSWORD='change-me' openarchive \
 셸에서 문서를 넣고, 빼고, 찾고, 묻습니다. 넷 다 `--user`로 준 계정의 권한으로 동작합니다 — 넣은 문서의
 소유자, 검색·내보내기의 열람 범위가 이 계정입니다. 계정이 없으면 아무것도 하지 않고 끝납니다.
 
+`search`·`ask`는 **`--user`를 생략하면 사용자 CLI 경로**입니다 — DB에 붙지 않고 `openarchive login`한 토큰으로
+서버 REST에 붙습니다(아래 「사용자 CLI」). `--dsn`만 주고 `--user`를 빼면 「--dsn은 --user와 함께 쓰는 운영자
+옵션입니다.」로 종료 코드 2입니다. 아래 설명은 `--user`를 준 운영자 경로입니다.
+
 ```bash
 openarchive import ./docs --user alice                        # 하위 폴더까지
 openarchive import ./docs --user alice --tag 회의 --visibility private
@@ -614,6 +618,58 @@ curl -s -b cookies.txt -H 'Content-Type: application/json' http://127.0.0.1:8000
 
 `examples/ingest_text.py`의 실제 서버 완주는 CI가 확인하지 않으므로 API·워커·DB를 함께 기동한
 환경에서 실행합니다.
+
+### 사용자 CLI
+
+`gh`처럼 서버 REST API에 **본인 API 토큰**으로만 붙는 명령입니다 (ADR-057, #189). DB 접속 정보(`DATABASE_URL`·
+`--dsn`)와 `.env`를 읽지 않으므로 서버 셸이 없는 사용자 PC에서 씁니다. 열람 범위·소유자 검사·편집 잠금·감사
+기록은 서버가 웹과 똑같이 적용합니다 — 볼 수 없는 문서는 「문서를 찾을 수 없습니다.」로, 있는지조차 드러나지 않습니다.
+
+```bash
+openarchive login --url http://<서버>:8000 --token <API 토큰>   # 토큰은 웹 「계정 설정」(/settings)에서 발급
+openarchive whoami                                             # 사용자 · 토큰 범위 · 만료일 · 서버
+openarchive doc list
+openarchive doc upload 회의록.docx --title "10월 회의록" --tag 회의
+openarchive search "출장비 정산 기한"                           # --user 없이
+```
+
+`login`은 토큰을 서버(`GET /api/auth/me`)에 확인한 뒤에만 저장합니다. 틀렸거나 폐기·만료된 토큰은 「토큰이 올바르지
+않습니다. openarchive login으로 다시 로그인하세요.」로 끝나고 저장하지 않습니다. 공유 토큰으로는 로그인할 수 없습니다.
+
+| 명령 | 하는 일 | 필요한 범위 |
+|---|---|---|
+| `doc list` | 볼 수 있는 문서를 최근 수정순으로 — ID·제목·유형·버전·처리 상태(웹 목록과 같은 라벨) | read |
+| `doc show <ID> [--version N]` | 문서 텍스트(현재 또는 텍스트 버전 N)만 출력 | read |
+| `doc download <ID> [-o 경로]` | 최신 원본 파일 저장. 이미 있는 파일은 덮어쓰지 않음. 크기와 sha256 앞부분 출력 | read |
+| `doc upload <파일> [--title …] [--tag …]` | 파일을 올려 새 문서. 문서 ID 출력 | read_write |
+| `doc edit <ID> --file <텍스트 파일> [--base-version N]` | 문서 텍스트를 UTF-8 파일 내용으로 바꿔 새 텍스트 버전 | read_write |
+| `doc restore <ID> <버전>` | 그 텍스트 버전의 내용으로 새 버전(이력은 남음) | read_write |
+| `doc tag <ID> --set 인사,규정` | 태그를 통째로 바꿈(쉼표 구분, 빈 값이면 모두 지움) | read_write |
+| `doc delete <ID> [--permanent]` | 휴지통으로 옮김 · `--permanent`는 영구 삭제 | read_write |
+| `doc trash list` · `doc trash restore <ID>` | 내 휴지통 보기 · 복원 | read_write |
+| `search` · `ask` (`--user` 없이) | 토큰 주인이 볼 수 있는 문서만으로 검색·답변 | read |
+
+- `read` 토큰으로 쓰기 명령을 실행하면 서버가 「쓰기 권한이 필요합니다.」로 거부합니다. 휴지통 목록·복원도 쓰기 권한이 필요합니다.
+- **삭제는 휴지통을 거칩니다** (ADR-060). `doc delete`는 확인 없이 휴지통으로 옮기고 되돌리는 명령을 알려 줍니다.
+  `doc delete --permanent`만 「삭제하면 되돌릴 수 없습니다. 계속할까요? [y/N]」를 묻고 `y`일 때 영구 삭제합니다.
+- **편집 충돌** — `doc show`로 받은 버전을 `--base-version`으로 주면, 그 사이 웹 등에서 먼저 고쳐졌을 때 「다른 곳에서
+  먼저 수정되었습니다. 현재 버전은 vN입니다 — …」로 거부해 남의 수정을 덮지 않습니다. 생략하면 실행 시점의 현재 버전을
+  기준으로 삼으므로 그 사이의 수정은 막지 못합니다.
+- **재시도** — 서버가 503(일시 불가용)을 주거나 연결이 끊기면 웹 UI와 같은 규칙(1초부터 최대 8초 간격·지터, 총 60초,
+  `Retry-After` 존중)으로 다시 시도하고 stderr에 한 번 알립니다. 대상은 읽기·`search`·`ask`와 업로드뿐입니다 — 업로드는
+  명령마다 멱등키를 붙여 두 번 만들어지지 않습니다. 편집·되돌리기·태그·삭제·복원은 다시 보내지 않고 「서버가 일시적으로
+  응답하지 못했습니다. 잠시 후 다시 실행하세요.」로 끝납니다. 이때는 `doc show`로 반영됐는지 확인한 뒤 다시 실행합니다 (ADR-048).
+- 종료 코드는 성공 0, 실패 1, 잘못된 사용 2입니다.
+
+**자격증명 파일** — `~/.openarchive/credentials.json`(`OPENARCHIVE_HOME`을 주면 `$OPENARCHIVE_HOME/credentials.json`)에
+서버 주소와 토큰을 **권한 600**으로 둡니다. 디렉터리가 없으면 700으로 만듭니다. 서버는 하나만 기억하며, 다시
+`login`하면 덮어씁니다. `logout` 명령은 없습니다 — 토큰은 웹 「계정 설정」에서 폐기하고, 파일은 지워도 됩니다. 토큰은
+평문이라 같은 계정의 프로세스는 읽을 수 있고, `--token` 인자는 셸 기록에 남을 수 있습니다.
+
+**사용자 CLI에 없는 것** — 세션 전용 동작은 웹에서만 합니다(ADR-034·044·054): 문서·폴더 열람 범위 변경, 외부 공유,
+API 토큰 발급·목록·폐기, 비밀번호 변경, `/api/admin/*` 관리(계정·그룹·감사 로그). 운영자 명령(`init`·`create-user`·
+`serve`·`reset-password`·`rebuild-edges`·`reextract`·`import`·`export`·`demo`, `--user`를 준 `search`·`ask`)은 DB에 직접
+붙는 서버 셸 접근자의 도구로 그대로입니다.
 
 ### MCP 서버
 
