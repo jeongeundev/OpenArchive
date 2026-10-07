@@ -1,0 +1,57 @@
+{
+  "project": "OpenArchive",
+  "phase": "m30-user-cli",
+  "issue": 189,
+  "title": "feat(cli): 사용자 CLI — REST API에 본인 토큰으로 붙는 gh형 클라이언트 (#189)",
+  "needs_vm": false,
+  "steps": [
+    {
+      "step": 0,
+      "name": "me-scope",
+      "type": "feat",
+      "scope": "api",
+      "desc": "/api/auth/me에 토큰 범위·만료일",
+      "status": "pending"
+    },
+    {
+      "step": 1,
+      "name": "rest-client",
+      "type": "feat",
+      "scope": "cli",
+      "desc": "사용자 CLI REST 클라이언트와 login·whoami",
+      "status": "pending"
+    },
+    {
+      "step": 2,
+      "name": "doc-read",
+      "type": "feat",
+      "scope": "cli",
+      "desc": "사용자 CLI 문서 목록·보기·원본 내려받기",
+      "status": "pending"
+    },
+    {
+      "step": 3,
+      "name": "doc-write",
+      "type": "feat",
+      "scope": "cli",
+      "desc": "사용자 CLI 올리기·편집·되돌리기·태그·삭제·휴지통",
+      "status": "pending"
+    },
+    {
+      "step": 4,
+      "name": "search-ask",
+      "type": "feat",
+      "scope": "cli",
+      "desc": "search·ask의 --user 선택화와 토큰 경로",
+      "status": "pending"
+    },
+    {
+      "step": 5,
+      "name": "user-cli-docs",
+      "type": "docs",
+      "scope": "adr",
+      "desc": "사용자 CLI 구현을 ADR·운영 문서에 반영",
+      "status": "pending"
+    }
+  ]
+}

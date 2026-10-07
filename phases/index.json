@@ -155,6 +155,10 @@
       "dir": "m29-token-expiry",
       "status": "completed",
       "completed_at": "2026-10-08T00:16:21+0900"
+    },
+    {
+      "dir": "m30-user-cli",
+      "status": "pending"
     }
   ]
 }
