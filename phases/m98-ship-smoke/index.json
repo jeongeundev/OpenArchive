@@ -1,0 +1,10 @@
+{
+  "project": "OpenArchive",
+  "phase": "m98-ship-smoke",
+  "issue": 217,
+  "title": "chore(harness): ship.py 실전 시험 — phase_slug (#217, 머지 안 함)",
+  "steps": [
+    { "step": 0, "name": "phase-slug", "type": "chore", "scope": "harness",
+      "desc": "ship.py 시험용 phase_slug", "status": "pending" }
+  ]
+}
