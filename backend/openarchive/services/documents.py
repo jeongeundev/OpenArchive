@@ -1506,13 +1506,6 @@ async def _current_version(conn: psycopg.AsyncConnection, document_id: UUID) -> 
     return row[0]
 
 
-async def delete_document(
-    conn: psycopg.AsyncConnection, document_id: UUID, *, user_id: str
-) -> None:
-    await _load_for_write(conn, document_id, user_id)
-    await conn.execute("DELETE FROM documents WHERE id = %s", (document_id,))
-
-
 async def request_reembedding(
     conn: psycopg.AsyncConnection, document_id: UUID, *, user_id: str
 ) -> dict:

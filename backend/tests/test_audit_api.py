@@ -36,7 +36,7 @@ def seed(client: TestClient, dsn: str) -> None:
     """alice 문서 둘(하나는 삭제), bob 문서 하나."""
     first = create_text(client, "alice", "첫째")
     create_text(client, "alice", "둘째")
-    assert client.delete(f"/api/documents/{first}").status_code == 204
+    assert client.delete(f"/api/documents/{first}?permanent=true").status_code == 204
     create_text(client, "bob", "셋째")
     client.cookies.clear()
     login_admin(client, dsn)
