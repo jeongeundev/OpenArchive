@@ -164,12 +164,14 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
-# 빌드된 프론트를 같은 오리진에서 내려준다 (ADR-041). catch-all 라우트를 더하므로
-# 반드시 API 라우트를 전부 등록한 **뒤에** 호출해야 한다 — 먼저 부르면 /api/*까지
-# 삼킨다. 산출물이 없는 개발 환경에서는 아무것도 하지 않는다.
 # ASGI endpoint는 정확히 /mcp에서 처리한다. Mount의 끝 슬래시 리다이렉트를 피한다.
 mcp_route = Route("/mcp", endpoint=remote_mcp.asgi, methods=["GET", "POST", "DELETE"])
 # Route는 bound method를 Request 핸들러로 감싼다. 원래 ASGI 앱을 직접 연결한다.
 mcp_route.app = remote_mcp.asgi
 app.router.routes.append(mcp_route)
+
+
+# 빌드된 프론트를 같은 오리진에서 내려준다 (ADR-041). catch-all 라우트를 더하므로
+# 반드시 API 라우트를 전부 등록한 **뒤에** 호출해야 한다 — 먼저 부르면 /api/*까지
+# 삼킨다. 산출물이 없는 개발 환경에서는 아무것도 하지 않는다.
 mount_frontend(app)
