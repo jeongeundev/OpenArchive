@@ -15,6 +15,7 @@ from psycopg.conninfo import conninfo_to_dict, make_conninfo
 from psycopg_pool import AsyncConnectionPool
 
 import openarchive.db
+import openarchive.services.documents
 from openarchive.config import get_settings
 
 
@@ -309,3 +310,97 @@ async def test_pool_query_survives_server_prepared_statement_reset(monkeypatch, 
                 assert row[0] == 42
     finally:
         await openarchive.db.close_pool()
+
+
+async def _open_pool(monkeypatch, dsn: str):
+    monkeypatch.setenv("DATABASE_URL", dsn)
+    get_settings.cache_clear()
+    pool = openarchive.db.get_pool()
+    await pool.open()
+    return pool
+
+
+async def test_pool_binds_parameters_on_the_client(monkeypatch, migrated_db):
+    """풀 연결의 파라미터는 서버가 아니라 클라이언트에서 문장에 들어간다 (#210).
+
+    OpenProxy는 파라미터가 있는 이름 없는 문장을 실행마다 서버 prepared statement로 새로
+    만들고 연결이 끝날 때까지 쌓는다. OpenSQL 배포판은 assert 빌드라 문장마다 백엔드 메모리
+    전체를 검사하므로, 쌓인 계획만큼 모든 문장이 느려진다. 서버가 받은 문장에 `$1`이 없고
+    값이 들어 있어야 프록시가 만들 서버 명령문이 생기지 않는다.
+    """
+    await _open_pool(monkeypatch, migrated_db)
+    try:
+        async with openarchive.db.connection() as conn, conn.transaction():
+            received = (
+                await (
+                    await conn.execute("SELECT current_query(), %s::text", ("표식-210",))
+                ).fetchone()
+            )[0]
+    finally:
+        await openarchive.db.close_pool()
+
+    assert "$1" not in received
+    assert "표식-210" in received
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "it's",
+        "\\x00 \\' \\\\",
+        "'); DROP TABLE documents; --",
+        "$$; SELECT 1; $$",
+        "E'\\n' 한글 🙂",
+        None,
+    ],
+)
+async def test_pool_round_trips_hostile_values_unchanged(monkeypatch, migrated_db, value):
+    """클라이언트 측 바인딩에서도 값은 문장이 아니라 값으로만 전달된다 (#210)."""
+    await _open_pool(monkeypatch, migrated_db)
+    try:
+        async with openarchive.db.connection() as conn, conn.transaction():
+            row = await (
+                await conn.execute(
+                    "SELECT %s::text, to_regclass('documents') IS NOT NULL", (value,)
+                )
+            ).fetchone()
+    finally:
+        await openarchive.db.close_pool()
+
+    assert row == (value, True)
+
+
+async def test_pool_round_trips_binary_original_files(monkeypatch, migrated_db):
+    """원본 파일 바이트(`%b`)는 클라이언트 측 바인딩 연결에서도 그대로 저장·조회된다 (#210)."""
+    data = bytes(range(256)) * 64
+    await _open_pool(monkeypatch, migrated_db)
+    try:
+        async with openarchive.db.connection() as conn, conn.transaction():
+            doc_id = (
+                await (
+                    await conn.execute(
+                        "INSERT INTO documents (title, content_type, content, content_hash, owner_id)"
+                        " VALUES ('t', 'txt', 'c', md5('c'), 'u210') RETURNING id"
+                    )
+                ).fetchone()
+            )[0]
+            await openarchive.services.documents._insert_original_file(
+                conn,
+                document_id=doc_id,
+                file_version=1,
+                filename="a.bin",
+                data=data,
+                text_version=1,
+                uploaded_by="u210",
+            )
+            stored = (
+                await (
+                    await conn.execute(
+                        "SELECT data FROM document_files WHERE document_id = %s", (doc_id,)
+                    )
+                ).fetchone()
+            )[0]
+    finally:
+        await openarchive.db.close_pool()
+
+    assert bytes(stored) == data
