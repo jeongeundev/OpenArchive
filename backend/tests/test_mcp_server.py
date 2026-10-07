@@ -804,3 +804,117 @@ async def test_create_without_grantees_makes_no_grants(monkeypatch, mcp_database
 
     assert await _grant_count(mcp_database, created["document_id"]) == 0
     assert created["document_id"] not in await _visible_ids(monkeypatch, "bob")
+
+
+async def test_stdio_tool_property_sets_are_unchanged():
+    from openarchive.mcp_server.server import mcp
+
+    assert {tool.name: set(tool.inputSchema["properties"]) for tool in await mcp.list_tools()} == {
+        "search_documents": {"query", "tags", "content_type", "k"},
+        "get_document": {"document_id"},
+        "list_documents": {"tag", "status", "extraction_status"},
+        "create_document": {
+            "title", "content", "content_type", "tags", "visibility", "grant_users", "grant_groups"
+        },
+    }
+
+
+def _injected_tool(principal, name):
+    from openarchive.mcp_server.server import build_server
+
+    server = build_server(lambda: principal, lambda: FakeProvider())
+    return server._tool_manager.get_tool(name).fn
+
+
+async def test_injected_principal_controls_all_reads(monkeypatch, mcp_database):
+    from openarchive.mcp_server.server import McpPrincipal
+    from openarchive.services.documents import DocumentNotFound
+
+    monkeypatch.setenv("MCP_USER_ID", "lee")
+    get_settings.cache_clear()
+    async with await psycopg.AsyncConnection.connect(mcp_database, autocommit=True) as conn:
+        kim = await insert_test_document(
+            conn, title="kim 근거", content="정합성 근거", owner_id="kim", visibility="private"
+        )
+        lee = await insert_test_document(
+            conn, title="lee 근거", content="정합성 근거", owner_id="lee", visibility="private"
+        )
+        await process_all_embedding_jobs(conn, FakeProvider())
+    principal = McpPrincipal("kim", "kim", True)
+    for name, kwargs in [("search_documents", {"query": "정합성 근거"}), ("list_documents", {})]:
+        result = await _injected_tool(principal, name)(**kwargs)
+        assert {item["document_id"] for item in result["items"]} == {str(kim)}
+    detail = _injected_tool(principal, "get_document")
+    assert (await detail(str(kim)))["owner_id"] == "kim"
+    with pytest.raises(DocumentNotFound):
+        await detail(str(lee))
+
+
+async def test_injected_share_reads_only_granted_documents(mcp_database):
+    from openarchive.mcp_server.server import principal_from_token
+    from openarchive.services.auth import PRINCIPAL_SHARE
+    from openarchive.services.documents import DocumentNotFound
+    from openarchive.services.shares import add_document, create_share
+
+    async with await psycopg.AsyncConnection.connect(mcp_database, autocommit=True) as conn:
+        await conn.execute("INSERT INTO users (username, password_hash) VALUES ('kim', 'unused')")
+        included = await insert_test_document(conn, owner_id="kim", title="공유 근거", content="근거")
+        excluded = await insert_test_document(conn, title="공개 근거", content="근거")
+        share = await create_share(conn, owner="kim", name="협업")
+        await add_document(conn, share["id"], included, owner="kim")
+        await process_all_embedding_jobs(conn, FakeProvider())
+    principal = principal_from_token({
+        "kind": PRINCIPAL_SHARE, "principal": f"share:{share['id']}",
+        "share_id": share["id"], "scope": "read", "username": None,
+    })
+    assert principal.share_id == share["id"]
+    assert principal.owner is None and not principal.can_write
+    for name, kwargs in [("search_documents", {"query": "근거"}), ("list_documents", {})]:
+        result = await _injected_tool(principal, name)(**kwargs)
+        assert {item["document_id"] for item in result["items"]} == {str(included)}
+    detail = _injected_tool(principal, "get_document")
+    assert (await detail(str(included)))["document_id"] == str(included)
+    with pytest.raises(DocumentNotFound):
+        await detail(str(excluded))
+
+
+@pytest.mark.parametrize("shared", [False, True])
+async def test_injected_read_scope_rejects_create_before_connection(monkeypatch, mcp_database, shared):
+    from openarchive.mcp_server import server
+
+    principal = server.principal_from_token({
+        "kind": "share" if shared else "user", "username": None if shared else "kim",
+        "principal": f"share:{uuid4()}" if shared else "kim",
+        "share_id": uuid4(), "scope": "read",
+    })
+    async with await psycopg.AsyncConnection.connect(mcp_database) as conn:
+        before = await (await conn.execute("SELECT count(*) FROM documents")).fetchone()
+    tool = _injected_tool(principal, "create_document")
+    with pytest.raises(server.WriteNotAllowed, match="^쓰기 권한이 필요합니다\\.$"):
+        await tool("거부 문서", "텍스트")
+    async with await psycopg.AsyncConnection.connect(mcp_database) as conn:
+        after = await (await conn.execute("SELECT count(*) FROM documents")).fetchone()
+    assert after == before
+    await close_pool()
+
+    def forbidden_connection():
+        pytest.fail("쓰기 거부 전에 DB 연결을 빌렸습니다")
+
+    monkeypatch.setattr(server, "connection", forbidden_connection)
+    with pytest.raises(server.WriteNotAllowed, match="^쓰기 권한이 필요합니다\\.$"):
+        await tool("거부 문서", "텍스트")
+
+
+async def test_injected_write_owner_and_audit(monkeypatch, mcp_database):
+    from test_audit import rows
+
+    from openarchive.mcp_server.server import principal_from_token
+
+    monkeypatch.setenv("MCP_USER_ID", "lee")
+    get_settings.cache_clear()
+    principal = principal_from_token({"kind": "user", "username": "kim", "scope": "read_write"})
+    created = await _injected_tool(principal, "create_document")("주입 감사", "텍스트")
+    assert created["owner_id"] == "kim"
+    assert rows(mcp_database, created["document_id"]) == [
+        ("document_created", "kim", "mcp", "주입 감사", {})
+    ]
