@@ -55,7 +55,10 @@
       "type": "feat",
       "scope": "cli",
       "desc": "search·ask의 --user 선택화와 토큰 경로",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-10-08T01:50:36+0900",
+      "summary": "search·ask의 --user를 선택 인자로: 있으면 운영자 직결(그대로), --dsn만 있으면 종료 2(「--dsn은 --user와 함께 쓰는 운영자 옵션입니다.」), 둘 다 없으면 user_cli.run_search/run_ask가 POST /api/search·/api/ask에 토큰으로(body: query·tags·content_type·k, k 검사는 서버, ask 타임아웃 300초, 상태별 disabled=1·no_evidence=0·failed=1). 출력 형식은 운영자와 같음. 테스트 11건(열람 범위·필터 전달·결과 없음·답변·꺼짐·근거 없음·로그인 전 DB 미접촉·--dsn 단독·--user 경로 회귀)",
+      "completed_at": "2026-10-08T01:53:11+0900"
     },
     {
       "step": 5,
