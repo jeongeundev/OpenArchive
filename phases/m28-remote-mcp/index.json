@@ -22,7 +22,10 @@
       "type": "feat",
       "scope": "mcp",
       "desc": "Bearer 토큰 미들웨어와 원격 Streamable HTTP MCP 진입점",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-10-07T21:45:32+0900",
+      "summary": "remote_mcp.asgi를 마운트하고 lifespan에서 remote_mcp.running(provider)에 진입; Bearer validate_token 주체를 ContextVar로 전달하며 매 lifespan 새 stateless JSON 매니저 사용; AC 58개 테스트·ruff와 mutant 3종 검증 통과",
+      "completed_at": "2026-10-07T21:49:40+0900"
     },
     {
       "step": 2,
