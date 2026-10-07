@@ -63,6 +63,7 @@ pg_repack 1.5.2
 | pgvector | 0.8.1 | ✅ `0.8.1` |
 | vectorscale | 0.9.0 | ✅ `0.9.0` (METADATA 이름은 `pgvectorscale`) |
 | `max_connections` | 100 | ✅ `100` |
+| 빌드 옵션 | (문서에 없음) | ⚠️ **`--enable-cassert`** — `debug_assertions = on` (2026-10-07 확인, HA·single 같음). 문장마다 메모리 컨텍스트 전체를 검사한다 → §18 |
 
 **미확인이었다가 해소된 항목**
 
@@ -2035,3 +2036,53 @@ PL/pgSQL 함수 내부의 generic plan과는 별개이므로 §16의 함수 설�
 측정 조건, 워커 수에 따른 응답 시간과 작업 대기의 차이, 재현 명령은
 [성능 검증](PERFORMANCE_VALIDATION.md)에 기록한다. 합성 벡터 측정은 실제 문서의
 검색 정답률이나 최대 서비스 용량을 보장하지 않는다.
+
+> → **2026-10-07 정정(§18, ADR-062, #210).** `prepare_threshold=None`이 끈 것은 **psycopg 쪽** 자동 준비뿐이다. OpenProxy는
+> 파라미터가 있는 이름 없는 문장을 실행마다 서버 명령문으로 새로 만든다 — 꺼진 것이 아니라 매번 새로 쌓이고 있었다.
+
+## 18. OpenProxy 서버 명령문 누적 × assert 빌드 — 쓸수록 모든 문장이 느려진다 [실측 2026-10-07]
+
+#198 뒤 열람 술어 회귀를 HA에서 재던 중, VIP를 가진 node2 OpenProxy를 거쳐 Primary로 가는 트랜잭션 안 `select 1`이
+4ms → 126ms로 느려졌다(node3 OpenProxy 경유 2~3ms, Primary 직결 3.8ms). 그 서버 연결이 idle_timeout으로 닫히자 사라졌고,
+벤치를 다시 돌리자 재현됐다(적재 뒤 10.8ms → 벤치 3회 뒤 48.2ms, 백엔드 RSS 85 → 274MB). 시간을 쓰는 쪽은 백엔드였다
+(트랜잭션 50개의 벽시계 6.76초 중 백엔드 CPU 6.44초). 프록시가 끼워 넣는 문장은 없었다.
+
+**① OpenProxy가 쌓는다.** 그 백엔드에 `OPENPROXY_<세션>_<번호>` 명령문이 252~267개(문장 3.2MB) 있었고, `DEALLOCATE ALL` 직후
+46ms → 4ms로 돌아왔다. 같은 문장 6회(트랜잭션 안)를 보냈을 때 서버에 남은 수:
+
+| 보내는 방식 | 서버 명령문 |
+|---|---|
+| 이름 없는 문장 + 파라미터 (앱의 기존 방식, `prepare_threshold=None`) | **6개** — 해시는 같고 번호만 `_0`~`_5` |
+| 이름 없는 문장, 파라미터 없음 | 1개 |
+| 이름 붙인 prepare(`prepare=True`) | 1개 — 다만 §17 사고 경로 |
+| 클라이언트 연결 6개에서 1회씩 | 6개 — 세션마다 따로 |
+| psycopg `ClientCursor`(클라이언트 측 바인딩) | **0개** |
+
+서버 연결마다 `server_prepared_statements_cache_size`(기본 5000)까지 보관하고, 연결은 `idle_timeout` 10분·`server_lifetime`
+1시간에만 정리된다. 파라미터 **값**이 달라서 새로 만드는 것은 아니다(같은 값 반복도 매번 새로 만든다).
+
+**② assert 빌드가 쌓인 만큼 매 문장에 비용을 매긴다.** 배포판은 `--enable-cassert`다. PostgreSQL 17.8 `postgres.c`의
+`finish_xact_command`는 `MEMORY_CONTEXT_CHECKING`(assert 빌드에서 켜짐)일 때 문장이 끝날 때마다
+`MemoryContextCheck(TopMemoryContext)`를 호출한다. 비용은 개수가 아니라 **캐시된 계획의 메모리**에 비례한다.
+
+| node1 직결, 같은 세션의 prepared | 백엔드 메모리 | `select 1` |
+|---|---|---|
+| 없음 | 1.4MB | 0.8~2.2ms |
+| 작은 문장 100개 | 1.8MB | 0.9ms |
+| 검색 SQL 30개 | 25MB | 7.0ms |
+| 검색 SQL 100개 | 76MB | 20.5ms |
+| (대조) 맥 네이티브 pg17.10, assert off, 검색 SQL 100개 | — | 0.29ms |
+
+트랜잭션 안·밖이 같았고, single VM에서 `shared_preload_libraries`를 `opensql_license` 하나로 줄여도 그대로였다 — 확장
+탓이 아니다. 세션에서 끌 수 있는 `pg_hint_plan.enable_hint`·`pg_stat_statements.track`·`pgaudit.log_catalog`도 무관했다.
+
+**대응 — ADR-062.** 배포판과 프록시는 공식 그대로 두고, 앱 풀을 `AsyncClientCursor`로 바꿔 서버 명령문을 만들지 않는다
+(원본 파일 `%b` INSERT만 서버 바인딩). VIP 경유, 제품 풀 코드로 같은 서버 연결에서 검색 80회: main은 명령문
+0 → 40 → 80·`select 1` 3.4 → 10.5 → 19.2ms, 수정 뒤는 명령문 0 → 0 → 0·3.2 → 3.1 → 3.3ms. 결과 동일·HNSW 30/30.
+
+**함의.** VM 성능 수치는 x86 에뮬레이션(TCG)에 더해 assert 검사 비용까지 포함한다. 운영자 CLI(`--dsn`)처럼 풀 밖에서
+파라미터 문장을 오래 반복하는 연결도 같은 누적을 만든다(#212).
+
+**Tmax 확인 사항.** ① 배포판이 `--enable-cassert` 빌드인 것이 의도인지 ② OpenProxy가 파라미터가 있는 이름 없는 문장을
+같은 문장이어도 재사용하지 않고 실행마다 서버 명령문을 새로 만드는 동작이 의도인지(위 표).
+벤치 왕복 시간이 회차마다 늘면 이것부터 의심한다 — 다른 노드의 6432로 비교하거나 서버 연결을 새로 맺는다.

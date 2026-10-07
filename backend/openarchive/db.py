@@ -46,7 +46,15 @@ def get_pool() -> AsyncConnectionPool:
             dsn,
             # OpenProxy 경유 지속 부하에서 서버 준비 명령문이 사라져 26000이 발생했다.
             # 자동 준비를 끄면 매 실행에 Parse를 보내 서버 캐시와의 불일치를 피한다.
-            kwargs={**keepalive_kwargs(dsn), "prepare_threshold": None},
+            # 파라미터는 클라이언트에서 문장에 넣는다(#210). OpenProxy는 파라미터가 있는
+            # 이름 없는 문장을 실행마다 서버 명령문으로 새로 만들어 연결이 끝날 때까지 쌓고,
+            # assert 빌드인 OpenSQL은 문장마다 백엔드 메모리 전체를 검사해 쌓인 계획만큼
+            # 모든 문장이 느려진다. 이진 파라미터(`%b`)는 서버 바인딩 커서를 명시한다.
+            kwargs={
+                **keepalive_kwargs(dsn),
+                "prepare_threshold": None,
+                "cursor_factory": psycopg.AsyncClientCursor,
+            },
             open=False,
             check=AsyncConnectionPool.check_connection,
         )
