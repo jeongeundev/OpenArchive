@@ -33,7 +33,10 @@
       "type": "feat",
       "scope": "cli",
       "desc": "사용자 CLI 문서 목록·보기·원본 내려받기",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-10-08T01:42:10+0900",
+      "summary": "user_cli.py run_doc_list(sort=updated, limit=100 페이지 끝까지, D7 라벨 표)·run_doc_show(--version → /versions/{n}, 텍스트만 stdout)·run_doc_download(-o 또는 filename* 경로 성분 제거, open('xb')로 덮어쓰기 거부, sha256 앞 12자리 출력) + 공통 _run(로그인 없음·ApiError 문구)·UUID 파싱 실패=「문서를 찾을 수 없습니다.」, cli.py에 doc 하위 파서(list·show·download) 한 곳 등록. 테스트 12건(헬퍼 put_text·login_cli, 동기 psycopg로 상태·101건 삽입)",
+      "completed_at": "2026-10-08T01:44:45+0900"
     },
     {
       "step": 3,
