@@ -32,7 +32,9 @@ import signal
 import subprocess
 import sys
 import time
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 from uuid import UUID
 
@@ -73,9 +75,8 @@ from openarchive.services.documents import (
     find_same_text,
     get_document,
     list_documents,
-    set_access,
 )
-from openarchive.services.folders import create_folder
+from openarchive.services.folders import create_folder, find_folder
 from openarchive.services.grants import UnknownGrantee, resolve_grantees
 from openarchive.services.parsing import (
     SUPPORTED_CONTENT_TYPES,
@@ -915,6 +916,7 @@ class _ImportSummary:
     unsupported: int = 0
     failed: int = 0
     awaiting_ocr: int = 0
+    visibility_ignored: int = 0
 
 
 @dataclass
@@ -931,65 +933,62 @@ class _FolderScopeMismatch(Exception):
     """재import 때 다시 쓸 최상위 폴더의 범위가 요청과 다르다."""
 
 
-async def _root_folder(
+async def _existing_root_folder(
     conn: psycopg.AsyncConnection, name: str, *, username: str, scope: _ImportScope
-) -> UUID:
+) -> UUID | None:
     """가져오는 폴더 자신이 최상위 폴더가 된다. 같은 사용자가 만든 같은 이름이 있으면 다시 쓴다.
 
     남이 만든 같은 이름의 폴더는 쓰지 않는다 — 범위를 정한 사람이 다른 폴더에 문서를 붓게 된다.
     기존 폴더의 범위는 바꾸지 않는다: 폴더 범위 변경은 만든 사람의 세션 전용이다(ADR-054 결정 4).
     범위를 직접 지정했는데 다르면 거부한다 — 좁힐 생각으로 준 옵션이 넓은 폴더에 조용히 묻힌다.
     """
-    cur = await conn.execute(
-        """
-        SELECT f.id, f.visibility,
-               COALESCE((SELECT array_agg(g.name ORDER BY g.name) FROM folder_grants fg
-                         JOIN groups g ON g.id = fg.group_id WHERE fg.folder_id = f.id),
-                        ARRAY[]::text[]),
-               EXISTS (SELECT 1 FROM folder_grants fg
-                       WHERE fg.folder_id = f.id AND fg.user_id IS NOT NULL)
-        FROM folders f
-        WHERE f.parent_id IS NULL AND f.name = %s AND f.created_by = %s
-        ORDER BY f.created_at, f.id
-        LIMIT 1
-        """,
-        (name, username),
-    )
-    existing = await cur.fetchone()
-    if existing is not None:
-        folder_id, visibility, groups, has_users = existing
-        if scope.explicit and (
-            visibility != scope.visibility or set(groups) != set(scope.groups) or has_users
-        ):
-            raise _FolderScopeMismatch(name)
-        print(f"기존 폴더 「{name}」에 넣습니다 — 폴더의 열람 범위는 바꾸지 않습니다.")
-        return folder_id
+    # 밖의 SELECT는 HA에서 Replica로 가 방금 만든 폴더를 못 본다 (ADR-010, #180).
     async with conn.transaction():
-        await set_actor(conn, actor=username, via="cli")
-        row = await create_folder(
-            conn,
-            user_id=username,
-            name=name,
-            visibility=scope.visibility,
-            grant_groups=scope.groups,
-        )
-    return row["id"]
+        existing = await find_folder(conn, name=name, created_by=username)
+    if existing is None:
+        return None
+    if scope.explicit and (
+        existing["visibility"] != scope.visibility
+        or set(existing["groups"]) != set(scope.groups)
+        or existing["users"]
+    ):
+        raise _FolderScopeMismatch(name)
+    print(f"기존 폴더 「{name}」에 넣습니다 — 폴더의 열람 범위는 바꾸지 않습니다.")
+    return existing["id"]
 
 
-async def _subfolder(
-    conn: psycopg.AsyncConnection, parent_id: UUID, name: str, *, username: str
+async def _ensure_folders(
+    conn: psycopg.AsyncConnection,
+    parts: tuple[str, ...],
+    known: dict[tuple[str, ...], UUID],
+    *,
+    root_name: str,
+    username: str,
+    scope: _ImportScope,
 ) -> UUID:
-    """같은 부모 아래 같은 이름은 하나뿐이라(030) 있으면 그것을 쓴다. 범위는 상위를 따른다."""
-    cur = await conn.execute(
-        "SELECT id FROM folders WHERE parent_id = %s AND name = %s", (parent_id, name)
-    )
-    row = await cur.fetchone()
-    if row is not None:
-        return row[0]
-    async with conn.transaction():
-        await set_actor(conn, actor=username, via="cli")
-        created = await create_folder(conn, user_id=username, name=name, parent_id=parent_id)
-    return created["id"]
+    """`parts` 경로(최상위 아래)의 폴더 id. 없는 폴더는 만들어 `known`에 적는다.
+
+    문서를 만드는 트랜잭션 안에서 부른다 — 문서가 실패하면 폴더도 함께 사라져 빈 폴더가 남지 않는다.
+    """
+    for depth in range(len(parts) + 1):
+        if parts[:depth] in known:
+            continue
+        if depth == 0:
+            row = await create_folder(
+                conn,
+                user_id=username,
+                name=root_name,
+                visibility=scope.visibility,
+                grant_groups=scope.groups,
+            )
+        else:
+            parent_id = known[parts[: depth - 1]]
+            name = parts[depth - 1]
+            row = await find_folder(conn, name=name, parent_id=parent_id) or await create_folder(
+                conn, user_id=username, name=name, parent_id=parent_id
+            )
+        known[parts[:depth]] = row["id"]
+    return known[parts]
 
 
 async def _import_file(
@@ -999,49 +998,52 @@ async def _import_file(
     username: str,
     tags: list[str],
     scope: _ImportScope,
-    folder_id: UUID | None = None,
-) -> dict | None:
-    """파일 하나를 문서로 만든다. 이미 있으면 None.
+    folder: Callable[[], Awaitable[UUID]] | None = None,
+) -> tuple[dict | None, bool]:
+    """파일 하나를 문서로 만든다. 이미 있으면 None. 둘째 값은 frontmatter visibility를 쓰지 않았는지.
 
     업로드와 같은 진입점(`create_document`)이라 원본을 보관한다(ADR-046). frontmatter가
     있는 마크다운만 예외로, 본문을 텍스트 진입점으로 넣는다 — 원본 바이트에는 메타데이터가
     섞여 있어 그대로 추출하면 문서 텍스트가 달라진다.
 
-    폴더에 넣는 문서는 폴더 범위를 따른다. frontmatter `visibility`가 범위와 겹치면 더 좁은
-    쪽을 따른다 — private는 폴더 범위를 끊고 소유자 전용(개별 지정)으로, public은 폴더나
-    --grant-group보다 넓으므로 버린다.
+    `folder`는 넣을 폴더 id를 (필요하면 만들어) 준다. 폴더에 넣는 문서는 frontmatter `visibility`와
+    상관없이 폴더 범위를 따른다 — 들어간 자리의 권한을 따르는 것이 이관 도구의 기본이고, 폴더를
+    지정해 만든 문서는 개별 범위를 받지 않는다(ADR-054). export가 쓰는 `private`은 소유자 전용인지
+    폴더·그룹 범위인지 구분하지 못한다.
     """
     data = path.read_bytes()
     front = _read_frontmatter(data) if detect_content_type(path.name) == "md" else None
-    if front is not None and front.visibility not in (None, *VISIBILITY_VALUES):
+    front_visibility = front.visibility if front is not None else None
+    if front_visibility not in (None, *VISIBILITY_VALUES):
         raise InvalidVisibility("공개범위는 public, private 중 하나여야 합니다.")
-    front_private = front is not None and front.visibility == "private"
-    if folder_id is not None:
+    if folder is not None:
         visibility, groups = None, None
     elif scope.groups:
-        visibility, groups = "private", (None if front_private else scope.groups)
+        visibility = "private"
+        groups = None if front_visibility == "private" else scope.groups
     else:
-        visibility = (front.visibility if front is not None else None) or scope.visibility
-        groups = None
+        visibility, groups = front_visibility or scope.visibility, None
+    ignored = folder is not None and front_visibility is not None
     # 판정과 생성을 한 트랜잭션에 둔다 — 밖의 SELECT는 HA에서 Replica로 가 방금 가져온 같은
     # 파일을 못 보고 두 벌을 만든다 (ADR-010, #180).
     async with conn.transaction():
         await set_actor(conn, actor=username, via="cli")
         if front is None:
             if await find_same_original(conn, owner_id=username, data=data):
-                return None
-            return await create_document(
+                return None, False
+            document = await create_document(
                 conn,
                 filename=path.name,
                 data=data,
                 owner_id=username,
                 tags=tags,
                 visibility=visibility,
-                folder_id=folder_id,
+                folder_id=await folder() if folder is not None else None,
                 grant_groups=groups,
             )
+            return document, ignored
         if await find_same_text(conn, owner_id=username, content=front.body):
-            return None
+            return None, False
         document = await create_text_document(
             conn,
             title=front.title or path.stem,
@@ -1049,15 +1051,10 @@ async def _import_file(
             owner_id=username,
             tags=front.tags + tags,
             visibility=visibility,
-            folder_id=folder_id,
+            folder_id=await folder() if folder is not None else None,
             grant_groups=groups,
         )
-        if folder_id is not None and front_private:
-            # 폴더 문서는 범위를 지정해 만들 수 없다 — 만든 트랜잭션 안에서 개별 지정으로 끊는다.
-            await set_access(
-                conn, document["id"], user_id=username, visibility="private", follows_folder=False
-            )
-        return document
+        return document, ignored
 
 
 async def _import(
@@ -1075,11 +1072,13 @@ async def _import(
         await _require_user(conn, username)
         # 모르는 그룹이면 폴더도 문서도 만들기 전에 멈춘다.
         await resolve_grantees(conn, users=[], groups=scope.groups)
+        # 커밋된 폴더만 기억한다 — 문서가 실패해 롤백된 폴더 id를 다음 파일이 쓰면 안 된다.
         folder_ids: dict[tuple[str, ...], UUID] = {}
+        root_name = folder.resolve().name
         if keep_folders:
-            folder_ids[()] = await _root_folder(
-                conn, folder.resolve().name, username=username, scope=scope
-            )
+            root_id = await _existing_root_folder(conn, root_name, username=username, scope=scope)
+            if root_id is not None:
+                folder_ids[()] = root_id
         for path in _import_candidates(folder):
             name = path.relative_to(folder).as_posix()
             try:
@@ -1092,27 +1091,35 @@ async def _import(
                 # 10^6 바이트다(api/documents.py `_read_upload`).
                 if path.stat().st_size > limit_mb * 1_000_000:
                     raise ValueError(f"업로드 파일은 {limit_mb}MB를 넘을 수 없습니다.")
-                folder_id = None
-                if keep_folders:
-                    parts = path.parent.relative_to(folder).parts
-                    for depth in range(1, len(parts) + 1):
-                        if parts[:depth] not in folder_ids:
-                            folder_ids[parts[:depth]] = await _subfolder(
-                                conn, folder_ids[parts[: depth - 1]], parts[depth - 1],
-                                username=username,
-                            )
-                    folder_id = folder_ids[parts]
-                document = await _import_file(
-                    conn, path, username=username, tags=tags, scope=scope, folder_id=folder_id
+                pending = dict(folder_ids)
+                document, ignored = await _import_file(
+                    conn,
+                    path,
+                    username=username,
+                    tags=tags,
+                    scope=scope,
+                    folder=partial(
+                        _ensure_folders,
+                        conn,
+                        path.parent.relative_to(folder).parts,
+                        pending,
+                        root_name=root_name,
+                        username=username,
+                        scope=scope,
+                    )
+                    if keep_folders
+                    else None,
                 )
             except _IMPORT_FILE_ERRORS as error:
                 summary.failed += 1
                 print(f"  실패 {name}: {error}")
                 continue
+            folder_ids = pending
             if document is None:
                 summary.existing += 1
                 continue
             summary.imported += 1
+            summary.visibility_ignored += ignored
             if document["extraction_status"] == "pending":
                 summary.awaiting_ocr += 1
     return summary
@@ -1171,6 +1178,11 @@ def run_import(
         f"가져옴 {summary.imported}건 · 이미 있음 {summary.existing}건"
         f" · 지원하지 않는 형식 {summary.unsupported}건 · 실패 {summary.failed}건"
     )
+    if summary.visibility_ignored:
+        print(
+            f"폴더 범위를 따름 — frontmatter의 visibility를 쓰지 않음 {summary.visibility_ignored}건."
+            " 좁혀야 할 문서는 웹 화면 문서 상세에서 「개별 지정」으로 바꿉니다."
+        )
     if summary.awaiting_ocr:
         print(
             f"텍스트 인식 대기 {summary.awaiting_ocr}건 — 원본이 이미지나 스캔이라"

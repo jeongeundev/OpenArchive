@@ -417,9 +417,9 @@ MCP `create_document`(`txt`·`md`)가 구현됐고, 세 입력 경로 모두 임
 
 열람 범위 변경(문서·폴더)·공유·토큰 발급·관리 API는 세션 전용이다(ADR-034·054). 관리자는 조직의 외부 공유를
 전수 조회하고 토큰을 비상 폐기할 수 있으나 공유 안 문서의 **제목은 보지 못한다**(ADR-061 결정 3, #201). 문서를 만들 때의 부여
-(`grant_users`·`grant_groups`)는 토큰(REST)·MCP·CLI에서도 허용한다 — REST·MCP는 구현됐고,
+(`grant_users`·`grant_groups`)는 토큰(REST)·MCP·CLI에서도 허용한다 — REST·MCP와 함께
 `openarchive import <폴더> --user X --keep-folders --grant-group 사업팀`이 최상위 폴더를 그 범위로
-만드는 것은 결정·미구현(#97 d·#187)이다.
+만드는 것도 구현됐다(#97 d·#187 d).
 
 **공유 토큰**은 위임 토큰(ADR-034)에 주체 하나를 더한 것이다. A 조직이 문서 집합을 지정해 공유를
 만들고 토큰을 발급하면, B 조직은 계정 없이 그 토큰으로 REST(원격 MCP는 결정·미구현 #188)만
