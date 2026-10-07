@@ -33,7 +33,10 @@
       "type": "feat",
       "scope": "api",
       "desc": "API 앱의 /mcp에 원격 MCP를 붙이고 SDK 클라이언트로 시험항목을 고정한다",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-10-07T21:49:40+0900",
+      "summary": "API /mcp를 프론트 catch-all 앞에 연결하고 예열된 프로바이더·풀을 공유; 실제 SDK로 인증·열람·scope·공유·감사 시험 고정, AC 133개·ruff 통과, 로컬 uvicorn curl 401/200 및 마운트 순서 mutant 실패 확인",
+      "completed_at": "2026-10-07T21:55:48+0900"
     },
     {
       "step": 3,
