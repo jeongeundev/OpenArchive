@@ -17,6 +17,7 @@ from psycopg.rows import dict_row
 
 from openarchive.services.auth import SCOPE_READ, TokenNotFound, UserNotFound, insert_token
 from openarchive.services.documents import _load_for_write
+from openarchive.services.visibility import NOT_TRASHED
 
 
 class ShareAlreadyExists(Exception):
@@ -87,10 +88,10 @@ async def list_shares(conn: psycopg.AsyncConnection, *, owner: str) -> list[dict
     shares = await cur.fetchall()
     share_ids = [share["id"] for share in shares]
     await cur.execute(
-        """
+        f"""
         SELECT g.share_id, d.id, d.title
         FROM document_grants g JOIN documents d ON d.id = g.document_id
-        WHERE g.share_id = ANY(%s)
+        WHERE g.share_id = ANY(%s) AND {NOT_TRASHED}
         ORDER BY d.title, d.id
         """,
         (share_ids,),

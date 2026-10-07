@@ -116,3 +116,10 @@ def test_application_does_not_set_session_audit_gucs():
     pattern = re.compile(r"\bSET\s+openarchive\.", re.IGNORECASE)
     assert not [str(path) for path in APPLICATION_SOURCE_ROOTS[0].rglob("*.py")
                 if pattern.search(path.read_text())]
+
+
+def test_trash_condition_is_confined_to_visibility_and_trash_service():
+    root = APPLICATION_SOURCE_ROOTS[0]
+    uses = {path.relative_to(root).as_posix() for path in root.rglob("*.py")
+            if "deleted_at" in path.read_text()}
+    assert uses <= {"services/visibility.py", "services/trash.py"}, uses
