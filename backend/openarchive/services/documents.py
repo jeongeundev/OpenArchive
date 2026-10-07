@@ -484,14 +484,15 @@ async def _insert_original_file(
     되어, 상한 50MB 파일이 100MB로 OpenProxy를 지난다. 풀 연결의 기본 커서는 파라미터를
     문장에 넣으므로(#210) 이 문장만 서버 바인딩 커서로 보낸다.
     """
-    await psycopg.AsyncCursor(conn).execute(
-        """
-        INSERT INTO document_files
-            (document_id, file_version, filename, data, text_version, uploaded_by)
-        VALUES (%s, %s, %s, %b, %s, %s)
-        """,
-        (document_id, file_version, filename, data, text_version, uploaded_by),
-    )
+    async with psycopg.AsyncCursor(conn) as cur:
+        await cur.execute(
+            """
+            INSERT INTO document_files
+                (document_id, file_version, filename, data, text_version, uploaded_by)
+            VALUES (%s, %s, %s, %b, %s, %s)
+            """,
+            (document_id, file_version, filename, data, text_version, uploaded_by),
+        )
 
 
 async def create_text_document(

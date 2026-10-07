@@ -138,7 +138,11 @@ def test_server_side_binding_is_confined_to_original_file_insert():
     문장을 느리게 한다. 이름 붙인 prepare는 26000 사고 경로다(§17).
     """
     root = APPLICATION_SOURCE_ROOTS[0]
-    pattern = re.compile(r"\bAsyncCursor\(|\bprepare\s*=\s*True")
+    # 서버 바인딩 커서(`Cursor`·`AsyncCursor`·`ServerCursor`·`AsyncServerCursor`), 이름 붙인 서버 커서,
+    # 이름 붙인 prepare. 클라이언트 바인딩(`AsyncClientCursor`)은 걸리지 않는다.
+    pattern = re.compile(
+        r"\b(?:Async)?(?:Server)?Cursor\(|\.cursor\(\s*(?:name\s*=|[\"'])|\bprepare\s*=\s*True"
+    )
     uses = {path.relative_to(root).as_posix() for path in root.rglob("*.py")
             if pattern.search(path.read_text())}
     assert uses <= {"services/documents.py"}, uses
