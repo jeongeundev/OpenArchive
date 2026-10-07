@@ -74,7 +74,10 @@
       "type": "feat",
       "scope": "frontend",
       "desc": "휴지통 화면·삭제 확인 문구·감사 표기",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-10-07T10:45:11+0900",
+      "summary": "휴지통 화면 /trash(복원·영구 삭제 확인)·사이드바 링크·삭제 확인창 문구·감사 표기 3종과 API 함수를 추가하고 정적 산출물을 갱신해 프론트 lint(경고만)·테스트 481개·build:static·test_frontend 11개를 통과했다",
+      "completed_at": "2026-10-07T10:48:00+0900"
     },
     {
       "step": 7,
