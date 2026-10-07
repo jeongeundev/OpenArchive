@@ -1,5 +1,8 @@
 """`openarchive` 명령 — 설치와 계정 복구를 담당하는 운영자 CLI (ADR-039·ADR-040).
 
+사용자 명령(`login`·`whoami`·`doc`, `--user` 없는 `search`·`ask`)은 REST 클라이언트이며
+DB에 붙지 않는다(ADR-057) — `user_cli.py`. 여기서는 등록과 분기만 한다.
+
 Web UI·REST·MCP와 같은 자리의 인터페이스이며, 로직을 새로 쓰지 않고 코어를 재사용한다.
 마이그레이션 적용은 `openarchive.migrations.run_migrations`, 준비 상태 판정은
 `openarchive.services.system.get_system_status`가 그대로 한다.
@@ -41,6 +44,7 @@ from uuid import UUID
 import psycopg
 import yaml
 
+from openarchive import user_cli
 from openarchive.answers import AnswerProvider, get_answer_provider
 from openarchive.config import ENV_FILE, get_settings
 from openarchive.demo import EdgeJobsTimeout, converge, load_seed_documents, seed_documents
@@ -1475,8 +1479,17 @@ def run_ask(
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="openarchive", description="OpenArchive 운영 CLI")
+    parser = argparse.ArgumentParser(
+        prog="openarchive",
+        description="OpenArchive CLI — 운영자 명령(DB 직결)과 사용자 명령(REST, API 토큰)",
+    )
     subcommands = parser.add_subparsers(dest="command", required=True)
+    login = subcommands.add_parser(
+        "login", help="서버에 API 토큰으로 로그인합니다. DB 접속 정보는 쓰지 않습니다."
+    )
+    login.add_argument("--url", required=True, help="서버 주소 (예: http://localhost:8000)")
+    login.add_argument("--token", required=True, help="웹 계정 설정에서 발급한 API 토큰")
+    subcommands.add_parser("whoami", help="로그인한 사용자와 토큰 범위를 보입니다.")
     init = subcommands.add_parser("init", help="DB를 확인하고 스키마를 준비합니다.")
     init.add_argument("--dsn", help="DB 연결 문자열. 생략하면 대화형으로 묻습니다.")
     init.add_argument("--yes", action="store_true", help="확인 없이 진행합니다.")
@@ -1594,6 +1607,10 @@ def main(argv: list[str] | None = None) -> int:
     )
     demo.add_argument("--dsn", help="DB 연결 문자열. 생략하면 DATABASE_URL을 씁니다.")
     args = parser.parse_args(argv)
+    if args.command == "login":
+        return user_cli.run_login(url=args.url, token=args.token)
+    if args.command == "whoami":
+        return user_cli.run_whoami()
     if args.command == "demo":
         return run_demo(
             dsn=args.dsn, username=args.user, wait=not args.no_wait, timeout=args.timeout
