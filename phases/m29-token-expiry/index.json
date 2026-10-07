@@ -1,0 +1,19 @@
+{
+  "project": "OpenArchive",
+  "phase": "m29-token-expiry",
+  "issue": 199,
+  "title": "feat: 토큰 만료일·마지막 사용 시각 — 위임 토큰·공유 토큰 공통 (#199)",
+  "needs_vm": true,
+  "steps": [
+    { "step": 0, "name": "token-columns", "type": "feat", "scope": "db",
+      "desc": "api_tokens에 만료일·마지막 사용 시각 컬럼", "status": "pending" },
+    { "step": 1, "name": "token-service", "type": "feat", "scope": "api",
+      "desc": "토큰 만료 판정·마지막 사용 갱신·만료일 발급", "status": "pending" },
+    { "step": 2, "name": "token-routes", "type": "feat", "scope": "api",
+      "desc": "토큰 발급 만료일 입력과 목록의 만료·마지막 사용 필드", "status": "pending" },
+    { "step": 3, "name": "token-ui", "type": "feat", "scope": "frontend",
+      "desc": "토큰·공유 화면에 만료일 입력과 만료·마지막 사용 표시", "status": "pending" },
+    { "step": 4, "name": "token-docs", "type": "docs", "scope": "adr",
+      "desc": "토큰 만료일·마지막 사용 운영·설계 문서 반영", "status": "pending" }
+  ]
+}
