@@ -49,7 +49,7 @@ export function DocumentFolderSection({ documentId, folder, hiddenFolder = false
       const hiddenBefore = access.hidden_folder && access.follows_folder;
       const beforeLabel = hiddenBefore ? "볼 수 없는 폴더의 범위" : scopeLabel(before);
       if (access.follows_folder && (hiddenBefore || !sameScope(before, after))
-        && !window.confirm(`열람 범위가 「${beforeLabel}」에서 「${scopeLabel(after)}」로 바뀝니다. 옮기시겠습니까?`)) {
+        && !window.confirm(`열람 범위가 바뀝니다: 「${beforeLabel}」 → 「${scopeLabel(after)}」. 옮기시겠습니까?`)) {
         return;
       }
       await moveDocument(documentId, target);

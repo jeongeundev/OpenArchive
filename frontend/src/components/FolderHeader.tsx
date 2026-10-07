@@ -38,7 +38,7 @@ export function FolderHeader({ folder, folders, onChanged, onDeleted, onAccessSa
   const label = folder.parent_id === null ? scopeLabel(folder.scope) : `상위 폴더 범위 따름(${scopeLabel(folder.scope)})`;
 
   async function remove() {
-    if (!window.confirm(`폴더 「${folder.name}」를 삭제합니다. 빈 폴더만 삭제할 수 있습니다.`)) return;
+    if (!window.confirm(`「${folder.name}」 폴더를 삭제하시겠습니까? 빈 폴더만 삭제할 수 있습니다.`)) return;
     setError(null);
     try {
       await deleteFolder(folder.id);

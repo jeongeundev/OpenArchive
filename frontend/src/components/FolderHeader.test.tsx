@@ -87,6 +87,17 @@ describe("FolderHeader", () => {
     expect(init.method).toBe("DELETE");
   });
 
+  it("삭제 확인 문구는 폴더 이름의 받침과 무관하게 맞는 형태다", () => {
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    const { rerender } = render(<FolderHeader folder={root} folders={[root]} onChanged={vi.fn()} onDeleted={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "삭제" }));
+    expect(confirm).toHaveBeenLastCalledWith("「인사」 폴더를 삭제하시겠습니까? 빈 폴더만 삭제할 수 있습니다.");
+    const withFinal = { ...root, name: "채용" };
+    rerender(<FolderHeader folder={withFinal} folders={[withFinal]} onChanged={vi.fn()} onDeleted={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "삭제" }));
+    expect(confirm).toHaveBeenLastCalledWith("「채용」 폴더를 삭제하시겠습니까? 빈 폴더만 삭제할 수 있습니다.");
+  });
+
   it("삭제 확인을 취소하면 요청하지 않는다", () => {
     vi.spyOn(window, "confirm").mockReturnValue(false);
     const fetchMock = vi.fn();
