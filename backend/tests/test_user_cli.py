@@ -683,3 +683,159 @@ def test_writes_on_invisible_or_foreign_documents(cli, capsys, monkeypatch, tmp_
     assert server.json()["detail"] in capsys.readouterr().out
     assert detail(cli, "bob", shared)["content"] == "공개 본문"
     assert detail(cli, "bob", secret)["content"] == "비밀 본문"
+
+
+# ── search · ask (step 4) ───────────────────────────────────────────────────
+
+
+@pytest.fixture
+def travel_docs(cli, migrated_db):
+    """alice 공개·bob 비공개 문서에 같은 문구를 넣고 임베딩한다."""
+    public = put_text(cli, "alice", "출장비 규정", "출장비 정산 기한은 귀임 후 7일입니다.", tags=["규정"])
+    secret = put_text(
+        cli, "bob", "밥 비밀 출장 메모", "출장비 정산 기한 메모 비공개", visibility="private",
+        tags=["메모"],
+    )
+    run_embedding_worker(migrated_db)
+    return {"public": public, "secret": secret}
+
+
+def test_search_with_token_sees_only_what_the_owner_can(cli, travel_docs, capsys):
+    login_cli(cli, "alice", scope="read")
+    capsys.readouterr()
+
+    assert main(["search", "출장비 정산 기한"]) == 0
+
+    out = capsys.readouterr().out
+    assert "출장비 규정" in out and travel_docs["public"] in out
+    assert "밥 비밀 출장 메모" not in out
+    assert travel_docs["secret"] not in out
+
+    login_cli(cli, "bob")
+    capsys.readouterr()
+    assert main(["search", "출장비 정산 기한"]) == 0
+    out = capsys.readouterr().out
+    assert travel_docs["secret"] in out
+
+
+def test_search_with_token_sends_filters(cli, travel_docs, monkeypatch, capsys):
+    login_cli(cli, "bob")
+    sent: list[dict] = []
+    inner = client_module.TRANSPORT
+
+    class Recording(httpx.BaseTransport):
+        def handle_request(self, request):
+            if request.url.path == "/api/search":
+                sent.append(json.loads(request.read()))
+            return inner.handle_request(request)
+
+    monkeypatch.setattr(client_module, "TRANSPORT", Recording())
+    capsys.readouterr()
+
+    assert main(["search", "출장비 정산 기한", "--tag", "메모", "--type", "md", "-k", "3"]) == 0
+
+    out = capsys.readouterr().out
+    assert sent == [{"query": "출장비 정산 기한", "tags": ["메모"], "content_type": "md", "k": 3}]
+    assert travel_docs["secret"] in out
+    assert travel_docs["public"] not in out
+
+
+def test_search_with_token_and_no_results(cli, travel_docs, capsys):
+    login_cli(cli, "alice")
+    capsys.readouterr()
+
+    assert main(["search", "출장비", "--tag", "없는태그"]) == 0
+
+    assert "결과가 없습니다." in capsys.readouterr().out
+
+
+def test_ask_with_token_answers_from_visible_documents(cli, travel_docs, monkeypatch, capsys):
+    from openarchive.answers import FakeAnswerProvider
+    from openarchive.main import app
+
+    monkeypatch.setattr(app.state, "answer_provider", FakeAnswerProvider())
+    login_cli(cli, "alice", scope="read")
+    capsys.readouterr()
+
+    assert main(["ask", "출장비 정산 기한은?"]) == 0
+
+    out = capsys.readouterr().out
+    assert "근거 기반 답변" in out
+    assert "출장비 규정" in out
+    assert "밥 비밀 출장 메모" not in out
+    assert travel_docs["secret"] not in out
+
+
+def test_ask_with_token_when_server_disabled(cli, travel_docs, capsys):
+    from openarchive.main import app
+
+    assert app.state.answer_provider is None
+    login_cli(cli, "alice")
+    capsys.readouterr()
+
+    assert main(["ask", "출장비 정산 기한은?"]) == 1
+
+    assert "답변 생성이 꺼져 있습니다" in capsys.readouterr().out
+
+
+def test_ask_with_token_without_evidence(cli, travel_docs, monkeypatch, capsys):
+    from openarchive.answers import FakeAnswerProvider
+    from openarchive.main import app
+
+    monkeypatch.setattr(app.state, "answer_provider", FakeAnswerProvider())
+    login_cli(cli, "alice")
+    capsys.readouterr()
+
+    assert main(["ask", "출장비", "--tag", "없는태그"]) == 0
+
+    assert "근거로 쓸 문서를 찾지 못했습니다." in capsys.readouterr().out
+
+
+def test_search_before_login_does_not_touch_the_database(cli, monkeypatch, capsys):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://nobody@127.0.0.1:1/nowhere")
+    import openarchive.cli as cli_module
+
+    def forbidden():
+        raise AssertionError("사용자 명령이 DB 설정을 읽었다")
+
+    monkeypatch.setattr(cli_module, "get_settings", forbidden)
+
+    assert main(["search", "출장비"]) == 1
+    assert main(["ask", "출장비"]) == 1
+
+    out = capsys.readouterr().out
+    assert out.count("로그인이 필요합니다") == 2
+
+
+@pytest.mark.parametrize("command", ["search", "ask"])
+def test_dsn_without_user_is_rejected(cli, monkeypatch, capsys, command):
+    login_cli(cli, "alice")
+
+    class Forbidden(httpx.BaseTransport):
+        def handle_request(self, request):
+            raise AssertionError("--dsn만 있는데 REST로 보냈다")
+
+    monkeypatch.setattr(client_module, "TRANSPORT", Forbidden())
+    capsys.readouterr()
+
+    assert main([command, "출장비", "--dsn", "postgresql://x@127.0.0.1:1/y"]) == 2
+
+    assert "--dsn은 --user와 함께 쓰는 운영자 옵션입니다." in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("command", ["search", "ask"])
+def test_user_option_keeps_the_operator_path(cli, monkeypatch, command):
+    login_cli(cli, "alice")
+
+    class Forbidden(httpx.BaseTransport):
+        def handle_request(self, request):
+            raise AssertionError("--user가 있는데 REST로 보냈다")
+
+    monkeypatch.setattr(client_module, "TRANSPORT", Forbidden())
+    import openarchive.cli as cli_module
+
+    called: list[str] = []
+    monkeypatch.setattr(cli_module, f"run_{command}", lambda **kwargs: called.append(kwargs["username"]) or 0)
+
+    assert main([command, "출장비", "--user", "alice"]) == 0
+    assert called == ["alice"]

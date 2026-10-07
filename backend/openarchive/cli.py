@@ -1478,6 +1478,9 @@ def run_ask(
     return 0
 
 
+OPERATOR_DSN_ONLY = "--dsn은 --user와 함께 쓰는 운영자 옵션입니다."
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="openarchive",
@@ -1614,24 +1617,29 @@ def main(argv: list[str] | None = None) -> int:
     exporter.add_argument("folder", type=Path, help="비어 있거나 없는 폴더")
     exporter.add_argument("--user", required=True, help=f"{user_help} 이 계정 소유 문서만 내보냅니다.")
     exporter.add_argument("--dsn", help="DB 연결 문자열. 생략하면 DATABASE_URL을 씁니다.")
+    operator_user_help = (
+        "이 계정의 권한으로 DB에 직접 붙습니다(운영자). 생략하면 openarchive login한 토큰으로"
+        " 서버에 붙습니다."
+    )
+    operator_dsn_help = "DB 연결 문자열 — --user와 함께만 씁니다. 생략하면 DATABASE_URL을 씁니다."
     searcher = subcommands.add_parser(
         "search", help="문서를 검색합니다. 질의 임베딩은 EMBEDDING_PROVIDER를 따릅니다."
     )
     searcher.add_argument("query")
-    searcher.add_argument("--user", required=True, help=f"{user_help} 볼 수 있는 문서만 찾습니다.")
+    searcher.add_argument("--user", help=f"{operator_user_help} 볼 수 있는 문서만 찾습니다.")
     searcher.add_argument("--tag", action="append", default=[], help="이 태그 중 하나가 붙은 문서만")
     searcher.add_argument("--type", choices=SUPPORTED_CONTENT_TYPES, help="이 형식의 문서만")
     searcher.add_argument("-k", type=int, default=10, help=f"결과 수 (1~{MAX_K}, 기본: 10)")
-    searcher.add_argument("--dsn", help="DB 연결 문자열. 생략하면 DATABASE_URL을 씁니다.")
+    searcher.add_argument("--dsn", help=operator_dsn_help)
     asker = subcommands.add_parser(
         "ask", help="문서를 근거로 답합니다. ANSWER_PROVIDER가 켜져 있어야 합니다(기본: off)."
     )
     asker.add_argument("query")
-    asker.add_argument("--user", required=True, help=f"{user_help} 볼 수 있는 문서만 근거로 씁니다.")
+    asker.add_argument("--user", help=f"{operator_user_help} 볼 수 있는 문서만 근거로 씁니다.")
     asker.add_argument("--tag", action="append", default=[], help="이 태그 중 하나가 붙은 문서만")
     asker.add_argument("--type", choices=SUPPORTED_CONTENT_TYPES, help="이 형식의 문서만")
     asker.add_argument("-k", type=int, default=ASK_K, help=f"근거를 찾을 문서 수 (1~{MAX_K}, 기본: {ASK_K})")
-    asker.add_argument("--dsn", help="DB 연결 문자열. 생략하면 DATABASE_URL을 씁니다.")
+    asker.add_argument("--dsn", help=operator_dsn_help)
     demo = subcommands.add_parser(
         "demo", help="예제 문서(가상 회사의 사내 규정)를 넣어 봅니다. 이미 있는 제목은 건너뜁니다."
     )
@@ -1692,6 +1700,13 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "export":
         return run_export(dsn=args.dsn, folder=args.folder, username=args.user)
     if args.command == "search":
+        if args.user is None:
+            if args.dsn is not None:
+                print(OPERATOR_DSN_ONLY)
+                return 2
+            return user_cli.run_search(
+                query=args.query, tags=args.tag, content_type=args.type, k=args.k
+            )
         return run_search(
             dsn=args.dsn,
             query=args.query,
@@ -1701,6 +1716,13 @@ def main(argv: list[str] | None = None) -> int:
             k=args.k,
         )
     if args.command == "ask":
+        if args.user is None:
+            if args.dsn is not None:
+                print(OPERATOR_DSN_ONLY)
+                return 2
+            return user_cli.run_ask(
+                query=args.query, tags=args.tag, content_type=args.type, k=args.k
+            )
         return run_ask(
             dsn=args.dsn,
             query=args.query,

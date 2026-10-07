@@ -376,3 +376,78 @@ def run_trash_restore(*, document_id: str) -> int:
         return 0
 
     return _run(action)
+
+
+# ── 검색·답변: search · ask (--user 없이) ──────────────────────────────────
+
+ASK_TIMEOUT_SECONDS = 300.0  # 생성은 수십 초 걸린다 — 서버 ANSWER_TIMEOUT_SECONDS(120) + 여유
+
+
+def _snippet(text: str, width: int = 160) -> str:
+    flat = " ".join(text.split())
+    return flat if len(flat) <= width else flat[: width - 1] + "…"
+
+
+def _query_body(query: str, tags: list[str], content_type: str | None, k: int) -> dict:
+    # k 범위는 서버가 판정한다(422) — 결과도 서버의 단일 SQL 그대로 출력한다.
+    return {"query": query, "tags": tags or None, "content_type": content_type, "k": k}
+
+
+def run_search(*, query: str, tags: list[str], content_type: str | None, k: int) -> int:
+    def action(api: ApiClient) -> int:
+        body = _query_body(query, tags, content_type, k)
+        hits = api.request("POST", "/api/search", json=body).json()["items"]
+        if not hits:
+            print("결과가 없습니다.")
+            return 0
+        for rank, hit in enumerate(hits, start=1):
+            tag_text = f"  [{', '.join(hit['tags'])}]" if hit["tags"] else ""
+            print(f"{rank}. {hit['title']}  {hit['score']:.3f}{tag_text}")
+            print(f"   {_snippet(hit['content'])}")
+            via = hit.get("via")
+            if via is not None:
+                print(f"   관계로 찾음: {via['kind']} · {via['depth']}단계")
+            print(f"   {hit['document_id']}")
+        return 0
+
+    return _run(action)
+
+
+def run_ask(*, query: str, tags: list[str], content_type: str | None, k: int) -> int:
+    def action(api: ApiClient) -> int:
+        body = _query_body(query, tags, content_type, k)
+        result = api.request("POST", "/api/ask", json=body, timeout=ASK_TIMEOUT_SECONDS).json()
+        status = result["status"]
+        if status == "disabled":
+            print(
+                "서버에서 답변 생성이 꺼져 있습니다. "
+                "검색은 openarchive search로 그대로 쓸 수 있습니다."
+            )
+            return 1
+        if status == "no_evidence":
+            print("근거로 쓸 문서를 찾지 못했습니다.")
+            return 0
+        if status == "failed":
+            print(f"{result.get('detail') or ''} 검색은 openarchive search로 그대로 쓸 수 있습니다.")
+            return 1
+        print("근거 기반 답변 — 근거 문서만 쓰도록 지시했지만 보장은 아닙니다.")
+        print()
+        print(result["answer"])
+        print()
+        print("근거")
+        sources = result["sources"]
+        for source in sources:
+            if not source["cited"]:
+                continue
+            version = f"v{source['based_on_version']} 기준"
+            if source["revised"]:
+                version += f" · 현재 v{source['current_version']}"
+            print(f"[{source['label']}] {source['title']} · {version}")
+            print(f"    {_snippet(source['content'])}")
+            print(f"    {source['document_id']} · 대목 {source['chunk_index']}")
+        uncited = sum(not source["cited"] for source in sources)
+        if uncited:
+            print(f"인용하지 않은 근거 {uncited}건")
+        return 0
+
+    return _run(action)
