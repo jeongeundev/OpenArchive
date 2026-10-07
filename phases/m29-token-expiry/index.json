@@ -33,7 +33,10 @@
       "type": "feat",
       "scope": "api",
       "desc": "토큰 발급 만료일 입력과 목록의 만료·마지막 사용 필드",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-10-08T00:05:19+0900",
+      "summary": "POST /api/auth/tokens·/api/shares/{id}/tokens body에 선택 expires_at(AwareDatetime, 시간대 없으면 422·과거면 400 '만료일은 지금 이후여야 합니다.'), TokenSummary·TokenCreated·ShareSummary.tokens에 expires_at·last_used_at·expired(bool, DB now 판정) 추가; 만료 토큰 REST(쿠키 동반 포함)·원격 MCP 401과 REST·MCP last_used_at 갱신을 HTTP 테스트로 고정, AC 194개·ruff·mutant 3종 통과",
+      "completed_at": "2026-10-08T00:11:42+0900"
     },
     {
       "step": 3,
