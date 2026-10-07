@@ -17,7 +17,7 @@ from pathlib import Path
 import httpx
 import psycopg
 import pytest
-from conftest import login_as, upload_document
+from conftest import login_as, run_embedding_worker, upload_document
 from fastapi.testclient import TestClient
 from starlette import testclient as starlette_testclient
 
@@ -72,7 +72,8 @@ def cli(db_client: TestClient, monkeypatch, tmp_path):
 
 
 def login(token: str) -> int:
-    return main(["login", "--url", URL, "--token", token])
+    # `--token=` — 토큰이 "-"로 시작하면 argparse가 옵션으로 읽는다.
+    return main(["login", "--url", URL, f"--token={token}"])
 
 
 def test_login_saves_owner_only_credentials(cli, capsys):
@@ -90,7 +91,7 @@ def test_login_saves_owner_only_credentials(cli, capsys):
 def test_login_strips_trailing_slash(cli):
     token = issue_token(cli, "alice", scope="read")["token"]
 
-    assert main(["login", "--url", URL + "/", "--token", token]) == 0
+    assert main(["login", "--url", URL + "/", f"--token={token}"]) == 0
 
     assert json.loads(credentials_path().read_text())["url"] == URL
 
@@ -396,3 +397,289 @@ def test_read_token_can_list_and_show(cli, capsys):
     assert document_id in capsys.readouterr().out
     assert main(["doc", "show", document_id]) == 0
     assert "읽기 본문" in capsys.readouterr().out
+
+
+# ── 쓰기: doc upload · edit · restore · tag · delete · trash (step 3) ────────
+
+
+def write_docx(path: Path, text: str) -> Path:
+    from docx import Document
+
+    document = Document()
+    document.add_paragraph(text)
+    document.save(path)
+    return path
+
+
+def detail(client: TestClient, username: str, document_id: str) -> dict:
+    login_as(client, username)
+    response = client.get(f"/api/documents/{document_id}")
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def no_prompt(monkeypatch) -> None:
+    def fail(*args, **kwargs):
+        raise AssertionError("확인을 묻지 않아야 한다")
+
+    monkeypatch.setattr("builtins.input", fail)
+
+
+def test_doc_upload_creates_searchable_document(cli, migrated_db, capsys, tmp_path):
+    path = write_docx(tmp_path / "회의록.docx", "출장비 정산 기한은 다음 달 10일입니다.")
+    login_cli(cli, "alice")
+    capsys.readouterr()
+
+    code = main(
+        ["doc", "upload", str(path), "--title", "10월 회의록", "--tag", "회의", "--tag", "인사"]
+    )
+
+    assert code == 0
+    out = capsys.readouterr().out
+    login_as(cli, "alice")
+    listed = cli.get("/api/documents").json()
+    (item,) = [item for item in listed if item["title"] == "10월 회의록"]
+    assert item["id"] in out
+    assert sorted(item["tags"]) == ["인사", "회의"]
+
+    run_embedding_worker(migrated_db)
+    issued = issue_token(cli, "alice", scope="read")
+    found = cli.post(
+        "/api/search",
+        json={"query": "출장비 정산 기한은 다음 달 10일입니다."},
+        headers={"Authorization": f"Bearer {issued['token']}"},
+    )
+    assert found.status_code == 200
+    assert item["id"] in [hit["document_id"] for hit in found.json()["items"]]
+
+
+class RecordingTransport(httpx.BaseTransport):
+    """요청을 기록만 하고 실제 앱으로 그대로 넘긴다 — 응답을 흉내 내지 않는다."""
+
+    def __init__(self, inner: httpx.BaseTransport) -> None:
+        self.inner = inner
+        self.requests: list[httpx.Request] = []
+
+    def handle_request(self, request: httpx.Request) -> httpx.Response:
+        self.requests.append(request)
+        return self.inner.handle_request(request)
+
+
+def test_doc_upload_sends_fresh_idempotency_key(cli, monkeypatch, tmp_path):
+    recorder = RecordingTransport(client_module.TRANSPORT)
+    monkeypatch.setattr(client_module, "TRANSPORT", recorder)
+    login_cli(cli, "alice")
+    path = tmp_path / "메모.txt"
+    path.write_text("메모 본문", encoding="utf-8")
+
+    assert main(["doc", "upload", str(path)]) == 0
+    assert main(["doc", "upload", str(path)]) == 0
+
+    keys = [
+        request.headers.get("Idempotency-Key")
+        for request in recorder.requests
+        if request.method == "POST" and request.url.path == "/api/documents"
+    ]
+    assert len(keys) == 2
+    assert all(keys) and keys[0] != keys[1]
+
+
+def test_doc_upload_missing_file_does_not_call_server(cli, capsys, monkeypatch, tmp_path):
+    login_cli(cli, "alice")
+    recorder = RecordingTransport(client_module.TRANSPORT)
+    monkeypatch.setattr(client_module, "TRANSPORT", recorder)
+    capsys.readouterr()
+    missing = tmp_path / "없음.docx"
+
+    assert main(["doc", "upload", str(missing)]) != 0
+
+    assert f"파일이 없습니다: {missing}" in capsys.readouterr().out
+    assert recorder.requests == []
+
+
+def test_doc_upload_unsupported_type_shows_server_message(cli, capsys, tmp_path):
+    path = tmp_path / "그림.gif"
+    path.write_bytes(b"GIF89a")
+    login_cli(cli, "alice")
+    capsys.readouterr()
+
+    assert main(["doc", "upload", str(path)]) == 1
+
+    assert "지원 형식" in capsys.readouterr().out
+
+
+def test_doc_edit_creates_new_version(cli, capsys, tmp_path):
+    document_id = put_text(cli, "alice", "편집 문서", "처음 본문")
+    login_cli(cli, "alice")
+    revised = tmp_path / "수정본.txt"
+    revised.write_text("고친 본문", encoding="utf-8")
+    capsys.readouterr()
+
+    assert main(["doc", "edit", document_id, "--file", str(revised)]) == 0
+
+    assert "v2" in capsys.readouterr().out
+    current = detail(cli, "alice", document_id)
+    assert current["content"] == "고친 본문"
+    assert current["version"] == 2
+    assert 2 in [version["version"] for version in current["versions"]]
+
+
+def test_doc_edit_conflict_does_not_overwrite(cli, capsys, tmp_path):
+    document_id = put_text(cli, "alice", "충돌 문서", "처음 본문")
+    login_cli(cli, "alice")
+    capsys.readouterr()
+    assert main(["doc", "show", document_id]) == 0
+    revised = tmp_path / "수정본.txt"
+    revised.write_text(capsys.readouterr().out + "CLI 수정", encoding="utf-8")
+    login_as(cli, "alice")
+    web = cli.put(f"/api/documents/{document_id}", json={"content": "웹 수정", "version": 1})
+    assert web.status_code == 200
+
+    code = main(["doc", "edit", document_id, "--file", str(revised), "--base-version", "1"])
+
+    assert code == 1
+    out = capsys.readouterr().out
+    assert "다른 곳에서 먼저 수정되었습니다" in out
+    assert "v2" in out
+    current = detail(cli, "alice", document_id)
+    assert current["content"] == "웹 수정"
+    assert current["version"] == 2
+
+
+def test_doc_restore_makes_new_version_from_old(cli, capsys):
+    document_id = put_text(cli, "alice", "되돌릴 문서", "첫 본문")
+    for version, content in ((1, "둘째 본문"), (2, "셋째 본문")):
+        response = cli.put(
+            f"/api/documents/{document_id}", json={"content": content, "version": version}
+        )
+        assert response.status_code == 200
+    login_cli(cli, "alice")
+    capsys.readouterr()
+
+    assert main(["doc", "restore", document_id, "1"]) == 0
+
+    assert "v4" in capsys.readouterr().out
+    current = detail(cli, "alice", document_id)
+    assert current["version"] == 4
+    assert current["content"] == "첫 본문"
+    assert {1, 2, 3, 4} <= {version["version"] for version in current["versions"]}
+
+
+@pytest.mark.parametrize("value", ["인사,규정", "인사, 규정", " 인사 ,규정,"])
+def test_doc_tag_replaces_tags(cli, capsys, value):
+    document_id = put_text(cli, "alice", "태그 문서", "본문", tags=["옛태그"])
+    login_cli(cli, "alice")
+    capsys.readouterr()
+
+    assert main(["doc", "tag", document_id, "--set", value]) == 0
+
+    assert sorted(detail(cli, "alice", document_id)["tags"]) == ["규정", "인사"]
+
+
+def test_doc_delete_moves_to_trash_without_prompt(cli, capsys, monkeypatch):
+    document_id = put_text(cli, "alice", "지울 문서", "본문")
+    login_cli(cli, "alice")
+    no_prompt(monkeypatch)
+    capsys.readouterr()
+
+    assert main(["doc", "delete", document_id]) == 0
+    out = capsys.readouterr().out
+    assert "휴지통으로 옮겼습니다" in out
+    assert f"openarchive doc trash restore {document_id}" in out
+
+    login_as(cli, "alice")
+    assert document_id not in [item["id"] for item in cli.get("/api/documents").json()]
+    assert main(["doc", "trash", "list"]) == 0
+    out = capsys.readouterr().out
+    assert document_id in out and "지울 문서" in out
+
+    assert main(["doc", "trash", "restore", document_id]) == 0
+    assert "복원했습니다: 지울 문서" in capsys.readouterr().out
+    assert document_id in [item["id"] for item in cli.get("/api/documents").json()]
+
+
+def test_doc_trash_list_empty(cli, capsys):
+    login_cli(cli, "alice")
+    capsys.readouterr()
+
+    assert main(["doc", "trash", "list"]) == 0
+
+    assert "휴지통이 비어 있습니다." in capsys.readouterr().out
+
+
+def test_doc_delete_permanent_asks_first(cli, capsys, monkeypatch):
+    document_id = put_text(cli, "alice", "영구 문서", "본문")
+    login_cli(cli, "alice")
+    prompts: list[str] = []
+
+    def answer(value: str):
+        def ask(prompt: str = "") -> str:
+            prompts.append(prompt)
+            return value
+
+        return ask
+
+    monkeypatch.setattr("builtins.input", answer("n"))
+    assert main(["doc", "delete", document_id, "--permanent"]) == 1
+    assert "삭제하면 되돌릴 수 없습니다" in prompts[0]
+    assert detail(cli, "alice", document_id)["id"] == document_id
+
+    monkeypatch.setattr("builtins.input", answer("Y"))
+    capsys.readouterr()
+    assert main(["doc", "delete", document_id, "--permanent"]) == 0
+    assert "영구 삭제했습니다." in capsys.readouterr().out
+    login_as(cli, "alice")
+    assert cli.get(f"/api/documents/{document_id}").status_code == 404
+    trash_ids = [item["id"] for item in cli.get("/api/documents/trash").json()]
+    assert document_id not in trash_ids
+
+
+def test_read_token_cannot_write(cli, capsys, monkeypatch, tmp_path):
+    document_id = put_text(cli, "alice", "읽기 전용 대상", "원래 본문")
+    login_as(cli, "alice")
+    before = len(cli.get("/api/documents").json())
+    login_cli(cli, "alice", scope="read")
+    revised = tmp_path / "수정본.txt"
+    revised.write_text("바꾸려는 본문", encoding="utf-8")
+    no_prompt(monkeypatch)
+    capsys.readouterr()
+
+    for argv in (
+        ["doc", "edit", document_id, "--file", str(revised)],
+        ["doc", "upload", str(revised)],
+        ["doc", "delete", document_id],
+    ):
+        assert main(argv) == 1, argv
+        assert "쓰기 권한이 필요합니다" in capsys.readouterr().out
+
+    current = detail(cli, "alice", document_id)
+    assert current["content"] == "원래 본문" and current["version"] == 1
+    assert len(cli.get("/api/documents").json()) == before
+    assert main(["doc", "list"]) == 0
+    assert main(["doc", "show", document_id]) == 0
+
+
+def test_writes_on_invisible_or_foreign_documents(cli, capsys, monkeypatch, tmp_path):
+    secret = put_text(cli, "bob", "밥 비밀", "비밀 본문", visibility="private")
+    shared = put_text(cli, "bob", "밥 공개", "공개 본문")
+    login_cli(cli, "alice")
+    revised = tmp_path / "수정본.txt"
+    revised.write_text("남의 문서 수정", encoding="utf-8")
+    no_prompt(monkeypatch)
+    capsys.readouterr()
+
+    for argv in (
+        ["doc", "edit", secret, "--file", str(revised), "--base-version", "1"],
+        ["doc", "tag", secret, "--set", "x"],
+        ["doc", "delete", secret],
+    ):
+        assert main(argv) == 1, argv
+        assert "문서를 찾을 수 없습니다" in capsys.readouterr().out
+
+    login_as(cli, "alice")
+    server = cli.put(f"/api/documents/{shared}", json={"content": "x", "version": 1})
+    assert server.status_code == 403
+    assert main(["doc", "edit", shared, "--file", str(revised), "--base-version", "1"]) == 1
+    assert server.json()["detail"] in capsys.readouterr().out
+    assert detail(cli, "bob", shared)["content"] == "공개 본문"
+    assert detail(cli, "bob", secret)["content"] == "비밀 본문"

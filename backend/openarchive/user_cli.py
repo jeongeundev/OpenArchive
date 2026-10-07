@@ -14,7 +14,7 @@ from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import unquote
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from openarchive.client import (
     LOGIN_AGAIN,
@@ -196,6 +196,183 @@ def run_doc_download(*, document_id: str, output: Path | None) -> int:
             return 1
         digest = hashlib.sha256(data).hexdigest()
         print(f"{target}에 저장했습니다 ({len(data)} 바이트, sha256 {digest[:12]}…)")
+        return 0
+
+    return _run(action)
+
+
+# ── 문서 쓰기: upload · edit · restore · tag · delete · trash ───────────────
+# 쓰기 권한·소유자·열람 판정은 서버가 한다 — 여기서 미리 막지 않는다 (ADR-057 결정 1).
+
+
+def _conflict_message(error: ApiError) -> str:
+    """버전 충돌 409(`current_version` 있음)만 CLI 문구로 바꾼다 (D6)."""
+    current = (error.body or {}).get("current_version")
+    if error.status == 409 and current is not None:
+        return (
+            f"다른 곳에서 먼저 수정되었습니다. 현재 버전은 v{current}입니다 — "
+            "openarchive doc show로 다시 받아 고친 뒤 실행하세요."
+        )
+    return error.message
+
+
+def run_doc_upload(*, path: Path, title: str | None, tags: list[str]) -> int:
+    if not path.is_file():
+        print(f"파일이 없습니다: {path}")
+        return 1
+
+    def action(api: ApiClient) -> int:
+        data: dict[str, str | list[str]] = {}
+        if title is not None:
+            data["title"] = title
+        if tags:
+            data["tags"] = tags
+        # 명령 실행마다 키 하나 — 재시도에는 같은 키가 실린다 (ADR-047).
+        document = api.request(
+            "POST",
+            "/api/documents",
+            files={"file": (path.name, path.read_bytes())},
+            data=data,
+            headers={"Idempotency-Key": str(uuid4())},
+        ).json()
+        print("문서를 올렸습니다 — 처리가 끝나면 검색됩니다.")
+        print(document["id"])
+        return 0
+
+    return _run(action)
+
+
+def _write_with_version(action: Callable[[ApiClient], int]) -> int:
+    try:
+        return action(ApiClient.from_saved())
+    except NotLoggedIn:
+        print(NEED_LOGIN)
+        return 1
+    except ApiError as error:
+        print(_conflict_message(error))
+        return 1
+
+
+def run_doc_edit(*, document_id: str, file: Path, base_version: int | None) -> int:
+    path = _document_path(document_id)
+    if path is None:
+        print(NOT_FOUND)
+        return 1
+    try:
+        content = file.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        print(f"파일이 없습니다: {file}")
+        return 1
+    except (UnicodeDecodeError, IsADirectoryError):
+        print("UTF-8 텍스트 파일만 쓸 수 있습니다.")
+        return 1
+
+    def action(api: ApiClient) -> int:
+        version = base_version
+        if version is None:
+            version = api.request("GET", path).json()["version"]
+        document = api.request(
+            "PUT", path, json={"content": content, "version": version}
+        ).json()
+        print(f"저장했습니다 — 새 버전 v{document['version']}")
+        return 0
+
+    return _write_with_version(action)
+
+
+def run_doc_restore(*, document_id: str, version: int) -> int:
+    path = _document_path(document_id)
+    if path is None:
+        print(NOT_FOUND)
+        return 1
+
+    def action(api: ApiClient) -> int:
+        current = api.request("GET", path).json()["version"]
+        document = api.request(
+            "POST", f"{path}/versions/{version}/restore", json={"current_version": current}
+        ).json()
+        print(f"되돌렸습니다 — v{version} 내용으로 새 버전 v{document['version']}")
+        return 0
+
+    return _write_with_version(action)
+
+
+def run_doc_tag(*, document_id: str, tags_csv: str) -> int:
+    path = _document_path(document_id)
+    if path is None:
+        print(NOT_FOUND)
+        return 1
+    tags = [tag.strip() for tag in tags_csv.split(",") if tag.strip()]
+
+    def action(api: ApiClient) -> int:
+        saved = api.request("PUT", f"{path}/tags", json={"tags": tags}).json()["tags"]
+        print(f"태그: {', '.join(saved)}" if saved else "태그를 모두 지웠습니다.")
+        return 0
+
+    return _run(action)
+
+
+PERMANENT_PROMPT = "삭제하면 되돌릴 수 없습니다. 계속할까요? [y/N] "
+
+
+def run_doc_delete(*, document_id: str, permanent: bool) -> int:
+    path = _document_path(document_id)
+    if path is None:
+        print(NOT_FOUND)
+        return 1
+    if permanent:
+        try:
+            answer = input(PERMANENT_PROMPT)
+        except EOFError:
+            answer = ""
+        if answer.strip().lower() != "y":
+            print("취소했습니다.")
+            return 1
+
+    def action(api: ApiClient) -> int:
+        if permanent:
+            api.request("DELETE", path, params={"permanent": "true"})
+            print("영구 삭제했습니다.")
+        else:
+            # 되돌릴 수 있는 동작이라 묻지 않는다 (ADR-060 결정 8).
+            api.request("DELETE", path)
+            print(
+                "휴지통으로 옮겼습니다. "
+                f"openarchive doc trash restore {UUID(document_id)}로 되돌릴 수 있습니다."
+            )
+        return 0
+
+    return _run(action)
+
+
+def run_trash_list() -> int:
+    def action(api: ApiClient) -> int:
+        items = api.request("GET", "/api/documents/trash").json()
+        if not items:
+            print("휴지통이 비어 있습니다.")
+            return 0
+        header = ("ID", "제목", "삭제한 때", "영구 삭제 예정")
+        rows = [
+            (item["id"], item["title"], _local_time(item["deleted_at"]), _local_time(item["purge_at"]))
+            for item in items
+        ]
+        title_width = min(40, max(len(header[1]), *(len(row[1]) for row in rows)))
+        for row in (header, *rows):
+            print(f"{row[0]:<36}  {row[1]:<{title_width}}  {row[2]:<16}  {row[3]}")
+        return 0
+
+    return _run(action)
+
+
+def run_trash_restore(*, document_id: str) -> int:
+    path = _document_path(document_id)
+    if path is None:
+        print(NOT_FOUND)
+        return 1
+
+    def action(api: ApiClient) -> int:
+        document = api.request("POST", f"{path}/restore").json()
+        print(f"복원했습니다: {document['title']}")
         return 0
 
     return _run(action)

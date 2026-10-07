@@ -1501,6 +1501,34 @@ def main(argv: list[str] | None = None) -> int:
     doc_download.add_argument(
         "-o", "--output", type=Path, help="저장할 경로 (생략하면 현재 디렉터리에 원본 파일명으로)"
     )
+    doc_upload = doc_commands.add_parser("upload", help="파일을 올려 새 문서를 만듭니다.")
+    doc_upload.add_argument("path", type=Path, help="올릴 파일")
+    doc_upload.add_argument("--title", help="문서 제목 (생략하면 파일명)")
+    doc_upload.add_argument("--tag", action="append", default=[], help="태그 (여러 번 줄 수 있음)")
+    doc_edit = doc_commands.add_parser("edit", help="문서 텍스트를 파일 내용으로 바꿉니다.")
+    doc_edit.add_argument("document_id", help="문서 ID")
+    doc_edit.add_argument("--file", type=Path, required=True, help="새 문서 텍스트 (UTF-8)")
+    doc_edit.add_argument(
+        "--base-version", type=int, help="고치기 시작한 버전 (다르면 거부, 생략하면 현재 버전)"
+    )
+    doc_restore = doc_commands.add_parser(
+        "restore", help="과거 텍스트 버전의 내용으로 새 버전을 만듭니다."
+    )
+    doc_restore.add_argument("document_id", help="문서 ID")
+    doc_restore.add_argument("version", type=int, help="되돌릴 텍스트 버전")
+    doc_tag = doc_commands.add_parser("tag", help="태그를 통째로 바꿉니다.")
+    doc_tag.add_argument("document_id", help="문서 ID")
+    doc_tag.add_argument("--set", dest="tags", required=True, help="쉼표로 구분한 태그")
+    doc_delete = doc_commands.add_parser("delete", help="문서를 휴지통으로 옮깁니다.")
+    doc_delete.add_argument("document_id", help="문서 ID")
+    doc_delete.add_argument(
+        "--permanent", action="store_true", help="되돌릴 수 없게 영구 삭제합니다 (확인을 묻습니다)"
+    )
+    doc_trash = doc_commands.add_parser("trash", help="내 휴지통을 다룹니다.")
+    trash_commands = doc_trash.add_subparsers(dest="trash_command", required=True)
+    trash_commands.add_parser("list", help="휴지통에 있는 내 문서를 보입니다.")
+    trash_restore = trash_commands.add_parser("restore", help="휴지통에서 문서를 복원합니다.")
+    trash_restore.add_argument("document_id", help="문서 ID")
     init = subcommands.add_parser("init", help="DB를 확인하고 스키마를 준비합니다.")
     init.add_argument("--dsn", help="DB 연결 문자열. 생략하면 대화형으로 묻습니다.")
     init.add_argument("--yes", action="store_true", help="확인 없이 진행합니다.")
@@ -1629,6 +1657,24 @@ def main(argv: list[str] | None = None) -> int:
             return user_cli.run_doc_show(document_id=args.document_id, version=args.version)
         if args.doc_command == "download":
             return user_cli.run_doc_download(document_id=args.document_id, output=args.output)
+        if args.doc_command == "upload":
+            return user_cli.run_doc_upload(path=args.path, title=args.title, tags=args.tag)
+        if args.doc_command == "edit":
+            return user_cli.run_doc_edit(
+                document_id=args.document_id, file=args.file, base_version=args.base_version
+            )
+        if args.doc_command == "restore":
+            return user_cli.run_doc_restore(document_id=args.document_id, version=args.version)
+        if args.doc_command == "tag":
+            return user_cli.run_doc_tag(document_id=args.document_id, tags_csv=args.tags)
+        if args.doc_command == "delete":
+            return user_cli.run_doc_delete(
+                document_id=args.document_id, permanent=args.permanent
+            )
+        if args.doc_command == "trash":
+            if args.trash_command == "list":
+                return user_cli.run_trash_list()
+            return user_cli.run_trash_restore(document_id=args.document_id)
     if args.command == "demo":
         return run_demo(
             dsn=args.dsn, username=args.user, wait=not args.no_wait, timeout=args.timeout
