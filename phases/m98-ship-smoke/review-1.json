@@ -1,0 +1,28 @@
+{
+  "findings": [
+    {
+      "severity": "high",
+      "class": "fix",
+      "file": "scripts/smoke_slug.py",
+      "line": 5,
+      "summary": "결과가 빈 문자열일 때 ValueError를 내지 않고 \"\"를 반환한다",
+      "reason": "이슈 #217 「요구」 4번째 항목: '결과가 빈 문자열이면(입력이 비었거나 남는 문자가 없으면) ValueError를 낸다'. 구현은 phase_slug(\"\")·phase_slug(\"한글!?\")에서 \"\"를 그대로 돌려준다. 원인은 설계 step0.md 「작업」이 이 항목을 옮기지 않은 것이라 하네스 AC로는 잡히지 않았다."
+    },
+    {
+      "severity": "high",
+      "class": "fix",
+      "file": "scripts/test_smoke_slug.py",
+      "line": 13,
+      "summary": "테스트가 빈 결과에 \"\" 반환을 단언해 스펙과 반대 동작을 고정한다",
+      "reason": "이슈 #217은 빈 결과에 ValueError를 요구한다. (\"\", \"\")·(\"한글!?\", \"\") 두 케이스는 pytest.raises(ValueError)로 바꿔야 하며, 지금 상태로는 구현을 고쳐도 테스트가 실패한다. CLAUDE.md 개발 프로세스(TDD — 테스트가 요구를 먼저 고정)."
+    },
+    {
+      "severity": "low",
+      "class": "fix",
+      "file": "phases/m98-ship-smoke/step0.md",
+      "line": 18,
+      "summary": "step 설계가 이슈의 ValueError 요구를 빠뜨렸다",
+      "reason": "이슈 #217 「요구」에는 4항목이 있으나 step0.md 「작업」에는 앞의 3항목만 있다. 설계 문서를 이슈와 맞춰 두지 않으면 재실행 시 같은 누락이 반복된다."
+    }
+  ]
+}
