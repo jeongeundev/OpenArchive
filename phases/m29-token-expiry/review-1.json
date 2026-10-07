@@ -1,0 +1,13 @@
+{
+  "findings": [
+    {
+      "severity": "low",
+      "class": "follow-up",
+      "file": "backend/openarchive/api/auth.py",
+      "line": 1,
+      "summary": "이슈 #199의 「CLI whoami에 만료일」이 #189로 미뤄졌지만 #189 본문·TC에는 없어 PR의 Closes #199로 요구가 사라진다",
+      "reason": "#199 결정 4번째 항목이 'CLI whoami에 만료일'을 요구한다. 설계(step0 '사실' 4번째 줄·D2 금지사항)는 이를 #189 몫으로 넘기고 /api/auth/me를 바꾸지 않았다. 그런데 #189 본문의 TC(25행)는 whoami가 '사용자명과 토큰 범위(read/read_write)'를 보여 준다고만 적고 만료일이 없다. /api/auth/me에도 만료 필드가 없어 #189 구현자가 이 요구를 알 경로가 없다. PR 본문이 'Closes #199'라 머지하면 이슈가 닫히고 요구는 어디에도 남지 않는다. 이 PR의 범위 축소 자체는 설계 승인 사항이라 결함이 아니다 — 받는 쪽 이슈에 옮겨 적는 일이 빠졌다",
+      "title": "#189 whoami에 토큰 만료일 표시 — /api/auth/me에 현재 토큰 expires_at 추가 (#199 이관분)"
+    }
+  ]
+}
