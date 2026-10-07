@@ -2086,3 +2086,43 @@ PL/pgSQL 함수 내부의 generic plan과는 별개이므로 §16의 함수 설�
 **Tmax 확인 사항.** ① 배포판이 `--enable-cassert` 빌드인 것이 의도인지 ② OpenProxy가 파라미터가 있는 이름 없는 문장을
 같은 문장이어도 재사용하지 않고 실행마다 서버 명령문을 새로 만드는 동작이 의도인지(위 표).
 벤치 왕복 시간이 회차마다 늘면 이것부터 의심한다 — 다른 노드의 6432로 비교하거나 서버 연결을 새로 맺는다.
+
+## 19. RLS와 `dbms_rls` — 열람 강제를 DB로 옮길 수 있는가 [실측 2026-10-07]
+
+#98 스파이크 원본은 이슈 코멘트에 있다. 결정은 ADR-063(채택하지 않음).
+
+**환경.** OpenSQL HA 3노드, OpenProxy VIP 경유. VM `openarchive` DB의 전용 스키마 `h98rls`에 제품 마이그레이션(031)과 10/5 폴더
+스파이크 데이터 6벌(624문서·11,724청크, 실 BGE-M3 + 행별 잡음)을 올렸다. 열람 범위는 u_wide 480 · u_mid 196 · u_tiny 5.
+정책은 제품 술어의 `%(user)s`를 `NULLIF(current_setting('app.principal', true), '')`로 바꾼 문장이고, 정책 열람 건수는 앱 술어와
+전부 일치했다(480·196·5). 측정 뒤 스키마와 임시 롤을 지웠다.
+
+**Q1 풀 누수** (두 클라이언트 번갈아 100회): `set_config(…, true)`는 0/100, 트랜잭션 안 LOCAL 없는 `SET`은 84/100 누수.
+커스텀 GUC는 트랜잭션이 끝나면 NULL이 아니라 `''`로 남으므로 `NULLIF`가 필요하다.
+
+**Q2 지연** (질의 10개, `strict_order`):
+
+| 사용자(열람/624) | 앱 술어 p50 | RLS p50 | HNSW(앱/RLS) | recall@10 |
+|---|---|---|---|---|
+| u_wide (480) | 1,096ms | 7,081ms | 10/10 · 10/10 | 1.000 · 1.000 |
+| u_mid (196) | 1,276ms | 6,396ms | 10/10 · 10/10 | 1.000 · 1.000 |
+| u_tiny (5) | 6,154ms | 6,372ms | 10/10 · 10/10 | 1.000 · 1.000 |
+
+정책은 검색 SQL 안의 **모든** `documents`·`document_chunks` 접근(발췌 이웃 청크·그래프 이웃 포함)마다 붙고, 청크 정책은 다시 문서
+정책을 부른다. 앱 술어는 필요한 3곳에만 있다. 원인 분해는 하지 않았다. 이 수치는 #210(§18) 수정 전이라 assert 빌드의 누적
+비용이 섞였을 수 있다 — 두 회차가 같은 조건이라 비교에는 영향이 없다고 본다(추정). u_tiny는 앱 술어에서도 6.2초인데, `strict_order`가
+5건을 찾으려 인덱스를 깊게 훑는 비용이다(#187 코멘트).
+
+**Q3 우회** (같은 SELECT의 행 수, 전체 624): superuser 624 · 소유자(FORCE 없음) 624 · 소유자 FORCE·주체 없음 125 · 소유자 FORCE·
+`set_config('app.principal','u_wide')` **스스로 선언** 605 · 비소유자 롤도 같은 자기 선언으로 605 · 소유자가 스스로 `NO FORCE` 뒤 624.
+**주체가 GUC인 한 SQL 클라이언트는 원하는 사람이 될 수 있다.**
+
+**Q4 선택적 recall** (u_tiny): `iterative_scan=off` 0.107 · `relaxed_order` 1.000 · `strict_order` 1.000 · `strict_order` +
+`max_scan_tuples=1000` 0.627. 기본 `max_scan_tuples`를 유지해야 한다.
+
+**`dbms_rls`(OpenSQL 번들, 공식 문서 검토).** Tmax O2의 Oracle VPD 호환 패키지로 PostgreSQL 16 이상에서 동작한다
+([DBMS_RLS](https://docs.tibero.com/tmaxopensql/tmax-o2-extensions/reference-guides/package/dbms_rls.md)). `ADD_POLICY`가 정책 함수를
+등록하면 조회마다 그 함수가 만든 조건문이 WHERE로 붙는다. `static_policy`·`policy_type`·`long_predicate`·`sec_relevant_cols_opt`는
+OpenSQL에서 무시된다. 주체 전달에 쓰는 [SYS_CONTEXT](https://docs.tibero.com/tmaxopensql/tmax-o2-extensions/reference-guides/sql-function/environment-functions/sys_context.md)는
+**`USERENV` 네임스페이스만** 지원한다(host·current_schema·current_user·session_user·server_host·ip_address). 풀 경유에서는
+DB 사용자가 앱 롤 하나이므로 문서 사용자 구분은 GUC로 돌아가고 Q3이 그대로다. 내부 구현(표준 RLS 위인지), `ENABLE_POLICY` 권한,
+HNSW 영향은 문서에 없고 실측하지 않았다. 영문 문서 색인에는 이 페이지가 없고 한국어 문서에만 있다.

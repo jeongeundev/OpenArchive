@@ -119,8 +119,8 @@ DB 계층에 있고, 애플리케이션 코드에는 파이프라인을 조율�
 
 - **주체(사용자·그룹·공유) + 부여 모델**: 채택됨 → PRD §6 (ADR-044, #97 a~c 구현).
 - **폴더 열람 범위 상속**: 채택됨 → PRD §6 (ADR-054, 백엔드 구현 #187 · 2026-10-07 화면 구현(#187 c)·CLI `import --keep-folders`(#187 d)).
-- **RLS 강제** (후보): 강제를 DB(RLS)에서 할지는 실OpenSQL 스파이크(#98) 뒤 별도 ADR. 열람 범위
-  술어가 한 곳(`visibility.py`)에 있어 교체 지점도 한 곳이다.
+- **RLS 강제**: 채택하지 않음 (ADR-063, #98 실측). GUC 주체는 SQL 클라이언트가 스스로 선언할 수 있고 검색 지연이 5~6초
+  늘었다. OpenSQL `dbms_rls`도 같다. 재검토는 사용자별 DB 롤(`current_user` 주체) 설계가 필요해질 때 — 술어가 한 곳이라 교체 지점도 한 곳이다.
 - **폴더 단위 편집 역할** (다음 단계 후보): 2026-10-06 실무 대조에서 조사 제품 전부(SharePoint Edit·Google Content
   manager/Contributor·Box Editor·Confluence 편집 제한·Alfresco Collaborator·Nextcloud Create/Change/Delete)가 폴더에
   편집/기여 역할을 두고 우리만 열람뿐이다 — 실무 대비 가장 큰 기능 간극. ADR-044의 역할 4단 기각은 "요청되면 그때"이며
