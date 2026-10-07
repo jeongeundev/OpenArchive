@@ -41,7 +41,10 @@
       "type": "feat",
       "scope": "api",
       "desc": "휴지통 이동·목록·복원·영구 삭제·만료 비우기 서비스",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-10-07T10:34:06+0900",
+      "summary": "휴지통 이동·목록·복원·영구 삭제·만료 비우기 서비스와 보존·권한·감사 테스트를 추가해 지정 AC 162개·Ruff 및 3개 mutant 검증을 통과했으며 기존 delete_document는 REST 라우터만 호출하므로 step 5까지 유지했다",
+      "completed_at": "2026-10-07T10:37:18+0900"
     },
     {
       "step": 4,
