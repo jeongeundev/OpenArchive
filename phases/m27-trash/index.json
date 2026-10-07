@@ -19,7 +19,10 @@
       "type": "feat",
       "scope": "db",
       "desc": "휴지통 이동·복원을 트리거가 감사 로그에 남긴다",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-10-07T10:24:58+0900",
+      "summary": "033 마이그레이션과 감사 동작 목록에 휴지통 이동·복원을 추가하고 지정 AC 156개 테스트·Ruff 및 WHEN 제거·분기 반전 mutant 검증을 통과했다",
+      "completed_at": "2026-10-07T10:27:20+0900"
     },
     {
       "step": 2,
