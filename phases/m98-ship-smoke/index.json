@@ -4,7 +4,17 @@
   "issue": 217,
   "title": "chore(harness): ship.py 실전 시험 — phase_slug (#217, 머지 안 함)",
   "steps": [
-    { "step": 0, "name": "phase-slug", "type": "chore", "scope": "harness",
-      "desc": "ship.py 시험용 phase_slug", "status": "pending" }
-  ]
+    {
+      "step": 0,
+      "name": "phase-slug",
+      "type": "chore",
+      "scope": "harness",
+      "desc": "ship.py 시험용 phase_slug",
+      "status": "completed",
+      "summary": "phase_slug 구현 및 변환 규칙 테스트 7건·ruff 검증 통과",
+      "started_at": "2026-10-07T20:26:12+0900",
+      "completed_at": "2026-10-07T20:27:37+0900"
+    }
+  ],
+  "created_at": "2026-10-07T20:26:12+0900"
 }
