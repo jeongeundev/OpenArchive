@@ -55,6 +55,15 @@ IMPL_PATH = re.compile(
     r"|^frontend/src/.*\.[jt]sx?$"
     r"|^scripts/[^/]+\.py$"
 )
+# 테스트 정의 줄 — 지워진 이름이 다시 추가되지 않으면 테스트 삭제로 본다.
+TEST_DEF = re.compile(
+    r"^\s*(?:async\s+)?def\s+(test_\w+)"
+    r"|^\s*(?:it|test)\(\s*(['\"`])(.+?)\2"
+)
+# 에이전트 세션은 권한 확인 없이 돈다 — 이슈 생성·머지·커밋·push는 도구 수준에서 막는다.
+# 커밋·push는 변조 검사를 거쳐 하네스만 한다. `--disallowedTools`는 권한 우회 모드에서도 거부된다(실측).
+AGENT_DENIED = ("Bash(gh issue create:*) Bash(gh api:*) Bash(gh pr merge:*) "
+                "Bash(git commit:*) Bash(git push:*)")
 SKIP_MARKER = re.compile(
     r"pytest\.mark\.(skip|xfail)|pytest\.(skip|xfail)\("
     r"|\b(it|test|describe)\.(skip|todo)\(|\bx(it|describe)\("
@@ -96,7 +105,7 @@ def untested_changes(paths: list[str]) -> list[str]:
 
 
 def find_tampering(name_status: str, diff: str) -> list[str]:
-    """자동 수정이 테스트를 지우거나 skip/xfail을 붙였는지. 단언 약화는 잡지 못한다."""
+    """자동 수정이 테스트(파일·함수)를 지우거나 skip/xfail을 붙였는지. 단언 약화는 잡지 못한다."""
     found = []
     for line in name_status.splitlines():
         parts = line.split("\t")
@@ -109,11 +118,25 @@ def find_tampering(name_status: str, diff: str) -> list[str]:
             found.append(f"테스트 파일 삭제: {parts[1]}")
 
     current = None
+    removed: dict[str, list[str]] = {}
+    added: dict[str, set[str]] = {}
     for line in diff.splitlines():
         if line.startswith("+++ "):
             current = line[6:] if line.startswith("+++ b/") else None
-        elif line.startswith("+") and current and is_test(current) and SKIP_MARKER.search(line):
+            continue
+        if not current or not is_test(current) or line.startswith("--- "):
+            continue
+        if line.startswith("+") and SKIP_MARKER.search(line):
             found.append(f"skip/xfail 추가: {current}: {line[1:].strip()}")
+        m = TEST_DEF.search(line[1:]) if line[:1] in "+-" else None
+        if m:
+            name = m.group(1) or m.group(3)
+            if line.startswith("-"):
+                removed.setdefault(current, []).append(name)
+            else:
+                added.setdefault(current, set()).add(name)
+    for path, names in removed.items():
+        found += [f"테스트 함수 삭제: {path}: {n}" for n in names if n not in added.get(path, set())]
     return found
 
 
@@ -123,8 +146,8 @@ def next_stage_after_review(findings: list[dict], reviews: int, fixes: int) -> s
     if not any(f["class"] == "fix" for f in findings):
         return "ci"
     if fixes >= MAX_FIXES or reviews >= MAX_REVIEWS:
-        raise Gate(f"자동 수정 한도({MAX_FIXES}회) 뒤에도 fix 지적이 남았다 — "
-                   "마지막 리뷰 결과를 직접 확인할 것")
+        raise Gate(f"자동 수정 한도({MAX_FIXES}회) 뒤에도 fix 지적이 남았다 — 마지막 리뷰 결과를 "
+                   "직접 반영·커밋한 뒤 --from review로 재개")
     return "fix"
 
 
@@ -181,8 +204,8 @@ class Shipper:
         self._report_ready()
         return EXIT_OK
 
-    def merge(self) -> int:
-        """G4 — 사람이 확인한 뒤 부른다."""
+    def merge(self, vm_verified: bool = False) -> int:
+        """G4 — 사람이 확인한 뒤 부른다. needs_vm phase는 G3 실측 확인(vm_verified)도 요구한다."""
         self.state = load_state(self.root, self.phase_dir) or {}
         if self.state.get("stage") != "ready":
             print(f"  머지할 수 없다 — ready 단계가 아니다 (현재: {self.state.get('stage', '시작 전')})")
@@ -190,6 +213,8 @@ class Shipper:
         st = self.state
         try:
             self._prepare(None)
+            if st["needs_vm"] and not vm_verified:
+                raise Gate("G3: VM 실측이 필요한 phase다 — 실측을 마친 뒤 --merge --vm-verified")
             if self._sh("gh", "pr", "checks", str(st["pr"])).returncode != 0:
                 raise Gate(f"CI가 초록이 아니다 — 머지하지 않았다: {st['pr_url']}")
             r = self._sh("gh", "pr", "merge", str(st["pr"]), "--squash")
@@ -319,7 +344,8 @@ class Shipper:
     def _stage_review(self):
         st = self.state
         if st["reviews"] >= MAX_REVIEWS:
-            raise Gate(f"리뷰 한도({MAX_REVIEWS}회)에 닿았다 — --from review로 횟수를 초기화해 재개")
+            raise Gate(f"리뷰 한도({MAX_REVIEWS}회)에 닿았다 — 마지막 리뷰 결과를 직접 반영·커밋한 뒤 "
+                       "--from review로 재개")
         self._require_clean()
         n = len(st["review_artifacts"]) + 1
         rel = f"{self.phase_rel}/review-{n}.json"
@@ -345,6 +371,8 @@ class Shipper:
     def _stage_fix(self):
         st = self.state
         self._require_clean()
+        if not st["review_artifacts"]:
+            raise Gate("수정할 리뷰 결과가 없다 — --from review로 재개")
         fixes = [f for f in self._load_findings(st["review_artifacts"][-1]) if f["class"] == "fix"]
         n = st["fixes"] + 1
         self._agent(self._fix_prompt(
@@ -356,9 +384,13 @@ class Shipper:
 
     def _stage_ci(self):
         st = self.state
-        if self._wait_checks().returncode == 0:
+        r = self._wait_checks()
+        if r.returncode == 0:
             st["stage"] = "ready"
             return
+        if r.returncode == 124:
+            # 실패가 아니라 대기 초과다 — 로그 없는 자동 수정으로 CI 수정 예산을 쓰지 않는다.
+            raise Gate(f"CI 대기 시간({CI_TIMEOUT}초)을 넘겼다 — Actions 상태를 확인한 뒤 재개: {st['pr_url']}")
         if st["ci_fixes"] >= MAX_CI_FIXES:
             raise Gate(f"CI 실패 — 자동 수정 {MAX_CI_FIXES}회 뒤에도 실패: {st['pr_url']}")
         self._require_clean()
@@ -466,8 +498,9 @@ class Shipper:
             for sha in st["ci_fix_commits"]:
                 print(f"  - {self._git('log', '-1', '--format=%h %s', sha)}")
         if st["needs_vm"]:
-            print("\n  ⏸ G3: VM 실측이 필요한 phase다 — 실측을 마친 뒤 머지할 것")
-        print(f"\n  ⏸ G4: 확인 후 python3 scripts/ship.py {self.phase_dir} --merge")
+            print("\n  ⏸ G3: VM 실측이 필요한 phase다 — 실측을 마친 뒤 --merge --vm-verified")
+        else:
+            print(f"\n  ⏸ G4: 확인 후 python3 scripts/ship.py {self.phase_dir} --merge")
         self._notify(f"머지 대기: PR #{st['pr']}" + (" (VM 실측 필요)" if st["needs_vm"] else ""))
 
     # --- 프롬프트·본문 ---
@@ -564,6 +597,7 @@ class Shipper:
     def _agent(self, prompt: str):
         # 매번 새 프로세스 — 리뷰는 구현 맥락이 없는 새 세션에서 돈다.
         r = self._sh("claude", "-p", "--dangerously-skip-permissions", "--model", MODEL,
+                     "--disallowedTools", AGENT_DENIED,
                      "--output-format", "json", input=prompt, timeout=AGENT_TIMEOUT)
         if r.returncode != 0:
             raise Gate(f"claude 세션 실패(code {r.returncode}): {tail(r.stderr or r.stdout)}")
@@ -595,10 +629,16 @@ def main():
     group.add_argument("--from", dest="from_stage", choices=STAGES[:-2],
                        help="이 단계부터 다시 (review 이전이면 리뷰·수정 횟수 초기화)")
     group.add_argument("--merge", action="store_true", help="G4: squash 머지 + 이슈 닫힘 확인")
+    parser.add_argument("--vm-verified", action="store_true",
+                        help="G3: needs_vm phase의 VM 실측을 마쳤다 (--merge와 함께)")
     args = parser.parse_args()
+    if args.vm_verified and not args.merge:
+        parser.error("--vm-verified는 --merge와 함께 쓴다")
 
     shipper = Shipper(args.phase_dir)
-    sys.exit(shipper.merge() if args.merge else shipper.run(from_stage=args.from_stage))
+    if args.merge:
+        sys.exit(shipper.merge(vm_verified=args.vm_verified))
+    sys.exit(shipper.run(from_stage=args.from_stage))
 
 
 if __name__ == "__main__":

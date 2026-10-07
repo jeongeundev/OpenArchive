@@ -67,7 +67,7 @@
 - CRITICAL: 마이그레이션 SQL도 TDD 대상이다. `*_triggers.sql`·`*_tables.sql`은 tdd-guard 훅이 대응 테스트(`backend/tests/test_triggers.py`, `test_tables.py`)를 요구한다. `*_extensions.sql`·`*_indexes.sql`은 훅에서 제외되지만, 인덱스가 검색 계획에 실제로 쓰이는지 확인이 필요하면 테스트를 직접 추가하라.
 - CRITICAL: DB 의존 테스트를 Mock·SQLite·인메모리 가짜 구현으로 대체하지 마라. 실제 `pgvector/pgvector:pg17` 컨테이너에 마이그레이션을 적용한 상태로 검증한다. 이유: 트리거·NOTIFY·`vector` 연산자 동작은 원리상 Mock으로 검증할 수 없고, 그것이 이 과제의 심사 핵심이다.
 - 전체 검증의 정본은 CI(`scripts/check.sh`)다. 작업 중·PR 전에는 바꾼 범위의 테스트만 돌린다. 프론트엔드를 바꿨다면 `npm run build:static`으로 동봉 산출물(`backend/openarchive/static`)을 갱신해 커밋한다 — CI는 어긋남을 실패로만 알리고 고쳐 주지 않는다. 테스트를 돌리지 못했거나 CI 결과를 확인하지 않았다면 추측으로 통과 처리하지 말고, 그 사실과 영향 범위를 응답에 명시하라.
-- 커밋은 Conventional Commits `<type>(<scope>): <설명>` 형식. 타입: `feat` `fix` `docs` `test` `refactor` `chore` `ci` `perf` / 스코프: `db` `worker` `api` `search` `mcp` `cli` `frontend` `adr` `harness`(`scripts/execute.py`·`.claude/commands/harness.md`)
+- 커밋은 Conventional Commits `<type>(<scope>): <설명>` 형식. 타입: `feat` `fix` `docs` `test` `refactor` `chore` `ci` `perf` / 스코프: `db` `worker` `api` `search` `mcp` `cli` `frontend` `adr` `harness`(`scripts/execute.py`·`scripts/ship.py`·`.claude/commands/harness.md`)
 - 브랜치는 `feat/` `fix/` `docs/` `test/` `chore/` 5개 접두사만 사용. `main` 단일 기본 브랜치에 Squash merge (ADR-013)
 - **TDD 강제는 커밋 순서가 아니라 `scripts/hooks/tdd-guard.sh`가 한다.** 이 훅은 `PreToolUse(Edit|Write)`로 걸려, 대응 테스트가 없는 구현 파일 쓰기를 `deny`로 차단한다. 커밋 순서는 사후 기록이지만 훅은 사전 차단이므로 더 강한 보장이다
 - 커밋 단위는 작업 방식에 따라 다르다
