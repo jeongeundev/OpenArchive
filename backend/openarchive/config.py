@@ -58,6 +58,9 @@ class Settings(BaseSettings):
     # 만료 뒤 회수된다 (ADR-050). 스윕도 drain 중 이 주기로 돈다.
     job_lease_seconds: int = Field(default=60, gt=0)
 
+    # ADR-060 결정 4: 0 이하는 기동 거부, 영구 보존은 큰 값을 사용한다.
+    trash_retention_days: int = Field(default=30, gt=0)
+
     # 한 근무일 동안 재로그인 없이 쓰되, 장기 토큰으로 남지 않도록 24시간으로 제한한다.
     session_lifetime_hours: int = 24
 

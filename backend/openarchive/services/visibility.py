@@ -11,6 +11,9 @@ public은 조직(이 설치에 로그인한 사용자) 전체, private는 소유
 지정」 문서는 문서 자신의 visibility·부여로 판정한다. 소유자는 어느 쪽이든 자기 문서를 본다.
 실효 범위를 저장하지 않으므로 폴더 부여·그룹 구성원 변경은 다음 조회부터 반영된다. 공유 주체는
 폴더를 보지 않는다 — 공유에 부여된 문서만 본다.
+
+휴지통 (ADR-060 결정 1): 휴지통 문서는 소유자·공유 주체에게도 존재하지 않는다.
+휴지통 조건은 모든 열람 분기 바깥에 두고, 복원 때 기존 청크·관계를 그대로 다시 읽는다.
 """
 
 from uuid import UUID
@@ -79,7 +82,10 @@ def root_folder_visibility(start: str) -> str:
 #
 # 익명(None): NULL LIKE …는 NULL이라 CASE가 ELSE로 간다. username = NULL이 참이 될 수
 # 없어 public(문서 또는 최상위 폴더)만 본다. 패턴의 %%는 바인딩 쿼리 안이라 이스케이프한 것이다.
-VISIBLE_TO_USER = """(CASE WHEN %(user)s LIKE 'share:%%' THEN EXISTS (
+# NOT_TRASHED와 VISIBLE_TO_USER는 documents의 별칭이 d라고 전제한다 — 쓰는 쿼리는 FROM documents d로 쓴다.
+NOT_TRASHED = "d.deleted_at IS NULL"
+
+VISIBLE_TO_USER = NOT_TRASHED + """ AND (CASE WHEN %(user)s LIKE 'share:%%' THEN EXISTS (
     SELECT 1 FROM document_grants g JOIN shares s ON s.id = g.share_id
     WHERE g.document_id = d.id
       AND 'share:' || s.id::text = %(user)s

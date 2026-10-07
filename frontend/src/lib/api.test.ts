@@ -12,6 +12,9 @@ import {
   createShareToken,
   createToken,
   deleteDocument,
+  listTrash,
+  purgeDocument,
+  restoreDocument,
   deleteGroup,
   deleteShare,
   editDocument,
@@ -254,6 +257,27 @@ describe("API responses", () => {
 
     expect(fetchMock.mock.calls[0][0]).toBe("/api/documents/doc%2F1/versions/3?chunk=2");
     expect(fetchMock.mock.calls[1][0]).toBe("/api/documents/doc%2F1/versions/3");
+  });
+
+  it("lists, restores and permanently deletes trashed documents", async () => {
+    const fetchMock = vi.fn<(url: string, init?: RequestInit) => Promise<Response>>(
+      (url) => Promise.resolve(
+        url.endsWith("/restore") ? new Response("{}")
+          : url === "/api/documents/trash" ? new Response("[]")
+          : new Response(null, { status: 204 }),
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(listTrash()).resolves.toEqual([]);
+    await restoreDocument("doc/1");
+    await expect(purgeDocument("doc/1")).resolves.toBeUndefined();
+
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/documents/trash");
+    expect(fetchMock.mock.calls[1][0]).toBe("/api/documents/doc%2F1/restore");
+    expect(fetchMock.mock.calls[1][1]?.method).toBe("POST");
+    expect(fetchMock.mock.calls[2][0]).toBe("/api/documents/doc%2F1?permanent=true");
+    expect(fetchMock.mock.calls[2][1]?.method).toBe("DELETE");
   });
 
   it("returns normally for a 204 delete response without parsing JSON", async () => {

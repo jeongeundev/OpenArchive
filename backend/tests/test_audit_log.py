@@ -30,6 +30,7 @@ def test_audit_defaults(conn):
 @pytest.mark.parametrize("action", [
     "document_created", "text_updated", "document_deleted", "access_changed",
     "group_member_changed", "original_replaced", "original_downloaded", "folder_access_changed",
+    "document_trashed", "document_restored",
 ])
 def test_allowed_actions(conn, action):
     assert conn.execute(
@@ -426,3 +427,56 @@ def test_document_folder_move_audit(conn, follows):
             "kind": "folder", "before": old, "after": new,
         }) for old, new in ((None, "사업 자료"), ("사업 자료", "개발 자료"), ("개발 자료", None))
     ] if follows else [])
+
+
+@pytest.mark.parametrize("restored", [False, True])
+def test_document_trash_transition_records_actor_and_title(conn, restored):
+    doc = create_document(conn)
+    if restored:
+        conn.execute("UPDATE documents SET deleted_at = now() WHERE id = %s", (doc,))
+    before = audit_rows(conn)
+    with conn.transaction():
+        set_actor(conn)
+        conn.execute(
+            "UPDATE documents SET deleted_at = " + ("NULL" if restored else "now()")
+            + " WHERE id = %s", (doc,),
+        )
+    action = "document_restored" if restored else "document_trashed"
+    assert audit_rows(conn) == before + [(action, "alice", "session", doc, "감사 대상", {})]
+
+
+def test_document_trash_unchanged_nullness_is_not_audited(conn):
+    doc = create_document(conn)
+    before = audit_rows(conn)
+    conn.execute("UPDATE documents SET deleted_at = NULL WHERE id = %s", (doc,))
+    conn.execute("UPDATE documents SET title = '새 제목' WHERE id = %s", (doc,))
+    assert audit_rows(conn) == before
+    conn.execute("UPDATE documents SET deleted_at = now() WHERE id = %s", (doc,))
+    before = audit_rows(conn)
+    conn.execute(
+        "UPDATE documents SET deleted_at = deleted_at + interval '1 day' WHERE id = %s", (doc,),
+    )
+    assert audit_rows(conn) == before
+
+
+def test_trashed_document_delete_preserves_audit_history(conn):
+    with conn.transaction():
+        set_actor(conn)
+        doc = create_document(conn)
+        conn.execute("UPDATE documents SET deleted_at = now() WHERE id = %s", (doc,))
+        original = audit_rows(conn)
+        assert original[-1] == ("document_trashed", "alice", "session", doc, "감사 대상", {})
+        conn.execute("DELETE FROM documents WHERE id = %s", (doc,))
+    assert conn.execute("SELECT id FROM documents WHERE id = %s", (doc,)).fetchone() is None
+    assert audit_rows(conn) == original + [
+        ("document_deleted", "alice", "session", doc, "감사 대상", {}),
+    ]
+
+
+def test_worker_delete_records_worker_without_actor(conn):
+    doc = create_document(conn)
+    conn.execute("UPDATE documents SET deleted_at = now() WHERE id = %s", (doc,))
+    with conn.transaction():
+        set_actor(conn, actor="", via="worker")
+        conn.execute("DELETE FROM documents WHERE id = %s", (doc,))
+    assert audit_rows(conn)[-1] == ("document_deleted", None, "worker", doc, "감사 대상", {})

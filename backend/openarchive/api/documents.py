@@ -41,11 +41,13 @@ from openarchive.api.schemas import (
     RestoreVersionRequest,
     TagSuggestionsResponse,
     TextVersionDetail,
+    TrashItem,
     UpdateAccessRequest,
     UpdateTagsRequest,
 )
 from openarchive.config import get_settings
 from openarchive.services import documents as service
+from openarchive.services import trash
 from openarchive.services.links import find_backlinks, resolve_links
 from openarchive.services.parsing import SUPPORTED_CONTENT_TYPES, UnsupportedFileType
 from openarchive.services.related import find_related, suggest_tags
@@ -213,6 +215,27 @@ async def list_visible_tags(
     user_id: Annotated[str, Depends(require_reader)],
 ) -> list[str]:
     return await service.list_visible_tags(conn, user_id=user_id)
+
+
+@router.get("/trash", response_model=list[TrashItem])
+async def list_trash(
+    conn: Connection,
+    user_id: Annotated[str, Depends(require_write_user_id)],
+) -> list[TrashItem]:
+    items = await trash.list_trash(
+        conn, user_id=user_id, retention_days=get_settings().trash_retention_days
+    )
+    return [TrashItem.model_validate(item) for item in items]
+
+
+@router.post("/{document_id}/restore", response_model=DocumentSummary)
+async def restore_document(
+    document_id: UUID,
+    conn: Connection,
+    user_id: Annotated[str, Depends(require_write_user_id)],
+) -> DocumentSummary:
+    document = await trash.restore_document(conn, document_id, user_id=user_id)
+    return DocumentSummary.model_validate(document)
 
 
 @router.get("/{document_id}", response_model=DocumentDetail)
@@ -480,8 +503,12 @@ async def delete_document(
     document_id: UUID,
     conn: Connection,
     user_id: Annotated[str, Depends(require_write_user_id)],
+    permanent: bool = False,
 ) -> Response:
-    await service.delete_document(conn, document_id, user_id=user_id)
+    if permanent:
+        await trash.purge_document(conn, document_id, user_id=user_id)
+    else:
+        await trash.trash_document(conn, document_id, user_id=user_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 

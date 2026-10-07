@@ -269,11 +269,21 @@ export interface GroupSummary {
   members: string[];
 }
 
+/** 휴지통의 문서 한 건. 영구 삭제 예정일은 서버가 보존 기간으로 계산한다 (ADR-060). */
+export interface TrashItem {
+  id: string;
+  title: string;
+  deleted_at: string;
+  purge_at: string;
+}
+
 /** 감사 로그의 동작. DB 트리거·함수가 기록한다 (ADR-055). */
 export type AuditAction =
   | "document_created"
   | "text_updated"
   | "document_deleted"
+  | "document_trashed"
+  | "document_restored"
   | "access_changed"
   | "folder_access_changed"
   | "group_member_changed"

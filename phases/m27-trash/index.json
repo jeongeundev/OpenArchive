@@ -1,0 +1,96 @@
+{
+  "project": "OpenArchive",
+  "phase": "m27-trash",
+  "steps": [
+    {
+      "step": 0,
+      "name": "trash-tables",
+      "type": "feat",
+      "scope": "db",
+      "desc": "문서에 휴지통 이동 시각 컬럼과 휴지통 조회 인덱스를 더한다",
+      "status": "completed",
+      "summary": "032 마이그레이션에 deleted_at과 휴지통 부분 인덱스를 추가하고 스키마·잡 비생성 테스트 및 지정 AC를 통과했다",
+      "started_at": "2026-10-07T10:22:42+0900",
+      "completed_at": "2026-10-07T10:24:58+0900"
+    },
+    {
+      "step": 1,
+      "name": "trash-audit",
+      "type": "feat",
+      "scope": "db",
+      "desc": "휴지통 이동·복원을 트리거가 감사 로그에 남긴다",
+      "status": "completed",
+      "started_at": "2026-10-07T10:24:58+0900",
+      "summary": "033 마이그레이션과 감사 동작 목록에 휴지통 이동·복원을 추가하고 지정 AC 156개 테스트·Ruff 및 WHEN 제거·분기 반전 mutant 검증을 통과했다",
+      "completed_at": "2026-10-07T10:27:20+0900"
+    },
+    {
+      "step": 2,
+      "name": "trash-predicate",
+      "type": "feat",
+      "scope": "search",
+      "desc": "열람 술어가 휴지통 문서를 전 경로에서 제외한다",
+      "status": "completed",
+      "started_at": "2026-10-07T10:27:20+0900",
+      "summary": "공통 열람 술어·공유 관리·가져오기 중복 판정에서 휴지통을 제외하고 격리·검색·아키텍처 테스트를 추가해 지정 AC 478개·Ruff 및 4개 mutant 검증을 통과했으며 1200 고유 벡터의 후보 CTE에서 HNSW idx_chunks_embedding 사용을 확인했다",
+      "completed_at": "2026-10-07T10:34:05+0900"
+    },
+    {
+      "step": 3,
+      "name": "trash-service",
+      "type": "feat",
+      "scope": "api",
+      "desc": "휴지통 이동·목록·복원·영구 삭제·만료 비우기 서비스",
+      "status": "completed",
+      "started_at": "2026-10-07T10:34:06+0900",
+      "summary": "휴지통 이동·목록·복원·영구 삭제·만료 비우기 서비스와 보존·권한·감사 테스트를 추가해 지정 AC 162개·Ruff 및 3개 mutant 검증을 통과했으며 기존 delete_document는 REST 라우터만 호출하므로 step 5까지 유지했다",
+      "completed_at": "2026-10-07T10:37:18+0900"
+    },
+    {
+      "step": 4,
+      "name": "trash-worker",
+      "type": "feat",
+      "scope": "worker",
+      "desc": "워커가 보존 기간이 지난 휴지통 문서를 영구 삭제한다",
+      "status": "completed",
+      "summary": "양의 보존 기간 설정(기본 30일)과 폴링 루프의 휴지통 자동 영구 삭제를 추가하고 LISTEN 없는 삭제·감사·오류 연결 폐기를 검증해 지정 AC 131개·Ruff 및 아키텍처 테스트를 통과했다",
+      "started_at": "2026-10-07T10:37:18+0900",
+      "completed_at": "2026-10-07T10:41:01+0900"
+    },
+    {
+      "step": 5,
+      "name": "trash-api",
+      "type": "feat",
+      "scope": "api",
+      "desc": "휴지통 이동·영구 삭제·목록·복원 REST 엔드포인트",
+      "status": "completed",
+      "started_at": "2026-10-07T10:41:01+0900",
+      "summary": "휴지통 이동·목록·복원·영구 삭제 REST와 세션·토큰 권한 및 감사 테스트를 추가하고 기존 하드 삭제 서비스를 정리해 지정 AC 186개·Ruff·아키텍처 테스트 9개를 통과했다",
+      "completed_at": "2026-10-07T10:45:11+0900"
+    },
+    {
+      "step": 6,
+      "name": "trash-ui",
+      "type": "feat",
+      "scope": "frontend",
+      "desc": "휴지통 화면·삭제 확인 문구·감사 표기",
+      "status": "completed",
+      "started_at": "2026-10-07T10:45:11+0900",
+      "summary": "휴지통 화면 /trash(복원·영구 삭제 확인)·사이드바 링크·삭제 확인창 문구·감사 표기 3종과 API 함수를 추가하고 정적 산출물을 갱신해 프론트 lint(경고만)·테스트 481개·build:static·test_frontend 11개를 통과했다",
+      "completed_at": "2026-10-07T10:48:00+0900"
+    },
+    {
+      "step": 7,
+      "name": "trash-docs",
+      "type": "docs",
+      "scope": "adr",
+      "desc": "ADR-060 구현 결정과 운영·아키텍처 문서에 휴지통 반영",
+      "status": "completed",
+      "started_at": "2026-10-07T10:48:00+0900",
+      "summary": "ADR-060 「구현 때 정함」을 닫고(/trash·032/033·폴링마다 비우기·양의 정수, 술어 밖 예외·영구 삭제·토큰 경계) OPERATIONS 환경변수 표·dr_restore break 주의, ARCHITECTURE 스키마·감사 트리거·워커 비우기·API 행을 갱신해 AC grep과 test_architecture 9개를 통과했다",
+      "completed_at": "2026-10-07T10:50:46+0900"
+    }
+  ],
+  "created_at": "2026-10-07T10:22:42+0900",
+  "completed_at": "2026-10-07T10:50:47+0900"
+}

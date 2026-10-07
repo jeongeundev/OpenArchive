@@ -312,6 +312,24 @@ async def test_search_candidates_can_use_hnsw_with_the_share_predicate(
         "k": 10,
     }
 
+    # 101청크에서는 필터 후 정렬도 정상 선택이다. 충분한 고유 벡터로 HNSW 가능성을 검증한다.
+    base = provider.embed([QUERY])[0]
+    coordinate = next(index for index, value in enumerate(base) if value == 0)
+    for index in range(1200):
+        doc = await insert_test_document(
+            visibility_conn, title=f"계획 후보 {index}", content=f"계획 본문 {index}"
+        )
+        vector = base.copy()
+        vector[coordinate] = (index + 1) / 1200
+        await visibility_conn.execute(
+            "INSERT INTO document_chunks (document_id, version, chunk_index, content, embedding) "
+            "VALUES (%s, 1, 0, %s, %s::vector)",
+            (doc, f"계획 본문 {index}", to_pgvector_literal(vector)),
+        )
+    cur = await visibility_conn.execute("SELECT count(DISTINCT embedding::text) FROM document_chunks")
+    assert (await cur.fetchone())[0] >= 1200
+    await visibility_conn.execute("ANALYZE documents")
+    await visibility_conn.execute("ANALYZE document_chunks")
     async with visibility_conn.transaction():
         await visibility_conn.execute("SET LOCAL random_page_cost = 1.1")
         await visibility_conn.execute("SET LOCAL enable_seqscan = off")

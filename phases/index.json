@@ -140,6 +140,11 @@
       "dir": "m26-folder-ui",
       "status": "completed",
       "completed_at": "2026-10-07T00:35:12+0900"
+    },
+    {
+      "dir": "m27-trash",
+      "status": "completed",
+      "completed_at": "2026-10-07T10:50:47+0900"
     }
   ]
 }

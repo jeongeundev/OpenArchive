@@ -85,6 +85,8 @@ describe("감사 로그 화면", () => {
   it("동작을 표기 규칙대로 보여 준다", async () => {
     const items = [
       entry({ action: "document_deleted", document_title: "삭제한 문서" }),
+      entry({ action: "document_trashed", document_title: "버린 문서" }),
+      entry({ action: "document_restored", document_title: "되살린 문서" }),
       entry({ action: "access_changed", detail: { kind: "visibility", before: "public", after: "private" } }),
       entry({ action: "access_changed", detail: { kind: "grant", change: "added", grantee_type: "user", grantee: "bob" } }),
       entry({ action: "access_changed", detail: { kind: "grant", change: "removed", grantee_type: "group", grantee: "재무팀" } }),
@@ -98,8 +100,15 @@ describe("감사 로그 화면", () => {
     render(<AuthProvider><AuditPage /></AuthProvider>);
 
     const table = await screen.findByRole("table");
-    expect(within(table).getByText("문서 삭제")).toBeInTheDocument();
+    expect(within(table).getByText("영구 삭제")).toBeInTheDocument();
     expect(within(table).getByText("삭제한 문서")).toBeInTheDocument();
+    expect(within(table).getByText("휴지통 이동")).toBeInTheDocument();
+    expect(within(table).getByText("버린 문서")).toBeInTheDocument();
+    expect(within(table).getByText("복원")).toBeInTheDocument();
+    expect(within(table).getByText("되살린 문서")).toBeInTheDocument();
+    const options = within(screen.getByRole("combobox", { name: "동작" }))
+      .getAllByRole("option").map((option) => option.textContent);
+    expect(options).toEqual(expect.arrayContaining(["휴지통 이동", "복원", "영구 삭제"]));
     expect(within(table).getAllByText("열람 범위 변경")).toHaveLength(3);
     expect(within(table).getByText("조직 공개 → 제한")).toBeInTheDocument();
     expect(within(table).getByText("사용자 bob 추가")).toBeInTheDocument();
@@ -109,7 +118,7 @@ describe("감사 로그 화면", () => {
     expect(within(table).getByText("재무팀에서 bob 제거")).toBeInTheDocument();
     expect(within(table).getByText("원본 교체(판 2)")).toBeInTheDocument();
     expect(within(table).getByText("원본 내려받기(판 1)")).toBeInTheDocument();
-    const memberRow = rows()[4];
+    const memberRow = rows()[6];
     expect(within(memberRow).getByText("admin")).toBeInTheDocument();
     expect(within(memberRow).getByText("—")).toBeInTheDocument();
   });

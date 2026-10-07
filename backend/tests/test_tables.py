@@ -17,6 +17,39 @@ import hashlib
 import psycopg
 import pytest
 
+
+def test_document_trash_column_preserves_existing_inserts(conn):
+    assert conn.execute(
+        "SELECT data_type, is_nullable, column_default"
+        " FROM information_schema.columns WHERE table_schema = 'public'"
+        " AND table_name = 'documents' AND column_name = 'deleted_at'"
+    ).fetchone() == ("timestamp with time zone", "YES", None)
+    doc = insert_document(conn)
+    assert conn.execute(
+        "SELECT deleted_at FROM documents WHERE id = %s", (doc,)
+    ).fetchone() == (None,)
+
+
+def test_changing_only_trash_timestamp_does_not_create_jobs(conn):
+    doc = insert_document(conn)
+    count_jobs = "SELECT count(*) FROM embedding_jobs WHERE document_id = %s"
+    before = conn.execute(count_jobs, (doc,)).fetchone()[0]
+    assert before == 1
+    conn.execute("UPDATE documents SET deleted_at = now() WHERE id = %s", (doc,))
+    assert conn.execute(count_jobs, (doc,)).fetchone()[0] == before
+    conn.execute("UPDATE documents SET deleted_at = NULL WHERE id = %s", (doc,))
+    assert conn.execute(count_jobs, (doc,)).fetchone()[0] == before
+
+
+def test_trash_index_covers_owner_and_timestamp_only_for_trashed_documents(conn):
+    row = conn.execute(
+        "SELECT indexdef FROM pg_indexes WHERE schemaname = 'public'"
+        " AND tablename = 'documents' AND indexname = 'idx_documents_trash'"
+    ).fetchone()
+    assert row is not None
+    assert "(owner_id, deleted_at)" in row[0]
+    assert "WHERE (deleted_at IS NOT NULL)" in row[0]
+
 CORE_TABLES = {
     "audit_log",
     "folders",

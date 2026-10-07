@@ -148,6 +148,70 @@ async def test_search_narrow_visibility_fills_k_with_iterative_scan(worker_conn)
         ))
 
 
+async def test_search_trash_candidates_fill_k_with_iterative_scan(worker_conn):
+    """가까운 후보 99%가 휴지통인 실제 HNSW 검색. 벡터는 1200개 모두 다르게 만든다."""
+    provider = FakeProvider()
+    query = "좁은범위"
+    base = provider.embed([query])[0]
+    coordinate = next(index for index, value in enumerate(base) if value == 0)
+    cur = await worker_conn.execute(
+        "INSERT INTO folders (name, created_by, visibility) "
+        "VALUES ('검색 계획', 'writer', 'public') RETURNING id"
+    )
+    folder = (await cur.fetchone())[0]
+    live = set()
+    async with worker_conn.transaction():
+        for index in range(1200):
+            doc = await insert_test_document(
+                worker_conn, title=f"후보 {index}", content=f"대목 {index}",
+                owner_id="viewer", visibility="public",
+            )
+            await worker_conn.execute(
+                "UPDATE documents SET folder_id = %s, follows_folder = false WHERE id = %s",
+                (folder, doc),
+            )
+            if index % 100 != 99:
+                await worker_conn.execute(
+                    "UPDATE documents SET deleted_at = now() WHERE id = %s", (doc,)
+                )
+            else:
+                live.add(doc)
+            vector = base.copy()
+            vector[coordinate] = (index + 1) / 1200
+            await worker_conn.execute(
+                "INSERT INTO document_chunks (document_id, version, chunk_index, content, embedding) "
+                "VALUES (%s, 1, 0, %s, %s::vector)",
+                (doc, f"대목 {index}", to_pgvector_literal(vector)),
+            )
+    cur = await worker_conn.execute("SELECT count(DISTINCT embedding::text) FROM document_chunks")
+    assert (await cur.fetchone())[0] == 1200
+    await worker_conn.execute("ANALYZE documents")
+    await worker_conn.execute("ANALYZE document_chunks")
+    recorder = RecordingConnection(worker_conn)
+    hits = await search_documents(
+        recorder, provider, query=query, user_id="viewer", folder_id=folder, k=10
+    )
+    assert len(hits) == 10
+    assert {hit.document_id for hit in hits} <= live
+    assert all(hit.via is None for hit in hits)
+    params = {
+        "query": query, "identifier": None, "edition": None,
+        "qvec": to_pgvector_literal(base), "tags": None, "ctype": None,
+        "user": "viewer", "folder": folder, "k": 10,
+    }
+    async with worker_conn.transaction():
+        for statement in recorder.statements[1:-1]:
+            await worker_conn.execute(statement)
+        cur = await worker_conn.execute("EXPLAIN " + SEARCH_SQL, params)
+        plan = "\n".join(row[0] for row in await cur.fetchall())
+        candidate_plan = plan.split("  CTE candidates\n", 1)[1].split("  CTE walk_ids\n", 1)[0]
+        assert "Index Scan using idx_chunks_embedding" in candidate_plan, candidate_plan
+        print("휴지통 후보 계획 (1200 고유 벡터):", next(
+            line.strip() for line in candidate_plan.splitlines()
+            if "Index Scan using idx_chunks_embedding" in line
+        ))
+
+
 @pytest.fixture
 async def worker_conn(migrated_db: str):
     """워커의 claim이 즉시 커밋되도록 autocommit 연결을 쓴다."""

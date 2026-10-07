@@ -1643,12 +1643,14 @@ class BeginFailer:
     [
         # 스윕의 BEGIN — HA 실측에서 난 자리다. 오류가 곧장 루프로 올라온다.
         (0, [psycopg.errors.SystemError]),
-        # 스윕·claim 다음의 load BEGIN — process_once가 첫 오류를 잡아 fail_job으로 넘기고,
+        # 휴지통 비우기의 BEGIN도 같은 연결 폐기·다음 폴링 경로를 탄다.
+        (1, [psycopg.errors.SystemError]),
+        # 스윕·휴지통 비우기·claim 다음의 load BEGIN — process_once가 첫 오류를 잡아 fail_job으로 넘기고,
         # 오염된 연결 위의 fail_job이 AssertionError를 낸다. 루프에 오는 것은 DB 오류가
         # 아니므로, 루프가 DB 오류일 때만 연결을 버리면 이 경로가 새어 나간다.
-        (2, [psycopg.errors.SystemError, AssertionError]),
+        (3, [psycopg.errors.SystemError, AssertionError]),
     ],
-    ids=["sweep", "job"],
+    ids=["sweep", "trash", "job"],
 )
 async def test_a_connection_broken_by_a_failed_begin_does_not_return_to_the_pool(
     migrated_db, conn, monkeypatch, caplog, skip, expected_errors
@@ -1661,7 +1663,7 @@ async def test_a_connection_broken_by_a_failed_begin_does_not_return_to_the_pool
     쓰므로(먼저 반납된 것부터) 수십 주기면 오염된 연결을 반드시 다시 빌린다. 그래서 주입한
     장애 한 번이 낸 오류 외에는 없어야 한다.
     """
-    await insert_document(conn)  # 첫 주기가 잡을 집어 BEGIN 순서가 스윕·claim·load로 정해진다
+    await insert_document(conn)  # 첫 주기 BEGIN 순서: 스윕·휴지통 비우기·claim·load
     real_sweep = sweep_zombies
     sweeps = 0
 
@@ -1775,6 +1777,51 @@ async def test_run_worker_purges_expired_idempotency_keys_on_its_sweep(
     worker = asyncio.create_task(run_worker())
     try:
         await wait_until(purged, message="워커 스윕이 만료 키를 지우지 않았다")
+    finally:
+        worker.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await worker
+        await close_pool()
+
+
+async def test_run_worker_purges_expired_trash_on_its_poll(migrated_db, conn, monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", migrated_db)
+    monkeypatch.setenv("EMBEDDING_PROVIDER", "fake")
+    monkeypatch.setenv("TRASH_RETENTION_DAYS", "7")
+    get_settings.cache_clear()
+    await close_pool()
+
+    expired = await insert_document(conn)
+    recent = await insert_document(conn)
+    active = await insert_document(conn)
+    await conn.execute(
+        "UPDATE documents SET deleted_at = now() - interval '8 days' WHERE id = %s",
+        (expired,),
+    )
+    await conn.execute(
+        "UPDATE documents SET deleted_at = now() - interval '6 days' WHERE id = %s",
+        (recent,),
+    )
+
+    async def purged() -> bool:
+        return await document_state(conn, expired) is None
+
+    # LISTEN 없이도 첫 폴링에서 비운다.
+    async def no_listen(*args):
+        return
+
+    monkeypatch.setattr("openarchive.worker._listen_for_jobs", no_listen)
+    worker = asyncio.create_task(run_worker())
+    try:
+        await wait_until(purged, message="워커 폴링이 만료 휴지통 문서를 지우지 않았다")
+        assert await document_state(conn, recent) is not None
+        assert await document_state(conn, active) is not None
+        cur = await conn.execute(
+            "SELECT actor, actor_via FROM audit_log "
+            "WHERE document_id = %s AND action = 'document_deleted'",
+            (expired,),
+        )
+        assert await cur.fetchall() == [(None, "worker")]
     finally:
         worker.cancel()
         with contextlib.suppress(asyncio.CancelledError):

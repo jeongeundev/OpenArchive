@@ -950,7 +950,7 @@ def test_edit_keeps_old_chunks_until_worker_replaces_them_and_exposes_convergenc
         ).fetchone() == (0,)
 
 
-def test_delete_cascades_all_document_rows(db_client: TestClient, migrated_db: str):
+def test_permanent_delete_cascades_all_document_rows(db_client: TestClient, migrated_db: str):
     document_id = upload(db_client).json()["id"]
 
     run_embedding_worker(migrated_db)
@@ -960,7 +960,7 @@ def test_delete_cascades_all_document_rows(db_client: TestClient, migrated_db: s
                 f"SELECT count(*) FROM {table} WHERE document_id = %s", (document_id,)
             ).fetchone()[0] > 0
 
-    response = db_client.delete(f"/api/documents/{document_id}")
+    response = db_client.delete(f"/api/documents/{document_id}?permanent=true")
 
     assert response.status_code == 204
     assert db_client.get(f"/api/documents/{document_id}").status_code == 404
@@ -2001,7 +2001,9 @@ def test_pending_document_still_allows_tags_and_delete(
 
     assert replace_tags(db_client, document_id, ["스캔"]).status_code == 200
     assert db_client.delete(f"/api/documents/{document_id}").status_code == 204
-    assert count_documents(migrated_db) == 0
+    assert count_documents(migrated_db) == 1
+    assert db_client.get(f"/api/documents/{document_id}").status_code == 404
+    assert db_client.get("/api/documents/trash").json()[0]["id"] == document_id
 
 
 def test_stale_version_does_not_hide_the_extraction_guard(

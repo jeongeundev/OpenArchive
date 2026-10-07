@@ -73,6 +73,13 @@ class DocumentSummary(BaseModel):
     updated_at: datetime
 
 
+class TrashItem(BaseModel):
+    id: UUID
+    title: str
+    deleted_at: datetime
+    purge_at: datetime
+
+
 class DocumentCount(BaseModel):
     total: int
 
