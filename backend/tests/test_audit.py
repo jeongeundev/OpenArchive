@@ -12,7 +12,7 @@ from test_share_access import issue_share_token
 from test_token_access import bearer, issue_token
 
 from openarchive import db
-from openarchive.services.audit import set_actor
+from openarchive.services.audit import AUDIT_ACTIONS, set_actor
 from openarchive.services.documents import DocumentNotFound, get_original_file
 
 
@@ -206,3 +206,7 @@ def test_invisible_original_does_not_record_download(db_client, migrated_db):
 
     asyncio.run(denied_service_call())
     assert rows(migrated_db, doc) == before
+
+
+def test_trash_actions_are_available_for_audit_filters():
+    assert {"document_trashed", "document_restored"} <= set(AUDIT_ACTIONS)
