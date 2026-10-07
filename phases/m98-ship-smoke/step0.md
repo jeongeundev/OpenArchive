@@ -16,6 +16,7 @@ def phase_slug(title: str) -> str: ...
 - 소문자로 바꾼다
 - 공백은 `-`로 바꾼다
 - 영문 소문자·숫자·하이픈 외의 문자는 지운다
+- 결과가 빈 문자열이면(입력이 비었거나 남는 문자가 없으면) `ValueError`를 낸다
 
 테스트는 `scripts/test_smoke_slug.py`에 먼저 작성한다(TDD).
 
