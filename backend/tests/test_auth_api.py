@@ -183,7 +183,9 @@ def test_session_user_can_create_and_list_a_token_without_exposing_secrets(
     listed = db_client.get("/api/auth/tokens")
 
     assert created.status_code == 201
-    assert set(created.json()) == {"id", "name", "scope", "created_at", "token"}
+    assert set(created.json()) == {
+        "id", "name", "scope", "created_at", "expires_at", "last_used_at", "expired", "token"
+    }
     assert created.json()["name"] == "CLI"
     assert created.json()["scope"] == "read"
     assert created.json()["token"]
@@ -194,6 +196,9 @@ def test_session_user_can_create_and_list_a_token_without_exposing_secrets(
             "name": "CLI",
             "scope": "read",
             "created_at": created.json()["created_at"],
+            "expires_at": None,
+            "last_used_at": None,
+            "expired": False,
         }
     ]
     serialized = json.dumps(listed.json())
@@ -222,6 +227,9 @@ def test_token_list_only_contains_the_session_users_tokens(
             "name": "Bob CLI",
             "scope": "read_write",
             "created_at": bob_token["created_at"],
+            "expires_at": None,
+            "last_used_at": None,
+            "expired": False,
         }
     ]
     assert alice_token["id"] not in response.text

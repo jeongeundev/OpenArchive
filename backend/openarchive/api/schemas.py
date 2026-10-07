@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
 from openarchive.services.answer import ASK_K
 from openarchive.services.auth import SCOPE_READ, TokenScope
@@ -215,6 +215,7 @@ class ChangePasswordRequest(BaseModel):
 class CreateTokenRequest(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     scope: TokenScope = SCOPE_READ
+    expires_at: AwareDatetime | None = None  # 생략·null = 만료 없음 (ADR-061 결정 1)
 
 
 class TokenSummary(BaseModel):
@@ -222,6 +223,9 @@ class TokenSummary(BaseModel):
     name: str
     scope: TokenScope
     created_at: datetime
+    expires_at: datetime | None
+    last_used_at: datetime | None
+    expired: bool  # DB now()로 판정한다 — 브라우저 시계에 기대지 않는다
 
 
 class TokenCreated(TokenSummary):
@@ -312,6 +316,7 @@ class ShareSummary(BaseModel):
 
 class CreateShareTokenRequest(BaseModel):
     name: str = Field(min_length=1, max_length=100)
+    expires_at: AwareDatetime | None = None
 
 
 class Principals(BaseModel):
