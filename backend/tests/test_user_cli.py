@@ -22,6 +22,7 @@ from fastapi.testclient import TestClient
 from starlette import testclient as starlette_testclient
 
 import openarchive.client as client_module
+from openarchive import user_cli
 from openarchive.cli import main
 from openarchive.client import credentials_path
 
@@ -72,8 +73,7 @@ def cli(db_client: TestClient, monkeypatch, tmp_path):
 
 
 def login(token: str) -> int:
-    # `--token=` — 토큰이 "-"로 시작하면 argparse가 옵션으로 읽는다.
-    return main(["login", "--url", URL, f"--token={token}"])
+    return main(["login", "--url", URL, "--token", token])
 
 
 def test_login_saves_owner_only_credentials(cli, capsys):
@@ -91,9 +91,25 @@ def test_login_saves_owner_only_credentials(cli, capsys):
 def test_login_strips_trailing_slash(cli):
     token = issue_token(cli, "alice", scope="read")["token"]
 
-    assert main(["login", "--url", URL + "/", f"--token={token}"]) == 0
+    assert main(["login", "--url", URL + "/", "--token", token]) == 0
 
     assert json.loads(credentials_path().read_text())["url"] == URL
+
+
+@pytest.mark.parametrize("token", ["-Abc_def", "--Abc_def"])
+def test_login_accepts_token_starting_with_dash(monkeypatch, token):
+    """토큰은 token_urlsafe라 약 1/64로 "-"로 시작한다. 명세서 그대로 `--token <토큰>`으로
+    받아야 한다 — argparse는 그 값을 옵션으로 읽는다."""
+    received = {}
+
+    def fake_login(*, url, token):
+        received.update(url=url, token=token)
+        return 0
+
+    monkeypatch.setattr(user_cli, "run_login", fake_login)
+
+    assert main(["login", "--url", URL, "--token", token]) == 0
+    assert received == {"url": URL, "token": token}
 
 
 @pytest.mark.parametrize("scope", ["read_write", "read"])

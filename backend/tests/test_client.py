@@ -166,6 +166,39 @@ def test_other_writes_are_not_retried(make_client, method, path):
     assert "서버가 일시적으로 응답하지 못했습니다" in error.value.message
 
 
+@pytest.mark.parametrize(
+    ("method", "path"),
+    [
+        ("PUT", "/api/documents/00000000-0000-0000-0000-000000000001"),
+        ("POST", "/api/documents/00000000-0000-0000-0000-000000000001/versions/1/restore"),
+    ],
+)
+def test_write_read_timeout_says_it_may_have_been_applied(make_client, method, path):
+    """응답 대기 중 시간 초과는 요청이 서버에 닿은 뒤다 — '연결하지 못했다'고 하면 다시 실행해
+    같은 내용의 버전이 한 번 더 쌓인다."""
+    api, recorder, sleeps = make_client([httpx.ReadTimeout("slow"), ok()])
+
+    with pytest.raises(ApiError) as error:
+        api.request(method, path, json={})
+
+    assert len(recorder.requests) == 1
+    assert sleeps == []
+    assert error.value.status is None
+    assert "연결하지 못했습니다" not in error.value.message
+    assert "응답을 받지 못했습니다" in error.value.message
+    assert "반영됐는지 확인" in error.value.message
+
+
+def test_write_connect_error_still_says_it_could_not_connect(make_client):
+    api, recorder, _ = make_client([httpx.ConnectError("refused"), ok()])
+
+    with pytest.raises(ApiError) as error:
+        api.request("PUT", "/api/documents/00000000-0000-0000-0000-000000000001", json={})
+
+    assert len(recorder.requests) == 1
+    assert "서버에 연결하지 못했습니다: http://testserver" in error.value.message
+
+
 def test_retry_notice_is_printed_once_to_stderr(make_client, capsys):
     api, _, _ = make_client([unavailable(), unavailable(), unavailable(), ok()])
 

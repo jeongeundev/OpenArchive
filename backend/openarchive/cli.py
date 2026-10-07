@@ -1481,6 +1481,17 @@ def run_ask(
 OPERATOR_DSN_ONLY = "--dsn은 --user와 함께 쓰는 운영자 옵션입니다."
 
 
+def _join_token_value(argv: list[str]) -> list[str]:
+    """`--token <토큰>`을 `--token=<토큰>`으로 합친다. 토큰은 token_urlsafe라 "-"로 시작할 수
+    있고, 그러면 argparse가 값을 옵션으로 읽어 로그인이 usage 오류로 끝난다."""
+    joined = list(argv)
+    if joined[:1] == ["login"] and "--token" in joined:
+        index = joined.index("--token")
+        if index + 1 < len(joined):
+            joined[index : index + 2] = [f"--token={joined[index + 1]}"]
+    return joined
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="openarchive",
@@ -1653,7 +1664,7 @@ def main(argv: list[str] | None = None) -> int:
         "--timeout", type=float, default=600, help="임베딩과 관계 잡을 각각 기다리는 시간(초, 기본: 600)"
     )
     demo.add_argument("--dsn", help="DB 연결 문자열. 생략하면 DATABASE_URL을 씁니다.")
-    args = parser.parse_args(argv)
+    args = parser.parse_args(_join_token_value(sys.argv[1:] if argv is None else argv))
     if args.command == "login":
         return user_cli.run_login(url=args.url, token=args.token)
     if args.command == "whoami":

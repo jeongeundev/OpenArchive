@@ -38,6 +38,10 @@ IDEMPOTENT_CREATE_PATHS = ("/api/documents",)
 
 LOGIN_AGAIN = "토큰이 올바르지 않습니다. openarchive login으로 다시 로그인하세요."
 UNAVAILABLE = "서버가 일시적으로 응답하지 못했습니다. 잠시 후 다시 실행하세요."
+NO_RESPONSE = (
+    "서버에서 응답을 받지 못했습니다: {url} — 요청이 반영됐을 수 있으니 "
+    "openarchive doc show 등으로 반영됐는지 확인한 뒤 다시 실행하세요."
+)
 RETRYING = "서버가 일시적으로 응답하지 않아 다시 시도하는 중입니다…"
 
 
@@ -194,10 +198,13 @@ class ApiClient:
                         data=data,
                         headers=all_headers,
                     )
-                except httpx.TransportError:
+                except (httpx.ConnectError, httpx.ConnectTimeout):
                     failure = ApiError(
                         f"서버에 연결하지 못했습니다: {self.credentials.url}", status=None
                     )
+                except httpx.TransportError:
+                    # 요청이 서버에 닿은 뒤일 수 있다 — 쓰기는 이미 커밋됐을 수 있다.
+                    failure = ApiError(NO_RESPONSE.format(url=self.credentials.url), status=None)
                 else:
                     if response.is_success:
                         return response
