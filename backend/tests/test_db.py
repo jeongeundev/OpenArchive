@@ -126,8 +126,13 @@ async def test_close_pool_without_a_pool_is_noop():
 
 
 def _effective_params(pool) -> dict:
-    """풀이 새 연결을 열 때 libpq에 넘길 최종 설정 — DSN 위에 풀의 kwargs가 얹힌다."""
-    return conninfo_to_dict(make_conninfo(pool.conninfo, **pool.kwargs.get("kwargs", {})))
+    """풀이 새 연결을 열 때 libpq에 넘길 최종 설정 — DSN 위에 풀의 kwargs가 얹힌다.
+
+    psycopg가 연결 객체에서 소비하는 옵션(커서 종류·준비 임계 등)은 libpq에 가지 않는다.
+    """
+    psycopg_only = {"autocommit", "prepare_threshold", "context", "row_factory", "cursor_factory"}
+    kwargs = {k: v for k, v in pool.kwargs.get("kwargs", {}).items() if k not in psycopg_only}
+    return conninfo_to_dict(make_conninfo(pool.conninfo, **kwargs))
 
 
 def test_pool_connections_detect_a_dead_peer_within_a_minute(monkeypatch, pool_spy):
@@ -404,3 +409,48 @@ async def test_pool_round_trips_binary_original_files(monkeypatch, migrated_db):
         await openarchive.db.close_pool()
 
     assert bytes(stored) == data
+
+
+async def test_original_file_bytes_stay_a_binary_parameter(monkeypatch, migrated_db):
+    """원본 파일 바이트는 문장에 hex로 펼치지 않고 이진 파라미터로 보낸다 (#210).
+
+    클라이언트 측 바인딩 연결에서 `%b`는 hex 리터럴이 되어 50MB 파일이 100MB 문장으로
+    OpenProxy를 지난다. 서버가 받은 INSERT 문장에 바이트 대신 파라미터 자리가 있어야 한다.
+    """
+    with psycopg.connect(migrated_db, autocommit=True) as setup:
+        setup.execute("CREATE TABLE received_sql (q text)")
+        setup.execute(
+            "CREATE FUNCTION record_sql() RETURNS trigger LANGUAGE plpgsql AS "
+            "$$ BEGIN INSERT INTO received_sql VALUES (current_query()); RETURN NULL; END $$"
+        )
+        setup.execute(
+            "CREATE TRIGGER record_sql AFTER INSERT ON document_files "
+            "FOR EACH STATEMENT EXECUTE FUNCTION record_sql()"
+        )
+    await _open_pool(monkeypatch, migrated_db)
+    try:
+        async with openarchive.db.connection() as conn, conn.transaction():
+            doc_id = (
+                await (
+                    await conn.execute(
+                        "INSERT INTO documents (title, content_type, content, content_hash, owner_id)"
+                        " VALUES ('t', 'txt', 'c', md5('c'), 'u210') RETURNING id"
+                    )
+                ).fetchone()
+            )[0]
+            await openarchive.services.documents._insert_original_file(
+                conn,
+                document_id=doc_id,
+                file_version=1,
+                filename="a.bin",
+                data=b"\xde\xad\xbe\xef" * 1024,
+                text_version=1,
+                uploaded_by="u210",
+            )
+    finally:
+        await openarchive.db.close_pool()
+
+    with psycopg.connect(migrated_db) as check:
+        (received,) = check.execute("SELECT q FROM received_sql").fetchone()
+    assert "$4" in received
+    assert "deadbeef" not in received

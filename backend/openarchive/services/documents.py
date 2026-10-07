@@ -481,9 +481,10 @@ async def _insert_original_file(
     """원본 파일 한 판을 넣는다. 크기와 sha256은 DB가 data에서 계산한다.
 
     바이트는 `%b`(이진 포맷)로 보낸다. 텍스트 포맷이면 hex 인코딩으로 크기가 두 배가
-    되어, 상한 50MB 파일이 100MB로 OpenProxy를 지난다.
+    되어, 상한 50MB 파일이 100MB로 OpenProxy를 지난다. 풀 연결의 기본 커서는 파라미터를
+    문장에 넣으므로(#210) 이 문장만 서버 바인딩 커서로 보낸다.
     """
-    await conn.execute(
+    await psycopg.AsyncCursor(conn).execute(
         """
         INSERT INTO document_files
             (document_id, file_version, filename, data, text_version, uploaded_by)
