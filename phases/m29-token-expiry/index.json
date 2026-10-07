@@ -44,7 +44,10 @@
       "type": "feat",
       "scope": "frontend",
       "desc": "토큰·공유 화면에 만료일 입력과 만료·마지막 사용 표시",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-10-08T00:11:42+0900",
+      "summary": "설정 API 토큰 표·외부 공유 토큰 줄에 「만료일 (선택)」 날짜 입력(그날 끝까지 = 다음 날 로컬 00:00 전송, 비우면 생략)·서버 expired 기준 「만료」 배지·만료 시각·「마지막 사용」(없으면 '사용 기록 없음') 추가(lib/tokenExpiry), 400 detail 표시; vitest 495·lint 0 error·build·build:static 갱신, mutant 확인",
+      "completed_at": "2026-10-08T00:14:56+0900"
     },
     {
       "step": 4,
