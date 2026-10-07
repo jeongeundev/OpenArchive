@@ -84,7 +84,7 @@ async def test_list_shares_returns_only_own_shares_with_documents_and_tokens(con
         {"id": zeta, "title": "제타"},
     ]
     [token] = shares[0]["tokens"]
-    assert set(token) == {"id", "name", "scope", "created_at"}
+    assert set(token) == {"id", "name", "scope", "created_at", "expires_at", "last_used_at", "expired"}
     assert token["id"] == issued["id"]
     assert token["scope"] == "read"
 
@@ -227,3 +227,38 @@ async def test_user_token_list_excludes_share_tokens(conn):
         await (await conn.execute("SELECT id FROM users WHERE username = 'alice'")).fetchone()
     )[0]
     assert await list_tokens(conn, alice_id) == []
+
+
+@pytest.mark.parametrize("offset", ["0 seconds", "-1 second"])
+async def test_share_token_expiry_rejects_nonfuture(conn, offset):
+    from openarchive.services.auth import InvalidTokenExpiry
+
+    share = await create_share(conn, owner="alice", name="expiry")
+    async with conn.transaction():
+        expiry = (await (await conn.execute("SELECT now() + %s::interval", (offset,))).fetchone())[0]
+        with pytest.raises(InvalidTokenExpiry, match="만료일은 지금 이후여야 합니다."):
+            await issue_share_token(conn, share["id"], owner="alice", name="invalid", expires_at=expiry)
+        assert await share_token_rows(conn, share["id"]) == []
+
+
+@pytest.mark.parametrize("expiry", ["omitted", "none", "future"])
+async def test_share_token_expiry_issue_validate_and_list(conn, expiry):
+    from openarchive.services.auth import AuthenticationFailed, validate_token
+
+    share = await create_share(conn, owner="alice", name="expiry")
+    future = (await (await conn.execute("SELECT now() + interval '1 hour'")).fetchone())[0]
+    kwargs = {} if expiry == "omitted" else {"expires_at": future if expiry == "future" else None}
+    issued = await issue_share_token(conn, share["id"], owner="alice", name="token", **kwargs)
+    assert issued["expires_at"] == (future if expiry == "future" else None)
+    assert issued["last_used_at"] is None and issued["expired"] is False
+    assert (await validate_token(conn, issued["token"]))["share_id"] == share["id"]
+    listed = (await list_shares(conn, owner="alice"))[0]["tokens"][0]
+    assert listed["expires_at"] == issued["expires_at"]
+    assert listed["last_used_at"] is not None and listed["expired"] is False
+    assert "token" not in listed and "token_hash" not in listed
+    await conn.execute("UPDATE api_tokens SET expires_at = now() - interval '1 second' WHERE id = %s", (issued["id"],))
+    with pytest.raises(AuthenticationFailed):
+        await validate_token(conn, issued["token"])
+    expired = (await list_shares(conn, owner="alice"))[0]["tokens"][0]
+    assert expired["expired"] is True
+    assert expired["last_used_at"] == listed["last_used_at"]

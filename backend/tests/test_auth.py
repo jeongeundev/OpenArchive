@@ -481,3 +481,76 @@ async def test_admin_exists_ignores_regular_accounts(conn):
 
     await create_user(conn, "boss", "secret", is_admin=True)
     assert await admin_exists(conn) is True
+
+
+@pytest.mark.parametrize("expiry", ["omitted", "none", "future"])
+async def test_token_expiry_issue_and_list(conn, expiry):
+    user_id = await _create_user(conn)
+    future = (await (await conn.execute("SELECT now() + interval '1 hour'")).fetchone())[0]
+    kwargs = {} if expiry == "omitted" else {"expires_at": future if expiry == "future" else None}
+    issued = await create_token(conn, user_id, name="expiry", **kwargs)
+    expected = future if expiry == "future" else None
+    assert issued["expires_at"] == expected
+    assert issued["last_used_at"] is None
+    assert issued["expired"] is False
+    await validate_token(conn, issued["token"])
+    listed = (await list_tokens(conn, user_id))[0]
+    assert listed["expires_at"] == expected
+    assert listed["last_used_at"] is not None
+    assert listed["expired"] is False
+    assert "token" not in listed and "token_hash" not in listed
+
+
+@pytest.mark.parametrize("offset", ["0 seconds", "-1 second"])
+async def test_token_expiry_rejects_nonfuture(conn, offset):
+    from openarchive.services.auth import InvalidTokenExpiry
+
+    user_id = await _create_user(conn)
+    async with conn.transaction():
+        expiry = (await (await conn.execute("SELECT now() + %s::interval", (offset,))).fetchone())[0]
+        with pytest.raises(InvalidTokenExpiry, match="만료일은 지금 이후여야 합니다."):
+            await create_token(conn, user_id, name="invalid", expires_at=expiry)
+        assert (await (await conn.execute("SELECT count(*) FROM api_tokens")).fetchone())[0] == 0
+
+
+async def test_token_expiry_rejects_expired_and_bad_without_usage(conn):
+    user_id = await _create_user(conn)
+    issued = await create_token(conn, user_id, name="expired")
+    other = await create_token(conn, user_id, name="untouched")
+    await conn.execute("UPDATE api_tokens SET expires_at = now() - interval '1 second' WHERE id = %s", (issued["id"],))
+    for token in (issued["token"], "bad-token"):
+        with pytest.raises(AuthenticationFailed):
+            await validate_token(conn, token)
+    listed = {t["id"]: t for t in await list_tokens(conn, user_id)}
+    assert listed[issued["id"]]["expired"] is True
+    assert listed[other["id"]]["expired"] is False
+    assert all(t["last_used_at"] is None for t in listed.values())
+
+
+async def test_token_usage_commit_and_minute_throttle(conn, migrated_db):
+    user_id = await _create_user(conn)
+    issued = await create_token(conn, user_id, name="usage")
+    async with await psycopg.AsyncConnection.connect(migrated_db) as request:
+        await validate_token(request, issued["token"])
+    first = (await list_tokens(conn, user_id))[0]["last_used_at"]
+    assert first is not None
+    await validate_token(conn, issued["token"])
+    assert (await list_tokens(conn, user_id))[0]["last_used_at"] == first
+    await conn.execute("UPDATE api_tokens SET last_used_at = now() - interval '2 minutes' WHERE id = %s", (issued["id"],))
+    old = (await list_tokens(conn, user_id))[0]["last_used_at"]
+    await validate_token(conn, issued["token"])
+    assert (await list_tokens(conn, user_id))[0]["last_used_at"] > old
+
+
+async def test_token_usage_skips_locked_row(conn, migrated_db):
+    user_id = await _create_user(conn)
+    issued = await create_token(conn, user_id, name="parallel")
+    await conn.execute("UPDATE api_tokens SET last_used_at = now() - interval '2 minutes' WHERE id = %s", (issued["id"],))
+    old = (await list_tokens(conn, user_id))[0]["last_used_at"]
+    async with conn.transaction():
+        await conn.execute("SELECT id FROM api_tokens WHERE id = %s FOR UPDATE", (issued["id"],))
+        async with await psycopg.AsyncConnection.connect(migrated_db) as request:
+            await request.execute("SET LOCAL lock_timeout = '1s'")
+            principal = await validate_token(request, issued["token"])
+            assert principal["username"] == "alice"
+    assert (await list_tokens(conn, user_id))[0]["last_used_at"] == old

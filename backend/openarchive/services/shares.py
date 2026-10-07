@@ -10,6 +10,7 @@
 - 공유 토큰은 `read` 고정이고 DB에는 sha256만 남는다(ADR-034).
 """
 
+from datetime import datetime
 from uuid import UUID
 
 import psycopg
@@ -99,7 +100,8 @@ async def list_shares(conn: psycopg.AsyncConnection, *, owner: str) -> list[dict
     documents = await cur.fetchall()
     await cur.execute(
         """
-        SELECT share_id, id, name, scope, created_at
+        SELECT share_id, id, name, scope, created_at, expires_at, last_used_at,
+               expires_at IS NOT NULL AND expires_at <= now() AS expired
         FROM api_tokens WHERE share_id = ANY(%s)
         ORDER BY created_at, id
         """,
@@ -111,7 +113,7 @@ async def list_shares(conn: psycopg.AsyncConnection, *, owner: str) -> list[dict
             {"id": d["id"], "title": d["title"]} for d in documents if d["share_id"] == share["id"]
         ]
         share["tokens"] = [
-            {key: t[key] for key in ("id", "name", "scope", "created_at")}
+            {key: t[key] for key in ("id", "name", "scope", "created_at", "expires_at", "last_used_at", "expired")}
             for t in tokens
             if t["share_id"] == share["id"]
         ]
@@ -158,11 +160,14 @@ async def remove_document(
 
 
 async def issue_share_token(
-    conn: psycopg.AsyncConnection, share_id: UUID, *, owner: str, name: str
+    conn: psycopg.AsyncConnection, share_id: UUID, *, owner: str, name: str,
+    expires_at: datetime | None = None,
 ) -> dict:
     """공유 토큰을 발급한다. 원문은 이 응답에 한 번만 나간다(ADR-034)."""
     await _own_share(conn, share_id, owner)
-    return await insert_token(conn, user_id=None, share_id=share_id, name=name, scope=SCOPE_READ)
+    return await insert_token(
+        conn, user_id=None, share_id=share_id, name=name, scope=SCOPE_READ, expires_at=expires_at
+    )
 
 
 async def revoke_share_token(
