@@ -82,6 +82,7 @@ def root_folder_visibility(start: str) -> str:
 #
 # 익명(None): NULL LIKE …는 NULL이라 CASE가 ELSE로 간다. username = NULL이 참이 될 수
 # 없어 public(문서 또는 최상위 폴더)만 본다. 패턴의 %%는 바인딩 쿼리 안이라 이스케이프한 것이다.
+# NOT_TRASHED와 VISIBLE_TO_USER는 documents의 별칭이 d라고 전제한다 — 쓰는 쿼리는 FROM documents d로 쓴다.
 NOT_TRASHED = "d.deleted_at IS NULL"
 
 VISIBLE_TO_USER = NOT_TRASHED + """ AND (CASE WHEN %(user)s LIKE 'share:%%' THEN EXISTS (

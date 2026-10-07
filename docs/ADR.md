@@ -4527,7 +4527,11 @@ ROADMAP·CLAUDE.md의 「휴지통 없음」을 **뒤집는다**. ADR-053(PITR)�
 - **열람 술어 밖 예외는 둘이다** — 공유 관리 목록(`services/shares.py`)은 휴지통 문서를 숨기고(공유 토큰으로도 이미 보이지
   않는다), 가져오기 중복 판정(`find_same_original`·`find_same_text`)은 휴지통 문서를 중복으로 세지 않는다(다시 가져오면 새 문서).
   둘 다 `visibility.py`의 조각 `NOT_TRASHED`를 쓴다. `backend/openarchive`에서 문자열 `deleted_at`이 나오는 파일은
-  `services/visibility.py`와 `services/trash.py` 둘뿐이고, 아키텍처 테스트가 이를 고정한다(트레이드오프 2).
+  `services/visibility.py`와 `services/trash.py` 둘뿐이고(휴지통 목록 응답 필드 선언인 `api/schemas.py`는 예외),
+  아키텍처 테스트가 이를 고정한다(트레이드오프 2).
+- **멱등키 재시도는 휴지통 문서도 처음 요청의 결과로 돌려준다** — 키(`idempotency_keys`)는 요청의 기록이라, 처음 생성이
+  성공한 뒤 문서를 휴지통에 옮긴 것은 그 뒤의 별개 동작이다. 재시도 응답은 성공 요약이고 이어지는 조회는 404다. 영구
+  삭제하면 키도 연쇄로 지워져 같은 키의 재시도가 새 문서를 만든다(019).
 - **영구 삭제는 휴지통 밖 문서에도 된다**(`DELETE /api/documents/{id}?permanent=true`) — 사용자 CLI `doc delete --permanent`(#189)용이다.
   화면은 휴지통에서만 영구 삭제 버튼을 보인다.
 - **휴지통 API(목록·복원·이동·영구 삭제)는 세션 전용이 아니다** — 문서 쓰기와 같은 경계라 `read_write` 토큰이면 되고, 목록까지

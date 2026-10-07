@@ -12,6 +12,7 @@ async def trash_document(
     conn: psycopg.AsyncConnection, document_id: UUID, *, user_id: str
 ) -> None:
     await documents._load_for_write(conn, document_id, user_id)
+    # 위 확인과 이 UPDATE 사이에 다른 요청이 먼저 옮겼으면 0행이 되어 없는 문서로 답한다.
     cur = await conn.execute(
         "UPDATE documents SET deleted_at = now() WHERE id = %s AND deleted_at IS NULL",
         (document_id,),

@@ -125,7 +125,7 @@ def test_trash_condition_is_confined_to_visibility_and_trash_service():
         source = path.read_text()
         if path == root / "api" / "schemas.py":
             # 응답 필드 선언만 예외다. SQL 조건이나 다른 사용은 계속 검사한다.
-            source = source.replace("    deleted_at: datetime\n", "")
+            source = re.sub(r"(?m)^\s*deleted_at:[^\n]*\n", "", source)
         if "deleted_at" in source:
             uses.add(path.relative_to(root).as_posix())
     assert uses <= {"services/visibility.py", "services/trash.py"}, uses
