@@ -582,38 +582,73 @@ def test_import_grant_group_without_keep_folders_restricts_each_document(
     )
 
 
-# 결정 ③ frontmatter visibility와 폴더 범위가 겹칠 때 — 더 좁은 쪽을 따른다.
+# 결정 ③ 폴더에 넣는 문서는 frontmatter visibility와 상관없이 폴더 범위를 따른다 — 들어간 자리의 권한을
+# 따르는 것이 실무 이관 도구의 기본이고(SPMT 권한 보존 꺼짐·Drive 폴더 상속), 폴더를 지정해 만든 문서는 개별
+# 범위를 받지 않는다(ADR-054). export가 쓰는 `private`은 소유자 전용인지 폴더·그룹 범위인지 구분하지 못한다.
 
 
-def test_import_keeps_a_frontmatter_private_document_private_inside_a_public_folder(
-    archive_db: str, tmp_path: Path
+def test_import_keep_folders_follows_the_folder_and_says_frontmatter_visibility_was_not_used(
+    archive_db: str, tmp_path: Path, capsys
 ):
+    from test_audit import rows
+
     source = tmp_path / "팀"
     write(source, "비밀.md", "---\ntitle: 비밀 메모\nvisibility: private\n---\n비밀 본문\n")
-    write(source, "공개.md", "---\ntitle: 공개 메모\n---\n공개 본문\n")
+    write(source, "공개.md", "---\ntitle: 공개 메모\nvisibility: public\n---\n공개 본문\n")
+    write(source, "보통.md", "---\ntitle: 보통 메모\n---\n보통 본문\n")
 
     assert main(["import", str(source), "--user", "bob", "--keep-folders", "--dsn", archive_db]) == 0
 
     docs = placement(archive_db)
-    assert docs["비밀 메모"] == {"folder": "팀", "follows": False, "visibility": "private", "groups": []}
-    assert docs["공개 메모"]["follows"] is True
+    assert all(d["folder"] == "팀" and d["follows"] for d in docs.values())
+    assert "frontmatter의 visibility를 쓰지 않음 2건" in capsys.readouterr().out
+    # 생성 뒤에 범위를 바꾸지 않는다 — 열람 범위 변경은 세션 전용이다.
+    assert {row[0] for row in rows(archive_db)} == {"document_created"}
 
 
-def test_import_does_not_let_frontmatter_public_widen_a_restricted_folder(
+def test_import_checks_existing_folders_inside_a_transaction_so_ha_reads_the_primary(
+    archive_db: str, tmp_path: Path, monkeypatch
+):
+    """#180과 같은 함정 — 트랜잭션 밖 폴더 조회는 HA에서 Replica로 가 방금 만든 폴더를 못 보고 두 벌을 만든다."""
+    from openarchive import cli
+
+    statuses = []
+    real = cli.find_folder
+
+    async def checked(conn, **kwargs):
+        statuses.append(conn.info.transaction_status)
+        return await real(conn, **kwargs)
+
+    monkeypatch.setattr(cli, "find_folder", checked)
+    source = rfp_tree(tmp_path)
+    args = ["import", str(source), "--user", "bob", "--keep-folders", "--dsn", archive_db]
+    assert main(args) == 0
+    write(source, "2026/추가.md", "OpenSQL 제안 추가")
+
+    assert main(args) == 0
+
+    assert statuses and set(statuses) == {psycopg.pq.TransactionStatus.INTRANS}
+    assert set(folders(archive_db)) == {"RFP", "RFP/2026", "RFP/2026/평가"}
+
+
+def test_import_keep_folders_makes_no_folder_without_a_document_in_it(
     archive_db: str, tmp_path: Path
 ):
-    add_group(archive_db, "사업팀", "alice")
+    """문서가 들어가지 않은 폴더는 남기지 않는다 — 지원하지 않는 형식뿐이거나 넣다가 실패한 폴더도."""
     source = tmp_path / "RFP"
-    write(source, "공개.md", "---\ntitle: 공개라고 적힌 메모\nvisibility: public\n---\n본문\n")
+    write(source, "공고.md", "OpenSQL 제안 공고")
+    write(source, "그림/로고.xyz", "지원하지 않는 형식")
+    write(source, "빈칸/blank.txt", "   \n")
+    empty = tmp_path / "빈곳"
+    write(empty, "로고.xyz", "지원하지 않는 형식")
 
-    assert main(
-        [
-            "import", str(source), "--user", "bob", "--keep-folders",
-            "--grant-group", "사업팀", "--dsn", archive_db,
-        ]
-    ) == 0
+    assert main(["import", str(source), "--user", "bob", "--keep-folders", "--dsn", archive_db]) == 1
+    assert main(["import", str(empty), "--user", "bob", "--keep-folders", "--dsn", archive_db]) == 0
 
-    assert placement(archive_db)["공개라고 적힌 메모"]["follows"] is True
+    assert set(folders(archive_db)) == {"RFP"}
+
+
+# 폴더 없이 --grant-group이면 범위는 문서를 만들 때 정한다 — frontmatter private는 소유자 전용으로 남는다.
 
 
 def test_import_grant_group_without_folders_keeps_frontmatter_private_owner_only(

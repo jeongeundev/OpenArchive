@@ -165,6 +165,22 @@ async def test_subfolder_scope_and_duplicate_names(conn):
     assert (await f.create_folder(conn, user_id="lee", name="인사"))["id"] != r["id"]
 
 
+async def test_find_folder_by_name_for_reimport(conn):
+    """import 재실행이 다시 쓸 폴더 — 최상위는 이름이 유일하지 않아 만든 사람으로 좁히고 가장 오래된 것을,
+    하위는 같은 부모·같은 이름 하나를 찾는다. 범위는 범위 요약과 같은 모양으로 함께 준다."""
+    await create_group(conn, "사업팀")
+    first = await root(conn, visibility="private", grant_groups=["사업팀"])
+    await root(conn)
+    await f.create_folder(conn, user_id="lee", name="인사")
+    child = await f.create_folder(conn, user_id="kim", name="채용", parent_id=first["id"])
+
+    found = await f.find_folder(conn, name="인사", created_by="kim")
+    assert found == {"id": first["id"], "visibility": "private", "users": [], "groups": ["사업팀"]}
+    assert (await f.find_folder(conn, name="채용", parent_id=first["id"]))["id"] == child["id"]
+    assert await f.find_folder(conn, name="채용", created_by="kim") is None
+    assert await f.find_folder(conn, name="없음", created_by="kim") is None
+
+
 async def test_direct_visible_document_count_and_nonempty_delete(conn):
     r = await root(conn)
     child = await f.create_folder(conn, user_id="kim", name="채용", parent_id=r["id"])
