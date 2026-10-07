@@ -215,6 +215,45 @@ class TestFindTampering:
         assert ship.find_tampering("M\tscripts/ship.py\n", diff) == []
 
 
+class TestRemovedTestFunctions:
+    def test_removed_python_test_function(self):
+        diff = (
+            "+++ b/backend/tests/test_foo.py\n"
+            "@@ -1,2 +0,0 @@\n"
+            "-def test_x():\n"
+            "-    assert 2 * 1 == 2\n"
+        )
+        assert ship.find_tampering("M\tbackend/tests/test_foo.py\n", diff) == [
+            "테스트 함수 삭제: backend/tests/test_foo.py: test_x"
+        ]
+
+    def test_removed_method_and_vitest_case(self):
+        diff = (
+            "+++ b/backend/tests/test_foo.py\n"
+            "-    async def test_async_case(self):\n"
+            "+++ b/frontend/src/lib/a.test.ts\n"
+            "-  it('renders title', () => {\n"
+            "-  test(\"keeps order\", () => {\n"
+        )
+        assert ship.find_tampering("", diff) == [
+            "테스트 함수 삭제: backend/tests/test_foo.py: test_async_case",
+            "테스트 함수 삭제: frontend/src/lib/a.test.ts: renders title",
+            "테스트 함수 삭제: frontend/src/lib/a.test.ts: keeps order",
+        ]
+
+    def test_rewritten_test_function_is_not_removal(self):
+        diff = (
+            "+++ b/backend/tests/test_foo.py\n"
+            "-def test_x():\n"
+            "+def test_x(tmp_path):\n"
+        )
+        assert ship.find_tampering("M\tbackend/tests/test_foo.py\n", diff) == []
+
+    def test_removed_function_outside_tests_ignored(self):
+        diff = "+++ b/backend/openarchive/foo.py\n-def test_helper():\n"
+        assert ship.find_tampering("", diff) == []
+
+
 class TestUntestedChanges:
     def test_impl_without_test(self):
         assert ship.untested_changes(["backend/openarchive/foo.py", "docs/ADR.md"]) == [
@@ -253,6 +292,10 @@ class TestNextStageAfterReview:
 
     def test_fix_after_budget_gates(self):
         with pytest.raises(ship.Gate, match="자동 수정 한도"):
+            ship.next_stage_after_review([FIX], reviews=3, fixes=2)
+
+    def test_fix_limit_gate_tells_how_to_resume(self):
+        with pytest.raises(ship.Gate, match="--from review"):
             ship.next_stage_after_review([FIX], reviews=3, fixes=2)
 
     def test_budget_is_two_fixes_three_reviews(self):
@@ -307,6 +350,18 @@ class TestHappyPath:
         assert review[:2] == ["claude", "-p"]
         prompt = r.prompts("[ship:review]")[0]
         assert "#42" in prompt and "origin/main" in prompt
+
+    def test_agent_sessions_deny_issue_creation_and_publishing(self, repo):
+        r = FakeRunner(repo)
+        r.on(lambda c: c[0] == "claude", r.agent(review_rounds=[[FIX], []]))
+        make(repo, r).run()
+        sessions = [c for c in r.calls if c[0] == "claude"]
+        assert len(sessions) == 3  # 리뷰 2 + 수정 1
+        for c in sessions:
+            denied = c[c.index("--disallowedTools") + 1]
+            for rule in ("Bash(gh issue create:*)", "Bash(gh api:*)", "Bash(gh pr merge:*)",
+                         "Bash(git commit:*)", "Bash(git push:*)"):
+                assert rule in denied
 
     def test_ready_notifies(self, repo):
         r = FakeRunner(repo)
@@ -483,6 +538,23 @@ class TestReviewFixLoop:
         assert git(repo, "rev-parse", "HEAD~1") == head
         assert "test_foo.py" in git(repo, "status", "--porcelain")  # 검토용으로 남겨 둔다
 
+    def test_fix_removing_test_function_gates(self, repo):
+        def drop_test(root):
+            (root / "backend/tests/test_foo.py").write_text("")
+            append_impl(root)
+
+        r = FakeRunner(repo)
+        r.on(lambda c: c[0] == "claude", r.agent(review_rounds=[[FIX]], fix=drop_test))
+        assert make(repo, r).run() == ship.EXIT_GATE
+        assert "테스트 함수 삭제" in ship.load_state(repo, PHASE)["gate"]
+
+    def test_from_fix_without_review_gates(self, repo):
+        r = FakeRunner(repo)
+        assert make(repo, r).run(from_stage="fix") == ship.EXIT_GATE
+        st = ship.load_state(repo, PHASE)
+        assert st["stage"] == "fix" and "리뷰 결과가 없다" in st["gate"]
+        assert r.count(lambda c: c[0] == "claude") == 0
+
     def test_fix_without_changes_gates(self, repo):
         r = FakeRunner(repo)
         r.on(lambda c: c[0] == "claude", r.agent(review_rounds=[[FIX]], fix=lambda root: None))
@@ -560,6 +632,16 @@ class TestCI:
         r.on(lambda c: c[0] == "claude", r.agent(review_rounds=[[]], ci_fix=add_skip))
         assert make(repo, r).run() == ship.EXIT_GATE
         assert "변조" in ship.load_state(repo, PHASE)["gate"]
+
+    def test_ci_wait_timeout_gates_without_fixing(self, repo):
+        r = FakeRunner(repo)
+        self._with_logs(r)
+        r.on(lambda c: c[:3] == ["gh", "pr", "checks"], ok(stderr="3600초 동안 끝나지 않아 중단함", code=124))
+        assert make(repo, r).run() == ship.EXIT_GATE
+        st = ship.load_state(repo, PHASE)
+        assert st["stage"] == "ci" and st["ci_fixes"] == 0
+        assert "대기 시간" in st["gate"]
+        assert r.prompts("[ship:ci-fix]") == []
 
     def test_waits_until_checks_reported(self, repo):
         r = FakeRunner(repo)
@@ -655,6 +737,20 @@ class TestMerge:
         assert make(repo, r).merge() == ship.EXIT_OK
         out = capsys.readouterr().out
         assert "#42가 아직 열려 있다" in out and "닫힘" not in out
+
+    def test_needs_vm_blocks_merge_until_verified(self, repo):
+        write_phase(repo, phase_index(needs_vm=True))
+        commit_all(repo, "docs: VM 실측 필요")
+        self._ready(repo)
+        r = FakeRunner(repo)
+        r.on(lambda c: c[:3] == ["gh", "pr", "merge"], ok())
+        r.on(lambda c: c[:3] == ["gh", "issue", "view"], ok("CLOSED\n"))
+        assert make(repo, r).merge() == ship.EXIT_GATE
+        assert r.count(lambda c: c[:3] == ["gh", "pr", "merge"]) == 0
+        assert "G3" in ship.load_state(repo, PHASE)["gate"]
+
+        assert make(repo, r).merge(vm_verified=True) == ship.EXIT_OK
+        assert r.count(lambda c: c[:3] == ["gh", "pr", "merge"]) == 1
 
     def test_merge_refuses_when_checks_not_green(self, repo):
         self._ready(repo)
