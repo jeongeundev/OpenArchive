@@ -11,7 +11,10 @@
       "type": "feat",
       "scope": "mcp",
       "desc": "MCP 도구가 주입받은 주체·scope로 동작하도록 구조를 바꾼다",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-10-07T21:41:30+0900",
+      "summary": "McpPrincipal·build_server·principal_from_token·WriteNotAllowed로 주체·scope 주입을 분리하고 stdio mcp 인스턴스 계약 유지; AC 48개 테스트·ruff 및 mutant 3종 검증 통과",
+      "completed_at": "2026-10-07T21:45:32+0900"
     },
     {
       "step": 1,
@@ -36,5 +39,6 @@
       "desc": "원격 MCP 구현 결정과 클라이언트 등록 절차를 문서에 반영한다",
       "status": "pending"
     }
-  ]
+  ],
+  "created_at": "2026-10-07T21:41:30+0900"
 }
