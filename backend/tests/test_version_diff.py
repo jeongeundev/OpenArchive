@@ -7,7 +7,7 @@ from conftest import login_as, upload_document
 from test_share_access import issue_share_token
 from test_token_access import bearer, issue_token
 
-from openarchive.services import documents
+from openarchive.services import documents, textdiff
 
 
 def versions(client, old="가\n나\n다", new="가\n나2\n다\n라"):
@@ -113,40 +113,31 @@ async def test_service(db_client, migrated_db):
 
 @pytest.mark.asyncio
 async def test_diff_runs_off_event_loop(db_client, migrated_db, monkeypatch):
-    """difflib 계산은 반복 줄이 많으면 수십 초라 이벤트 루프 밖 스레드에서 돈다."""
+    """비교 계산은 예산 안에서도 1초 가까이 걸릴 수 있어 이벤트 루프 밖 스레드에서 돈다."""
     doc = versions(db_client)
     loop_thread = threading.get_ident()
     threads = []
-    diff_lines = documents._diff_lines
+    diff_hunks = textdiff.diff_hunks
 
     def recording(old, new):
         threads.append(threading.get_ident())
-        return diff_lines(old, new)
+        return diff_hunks(old, new)
 
-    monkeypatch.setattr(documents, "_diff_lines", recording)
+    monkeypatch.setattr(textdiff, "diff_hunks", recording)
     async with await psycopg.AsyncConnection.connect(migrated_db) as conn:
         result = await documents.diff_versions(conn, UUID(doc), user_id="alice", base=1, target=2)
     assert len(threads) == 1 and threads[0] != loop_thread
     assert result["hunks"][0]["lines"][1] == {"op": "removed", "text": "나"}
 
 
-def test_line_pairs_counts_matching_line_pairs():
-    # 「a」 2×1 + 「b」 1×2 — difflib이 맞춰 볼 같은 줄의 짝 수다.
-    assert documents._line_pairs("a\na\nb", "a\nb\nb") == 4
-    assert documents._line_pairs("a", "b") == 0
+# 모든 줄이 바뀐 3000줄 — 편집량이 작업 예산을 넘는다.
+OLD_LARGE = "\n".join(f"이전 {i}" for i in range(3000))
+NEW_LARGE = "\n".join(f"새 {i}" for i in range(3000))
 
 
-# 빈 줄 3000개 — 같은 줄의 짝이 3001² ≈ 900만으로 상한(500만)을 넘는다.
-REPEATED = "\n" * 3000
-
-
-def test_large_diff_is_not_computed(db_client, monkeypatch):
-    """같은 줄의 짝이 상한을 넘으면 계산하지 않고 too_large로 알린다."""
-    def must_not_run(old, new):
-        raise AssertionError("상한을 넘는 비교를 계산했다")
-
-    monkeypatch.setattr(documents, "_diff_lines", must_not_run)
-    response = compare(db_client, versions(db_client, REPEATED + "끝 1", REPEATED + "끝 2"))
+def test_large_diff_is_too_large(db_client):
+    """편집량이 예산을 넘으면 비교 결과 대신 too_large로 알린다."""
+    response = compare(db_client, versions(db_client, OLD_LARGE, NEW_LARGE))
     assert response.status_code == 200
     assert response.json() == {
         "base": 1, "target": 2, "identical": False, "too_large": True, "hunks": [],
@@ -154,8 +145,8 @@ def test_large_diff_is_not_computed(db_client, monkeypatch):
 
 
 def test_large_identical_versions_are_still_identical(db_client):
-    """같은 내용 판정은 문자열 비교라 상한과 무관하다."""
-    doc = versions(db_client, REPEATED + "끝 1", REPEATED + "끝 2")
+    """같은 내용 판정은 문자열 비교라 예산과 무관하다."""
+    doc = versions(db_client, OLD_LARGE, NEW_LARGE)
     response = db_client.post(f"/api/documents/{doc}/versions/1/restore", json={"current_version": 2})
     assert response.status_code == 200
     response = compare(db_client, doc, 1, 3)
@@ -163,12 +154,8 @@ def test_large_identical_versions_are_still_identical(db_client):
     assert response.json()["too_large"] is False
 
 
-@pytest.mark.parametrize(("limit", "too_large"), [(4, False), (3, True)])
-def test_limit_boundary(db_client, monkeypatch, limit, too_large):
-    """짝 수가 상한과 같으면 계산하고, 넘을 때만 too_large다."""
-    old, new = "가\n가\n다", "가\n다\n다"
-    assert documents._line_pairs(old, new) == 4
-    monkeypatch.setattr(documents, "MAX_DIFF_LINE_PAIRS", limit)
-    response = compare(db_client, versions(db_client, old, new))
-    assert response.json()["too_large"] is too_large
-    assert (response.json()["hunks"] == []) is too_large
+def test_terminal_newline_only_is_neither_identical_nor_too_large(db_client):
+    response = compare(db_client, versions(db_client, "가\n", "가"))
+    assert response.json() == {
+        "base": 1, "target": 2, "identical": False, "too_large": False, "hunks": [],
+    }
