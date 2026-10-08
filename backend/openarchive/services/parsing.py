@@ -212,6 +212,10 @@ def _join_paragraphs(paragraphs: Iterator[str]) -> str:
 # HWP·HWPX 문단은 본문 순서대로 낸다 — 표 셀·머리말 안의 문단도 그것을 담은 문단 바로 뒤에
 # 온다. 두 형식이 같은 문서에서 같은 텍스트를 내도록 특수 문자를 같은 값으로 옮긴다
 # (탭·줄바꿈·묶음 빈칸·고정폭 빈칸·하이픈).
+#
+# 본 제품은 한컴의 HWP 문서 파일(.hwp) 공개 문서를 참고하여 개발하였습니다.
+# (HWP 읽기는 한컴이 공개한 「한글 문서 파일 형식 5.0」을 따른다 — 공개 조건이 소스에 이 문장을
+# 적으라고 한다, ADR-059 결정 1)
 
 _HWP_SIGNATURE = b"HWP Document File"
 _HWP_COMPRESSED, _HWP_PASSWORD, _HWP_DISTRIBUTION = 0x01, 0x02, 0x04

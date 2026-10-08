@@ -1499,6 +1499,8 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="openarchive",
         description="OpenArchive CLI — 운영자 명령(DB 직결)과 사용자 명령(REST, API 토큰)",
+        # 한컴 HWP 형식 공개 조건이 도움말에 적으라고 한 고지 (ADR-059 결정 1)
+        epilog="본 제품은 한컴의 HWP 문서 파일(.hwp) 공개 문서를 참고하여 개발하였습니다.",
     )
     subcommands = parser.add_subparsers(dest="command", required=True)
     login = subcommands.add_parser(
