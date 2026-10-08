@@ -381,6 +381,18 @@ def test_preview_configuration(monkeypatch):
         Settings(_env_file=None)
 
 
+def test_preview_timeout_default_covers_the_measured_evaluation_vm(monkeypatch):
+    """기본 상한 900초는 Rocky 9 x86-64 VM 실측에서 나왔다 (#228 G3, 2026-10-09).
+
+    Apple Silicon 위 에뮬레이션 VM에서 rhwp는 쪽당 약 10.6초(17쪽 179.8초)였다. 300초면 약 28쪽에서
+    끊겨 시간 초과 × 재시도 예산만큼 워커를 붙든 뒤 실패한다. 900초는 그 VM에서 약 85쪽이다.
+    """
+    from openarchive.config import Settings
+
+    monkeypatch.delenv("PREVIEW_TIMEOUT_SECONDS", raising=False)
+    assert Settings(_env_file=None).preview_timeout_seconds == 900
+
+
 @pytest.mark.converters
 def test_fixed_name_reaches_real_converter_process(monkeypatch, tmp_path):
     import json
