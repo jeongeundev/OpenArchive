@@ -393,6 +393,21 @@ def _query_body(query: str, tags: list[str], content_type: str | None, k: int) -
     return {"query": query, "tags": tags or None, "content_type": content_type, "k": k}
 
 
+# 웹 `frontend/src/lib/relations.ts`와 같은 어휘.
+RELATION_LABELS = {
+    "overlaps": "여러 대목에서 만난다",
+    "points_to": "이 대목에서 만난다",
+    "refers": "본문에서 가리킨다",
+    "related": "관련 있음",
+    "revision": "이전 텍스트 버전",
+    "broader": "더 자세한 문서",
+}
+
+
+def relation_label(kind: str) -> str:
+    return RELATION_LABELS.get(kind, "관련 있음")
+
+
 def run_search(*, query: str, tags: list[str], content_type: str | None, k: int) -> int:
     def action(api: ApiClient) -> int:
         body = _query_body(query, tags, content_type, k)
@@ -402,11 +417,14 @@ def run_search(*, query: str, tags: list[str], content_type: str | None, k: int)
             return 0
         for rank, hit in enumerate(hits, start=1):
             tag_text = f"  [{', '.join(hit['tags'])}]" if hit["tags"] else ""
-            print(f"{rank}. {hit['title']}  {hit['score']:.3f}{tag_text}")
-            print(f"   {_snippet(hit['content'])}")
             via = hit.get("via")
             if via is not None:
-                print(f"   관계로 찾음: {via['kind']} · {via['depth']}단계")
+                print(f"{rank}. {hit['title']}{tag_text}")
+            else:
+                print(f"{rank}. {hit['title']}  {hit['score']:.3f}{tag_text}")
+            print(f"   {_snippet(hit['content'])}")
+            if via is not None:
+                print(f"   관계로 찾음: {relation_label(via['kind'])} · {via['depth']}단계")
             print(f"   {hit['document_id']}")
         return 0
 

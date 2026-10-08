@@ -1387,10 +1387,13 @@ def run_search(
         return 0
     for rank, hit in enumerate(hits, start=1):
         tag_text = f"  [{', '.join(hit.tags)}]" if hit.tags else ""
-        print(f"{rank}. {hit.title}  {hit.score:.3f}{tag_text}")
+        if hit.via is not None:
+            print(f"{rank}. {hit.title}{tag_text}")
+        else:
+            print(f"{rank}. {hit.title}  {hit.score:.3f}{tag_text}")
         print(f"   {_snippet(hit.content)}")
         if hit.via is not None:
-            print(f"   관계로 찾음: {hit.via.kind} · {hit.via.depth}단계")
+            print(f"   관계로 찾음: {user_cli.relation_label(hit.via.kind)} · {hit.via.depth}단계")
         print(f"   {hit.document_id}")
     return 0
 
