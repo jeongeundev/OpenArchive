@@ -50,6 +50,7 @@ from openarchive.services.audit import set_actor
 from openarchive.services.chunking import chunk_text
 from openarchive.services.documents import apply_extracted_text
 from openarchive.services.parsing import detect_content_type, ocr_text
+from openarchive.services.preview import ConverterUnavailable, PreviewRenderFailed, convert_to_pdf
 from openarchive.vectors import to_pgvector_literal
 
 logger = logging.getLogger(__name__)
@@ -72,6 +73,7 @@ LeaseConnection = Callable[[], AbstractAsyncContextManager[psycopg.AsyncConnecti
 EMBED_JOB_KIND = "embed"
 EDGE_JOB_KIND = "edges"
 EXTRACT_JOB_KIND = "extract"
+PREVIEW_JOB_KIND = "preview"
 
 
 @dataclass(frozen=True)
@@ -112,7 +114,9 @@ async def claim_job(conn: psycopg.AsyncConnection) -> ClaimedJob | None:
     워커의 claim이 막히고, processing 배지가 UI에 보이지도 않는다. 그래서 선점만
     커밋하고, 결과 반영은 finalize_job의 별도 트랜잭션이 맡는다.
 
-    **종류를 가리지 않고 id 순으로 집는다.** 관계 잡에 우선순위를 주면 그 판정이 뒤에
+    **미리보기만 뒤로 미루고 나머지는 id 순으로 집는다** (ADR-058 결정 2). 큰 문서 변환이
+    검색 반영을 늦추지 않게 한다. 이미 집은 변환이 도는 동안에는 같은 워커가 다음 잡을
+    집을 수 없다는 대가는 남는다. 관계 잡에 우선순위를 주면 그 판정이 뒤에
     오는 문서의 임베딩보다 먼저 돌아, 아직 청크가 없는 이웃을 못 보고 관계를 놓친다.
 
     선점은 lease와 함께다 (ADR-050). 처리하는 동안 heartbeat가 연장하지 않으면 lease 뒤에
@@ -134,7 +138,7 @@ async def claim_job(conn: psycopg.AsyncConnection) -> ClaimedJob | None:
              WHERE j.id = (SELECT q.id FROM embedding_jobs q
                              JOIN documents d ON d.id = q.document_id
                             WHERE q.status = 'pending' AND q.next_attempt_at <= now()
-                            ORDER BY q.id LIMIT 1
+                            ORDER BY (q.kind = 'preview'), q.id LIMIT 1
                               FOR UPDATE OF q SKIP LOCKED
                               FOR NO KEY UPDATE OF d SKIP LOCKED)
             RETURNING j.id, j.document_id, j.kind, j.attempts
@@ -435,6 +439,66 @@ async def finalize_extract_job(conn: psycopg.AsyncConnection, job: ClaimedJob, t
     return True
 
 
+async def load_pending_previews(
+    conn: psycopg.AsyncConnection, document_id: UUID
+) -> list[tuple[int, str, bytes, str]]:
+    """대기 판과 그 판의 텍스트를 Primary에서 읽는다 — load_original_file과 같은 HA 경계다."""
+    async with conn.transaction():
+        cur = await conn.execute(
+            """
+            SELECT p.file_version, f.filename, f.data,
+                   CASE WHEN f.text_version IS NULL THEN d.content ELSE v.content END
+              FROM document_file_previews p
+              JOIN document_files f USING (document_id, file_version)
+              JOIN documents d ON d.id = p.document_id
+              LEFT JOIN document_versions v
+                ON v.document_id = f.document_id AND v.version = f.text_version
+             WHERE p.document_id = %s AND p.status = 'pending'
+             ORDER BY p.file_version
+            """,
+            (document_id,),
+        )
+        return await cur.fetchall()
+
+
+async def finalize_preview(
+    conn: psycopg.AsyncConnection,
+    job: ClaimedJob,
+    file_version: int,
+    status: str,
+    pdf: bytes | None,
+    error: str | None,
+) -> bool:
+    """판 하나를 별도 커밋한다. 소유권을 잃거나 문서가 삭제됐으면 결과를 버린다."""
+    async with conn.transaction():
+        await bound_lock_wait(conn)
+        cur = await conn.execute(
+            "SELECT 1 FROM documents WHERE id = %s FOR UPDATE", (job.document_id,)
+        )
+        if await cur.fetchone() is None or not await lock_owned_job(conn, job):
+            return False
+        await conn.execute(
+            "UPDATE document_file_previews SET status = %s, pdf = %s, error = %s,"
+            " updated_at = now() WHERE document_id = %s AND file_version = %s"
+            " AND status = 'pending'",
+            (status, pdf, error, job.document_id, file_version),
+        )
+    return True
+
+
+async def _mark_previews_failed(
+    conn: psycopg.AsyncConnection,
+    document_ids: list[UUID],
+    error: str,
+) -> None:
+    """소진된 잡의 대기 판만 실패로 둔다 — 검색·추출 상태와 완료 판은 그대로다."""
+    await conn.execute(
+        "UPDATE document_file_previews SET status = 'failed', error = %s, updated_at = now()"
+        " WHERE document_id = ANY(%s) AND status = 'pending'",
+        (error, document_ids),
+    )
+
+
 async def _mark_extraction_failed(conn: psycopg.AsyncConnection, document_ids: list[UUID]) -> None:
     """예산을 소진한 추출 잡의 문서를 `failed`로 둔다 — `embedding_status`는 건드리지 않는다.
 
@@ -457,7 +521,7 @@ async def fail_job(conn: psycopg.AsyncConnection, job: ClaimedJob, error: Except
     message = f"{type(error).__name__}: {error}"
     async with conn.transaction():
         await bound_lock_wait(conn)
-        # 문서 행을 먼저 잠근다. 잡 생성은 전부 documents 변경 트리거 안에서 일어나므로,
+        # 문서 행을 먼저 잠근다. 잡 생성은 모두 문서 행 잠금 아래에서 일어나므로,
         # 이 잠금이 아래 "다른 pending 잡이 있는가" 판정과 pending 복귀 사이에 새 잡이
         # 끼어드는 것(uq_pending_job_per_doc 위반)을 막는다.
         cur = await conn.execute(
@@ -516,6 +580,8 @@ async def fail_job(conn: psycopg.AsyncConnection, job: ClaimedJob, error: Except
                 )
             elif job.kind == EXTRACT_JOB_KIND:
                 await _mark_extraction_failed(conn, [job.document_id])
+            elif job.kind == PREVIEW_JOB_KIND:
+                await _mark_previews_failed(conn, [job.document_id], message)
             return
 
         # attempts는 claim 시점에 이미 올라 있다: 1번째 실패 → 2초, 2번째 → 4초.
@@ -586,7 +652,7 @@ async def sweep_zombies(conn: psycopg.AsyncConnection) -> int:
     """
     async with conn.transaction():
         # 판정 전에 대상 문서 행을 잠근다 — fail_job과 같은 이유다 (ARCHITECTURE 4·5번
-        # 공통 예외). 잡 생성은 전부 documents 변경 트리거 안에서 일어나므로, 이 잠금이
+        # 공통 예외). 잡 생성은 모두 문서 행 잠금 아래에서 일어나므로, 이 잠금이
         # 아래 두 UPDATE의 (NOT) EXISTS 판정과 상태 기록 사이에 새 pending 잡이 커밋되는
         # 것을 막는다. 잠그지 않으면 READ COMMITTED의 statement 스냅샷 탓에 그 잡을 놓쳐
         # 좀비를 pending으로 되돌리고, uq_pending_job_per_doc 위반으로 스윕이 통째로 터진다.
@@ -694,6 +760,14 @@ async def sweep_zombies(conn: psycopg.AsyncConnection) -> int:
         if extraction_exhausted:
             await _mark_extraction_failed(conn, extraction_exhausted)
 
+        preview_exhausted = [
+            doc_id
+            for doc_id, kind, status in decided
+            if status == "error" and kind == PREVIEW_JOB_KIND
+        ]
+        if preview_exhausted:
+            await _mark_previews_failed(conn, preview_exhausted, ZOMBIE_EXHAUSTED_ERROR)
+
         return sum(1 for _, _, status in decided if status == "pending")
 
 
@@ -724,7 +798,7 @@ async def process_once(
 
     처리 본체는 잡의 종류로 갈린다 — `embed`는 본문을 읽어 청킹·임베딩·청크 교체까지,
     `edges`는 저장된 청크 벡터로 관계만 다시 판정하고, `extract`는 최신 원본 판을 OCR해
-    문서 텍스트를 채운다.
+    문서 텍스트를 채운다. `preview`는 대기 중인 원본 판을 하나씩 PDF로 변환한다.
 
     처리 실패도 True다 — fail_job이 재시도를 예약했고, drain의 반복 조건은 "이번에
     할 일이 있었는가"이기 때문이다. 예외: 실패 기록마저 락 상한(`bound_lock_wait`)에 걸리면
@@ -774,6 +848,38 @@ async def process_once(
                 logger.warning("lease를 잃어 추출 결과를 버린다 — job_id=%s", job.job_id)
                 return True
             await finalize_extract_job(conn, job, text)
+            return True
+        if job.kind == PREVIEW_JOB_KIND:
+            originals = await load_pending_previews(conn, job.document_id)
+            for file_version, filename, data, document_text in originals:
+                if lost.is_set():
+                    return True
+                pdf, error = None, None
+                try:
+                    pdf = await asyncio.to_thread(
+                        convert_to_pdf,
+                        bytes(data),
+                        filename,
+                        document_text=document_text,
+                    )
+                    status = "ready"
+                except ConverterUnavailable as exc:
+                    status, error = "unavailable", str(exc)
+                except PreviewRenderFailed as exc:
+                    status, error = "failed", str(exc)
+                if lost.is_set():
+                    return True
+                if not await finalize_preview(conn, job, file_version, status, pdf, error):
+                    return True
+            # 마지막 판 반영 뒤에도 회수될 수 있으므로 마감 역시 소유권 아래에서 한다.
+            async with conn.transaction():
+                await bound_lock_wait(conn)
+                cur = await conn.execute(
+                    "SELECT 1 FROM documents WHERE id = %s FOR UPDATE",
+                    (job.document_id,),
+                )
+                if await cur.fetchone() is not None and await lock_owned_job(conn, job):
+                    await mark_job_done(conn, job.job_id)
             return True
         document = await load_document(conn, job.document_id)
         if document is None:
