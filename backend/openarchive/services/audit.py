@@ -60,6 +60,13 @@ async def set_actor(
         await conn.execute("SELECT set_config(%s, %s, true)", (name, value))
 
 
+async def mark_text_from_extraction(conn: psycopg.AsyncConnection) -> None:
+    """작성자는 텍스트를 쓴 주체인 워커로 기록하고 감사 행위자는 그대로 둔다 (D3)."""
+    if conn.autocommit and conn.info.transaction_status == TransactionStatus.IDLE:
+        raise RuntimeError("추출 출처 설정은 트랜잭션 안에서 불러야 한다.")
+    await conn.execute("SELECT set_config('openarchive.text_source', 'extraction', true)")
+
+
 async def list_audit(
     conn: psycopg.AsyncConnection,
     *,

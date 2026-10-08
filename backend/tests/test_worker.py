@@ -2687,6 +2687,11 @@ async def test_reextraction_records_text_update_by_the_worker(conn):
     assert await finalize_extract_job(conn, job, "다시 인식한 결과") is True
 
     assert await text_version_numbers(conn, doc_id) == [1, 2]
+    row = await (await conn.execute(
+        "SELECT author, author_via FROM document_versions WHERE document_id = %s AND version = 2",
+        (doc_id,),
+    )).fetchone()
+    assert row == (None, "worker")
     assert await text_updated_audit(conn, doc_id) == [(None, "worker", {"version": 2})]
 
 

@@ -98,6 +98,9 @@ class DocumentProgress(BaseModel):
 class TextVersion(BaseModel):
     version: int
     created_at: datetime
+    # 표시 문구는 화면·CLI가 정한다 (D6).
+    author: str | None
+    author_via: str | None
 
 
 class TextVersionDetail(TextVersion):

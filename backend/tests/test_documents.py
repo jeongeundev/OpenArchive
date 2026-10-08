@@ -1097,3 +1097,10 @@ async def test_finder_visible_tags(documents_conn):
 async def test_finder_invalid_sort(documents_conn):
     with pytest.raises(ValueError):
         await list_documents(documents_conn, sort="title; DROP TABLE documents")
+
+
+async def test_extraction_marker_requires_a_transaction(documents_conn):
+    from openarchive.services.audit import mark_text_from_extraction
+
+    with pytest.raises(RuntimeError, match="트랜잭션"):
+        await mark_text_from_extraction(documents_conn)
