@@ -219,6 +219,9 @@ def build_server(
                 conn, document_id=parsed_id, user_id=principal.principal
             )
         payload = _document_payload(document)
+        # preview_status는 화면의 미리보기 링크용이다 — MCP에는 미리보기 경로가 없다 (#228 D4).
+        for file in payload["files"]:
+            file.pop("preview_status", None)
         payload["related"] = _json_value(asdict(related))
         return payload
 
