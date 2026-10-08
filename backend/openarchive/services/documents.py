@@ -25,6 +25,7 @@ from openarchive.services.parsing import (
     media_type_for,
     needs_ocr,
 )
+from openarchive.services.preview import PREVIEW_CONVERTIBLE_EXTENSIONS
 from openarchive.services.visibility import (
     FOLDER_VISIBLE_TO_USER,
     NOT_TRASHED,
@@ -76,6 +77,14 @@ class DocumentNotFound(Exception):
 
 class OriginalFileNotFound(Exception):
     """볼 수 있는 문서지만 요청한 원본 판이 없는 경우. 문서 없음과 구분해도 누출이 없다."""
+
+
+class PreviewPending(Exception):
+    pass
+
+
+class PreviewFailed(Exception):
+    pass
 
 
 class OriginalNotPreviewable(Exception):
@@ -887,10 +896,16 @@ async def get_document(
     # 원본 판은 메타데이터만 싣는다. 상세는 화면이 수시로 부르는 응답이라 바이트를 섞지 않는다.
     await cur.execute(
         """
-        SELECT file_version, filename, size, sha256, text_version, uploaded_by, uploaded_at
-        FROM document_files
-        WHERE document_id = %s
-        ORDER BY file_version
+        SELECT f.file_version, f.filename, f.size, f.sha256, f.text_version,
+               f.uploaded_by, f.uploaded_at,
+               CASE WHEN lower(substring(f.filename from '[.][^.]+$'))
+                              IN ('.pdf', '.png', '.jpg', '.jpeg') THEN 'ready'
+                    WHEN preview_convertible(f.filename) THEN coalesce(p.status, 'unavailable')
+                    ELSE NULL END AS preview_status
+        FROM document_files f
+        LEFT JOIN document_file_previews p USING (document_id, file_version)
+        WHERE f.document_id = %s
+        ORDER BY f.file_version
         """,
         (document_id,),
     )
@@ -965,11 +980,26 @@ async def get_original_file(
     original = await cur.fetchone()
     if original is None:
         raise OriginalFileNotFound
-    if (
-        preview
-        and PurePath(original["filename"]).suffix.lower().lstrip(".") not in PREVIEWABLE_EXTENSIONS
-    ):
-        raise OriginalNotPreviewable
+    if preview:
+        extension = PurePath(original["filename"]).suffix.lower().lstrip(".")
+        if extension in PREVIEW_CONVERTIBLE_EXTENSIONS:
+            await cur.execute(
+                "SELECT status, pdf FROM document_file_previews "
+                "WHERE document_id = %s AND file_version = %s",
+                (document_id, original["file_version"]),
+            )
+            converted = await cur.fetchone()
+            if converted is None or converted["status"] == "unavailable":
+                raise OriginalNotPreviewable
+            if converted["status"] == "pending":
+                raise PreviewPending
+            if converted["status"] == "failed":
+                raise PreviewFailed
+            original["data"] = converted["pdf"]
+            original["filename"] = str(PurePath(original["filename"]).with_suffix(".pdf"))
+            original["sha256"] = hashlib.sha256(converted["pdf"]).hexdigest()
+        elif extension not in PREVIEWABLE_EXTENSIONS:
+            raise OriginalNotPreviewable
     await conn.execute(
         "SELECT record_original_preview(%s, %s)"
         if preview

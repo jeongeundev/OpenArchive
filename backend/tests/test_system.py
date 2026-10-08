@@ -44,6 +44,7 @@ async def test_empty_database_has_no_jobs_or_finished_job(system_conn):
         embedding_provider="fake",
     )
 
+    assert (result.preview_pending, result.preview_failed, result.preview_unavailable) == (0, 0, 0)
     assert result.jobs.pending == 0
     assert result.jobs.processing == 0
     assert result.jobs.recovery_pending == 0

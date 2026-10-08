@@ -1198,6 +1198,7 @@ def test_restore_endpoint_refuses_a_non_owner_of_a_public_document(
 
 
 ORIGINAL_FILE_KEYS = {
+    "preview_status",
     "file_version",
     "filename",
     "size",

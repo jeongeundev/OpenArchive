@@ -106,6 +106,16 @@ async def _original_file_not_found(request: Request, error: Exception) -> JSONRe
     return JSONResponse(status_code=404, content={"detail": "원본 파일이 없습니다."})
 
 
+@app.exception_handler(documents_service.PreviewPending)
+async def _preview_pending(request: Request, error: Exception) -> JSONResponse:
+    return JSONResponse(status_code=409, content={"detail": "미리보기를 준비 중입니다."})
+
+
+@app.exception_handler(documents_service.PreviewFailed)
+async def _preview_failed(request: Request, error: Exception) -> JSONResponse:
+    return JSONResponse(status_code=415, content={"detail": "미리보기를 만들지 못했습니다."})
+
+
 @app.exception_handler(documents_service.OriginalNotPreviewable)
 async def _original_not_previewable(request: Request, error: Exception) -> JSONResponse:
     return JSONResponse(status_code=415, content={"detail": "미리보기할 수 없는 형식입니다."})
