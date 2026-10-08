@@ -351,3 +351,20 @@ async def running_app(app):
         stop.set()
         waiter.cancel()
         await task
+
+
+@pytest.fixture(autouse=True)
+def _require_conversion_tools(request):
+    if request.node.get_closest_marker("converters") is None:
+        return
+    from openarchive.services.preview import ConverterUnavailable, check_conversion_tools
+
+    try:
+        check_conversion_tools()
+    except ConverterUnavailable as exc:
+        if os.environ.get("OPENARCHIVE_REQUIRE_CONVERTERS") == "1":
+            pytest.fail(str(exc), pytrace=False)
+        pytest.skip(str(exc))
+    finally:
+        # 사전 점검이 테스트 안의 환경변수 변경을 가리는 캐시를 남기지 않는다.
+        get_settings.cache_clear()
