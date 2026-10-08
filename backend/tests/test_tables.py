@@ -13,9 +13,12 @@
 """
 
 import hashlib
+import shutil
 
 import psycopg
 import pytest
+
+from openarchive.migrations import MIGRATIONS_DIR, run_migrations
 
 
 def test_document_trash_column_preserves_existing_inserts(conn):
@@ -1465,3 +1468,75 @@ def test_hard_deleting_document_cascades_to_originals_and_previews(conn):
     conn.execute("DELETE FROM documents WHERE id = %s", (doc,))
     assert conn.execute("SELECT count(*) FROM document_files").fetchone()[0] == 0
     assert conn.execute("SELECT count(*) FROM document_file_previews").fetchone()[0] == 0
+
+
+def test_version_author_columns_are_nullable_text(conn):
+    assert conn.execute(
+        "SELECT column_name, data_type, is_nullable FROM information_schema.columns"
+        " WHERE table_schema = 'public' AND table_name = 'document_versions'"
+        " AND column_name IN ('author', 'author_via') ORDER BY column_name"
+    ).fetchall() == [("author", "text", "YES"), ("author_via", "text", "YES")]
+
+
+@pytest.mark.parametrize("via", ["session", "token", "mcp", "cli", "share",
+                                 "worker", "direct", None])
+def test_version_author_via_accepts_known_routes(conn, via):
+    doc = insert_document(conn)
+    conn.execute("UPDATE document_versions SET author_via = %s WHERE document_id = %s",
+                 (via, doc))
+    assert conn.execute(
+        "SELECT author_via FROM document_versions WHERE document_id = %s", (doc,)
+    ).fetchone() == (via,)
+
+
+def test_version_author_via_rejects_unknown_route(conn):
+    doc = insert_document(conn)
+    with pytest.raises(psycopg.errors.CheckViolation) as exc:
+        conn.execute("UPDATE document_versions SET author_via = 'admin'"
+                     " WHERE document_id = %s", (doc,))
+    assert exc.value.diag.constraint_name == "document_versions_author_via_valid"
+
+
+async def test_version_authors_backfill_only_matching_audit_transactions(clean_db, tmp_path):
+    for path in MIGRATIONS_DIR.glob("0[0-3][0-9]_*.sql"):
+        if path.name < "038":
+            shutil.copy(path, tmp_path)
+    await run_migrations(clean_db, tmp_path)
+    with psycopg.connect(clean_db, autocommit=True) as c:
+        with c.transaction():
+            c.execute("SELECT set_config('openarchive.actor_id', 'alice', true),"
+                      " set_config('openarchive.actor_via', 'session', true)")
+            doc_a = insert_document(c)
+        with c.transaction():
+            c.execute("SELECT set_config('openarchive.actor_id', 'bob', true),"
+                      " set_config('openarchive.actor_via', 'token', true)")
+            c.execute("UPDATE documents SET content = 'second', content_hash = 'second',"
+                      " version = 2 WHERE id = %s", (doc_a,))
+        with c.transaction():
+            c.execute("UPDATE documents SET content = 'third', content_hash = 'third',"
+                      " version = 3 WHERE id = %s", (doc_a,))
+        with c.transaction():
+            c.execute("SELECT set_config('openarchive.actor_id', 'alice', true),"
+                      " set_config('openarchive.actor_via', 'session', true)")
+            doc_b = c.execute(
+                "INSERT INTO documents (title, content_type, content, content_hash,"
+                " owner_id, extraction_status) VALUES ('scan', 'pdf', '', 'scan',"
+                " 'alice', 'pending') RETURNING id"
+            ).fetchone()[0]
+        with c.transaction():
+            c.execute("SELECT set_config('openarchive.actor_via', 'worker', true)")
+            c.execute("UPDATE documents SET content = 'recognized',"
+                      " content_hash = 'recognized', extraction_status = 'done'"
+                      " WHERE id = %s", (doc_b,))
+        before = c.execute("SELECT count(*) FROM audit_log").fetchone()[0]
+        shutil.copy(MIGRATIONS_DIR / "038_version_author_tables.sql", tmp_path)
+        assert await run_migrations(clean_db, tmp_path) == ["038_version_author_tables.sql"]
+        assert c.execute(
+            "SELECT version, author, author_via FROM document_versions"
+            " WHERE document_id = %s ORDER BY version", (doc_a,)
+        ).fetchall() == [(1, "alice", "session"), (2, "bob", "token"), (3, None, "direct")]
+        assert c.execute(
+            "SELECT version, author, author_via FROM document_versions"
+            " WHERE document_id = %s", (doc_b,)
+        ).fetchall() == [(1, None, None)]
+        assert c.execute("SELECT count(*) FROM audit_log").fetchone()[0] == before
