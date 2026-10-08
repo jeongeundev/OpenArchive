@@ -4,6 +4,7 @@ HTTP를 알지 못한다 — 실패는 아래 예외로 표현하고, 상태 코
 MCP 서버는 HTTPException을 쓸 수 없으므로 이 경계가 필요하다.
 """
 
+import asyncio
 import difflib
 import hashlib
 import json
@@ -1313,7 +1314,8 @@ async def diff_versions(
         "base": base,
         "target": target,
         "identical": identical,
-        "hunks": [] if identical else _diff_lines(old, new),
+        # difflib은 반복 줄이 많은 긴 텍스트에서 수십 초가 걸려 이벤트 루프 밖에서 돌린다.
+        "hunks": [] if identical else await asyncio.to_thread(_diff_lines, old, new),
     }
 
 

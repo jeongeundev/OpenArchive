@@ -1,3 +1,4 @@
+import threading
 from uuid import UUID
 
 import psycopg
@@ -105,4 +106,23 @@ async def test_service(db_client, migrated_db):
     async with await psycopg.AsyncConnection.connect(migrated_db) as conn:
         result = await documents.diff_versions(conn, UUID(doc), user_id="alice", base=1, target=2)
     assert result == compare(db_client, doc).json()
+    assert result["hunks"][0]["lines"][1] == {"op": "removed", "text": "나"}
+
+
+@pytest.mark.asyncio
+async def test_diff_runs_off_event_loop(db_client, migrated_db, monkeypatch):
+    """difflib 계산은 반복 줄이 많으면 수십 초라 이벤트 루프 밖 스레드에서 돈다."""
+    doc = versions(db_client)
+    loop_thread = threading.get_ident()
+    threads = []
+    diff_lines = documents._diff_lines
+
+    def recording(old, new):
+        threads.append(threading.get_ident())
+        return diff_lines(old, new)
+
+    monkeypatch.setattr(documents, "_diff_lines", recording)
+    async with await psycopg.AsyncConnection.connect(migrated_db) as conn:
+        result = await documents.diff_versions(conn, UUID(doc), user_id="alice", base=1, target=2)
+    assert len(threads) == 1 and threads[0] != loop_thread
     assert result["hunks"][0]["lines"][1] == {"op": "removed", "text": "나"}
