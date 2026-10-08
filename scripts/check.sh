@@ -44,7 +44,7 @@ else
 fi
 
 echo "== scripts: 셸 구문 검사 =="
-for f in "$ROOT"/scripts/*.sh "$ROOT"/scripts/hooks/*.sh; do
+for f in "$ROOT"/scripts/*.sh; do
   [ -f "$f" ] || continue
   bash -n "$f" || FAILED=1
 done

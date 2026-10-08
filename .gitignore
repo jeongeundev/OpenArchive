@@ -43,10 +43,6 @@ scripts/eval/formats/*
 .idea/
 *.swp
 
-# --- phase 실행 산출물 ---
-phases/**/phase*-output.json
-phases/**/step*-output.json
-
 # 대회 서식 원본
 *.docx
 
@@ -60,3 +56,15 @@ ha-runs/
 
 # --- 성능 측정기 실행 산출물 ---
 benchmark-results/
+
+# --- 메인테이너 개인 AI 작업 도구 ---
+# 하네스(phase 설계·실행·머지 대기 오케스트레이션)와 Claude Code 개인 설정은 저장소 밖에서
+# 따로 관리한다. 기여자는 CONTRIBUTING.md의 일반 흐름(브랜치 → 테스트 먼저 → PR)을 따른다.
+phases/
+scripts/execute.py
+scripts/test_execute.py
+scripts/ship.py
+scripts/test_ship.py
+scripts/hooks/
+.claude/
+CLAUDE.local.md
