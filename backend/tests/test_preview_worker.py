@@ -282,3 +282,37 @@ async def test_preview_exhaustion_preserves_ready_plate(conn, zombie):
     result = await rows(conn)
     assert result[0] == ("ready", b"saved", None)
     assert result[1][0] == "failed"
+
+
+async def test_preview_failing_plate_does_not_starve_other_plates(conn, monkeypatch):
+    """판 하나의 반복 예외가 다른 판의 변환을 막지 않는다 (#228 리뷰 결정 2).
+
+    예외가 난 판은 미뤄 두고 나머지 판을 끝까지 처리한 뒤 첫 예외로 재시도한다. 재시도는
+    실패한 판만 다시 하고, 소진되면 그 판만 실패다.
+    """
+    await originals(conn, count=3)
+    calls = []
+
+    def convert(data, *args, **kwargs):
+        calls.append(data)
+        if data == b"2":
+            raise TimeoutError("timeout")
+        return b"PDF" + data
+
+    monkeypatch.setattr(worker, "convert_to_pdf", convert)
+    await worker.process_once(conn, FakeProvider())
+    assert [row[0] for row in await rows(conn)] == ["ready", "pending", "ready"]
+    assert await job_row(conn) == ("pending", 1, True, "TimeoutError: timeout")
+
+    for _ in range(worker.MAX_ATTEMPTS - 1):
+        await conn.execute(
+            "UPDATE embedding_jobs SET next_attempt_at = now() WHERE kind = 'preview'"
+        )
+        await worker.process_once(conn, FakeProvider())
+    assert calls == [b"1", b"2", b"3"] + [b"2"] * (worker.MAX_ATTEMPTS - 1)
+    assert await rows(conn) == [
+        ("ready", b"PDF1", None),
+        ("failed", None, "TimeoutError: timeout"),
+        ("ready", b"PDF3", None),
+    ]
+    assert (await job_row(conn))[0] == "error"

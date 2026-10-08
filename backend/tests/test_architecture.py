@@ -134,8 +134,9 @@ def test_trash_condition_is_confined_to_visibility_and_trash_service():
     assert uses <= {"services/visibility.py", "services/trash.py"}, uses
 
 
-def test_server_side_binding_is_confined_to_original_file_insert():
-    """서버 바인딩은 원본 파일 `%b` INSERT 하나만 쓴다 (ADR-062, #210).
+def test_server_side_binding_is_confined_to_binary_writes():
+    """서버 바인딩은 이진 쓰기 둘 — 원본 파일 `%b` INSERT와 변환본 PDF `%b` UPDATE — 만 쓴다
+    (ADR-062 결정 2, 2026-10-08 개정 #228).
 
     OpenProxy는 파라미터 문장을 서버 명령문으로 쌓고, assert 빌드인 배포판은 쌓인 계획만큼 모든
     문장을 느리게 한다. 이름 붙인 prepare는 26000 사고 경로다(§17).
@@ -148,6 +149,6 @@ def test_server_side_binding_is_confined_to_original_file_insert():
     )
     uses = {path.relative_to(root).as_posix() for path in root.rglob("*.py")
             if pattern.search(path.read_text())}
-    assert uses <= {"services/documents.py"}, uses
-    documents = (root / "services" / "documents.py").read_text()
-    assert len(pattern.findall(documents)) == 1
+    assert uses <= {"services/documents.py", "worker.py"}, uses
+    for binary_writer in ("services/documents.py", "worker.py"):
+        assert len(pattern.findall((root / binary_writer).read_text())) == 1, binary_writer

@@ -16,6 +16,7 @@ from psycopg_pool import AsyncConnectionPool
 
 import openarchive.db
 import openarchive.services.documents
+import openarchive.worker
 from openarchive.config import get_settings
 
 
@@ -454,3 +455,47 @@ async def test_original_file_bytes_stay_a_binary_parameter(monkeypatch, migrated
         (received,) = check.execute("SELECT q FROM received_sql").fetchone()
     assert "$4" in received
     assert "deadbeef" not in received
+
+
+async def test_preview_pdf_bytes_stay_a_binary_parameter(monkeypatch, migrated_db):
+    """변환본 PDF도 원본과 같은 이유로 이진 파라미터로 보낸다 (ADR-062 결정 2 개정, #228).
+
+    변환본은 원본과 비슷한 크기라 hex 리터럴로 펼치면 두 배 크기 문장이 OpenProxy를 지난다.
+    """
+    with psycopg.connect(migrated_db, autocommit=True) as setup:
+        setup.execute("CREATE TABLE received_sql (q text)")
+        setup.execute(
+            "CREATE FUNCTION record_sql() RETURNS trigger LANGUAGE plpgsql AS "
+            "$$ BEGIN INSERT INTO received_sql VALUES (current_query()); RETURN NULL; END $$"
+        )
+        setup.execute(
+            "CREATE TRIGGER record_sql AFTER UPDATE ON document_file_previews "
+            "FOR EACH STATEMENT EXECUTE FUNCTION record_sql()"
+        )
+        doc_id = setup.execute(
+            "INSERT INTO documents (title, content_type, content, content_hash, owner_id)"
+            " VALUES ('t', 'txt', 'c', md5('c'), 'u228') RETURNING id"
+        ).fetchone()[0]
+        setup.execute(
+            "INSERT INTO document_files (document_id, file_version, filename, data, uploaded_by)"
+            " VALUES (%s, 1, 'a.docx', %s, 'u228')",
+            (doc_id, b"docx"),
+        )
+        setup.execute("UPDATE embedding_jobs SET status = 'done' WHERE kind <> 'preview'")
+    await _open_pool(monkeypatch, migrated_db)
+    try:
+        async with openarchive.db.connection() as conn:
+            job = await openarchive.worker.claim_job(conn)
+            assert job is not None and job.kind == "preview"
+            assert await openarchive.worker.finalize_preview(
+                conn, job, 1, "ready", b"\xde\xad\xbe\xef" * 1024, None
+            )
+    finally:
+        await openarchive.db.close_pool()
+
+    with psycopg.connect(migrated_db) as check:
+        (received,) = check.execute("SELECT q FROM received_sql").fetchone()
+        (stored,) = check.execute("SELECT pdf FROM document_file_previews").fetchone()
+    assert "$" in received
+    assert "deadbeef" not in received
+    assert bytes(stored) == b"\xde\xad\xbe\xef" * 1024
