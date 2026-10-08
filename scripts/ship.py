@@ -217,7 +217,10 @@ class Shipper:
                 raise Gate("G3: VM 실측이 필요한 phase다 — 실측을 마친 뒤 --merge --vm-verified")
             if self._sh("gh", "pr", "checks", str(st["pr"])).returncode != 0:
                 raise Gate(f"CI가 초록이 아니다 — 머지하지 않았다: {st['pr_url']}")
-            r = self._sh("gh", "pr", "merge", str(st["pr"]), "--squash")
+            reviewed = self._require_reviewed_head()
+            # 확인과 머지 사이에 push가 끼어들어도 GitHub가 head 불일치로 거부한다.
+            r = self._sh("gh", "pr", "merge", str(st["pr"]), "--squash",
+                         "--match-head-commit", reviewed)
             if r.returncode != 0:
                 raise Gate(f"gh pr merge 실패: {tail(r.stderr)}")
         except Gate as g:
@@ -236,6 +239,25 @@ class Shipper:
         self._sh("git", "fetch", "-q", "origin")
         return EXIT_OK
 
+    def _require_reviewed_head(self) -> str:
+        """머지할 PR head가 마지막 독립 리뷰가 본 커밋인지 확인한다 — 실무의 「새 커밋이 오면 승인 무효」.
+
+        1인 저장소에서는 본인 PR을 승인할 수 없어 GitHub 브랜치 보호로 강제할 수 없으므로 여기서 막는다.
+        """
+        st = self.state
+        reviewed = st.get("reviewed_head")
+        if not reviewed:
+            raise Gate("리뷰 기록(reviewed_head)이 없다 — --from review로 리뷰를 받은 뒤 머지할 것")
+        r = self._sh("gh", "pr", "view", str(st["pr"]), "--json", "headRefOid", "-q", ".headRefOid")
+        head = r.stdout.strip()
+        if r.returncode != 0 or not head:
+            raise Gate(f"PR head를 읽지 못했다 — 머지하지 않았다: {tail(r.stderr)}")
+        if head != reviewed:
+            count = self._sh("git", "rev-list", "--count", f"{reviewed}..{head}").stdout.strip() or "?"
+            raise Gate(f"리뷰 뒤 커밋 {count}개가 PR에 있다(리뷰 {reviewed[:7]} → head {head[:7]}) — "
+                       "--from review로 다시 리뷰받은 뒤 머지할 것")
+        return reviewed
+
     # --- 준비·저장·멈춤 ---
 
     def _blank_state(self) -> dict:
@@ -244,7 +266,7 @@ class Shipper:
             "needs_vm": False, "pr": None, "pr_url": None,
             "reviews": 0, "fixes": 0, "ci_fixes": 0,
             "review_artifacts": [], "ci_fix_commits": [], "tests_run": [],
-            "last_commit": None, "gate": None, "updated_at": None,
+            "last_commit": None, "reviewed_head": None, "gate": None, "updated_at": None,
         }
 
     def _prepare(self, from_stage: str | None):
@@ -360,6 +382,8 @@ class Shipper:
         self._git("add", rel)
         self._git("commit", "-q", "-m", f"chore: {self.phase_dir} 리뷰 {n}차 결과")
         self._git("push", "-q", "origin", st["branch"])
+        # 리뷰 결과 커밋까지가 이 리뷰가 본 판이다 — 이후 커밋은 다시 리뷰받아야 머지된다.
+        st["reviewed_head"] = self._git("rev-parse", "HEAD")
         st["reviews"] += 1
         st["review_artifacts"].append(rel)
         self._sh("gh", "pr", "comment", str(st["pr"]), "--body-file", "-",
@@ -398,6 +422,8 @@ class Shipper:
         sha = self._commit_auto_fix(f"fix: {self.phase_dir} CI 실패 수정")
         st["ci_fixes"] += 1
         st["ci_fix_commits"].append(sha)
+        # 리뷰 뒤 커밋이므로 바뀐 부분을 다시 리뷰받는다. 리뷰 한도면 review 단계가 사람에게 넘긴다.
+        st["stage"] = "review"
 
     # --- 단계 도우미 ---
 
@@ -494,7 +520,7 @@ class Shipper:
             for f, rel in candidates:
                 print(f"  - [{f['severity']}] {f['title']} — {f['reason']} ({rel})")
         if st["ci_fix_commits"]:
-            print("\n  ⚠ 리뷰 뒤 CI 수정 커밋 — 재리뷰를 받지 않았다. 머지 전에 확인할 것:")
+            print("\n  CI 자동 수정 커밋 — 재리뷰를 거쳤다:")
             for sha in st["ci_fix_commits"]:
                 print(f"  - {self._git('log', '-1', '--format=%h %s', sha)}")
         if st["needs_vm"]:
@@ -533,6 +559,11 @@ class Shipper:
     def _review_prompt(self, rel: str) -> str:
         st = self.state
         prev = ", ".join(st["review_artifacts"]) or "없음"
+        since = ""
+        reviewed = st.get("reviewed_head")
+        if reviewed and reviewed != self._git("rev-parse", "HEAD"):
+            since = (f"- 직전 리뷰 이후 변경: `git diff {reviewed}..HEAD` — 이번 리뷰는 이 변경을 중점으로 보되, "
+                     "전체 diff의 맥락에서 판단하라\n")
         return f"""[ship:review]
 당신은 이 저장소의 독립 리뷰어다. 구현에 참여하지 않았다. 코드를 고치지 마라 — 결과 파일 하나만 쓴다.
 
@@ -540,7 +571,7 @@ class Shipper:
 - 스펙: GitHub 이슈 #{st['issue']} (`gh issue view {st['issue']}`), 하네스 설계 `{self.phase_rel}/step*.md`
 - 기준: CLAUDE.md(특히 CRITICAL), docs/ADR.md, docs/ARCHITECTURE.md
 - 이전 리뷰: {prev} — 반영된 지적을 되풀이하지 말고, 반영이 맞는지 확인하라
-
+{since}
 두 축으로 본다:
 1. Standards — 문서화된 규칙 위반. 규칙 출처를 reason에 적는다
 2. Spec — 이슈·설계가 요구했는데 빠졌거나 틀린 것, 요구하지 않은 범위 확장
