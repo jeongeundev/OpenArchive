@@ -60,6 +60,16 @@ def test_adjacent_delete_and_insert_become_replace():
     ]
 
 
+@pytest.mark.parametrize("gap", [5, 6, 7, 8])
+def test_grouping_boundary_matches_difflib(gap):
+    """바뀐 곳 사이 같은 줄이 2 × 3줄 안팎일 때 — 하나로 묶을지 나눌지의 경계다."""
+    a = ["처음"] + [f"같음 {i}" for i in range(gap)] + ["끝"]
+    b = ["처음 바뀜"] + [f"같음 {i}" for i in range(gap)] + ["끝 바뀜"]
+    matcher = difflib.SequenceMatcher(None, a, b, autojunk=False)
+    assert textdiff.group_opcodes(matcher.get_opcodes(), 3) == list(matcher.get_grouped_opcodes(3))
+    assert len(textdiff.group_opcodes(matcher.get_opcodes(), 3)) == (1 if gap <= 6 else 2)
+
+
 def test_grouping_matches_difflib():
     rnd = random.Random(7)
     for _ in range(300):
@@ -117,9 +127,22 @@ def test_frequent_edits_on_repeated_blank_lines_stay_fast(step):
 
 
 def test_work_never_runs_far_past_the_budget():
-    """예산 확인은 대각선마다 한다 — 넘는 순간 멈추므로 실제 작업은 예산 + 한 번의 직진을 넘지 않는다."""
-    a = [f"이전 {i}" for i in range(500)]
-    b = [f"새 {i}" for i in range(500)]
-    codes, work = textdiff._myers(a, b, budget=10_000)
-    assert codes is None
-    assert 10_000 < work <= 10_000 + len(a) + len(b)
+    """예산을 넘는 순간 멈춘다 — 쓴 작업량은 예산 + 2 + min(N, M)을 넘지 않는다.
+
+    두 종류 줄만으로 된 입력은 여러 대각선에 직진이 동시에 생긴다 — 걸음(d) 단위로만 확인하면
+    한 걸음 안의 직진이 쌓여 이 한계를 넘는다(그 구현에서 3,000건 중 실제로 넘는 입력이 나온다).
+    """
+    rnd = random.Random(2026)
+    for _ in range(3000):
+        a = [rnd.choice(["", "가"]) for _ in range(rnd.randint(1, 60))]
+        b = [rnd.choice(["", "가"]) for _ in range(rnd.randint(1, 60))]
+        full = textdiff._myers(a, b, budget=10**9)[1]
+        codes, work = textdiff._myers(a, b, budget=full)
+        assert codes is not None and work == full
+        if full == 0:
+            continue
+        budget = rnd.randrange(full)
+        codes, work = textdiff._myers(a, b, budget=budget)
+        # 마지막 대각선에서 끝에 닿으면 그 걸음은 마치고 결과를 낸다 — 그때 작업량은 전체와 같다.
+        assert codes is None and work > budget or codes is not None and work == full
+        assert work <= budget + 2 + min(len(a), len(b))

@@ -5,10 +5,8 @@ MCP 서버는 HTTPException을 쓸 수 없으므로 이 경계가 필요하다.
 """
 
 import asyncio
-import difflib
 import hashlib
 import json
-from collections import Counter
 from collections.abc import Awaitable, Callable
 from pathlib import PurePath
 from typing import Literal
@@ -17,6 +15,7 @@ from uuid import UUID
 import psycopg
 from psycopg.rows import dict_row
 
+from openarchive.services import textdiff
 from openarchive.services.chunking import chunk_spans
 from openarchive.services.grants import insert_grants, resolve_grantees
 from openarchive.services.parsing import (
@@ -53,11 +52,6 @@ SUMMARY_COLUMNS = """id, title, filename, content_type, version, owner_id, visib
 
 # 시연 데이터 최대 추출 텍스트(약 90KB)의 5배보다 크고 DB CHECK와 같은 경계다.
 MAX_EXTRACTED_TEXT_LENGTH = 500_000
-# 버전 비교(difflib)의 시간은 줄 수가 아니라 두 버전에서 같은 줄끼리 맺는 짝 수에 비례한다
-# (실측 2026-10-08: 짝 100만 개당 약 0.17~0.2초). 빈 줄이 반복되는 1만 줄은 짝 2,500만 개·3.9초,
-# 4천 줄 표는 짝 6만 개·18ms였다. 실문서는 500K자 문서도 짝 350만 개·0.65초다. 상한을 넘으면
-# 계산하지 않는다 — 최악 시간을 약 1초로 묶는다 (#190).
-MAX_DIFF_LINE_PAIRS = 5_000_000
 PREVIEWABLE_EXTENSIONS: frozenset[str] = frozenset({"pdf", "png", "jpg", "jpeg"})
 TEXT_CONTENT_TYPES: tuple[str, ...] = ("txt", "md")
 EXTRACTION_FAILED_MESSAGE = "문서에서 텍스트를 추출하지 못했습니다."
@@ -1316,38 +1310,15 @@ async def diff_versions(
         raise DocumentNotFound
     old, new = contents[base], contents[target]
     identical = old == new
-    too_large = not identical and _line_pairs(old, new) > MAX_DIFF_LINE_PAIRS
+    # 예산 안에서도 1초 가까이 걸릴 수 있어 이벤트 루프 밖에서 돌린다.
+    hunks = [] if identical else await asyncio.to_thread(textdiff.diff_hunks, old, new)
     return {
         "base": base,
         "target": target,
         "identical": identical,
-        "too_large": too_large,
-        # 상한 안에서도 1초 가까이 걸릴 수 있어 이벤트 루프 밖에서 돌린다.
-        "hunks": [] if identical or too_large else await asyncio.to_thread(_diff_lines, old, new),
+        "too_large": hunks is None,
+        "hunks": hunks or [],
     }
-
-
-def _line_pairs(old: str, new: str) -> int:
-    """두 텍스트에서 같은 줄끼리 맺을 수 있는 짝 수 — difflib 비교 시간의 예측값이다."""
-    new_counts = Counter(new.splitlines())
-    return sum(count * new_counts[line] for line, count in Counter(old.splitlines()).items())
-
-
-def _diff_lines(old: str, new: str) -> list[dict]:
-    old_lines, new_lines = old.splitlines(), new.splitlines()
-    hunks = []
-    matcher = difflib.SequenceMatcher(None, old_lines, new_lines, autojunk=False)
-    for group in matcher.get_grouped_opcodes(3):
-        lines = []
-        for op, a_start, a_end, b_start, b_end in group:
-            if op == "equal":
-                lines.extend({"op": "equal", "text": text} for text in old_lines[a_start:a_end])
-            if op in ("delete", "replace"):
-                lines.extend({"op": "removed", "text": text} for text in old_lines[a_start:a_end])
-            if op in ("insert", "replace"):
-                lines.extend({"op": "added", "text": text} for text in new_lines[b_start:b_end])
-        hunks.append({"lines": lines})
-    return hunks
 
 
 def _utf16_len(text: str) -> int:
