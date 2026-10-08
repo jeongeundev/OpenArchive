@@ -44,6 +44,7 @@ from openarchive.api.schemas import (
     TrashItem,
     UpdateAccessRequest,
     UpdateTagsRequest,
+    VersionDiff,
 )
 from openarchive.config import get_settings
 from openarchive.services import documents as service
@@ -416,6 +417,20 @@ async def get_document_version(
         conn, document_id, version=version, user_id=user_id, chunk=chunk
     )
     return TextVersionDetail.model_validate(document_version)
+
+
+@router.get("/{document_id}/versions/{base}/diff/{target}", response_model=VersionDiff)
+async def diff_document_versions(
+    document_id: UUID,
+    base: Annotated[int, Path(ge=1)],
+    target: Annotated[int, Path(ge=1)],
+    conn: Connection,
+    user_id: Annotated[str, Depends(require_user_id)],
+) -> VersionDiff:
+    result = await service.diff_versions(
+        conn, document_id, user_id=user_id, base=base, target=target
+    )
+    return VersionDiff.model_validate(result)
 
 
 @router.post(

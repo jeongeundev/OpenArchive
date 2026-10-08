@@ -4,6 +4,7 @@ HTTP를 알지 못한다 — 실패는 아래 예외로 표현하고, 상태 코
 MCP 서버는 HTTPException을 쓸 수 없으므로 이 경계가 필요하다.
 """
 
+import difflib
 import hashlib
 import json
 from collections.abc import Awaitable, Callable
@@ -1280,6 +1281,57 @@ async def get_document_version(
             document_version["passage_start"] = _utf16_len(content[:start])
             document_version["passage_end"] = _utf16_len(content[:end])
     return document_version
+
+
+async def diff_versions(
+    conn: psycopg.AsyncConnection,
+    document_id: UUID,
+    *,
+    user_id: str,
+    base: int,
+    target: int,
+) -> dict:
+    """열람 가능한 문서의 두 텍스트 버전을 한 번에 읽어 비교한다."""
+    cur = conn.cursor(row_factory=dict_row)
+    await cur.execute(
+        f"""
+        SELECT v.version, v.content
+        FROM document_versions v
+        JOIN documents d ON d.id = v.document_id
+        WHERE v.document_id = %(id)s
+          AND v.version IN (%(base)s, %(target)s)
+          AND {VISIBLE_TO_USER}
+        """,
+        {"id": document_id, "base": base, "target": target, "user": user_id},
+    )
+    contents = {row["version"]: row["content"] for row in await cur.fetchall()}
+    if base not in contents or target not in contents:
+        raise DocumentNotFound
+    old, new = contents[base], contents[target]
+    identical = old == new
+    return {
+        "base": base,
+        "target": target,
+        "identical": identical,
+        "hunks": [] if identical else _diff_lines(old, new),
+    }
+
+
+def _diff_lines(old: str, new: str) -> list[dict]:
+    old_lines, new_lines = old.splitlines(), new.splitlines()
+    hunks = []
+    matcher = difflib.SequenceMatcher(None, old_lines, new_lines, autojunk=False)
+    for group in matcher.get_grouped_opcodes(3):
+        lines = []
+        for op, a_start, a_end, b_start, b_end in group:
+            if op == "equal":
+                lines.extend({"op": "equal", "text": text} for text in old_lines[a_start:a_end])
+            if op in ("delete", "replace"):
+                lines.extend({"op": "removed", "text": text} for text in old_lines[a_start:a_end])
+            if op in ("insert", "replace"):
+                lines.extend({"op": "added", "text": text} for text in new_lines[b_start:b_end])
+        hunks.append({"lines": lines})
+    return hunks
 
 
 def _utf16_len(text: str) -> int:

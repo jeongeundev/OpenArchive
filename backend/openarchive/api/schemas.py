@@ -107,6 +107,22 @@ class TextVersionDetail(TextVersion):
     passage_end: int | None = None
 
 
+class DiffLine(BaseModel):
+    op: Literal["equal", "added", "removed"]
+    text: str
+
+
+class DiffHunk(BaseModel):
+    lines: list[DiffLine]
+
+
+class VersionDiff(BaseModel):
+    base: int
+    target: int
+    identical: bool
+    hunks: list[DiffHunk]
+
+
 class RestoreVersionRequest(BaseModel):
     # 되돌릴 과거 버전은 경로에 있다. 이 값은 호출자가 읽어온 **현재** 버전이며,
     # 서버의 현재 버전과 다르면 409다 (ADR-037 결정 3).
