@@ -38,6 +38,10 @@ mkdir -p ~/.openarchive && cp backend/.env.example ~/.openarchive/.env   # 예�
 | `ANSWER_MODEL` | `qwen3:8b` | 임시 모델 태그 — #96 c의 한국어 실측으로 확정 |
 | `ANSWER_TIMEOUT_SECONDS` | `120` | 생성 호출 한 번의 HTTP 타임아웃(초). 0보다 큰 실수 |
 | `ANSWER_CONTEXT_CHARS` | `6000` | 프롬프트에 넣는 근거 본문의 글자 예산. 0보다 큰 정수 |
+| `PREVIEW_RHWP_BIN` | `rhwp` | HWP·HWPX 미리보기 변환기. 이름이면 PATH에서 찾고, 경로를 줘도 된다. 없으면 그 형식은 「변환기 없음」. 아래 「원본 미리보기 변환기」 |
+| `PREVIEW_SOFFICE_BIN` | `soffice` | DOCX·XLSX·PPTX 미리보기 변환기(LibreOffice) |
+| `PREVIEW_BWRAP_BIN` | `bwrap` | 변환기를 격리해 실행하는 bubblewrap. 없거나 격리를 쓸 수 없으면 모든 변환이 「변환기 없음」 |
+| `PREVIEW_TIMEOUT_SECONDS` | `900` | 변환 한 판의 시간 상한(초, 0보다 큰 실수). 넘기면 재시도 대상 실패. Rocky 9 x86-64 **에뮬레이션** VM(Apple Silicon 위) 실측 rhwp 쪽당 약 10.6초에서 약 85쪽을 감당한다. 네이티브 x86·arm64는 쪽당 2~3초라 수백 쪽이다. 더 큰 문서가 흔하면 올린다 |
 
 ## 임베딩 프로바이더
 
@@ -88,6 +92,93 @@ brew install tesseract tesseract-lang                    # macOS
 - 인식은 쪽당 수 초(맥 M2 Pro · tesseract 5.5 실측 약 3.3초)이고, 워커는 잡을 하나씩 처리하므로 긴
   스캔 문서를 인식하는 동안 다른 문서의 임베딩이 밀립니다. Rocky 9 패키지(tesseract 4.1.1)는 컨테이너
   실측에서 문자 오류율 3~5%, 쪽당 3.4~5.5초였습니다(arm64 — x86 호스트 시간은 다를 수 있습니다).
+
+## 원본 미리보기 변환기 (rhwp·LibreOffice)
+
+브라우저가 열지 못하는 HWP·HWPX·DOCX·XLSX·PPTX 원본 판은 워커가 **격리된 변환기로 PDF로 바꿔 DB에
+보관**하고, 그 PDF로 미리 봅니다(ADR-058 개정, #228). HWP·HWPX는 rhwp, 오피스 3종은 LibreOffice가 맡고,
+둘 다 bubblewrap 안에서 돕니다. 변환기는 **선택 설치**입니다 — 없으면 그 형식은 지금처럼 「내려받기」만
+있고, 다른 기능은 영향이 없습니다. PDF·PNG·JPG·JPEG는 변환 없이 원본을 그대로 미리 봅니다.
+
+변환은 원본 판이 들어올 때(업로드·원본 교체) 트리거가 거는 미리보기 잡(`kind='preview'`)으로 하며,
+판마다 한 번입니다. 미리보기 잡은 임베딩·관계·추출 잡보다 뒤에 집습니다.
+
+**Rocky Linux 9 설치** — 모두 AppStream 패키지입니다(LibreOffice 7.1.8, 약 354MB). `git`·`gcc`는 rhwp 빌드용이며
+최소 설치(Minimal)에는 `git`이 없습니다.
+
+```bash
+sudo dnf install git gcc bubblewrap libreoffice-writer libreoffice-calc libreoffice-impress \
+                 google-noto-sans-cjk-ttc-fonts google-noto-serif-cjk-ttc-fonts
+```
+
+rhwp는 **소스에서 빌드합니다.** 배포판 리눅스 바이너리는 GLIBC 2.35·2.39를 요구해 Rocky 9(2.34)에서 돌지
+않습니다. 버전은 **v0.8.7로 고정**합니다 — v1.0 전 프로젝트라 판을 올리기 전에 품질·시간 실측
+(`notes/rhwp-quality-measurement-20261008.md`)을 다시 돌립니다(ADR-058 트레이드오프 4).
+
+```bash
+curl --proto '=https' -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal   # Rust 툴체인
+git clone --depth 1 --branch v0.8.7 https://github.com/edwardkim/rhwp
+cd rhwp && cargo build --release --locked --bin rhwp                             # 아래 「빌드 시간·크기」
+sudo install -m 755 target/release/rhwp /usr/local/bin/rhwp
+```
+
+**빌드 시간·크기** — rhwp 저장소는 `--depth 1`로 받아도 작업 트리까지 **약 8.9GB**입니다(샘플 문서 포함). 빌드는 arm64
+네이티브 Rocky 9 컨테이너에서 약 6분, Apple Silicon 위 **x86-64 에뮬레이션 VM에서 약 81분**(4코어·8GB, 2026-10-09)이었습니다 —
+본체 크레이트 하나를 단일 스레드로 오래 컴파일합니다. 빌드한 바이너리(약 27MB, GLIBC_2.34)만 다른 Rocky 9 호스트로 옮겨도 됩니다.
+
+`/usr` 아래에 두면 격리 안에서 그대로 보입니다. 다른 곳에 두면 `PREVIEW_RHWP_BIN`에 경로를 주고, 워커가
+그 파일 하나만 격리 안에 노출합니다.
+
+**Ubuntu 24.04**는 배포판 바이너리가 돕니다(CI와 같은 구성 — `.github/workflows/ci.yml`).
+
+```bash
+sudo apt install bubblewrap fontconfig fonts-noto-cjk \
+                 libreoffice-writer-nogui libreoffice-calc-nogui libreoffice-impress-nogui
+curl -fL https://github.com/edwardkim/rhwp/releases/download/v0.8.7/rhwp-v0.8.7-linux-x86_64.tar.gz -o rhwp.tar.gz
+echo "24de2bdaa0b69f86302a27e7fdfb570ad3c53b0ab3a4eac06446adc651dfb988  rhwp.tar.gz" | sha256sum -c -
+tar -xzf rhwp.tar.gz && sudo install -m 755 rhwp/rhwp /usr/local/bin/rhwp
+```
+
+Ubuntu 24.04는 `kernel.apparmor_restrict_unprivileged_userns=1`이 기본이라 일반 사용자의 bubblewrap이 막힐 수
+있습니다. 그러면 bwrap에 AppArmor 프로필을 주거나 이 값을 0으로 둡니다 — 막힌 채로 두면 모든 변환이
+「변환기 없음」입니다. **macOS에는 bubblewrap이 없어 변환이 꺼집니다**(맥 개발 환경에서 한글·오피스 판은
+「내려받기」만).
+
+**워커는 변환기를 설치한 리눅스 호스트에만 둡니다.** 변환은 워커가 도는 호스트에서 일어나고, 워커는 잡 종류를 가리지
+않고 집습니다. 변환기 없는 워커(맥 등)가 함께 떠 있으면 그 워커가 변환 잡을 먼저 집어 「변환기 없음」으로 끝낼 수 있습니다 —
+그렇게 된 판은 워커 배치를 고친 뒤 `openarchive rebuild-previews`로 다시 겁니다.
+
+**왜 격리하나** — 사용자가 올린 문서는 변환기에게 신뢰할 수 없는 입력입니다. 격리 없이 LibreOffice를 돌리면
+문서 안 외부 링크 그림을 서버가 받아 오고(SSRF), `file://` 그림으로 서버 디스크의 그림이 변환 PDF에
+들어오는 것을 실증했습니다. 워커는 두 변환기 모두 네트워크·사용자·IPC·UTS·PID 네임스페이스를 분리하고,
+실행에 필요한 시스템 경로(읽기 전용)·입력 파일 하나·결과 디렉터리만 보이게 합니다. 변환 직전마다 같은
+격리로 `true`를 실행해 보고, **격리를 쓸 수 없으면 격리 없이 변환하지 않고** 「변환기 없음」으로 남깁니다.
+
+**글꼴** — 한글 글꼴이 없으면 두 변환기 모두 **종료 코드 0으로 끝나면서 한글을 못 그립니다**(rhwp는 빈칸,
+LibreOffice는 □). 그래서 워커가 두 번 점검합니다. 변환 전에 `fc-list :lang=ko family`가 비면 「변환기 없음」,
+변환 뒤에는 그 판의 문서 텍스트에 한글이 있는데 결과 PDF에 한글 텍스트가 없으면 재시도 없이 「실패」입니다.
+한컴·MS 글꼴은 재배포할 수 없어 Noto CJK(OFL)를 씁니다 — 글자 모양은 원본과 다릅니다.
+
+**확인 방법** — 워커가 도는 계정으로:
+
+```bash
+bwrap --unshare-all --ro-bind / / true && echo 격리 가능
+rhwp --version
+soffice --version
+fc-list :lang=ko family          # 한 줄 이상 나와야 한다
+```
+
+결과는 `/admin/status`의 **「미리보기 변환」** 카드에서 봅니다 — 대기·실패·변환기 없음 **판 수**. 변환기 없음이
+0보다 크면 위 설치를 마친 뒤 `openarchive rebuild-previews`로 다시 겁니다(아래 「프로세스 구성」).
+
+- **시간** — rhwp PDF 변환은 arm64 네이티브 컨테이너에서 쪽당 2~3초(17쪽 37~51초), LibreOffice는 문서당 0.5~1초입니다.
+  Apple Silicon 위 Rocky 9 x86-64 **에뮬레이션** VM에서는 rhwp 1쪽 3.3초·4쪽 45.7초·17쪽 179.8초(쪽당 약 10.6초),
+  LibreOffice 문서당 10~11초였습니다(2026-10-09) — 변환은 워커 호스트의 CPU에서 일어나므로 에뮬레이션만큼 느려집니다. 워커는 잡을 하나씩 처리하므로 긴 문서를 변환하는
+  동안 같은 워커의 다음 잡(임베딩 포함)이 기다립니다.
+- **크기** — 변환본은 원본과 비슷한 크기의 PDF이고(17쪽 HWP 2.1MB) DB에 쌓이므로 백업도 그만큼 커집니다.
+  원본 판이 지워지면(문서 영구 삭제) 함께 지워집니다.
+- **재시도** — 시간 초과·변환기 비정상 종료는 다른 잡처럼 백오프 재시도하고, 예산을 다 쓰면 「실패」입니다.
+  「실패」·「변환기 없음」 판은 `openarchive rebuild-previews`가 다시 겁니다.
 
 ## 프로세스 구성
 
@@ -284,6 +375,21 @@ openarchive rebuild-edges --dsn "postgresql://app@<vip>:6432/<pool_name>"
 - **`error`로 격리된 관계 잡의 복구 경로**이기도 합니다. 다시 건 잡의 판정이 성공하면 워커가 그 문서의
   격리된 잡을 함께 마감해 관계 미반영 문서 수가 내려옵니다. 또 실패하면 격리된 채 남고, 명령은 격리된
   문서 수를 알리며 종료 코드 1로 끝납니다.
+
+### `openarchive rebuild-previews`
+
+한글·오피스 원본(HWP·HWPX·DOCX·XLSX·PPTX) 판의 미리보기 변환 잡을 겁니다. **변환기를 새로 설치했거나**
+(그 전에 올라온 판, 「변환기 없음」 판) **실패한 판을 다시 변환할 때** 씁니다 (ADR-058 결정 2·5).
+
+```bash
+openarchive rebuild-previews
+openarchive rebuild-previews --dsn "postgresql://app@<vip>:6432/<pool_name>"
+```
+
+- 잡은 DB 함수 `enqueue_all_preview_jobs()`가 겁니다. 변환본이 없는 판은 대기로 만들고, 「실패」·「변환기
+  없음」 판은 대기로 되돌리며, 이미 변환된 판은 건드리지 않습니다. 출력의 수는 **대기 판 수**입니다.
+- **기다리지 않습니다** — 잡만 걸고 끝나며 변환은 워커가 합니다. 진행은 `/admin/status`의 「미리보기 변환」
+  카드에서 봅니다.
 
 ### `openarchive reextract`
 
@@ -686,7 +792,7 @@ openarchive search "출장비 정산 기한"                           # --user 
 
 **사용자 CLI에 없는 것** — 세션 전용 동작은 웹에서만 합니다(ADR-034·044·054): 문서·폴더 열람 범위 변경, 외부 공유,
 API 토큰 발급·목록·폐기, 비밀번호 변경, `/api/admin/*` 관리(계정·그룹·감사 로그). 운영자 명령(`init`·`create-user`·
-`serve`·`reset-password`·`rebuild-edges`·`reextract`·`import`·`export`·`demo`, `--user`를 준 `search`·`ask`)은 DB에 직접
+`serve`·`reset-password`·`rebuild-edges`·`rebuild-previews`·`reextract`·`import`·`export`·`demo`, `--user`를 준 `search`·`ask`)은 DB에 직접
 붙는 서버 셸 접근자의 도구로 그대로입니다.
 
 ### MCP 서버
@@ -745,7 +851,8 @@ DB가 원래 작업과 같은 트랜잭션에서 `audit_log`에 남긴다 (ADR-0
 공개범위·부여 대상)은 `folder_access_changed`로, 문서의 「폴더 범위 따름」↔「개별 지정」 전환과 「폴더 범위 따름」 문서의
 폴더 이동은 `access_changed`(`detail.kind`가 `inherit`·`folder`)로 남는다 (#187, `031_folder_audit_triggers.sql`).
 원본 미리보기(PDF·PNG·JPG)는 내려받기와 별도 동작 `original_previewed`(판 번호)로 남는다 — 화면 라벨 「원본 미리보기」
-(ADR-061 결정 7, #190, `035_preview_audit_triggers.sql`).
+(ADR-061 결정 7, #190, `035_preview_audit_triggers.sql`) 한글·오피스 판의 변환본 PDF를 보낸 경우도 같은 동작·같은 판
+번호이며, 미리보기를 실제로 보낸 경우(200)에만 남는다 — 준비 중(409)·실패·변환기 없음(415)은 남지 않는다 (#228).
 
 **어디서 보나** — 관리자로 로그인해 관리 메뉴 「감사 로그」(`/admin/audit`). 시각·사용자·동작·대상 문서 제목을 최신순으로
 보이고 사용자·동작으로 거른다. 본문·발췌는 보이지 않는다. API는 `GET /api/admin/audit`(관리자·세션 전용)이다.

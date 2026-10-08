@@ -6,7 +6,6 @@ import {
   ApiError,
   originalFileUrl,
   originalPreviewUrl,
-  isPreviewable,
   reextractDocument,
   replaceOriginalFile,
 } from "@/lib/api";
@@ -140,7 +139,8 @@ export function OriginalFiles({
               </div>
               {/* 브라우저가 직접 받게 둔다 — fetch로 받으면 파일 전체가 탭 메모리에 올라간다. */}
               <div className="flex items-center gap-3">
-                {isPreviewable(file.filename) ? (
+                {/* 미리보기 여부는 서버의 preview_status만 따른다(ADR-058) — 변환본도 같은 경로로 열린다. */}
+                {file.preview_status === "ready" ? (
                   <a
                     className="text-xs text-[#0ea5e9] hover:underline"
                     href={originalPreviewUrl(document.id, file.file_version)}
@@ -149,6 +149,8 @@ export function OriginalFiles({
                   >
                     미리보기
                   </a>
+                ) : file.preview_status === "pending" ? (
+                  <span className="text-xs text-neutral-500">미리보기 준비 중</span>
                 ) : null}
                 <a
                   className="text-xs text-[#0ea5e9] hover:underline"

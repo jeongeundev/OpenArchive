@@ -10,6 +10,7 @@ jobs:
   check:
     runs-on: ubuntu-latest
     env:
+      OPENARCHIVE_REQUIRE_CONVERTERS: "1"
       DATABASE_URL: postgresql://openarchive:openarchive@localhost:5433/openarchive
     services:
       db:
@@ -39,6 +40,19 @@ jobs:
         run: |
           sudo apt-get update && sudo apt-get install -y --no-install-recommends tesseract-ocr tesseract-ocr-kor
           tesseract --list-langs | grep -x kor
+      - name: Install preview converters
+        run: |
+          sudo apt-get install -y --no-install-recommends bubblewrap fontconfig fonts-noto-cjk libreoffice-writer-nogui libreoffice-calc-nogui libreoffice-impress-nogui
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          curl -fL https://github.com/edwardkim/rhwp/releases/download/v0.8.7/rhwp-v0.8.7-linux-x86_64.tar.gz -o /tmp/rhwp.tar.gz
+          echo "24de2bdaa0b69f86302a27e7fdfb570ad3c53b0ab3a4eac06446adc651dfb988  /tmp/rhwp.tar.gz" | sha256sum -c -
+          mkdir /tmp/rhwp-release
+          tar -xzf /tmp/rhwp.tar.gz -C /tmp/rhwp-release
+          sudo install -m 755 /tmp/rhwp-release/rhwp/rhwp /usr/local/bin/rhwp
+          bwrap --unshare-all --ro-bind / / true
+          rhwp --version
+          soffice --version
+          fc-list :lang=ko family | head -1
       - name: Install backend dependencies
         run: cd backend && python -m venv .venv && .venv/bin/pip install -e ".[dev]"
       - name: Install frontend dependencies

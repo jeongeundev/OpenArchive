@@ -28,9 +28,7 @@ def test_read_scope_token_can_poll_status_without_a_cookie(db_client: TestClient
     status는 읽기 엔드포인트이므로 `read` 토큰으로 통과하는 것이 의도다. 이 단언이
     없으면 이후 status에 쓰기 게이트가 잘못 붙어도 아무도 알아채지 못한다.
     """
-    issued = db_client.post(
-        "/api/auth/tokens", json={"name": "monitoring", "scope": "read"}
-    ).json()
+    issued = db_client.post("/api/auth/tokens", json={"name": "monitoring", "scope": "read"}).json()
     db_client.cookies.clear()
 
     response = db_client.get(
@@ -56,6 +54,9 @@ def test_status_reports_operational_fields(db_client: TestClient):
         "stale_edge_documents",
         "extraction_pending",
         "extraction_failed",
+        "preview_pending",
+        "preview_failed",
+        "preview_unavailable",
         "embedding_provider",
     }
     assert "reconnect_events" not in body
@@ -135,9 +136,7 @@ def test_status_distinguishes_fresh_processing_jobs_from_recovery_pending_jobs(
     assert body["job_lease_seconds"] == 60
 
 
-def test_status_observes_version_drift_and_convergence(
-    db_client: TestClient, migrated_db: str
-):
+def test_status_observes_version_drift_and_convergence(db_client: TestClient, migrated_db: str):
     document = upload(db_client)
     run_embedding_worker(migrated_db)
     assert db_client.get("/api/system/status").json()["inconsistent_documents"] == 0
@@ -155,9 +154,7 @@ def test_status_observes_version_drift_and_convergence(
     assert db_client.get("/api/system/status").json()["inconsistent_documents"] == 0
 
 
-def test_consistency_counter_counts_documents_not_chunks(
-    db_client: TestClient, migrated_db: str
-):
+def test_consistency_counter_counts_documents_not_chunks(db_client: TestClient, migrated_db: str):
     document = upload(db_client, "OpenSQL 정합성 문단.\n\n" * 300)
     run_embedding_worker(migrated_db)
     detail = db_client.get(f"/api/documents/{document['id']}").json()
@@ -188,3 +185,27 @@ def test_status_reports_documents_whose_relations_are_not_reflected_yet(
     # 새 카운터도 기존 응답과 같은 로그인 경계 안에 있다 (ADR-028).
     db_client.post("/api/auth/logout")
     assert db_client.get("/api/system/status").status_code == 401
+
+
+def test_status_counts_preview_plates(db_client, migrated_db):
+    doc = upload(db_client)["id"]
+    with psycopg.connect(migrated_db) as conn:
+        for version in range(2, 7):
+            conn.execute(
+                "INSERT INTO document_files (document_id, file_version, filename, data, uploaded_by) VALUES (%s, %s, 'plate.docx', %s, 'alice')",
+                (doc, version, b"source"),
+            )
+        conn.execute("UPDATE document_file_previews SET status = 'failed' WHERE file_version = 4")
+        conn.execute(
+            "UPDATE document_file_previews SET status = 'unavailable' WHERE file_version = 5"
+        )
+        conn.execute(
+            "UPDATE document_file_previews SET status = 'ready', pdf = %s WHERE file_version = 6",
+            (b"pdf",),
+        )
+    body = db_client.get("/api/system/status").json()
+    assert (body["preview_pending"], body["preview_failed"], body["preview_unavailable"]) == (
+        2,
+        1,
+        1,
+    )

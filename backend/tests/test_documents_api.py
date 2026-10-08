@@ -1198,6 +1198,7 @@ def test_restore_endpoint_refuses_a_non_owner_of_a_public_document(
 
 
 ORIGINAL_FILE_KEYS = {
+    "preview_status",
     "file_version",
     "filename",
     "size",
@@ -1502,8 +1503,9 @@ def test_replace_with_same_extracted_text_adds_file_but_no_text_version(
             "SELECT count(*) FROM document_versions WHERE document_id = %s", (document_id,)
         ).fetchone() == (1,)
         assert conn.execute(
-            "SELECT count(*) FROM embedding_jobs WHERE document_id = %s", (document_id,)
-        ).fetchone() == (1,)
+            "SELECT kind, count(*) FROM embedding_jobs WHERE document_id = %s"
+            " GROUP BY kind ORDER BY kind", (document_id,)
+        ).fetchall() == [("embed", 1), ("preview", 1)]
 
 
 def test_replace_with_stale_version_is_409(db_client: TestClient, migrated_db: str):

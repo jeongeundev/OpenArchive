@@ -14,7 +14,12 @@ import psycopg
 import pytest
 from conftest import background_worker
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
-from test_triggers import insert_document, mark_document_ready, unit_vector
+from test_triggers import (
+    insert_document,
+    insert_preview_original,
+    mark_document_ready,
+    unit_vector,
+)
 
 from openarchive.cli import OWNED_TABLES, main, probe_capabilities
 from openarchive.migrations import migration_files, run_migrations
@@ -65,6 +70,7 @@ def test_owned_tables_match_the_migration_files():
         "api_tokens",
         "document_chunks",
         "document_edges",
+        "document_file_previews",
         "document_files",
         "document_grants",
         "document_links",
@@ -1170,3 +1176,56 @@ def test_reextract_records_operator_actor(migrated_db, all_documents):
     audit = [row for row in rows(migrated_db) if row[0] == "text_updated" and row[4] == {"version": 3}]
     assert len(audit) == (2 if all_documents else 1)
     assert all(row[1:3] == (None, "cli") for row in audit)
+
+
+def preview_fixture(dsn):
+    """변환 대상 판 둘(행 없음·failed), ready 하나, PDF 판 하나 — 트리거가 건 잡은 처리된 것으로 둔다."""
+    with psycopg.connect(dsn, autocommit=True) as conn:
+        missing, failed, ready = (insert_document(conn) for _ in range(3))
+        insert_preview_original(conn, missing, "a.hwp")
+        insert_preview_original(conn, failed, "b.docx")
+        insert_preview_original(conn, ready, "c.xlsx")
+        insert_preview_original(conn, ready, "d.pdf", 2)
+        conn.execute("DELETE FROM document_file_previews WHERE document_id = %s", (missing,))
+        conn.execute(
+            "UPDATE document_file_previews SET status = 'failed', error = 'bad'"
+            " WHERE document_id = %s", (failed,),
+        )
+        conn.execute(
+            "UPDATE document_file_previews SET status = 'ready', pdf = %s"
+            " WHERE document_id = %s", (b"%PDF", ready),
+        )
+        conn.execute("UPDATE embedding_jobs SET status = 'done' WHERE kind = 'preview'")
+    return missing, failed, ready
+
+
+def test_rebuild_previews_queues_conversion_jobs_for_plates_without_a_ready_preview(
+    migrated_db, capsys
+):
+    missing, failed, ready = preview_fixture(migrated_db)
+
+    assert main(["rebuild-previews", "--dsn", migrated_db]) == 0
+
+    assert "미리보기 변환 대상 2개 판에 잡을 걸었습니다. 워커가 처리합니다." in capsys.readouterr().out
+    with psycopg.connect(migrated_db) as conn:
+        assert conn.execute(
+            "SELECT document_id, file_version, status FROM document_file_previews"
+            " ORDER BY status, document_id"
+        ).fetchall() == sorted(
+            [(missing, 1, "pending"), (failed, 1, "pending")]
+        ) + [(ready, 1, "ready")]
+        assert sorted(conn.execute(
+            "SELECT document_id FROM embedding_jobs WHERE kind = 'preview' AND status = 'pending'"
+        ).fetchall()) == sorted([(missing,), (failed,)])
+
+
+def test_rebuild_previews_says_so_when_there_is_nothing_to_convert(migrated_db, capsys):
+    assert main(["rebuild-previews", "--dsn", migrated_db]) == 0
+    assert "미리보기 변환 대상 판이 없습니다." in capsys.readouterr().out
+
+
+def test_rebuild_previews_reports_a_connection_failure_without_traceback(capsys):
+    assert main([
+        "rebuild-previews", "--dsn", "postgresql://nobody@127.0.0.1:1/none"
+    ]) == 1
+    assert "연결하지 못했습니다" in capsys.readouterr().out

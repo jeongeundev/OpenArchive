@@ -39,6 +39,12 @@ export function StatusPanel({ status, error }: { status: SystemStatus | null; er
             <dl className="mt-2 flex gap-5 text-sm"><div><dt className="text-neutral-500">인식 대기</dt><dd data-testid="extraction-pending" className="text-white">{status.extraction_pending}</dd></div><div><dt className="text-[#ef4444]">인식 실패</dt><dd data-testid="extraction-failed" className="text-[#ef4444]">{status.extraction_failed}</dd></div></dl>
             <p className="mt-3 text-xs text-neutral-500">이미지·스캔 PDF에서 워커가 텍스트를 인식하는 문서 수. 인식 실패는 원본 교체나 다시 추출로 다시 시도합니다.</p>
           </div>
+          <div className="rounded-lg border border-neutral-800 bg-[#141414] p-6">
+            <p className="text-sm font-medium text-neutral-400">미리보기 변환</p>
+            <dl className="mt-2 flex gap-5 text-sm"><div><dt className="text-neutral-500">대기</dt><dd data-testid="preview-pending" className="text-white">{status.preview_pending}</dd></div><div><dt className="text-[#ef4444]">실패</dt><dd data-testid="preview-failed" className="text-[#ef4444]">{status.preview_failed}</dd></div><div><dt className="text-neutral-500">변환기 없음</dt><dd data-testid="preview-unavailable" className="text-white">{status.preview_unavailable}</dd></div></dl>
+            <p className="mt-3 text-xs text-neutral-500">한글·오피스 원본 판을 워커가 PDF로 바꾸는 판 수.</p>
+            {status.preview_unavailable > 0 && <p className="mt-1 text-xs text-neutral-400">변환기(rhwp·LibreOffice)·한글 글꼴·bubblewrap 설치를 확인하세요. 설치 뒤 openarchive rebuild-previews로 다시 겁니다.</p>}
+          </div>
           <div className="rounded-lg border border-neutral-800 bg-[#141414] p-6"><p className="text-sm font-medium text-neutral-400">임베딩 프로바이더</p><p className="mt-2 text-sm text-white">{status.embedding_provider}</p></div>
         </div>
       )}

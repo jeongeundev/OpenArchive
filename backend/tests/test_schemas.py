@@ -69,11 +69,15 @@ def test_system_status_accepts_service_dataclasses():
         inconsistent_documents=4,
         stale_edge_documents=2,
         extraction_pending=5,
+        preview_pending=2,
+        preview_failed=3,
+        preview_unavailable=4,
         extraction_failed=6,
         embedding_provider="fake",
     )
 
     response = SystemStatus.model_validate(result)
+    assert (response.preview_pending, response.preview_failed, response.preview_unavailable) == (2, 3, 4)
 
     assert response.jobs.pending == 1
     assert response.jobs.recovery_pending == 1

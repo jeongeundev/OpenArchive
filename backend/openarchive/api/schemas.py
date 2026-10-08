@@ -132,6 +132,7 @@ class RestoreVersionRequest(BaseModel):
 
 
 class OriginalFile(BaseModel):
+    preview_status: Literal["ready", "pending", "failed", "unavailable"] | None
     # 원본 판의 메타데이터. 바이트는 싣지 않는다 — 내려받기 엔드포인트의 몫이다.
     file_version: int
     filename: str
@@ -274,6 +275,9 @@ class SystemStatus(BaseModel):
     stale_edge_documents: int
     extraction_pending: int
     extraction_failed: int
+    preview_pending: int
+    preview_failed: int
+    preview_unavailable: int
     embedding_provider: str
 
 

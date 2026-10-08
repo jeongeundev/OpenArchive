@@ -4467,7 +4467,7 @@ MCP로 붙을 수 있게 되는 것도 이 경로가 생겨서다 — stdio는 D
 ---
 
 ### ADR-058: 원본 미리보기는 PDF·PNG·JPG(JPEG)만 허용 목록으로 연다 — 나머지는 내려받기다
-**상태**: 2026-10-05 신규 — 채택(결정) · **2026-10-08 구현됨 #190**(아래 「2026-10-08 구현」) · **2026-10-08 개정 — HWP·HWPX·DOCX·XLSX·PPTX를 서버에서 격리된 변환기로 PDF로 바꿔 미리보기한다, 결정·미구현**(아래 「2026-10-08 개정」). ADR-046 결정 4("내려받기는 항상 `attachment`와 `nosniff`")를 개정한다.
+**상태**: 2026-10-05 신규 — 채택(결정) · **2026-10-08 구현됨 #190**(아래 「2026-10-08 구현」) · **2026-10-08 개정 — HWP·HWPX·DOCX·XLSX·PPTX를 서버에서 격리된 변환기로 PDF로 바꿔 미리보기한다, 결정**(아래 「2026-10-08 개정」) · **2026-10-08 개정 구현됨 #228**(그 끝의 「2026-10-08 구현(#228)」 — Rocky 9 x86-64 VM 실측 2026-10-09). ADR-046 결정 4("내려받기는 항상 `attachment`와 `nosniff`")를 개정한다.
 
 **맥락**: 원본 판을 보관하게 되었지만(ADR-046) 원본을 확인하려면 매번 내려받아 열어야 한다. 기능명세서는 PDF·이미지의
 브라우저 미리보기를 요구한다. ADR-046이 항상 `attachment`로 둔 이유 — 앱과 같은 오리진(ADR-041)에서 세션 쿠키를 가진
@@ -4609,6 +4609,46 @@ MCP로 붙을 수 있게 되는 것도 이 경로가 생겨서다 — stdio는 D
 구현 방식(claim 순서), 변환 시간 상한 값(Rocky 9 x86-64 실측), PDF 한글 렌더 여부 판정 방법(결정 6), 일괄 함수와 운영자 CLI 명령 이름,
 `/admin/status`에 변환 대기·실패 수를 보일지, 감사 detail에 변환본임을 적을지, bubblewrap 인자의 정확한 목록과 격리 가능 여부 점검
 방법(시작 시 한 번 / 잡마다), LibreOffice 프로필 디렉터리 위치(격리 안 임시 디렉터리), 변환기 판 고정 방식.
+>
+> → **2026-10-08 구현(#228).** 위 항목을 다음으로 닫는다.
+> - **테이블·마이그레이션**: `document_file_previews`(PK `(document_id, file_version)`, `document_files`로 FK `ON DELETE CASCADE`,
+>   `status` `pending`·`ready`·`failed`·`unavailable`, `pdf bytea`·`error`·`updated_at`, `ready`와 `pdf` 존재가 같다는 CHECK) —
+>   `036_preview_tables.sql`(테이블 + `embedding_jobs.kind`에 `preview`). 판정 함수 `preview_convertible(filename)`·트리거
+>   `trg_document_files_preview_requested`(`document_files` AFTER INSERT)·일괄 함수 — `037_preview_triggers.sql`.
+> - **상태 코드·응답 본문**: 변환 대상 판의 미리보기는 `ready` → 200 변환본 PDF(지금 헤더 그대로), `pending` → 409
+>   「미리보기를 준비 중입니다.」, `failed` → 415 「미리보기를 만들지 못했습니다.」, `unavailable`·행 없음 → 415 「미리보기할 수
+>   없는 형식입니다.」(목록 밖 형식과 같은 문구). 판 목록에는 판마다 `preview_status`를 싣고 화면은 그 값만 본다.
+> - **잡 우선순위**: `claim_job`이 `ORDER BY (q.kind = 'preview'), q.id`로 집는다 — 미리보기만 뒤로 가고 다른 종류의 순서는 그대로다.
+> - **시간 상한**: `PREVIEW_TIMEOUT_SECONDS` 기본 **900초**. 처음엔 arm64 컨테이너 17쪽 약 51초의 약 6배인 300초였으나, Rocky 9.7
+>   x86-64 VM(Apple Silicon 위 에뮬레이션, 2차 평가 환경과 같은 방식) 실측에서 rhwp가 쪽당 약 10.6초(17쪽 179.8초)라 300초는 약
+>   28쪽에서 끊겼다 — 시간 초과 × 재시도 예산만큼 워커를 붙든 뒤 실패한다. 900초는 그 VM에서 약 85쪽이다(2026-10-09 G3). 넘기면
+>   프로세스 그룹을 죽이고 재시도 대상 실패로 다룬다.
+> - **한글 렌더 판정(결정 6)**: 두 겹이다. 변환 전 `fc-list :lang=ko family`가 비면 「변환기 없음」(설치 문제), 변환 뒤 그 판의
+>   문서 텍스트(`text_version`의 버전 본문, 없으면 현재 문서 텍스트)에 한글이 있는데 결과 PDF 텍스트 레이어(pypdf)에 한글이
+>   없으면 재시도 없는 「실패」. Ubuntu 24.04 arm64 실측: 글꼴이 전혀 없으면 LibreOffice는 PDF를 만들지 못하고(종료 코드 134),
+>   한글 없는 글꼴만 있으면 PDF 텍스트 레이어에는 한글이 남는다(□로 그려져도) — 첫 겹(`fc-list`)이 그 경우를 막는다.
+> - **일괄 함수·CLI**: `enqueue_all_preview_jobs()`(변환본 없는 판·`failed`·`unavailable` 판을 `pending`으로, `ready`는 보존,
+>   반환값은 `pending` 판 수) · `openarchive rebuild-previews`(기다리지 않는다).
+> - **`/admin/status`**: 넣었다 — 「미리보기 변환」 카드에 대기·실패·변환기 없음 판 수.
+> - **감사 detail**: 바꾸지 않았다 — 변환본을 보내도 `original_previewed` · `{file_version}`이고, 200일 때만 기록한다.
+> - **bubblewrap 인자·점검**: `--unshare-net --unshare-user --unshare-ipc --unshare-uts --unshare-pid --die-with-parent --new-session
+>   --clearenv`, 읽기 전용 `/usr`·`/bin`·`/lib`·`/lib64`와 글꼴·공개 인증서 등 `/etc` 일부, 빈 `/tmp`, 읽기 전용 입력 파일 하나,
+>   결과 디렉터리 하나. `/usr` 밖 변환기는 그 파일만 `/converter`로 노출한다. 점검은 **잡마다** 변환 직전 같은 인자로
+>   `/usr/bin/true`를 실행한다(캐시 없음). 실패하면 「변환기 없음」. Ubuntu 24.04 arm64 일반 사용자에서 PID 분리 포함 실변환과
+>   네트워크 제거(SSRF 차단)를 확인했다. 실제 Rocky 9.7 호스트(VM)에서도 PID 분리를 확인했다 — 격리 안 셸이 PID 2, 보이는 프로세스
+>   5개(호스트 178개), 네트워크 `lo`만, `/home`·`/var` 없음(2026-10-09 G3).
+> - **LibreOffice 프로필**: 격리 안 `/tmp/lo-profile`(빈 tmpfs라 변환마다 새로 만든다).
+> - **판 고정**: rhwp는 v0.8.7 태그를 `cargo build --release --locked`로 빌드한다(Rocky 9). CI(Ubuntu)는 배포판 바이너리를
+>   SHA256으로 고정해 받는다. 판올림은 품질·시간 실측을 다시 돌린 뒤 한다(트레이드오프 4). 설치 절차는 `OPERATIONS.md`
+>   「원본 미리보기 변환기」.
+> - **실변환기 테스트**: `@pytest.mark.converters` — 도구가 없으면 skip, `OPENARCHIVE_REQUIRE_CONVERTERS=1`이면 실패(CI는 켠다).
+> - **VM 실측(2026-10-09, Rocky 9.7 x86-64 에뮬레이션 VM·실 OpenSQL 17.8)**: 마이그레이션 036·037 적용, 오피스 3종 변환, rhwp 없을 때
+>   「변환기 없음」 → 설치 → `rebuild-previews` → HWP·HWPX 변환, 미리보기 헤더·감사(200만), PDF·JPG 미리보기 회귀, 「미리보기 준비 중」
+>   → 「미리보기」 화면 전환(Chromium), PID 분리를 확인했다. 변환 시간은 위 「시간 상한」. **재지 못한 것**: 구형 HWP의 외부 연결 그림
+>   (표본을 구하지 못했다 — 격리가 네트워크·파일을 막아 따라가도 닿을 곳은 없다), Firefox·Safari 내장 PDF 뷰어(결정 4의 기존 미실측과 같다).
+> - **시연·배치 주의**: 변환은 **워커 호스트**에서 일어난다. 맥(bubblewrap 없음)에서 도는 워커는 모든 변환을 「변환기 없음」으로 끝내므로,
+>   워커가 맥과 리눅스에 함께 떠 있으면 맥 워커가 변환 잡을 먼저 집어 미리보기가 꺼질 수 있다(워커가 잡 종류를 가리지 않는다). 미리보기를
+>   쓰려면 워커를 리눅스에만 둔다.
 
 ---
 
@@ -4792,7 +4832,7 @@ ROADMAP 다음 단계 후보) · 열람·검색·로그인 미기록(ADR-055 결
 3. 정확 구문 조건은 trigram·ILIKE가 HNSW 후보를 좁히는 비율에 따라 recall이 흔들릴 수 있다 — iterative_scan과 실측으로 정한다.
 
 ### ADR-062: 앱 풀은 파라미터를 클라이언트에서 바인딩한다 — OpenProxy가 쌓는 서버 명령문과 assert 빌드의 곱을 끊는다
-**상태**: 2026-10-07 신규 — 채택, 구현 #210. `OPENSQL_RESEARCH.md` §17(10/3)의 "자동 준비를 껐다"를 정정한다(§18).
+**상태**: 2026-10-07 신규 — 채택, 구현 #210 · 2026-10-08 결정 2 개정(이진 쓰기 둘, #228). `OPENSQL_RESEARCH.md` §17(10/3)의 "자동 준비를 껐다"를 정정한다(§18).
 
 **맥락 — 쓸수록 모든 문장이 느려졌다.** #198 이후 HA에서 술어 회귀를 재던 중, VIP를 가진 node2 OpenProxy를 거쳐 Primary로
 가는 트랜잭션 안 `select 1`이 4ms에서 126ms까지 느려졌다. 실측으로 원인이 두 겹임을 확정했다(§18).
@@ -4809,6 +4849,9 @@ ROADMAP 다음 단계 후보) · 열람·검색·로그인 미기록(ADR-055 결
    넣으므로 서버도 프록시도 명령문을 만들지 않는다. `prepare_threshold=None`(§17)은 그대로 둔다.
 2. **예외는 이진 파라미터 하나** — 원본 파일 INSERT(`%b`)는 서버 바인딩 커서(`psycopg.AsyncCursor`)를 명시한다. 클라이언트
    바인딩이면 hex 리터럴이 되어 50MB 파일이 100MB 문장으로 OpenProxy를 지난다. 업로드 1건에 명령문 1개가 남지만 계획이 작다.
+   > → **2026-10-08 개정(#228): 예외는 이진 쓰기 둘이다.** 원본 미리보기 변환본 PDF를 쓰는 워커의 UPDATE
+   > (`worker.finalize_preview`, `document_file_previews.pdf`)도 같은 이유로 `%b`·서버 바인딩 커서를 쓴다 — 변환본은 원본과
+   > 비슷한 크기다(실측 17쪽 2.1MB). 판 하나에 명령문 1개가 남는 대가도 같다. 위치는 `test_architecture.py`가 두 파일로 고정한다.
 3. 운영자 CLI(`--dsn`)·LISTEN 전용 연결은 풀 밖이라 이 결정의 범위가 아니다 — CLI·마이그레이션 연결은 #212에서 정한다.
 
 **실측(HA VIP 경유, 제품 풀 `openarchive.db.connection()` + 제품 `search_documents`, 같은 서버 연결, 검색 80회, 2026-10-07)**:

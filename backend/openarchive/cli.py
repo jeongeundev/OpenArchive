@@ -91,6 +91,7 @@ from openarchive.services.search import MAX_K, SearchHit, search_documents
 from openarchive.services.system import (
     ReextractSummary,
     enqueue_edge_rebuild,
+    enqueue_preview_rebuild,
     get_system_status,
     reextract_all,
     reextract_one,
@@ -802,6 +803,26 @@ def run_rebuild_edges(*, dsn: str | None) -> int:
             " 워커 로그에서 원인을 확인한 뒤 다시 실행하세요."
         )
         return 1
+    return 0
+
+
+async def _rebuild_previews(dsn: str) -> int:
+    async with await _connect(dsn, autocommit=True) as conn:
+        return await enqueue_preview_rebuild(conn)
+
+
+def run_rebuild_previews(*, dsn: str | None) -> int:
+    """변환본이 없거나 실패·변환기 없음인 판에 변환 잡을 건다 — 기다리지 않는다 (ADR-058 결정 2·5)."""
+    dsn = dsn or get_settings().database_url
+    try:
+        plates = asyncio.run(_rebuild_previews(dsn))
+    except _ConnectionFailed as error:
+        print(f"연결하지 못했습니다: {error}")
+        return 1
+    if plates:
+        print(f"미리보기 변환 대상 {plates}개 판에 잡을 걸었습니다. 워커가 처리합니다.")
+    else:
+        print("미리보기 변환 대상 판이 없습니다.")
     return 0
 
 
@@ -1588,6 +1609,14 @@ def main(argv: list[str] | None = None) -> int:
         "rebuild-edges", help=rebuild_help, description=rebuild_help
     )
     rebuild.add_argument("--dsn", help="DB 연결 문자열. 생략하면 DATABASE_URL을 씁니다.")
+    previews_help = (
+        "한글·오피스 원본의 미리보기 변환 잡을 겁니다. 변환기를 새로 설치했거나"
+        " 실패한 판을 다시 변환할 때 씁니다. 변환은 워커가 합니다."
+    )
+    previews = subcommands.add_parser(
+        "rebuild-previews", help=previews_help, description=previews_help
+    )
+    previews.add_argument("--dsn", help="DB 연결 문자열. 생략하면 DATABASE_URL을 씁니다.")
     reextract_help = (
         "보관된 최신 원본에서 텍스트를 다시 추출합니다. 파서를 고친 뒤 기존 문서에 적용합니다."
     )
@@ -1751,6 +1780,8 @@ def main(argv: list[str] | None = None) -> int:
         return run_reextract(dsn=args.dsn, document_id=None if args.all else args.document_id)
     if args.command == "rebuild-edges":
         return run_rebuild_edges(dsn=args.dsn)
+    if args.command == "rebuild-previews":
+        return run_rebuild_previews(dsn=args.dsn)
     if args.command == "serve":
         return run_serve(host=args.host, port=args.port)
     if args.command == "reset-password":

@@ -63,7 +63,7 @@ OpenArchive/
 │   │   ├── config.py             # pydantic-settings — $OPENARCHIVE_HOME/.env(기본 ~/.openarchive/.env)
 │   │   ├── db.py                 # AsyncConnectionPool만 — import 시 부작용 없음
 │   │   ├── migrations/           # __init__.py = 러너(API startup과 `openarchive init`이 호출)
-│   │   │                         #   + SQL(패키지 안이라 wheel에 실린다) 001~031: extensions, tables, triggers, indexes,
+│   │   │                         #   + SQL(패키지 안이라 wheel에 실린다) 001~037: extensions, tables, triggers, indexes,
 │   │   │                         #   trgm, edges(006~008), auth(009), links(010~012), token(013),
 │   │   │                         #   edges 재설계(014 — rebuild_document_edges), 위키링크 정규화(015),
 │   │   │                         #   관계 잡 분리(016 — embedding_jobs.kind / 017 — ready 트리거,
@@ -73,8 +73,10 @@ OpenArchive/
 │   │   │                         #   재계산 문서 잠금(024), 그룹·열람 부여(025 — ADR-044), 외부 공유(026),
 │   │   │                         #   전량 재계산을 관계 잡으로(027 — enqueue_all_edge_jobs, ADR-029 결정 6 개정),
 │   │   │                         #   감사 로그(028 — audit_log / 029 — 기록·거부 트리거, ADR-055),
-│   │   │                         #   폴더(030 — folders·folder_grants·documents.folder_id / 031 — 폴더 감사 트리거, ADR-054)
-│   │   ├── cli.py                # `openarchive init`(첫 관리자 포함)·`serve`·`create-user`·`reset-password`·`rebuild-edges`·`reextract`
+│   │   │                         #   폴더(030 — folders·folder_grants·documents.folder_id / 031 — 폴더 감사 트리거, ADR-054),
+│   │   │                         #   휴지통(032·033 — ADR-060), 토큰 만료(034 — ADR-061), 미리보기 감사(035),
+│   │   │                         #   미리보기 변환본(036 — document_file_previews / 037 — 변환 잡 트리거, ADR-058)
+│   │   ├── cli.py                # `openarchive init`(첫 관리자 포함)·`serve`·`create-user`·`reset-password`·`rebuild-edges`·`rebuild-previews`·`reextract`
 │   │   │                         #   ·`import`·`export`·`search`·`ask`·`demo` — 운영자 CLI, DB에 직접 붙는다 (ADR-039·040·046)
 │   │   ├── api/                  # 라우터: documents, search, ask, system, auth, admin, groups(+principals),
 │   │   │                         #   shares, audit(감사 로그 조회), folders(폴더), diagnostics, clusters / 미들웨어 retry (+ deps, schemas)
@@ -177,6 +179,24 @@ CREATE TABLE document_files (
     REFERENCES document_versions (document_id, version)
 );
 
+-- document_file_previews: 원본 판의 PDF 변환본 (036, ADR-058 개정). 판 하나당 하나.
+-- 파생물이다 — 018의 원본 등록은 공급 자체라 트리거가 없지만, 변환본 행과 잡은 037의 트리거가 만든다.
+-- 편집·버전·감사 대상이 아니고 휴지통·열람 조건을 따로 두지 않는다(미리보기 경로가 ensure_visible을 먼저 부른다)
+CREATE TABLE document_file_previews (
+  document_id  uuid NOT NULL,
+  file_version int  NOT NULL,
+  status       text NOT NULL,    -- pending | ready | failed | unavailable (아래 「미리보기 변환 잡」)
+  pdf          bytea,            -- status = 'ready'일 때만, 비어 있지 않다 (CHECK)
+  error        text,             -- failed·unavailable의 이유
+  updated_at   timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (document_id, file_version),
+  FOREIGN KEY (document_id, file_version)       -- 원본 판이 지워지면(문서 영구 삭제) 함께 지워진다
+    REFERENCES document_files (document_id, file_version) ON DELETE CASCADE,
+  CHECK (status IN ('pending', 'ready', 'failed', 'unavailable')),
+  CHECK ((status = 'ready') = (pdf IS NOT NULL)),
+  CHECK (pdf IS NULL OR octet_length(pdf) > 0)
+);
+
 -- idempotency_keys: 문서 생성 요청의 멱등키 (019, ADR-047). 문서 INSERT와 같은 트랜잭션에서 앱이 넣는다
 -- 파생물이 아니라 요청의 기록이라 트리거 규칙의 대상이 아니다. 24시간 뒤 워커 스윕이 지운다
 CREATE TABLE idempotency_keys (
@@ -250,7 +270,7 @@ CREATE TABLE document_chunks (
 CREATE TABLE embedding_jobs (
   id              bigserial PRIMARY KEY,
   document_id     uuid NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
-  kind            text NOT NULL DEFAULT 'embed',   -- embed|edges|extract (016·021, ADR-029·052)
+  kind            text NOT NULL DEFAULT 'embed',   -- embed|edges|extract|preview (016·021·036, ADR-029·052·058)
   status          text NOT NULL DEFAULT 'pending', -- pending|processing|done|error
   attempts        int  NOT NULL DEFAULT 0,
   next_attempt_at timestamptz NOT NULL DEFAULT now(),
@@ -431,7 +451,7 @@ CREATE TRIGGER trg_documents_content_changed
 | `trg_audit_grant_changed` | `document_grants` INSERT / DELETE — 공유 부여·연쇄 삭제 제외 | `access_changed` · `{kind: grant, change, grantee_type, grantee}` |
 | `trg_audit_group_member_changed` | `group_members` INSERT / DELETE — 연쇄 삭제 제외 | `group_member_changed` · `{change, group, user}` |
 | `record_original_download(document_id, file_version)` | 원본 판을 읽는 트랜잭션에서 `get_original_file`이 호출 | `original_downloaded` · `{file_version}` |
-| `record_original_preview(document_id, file_version)` | 미리보기 경로에서 `get_original_file(preview=True)`가 형식 확인 뒤 같은 트랜잭션에서 호출 (035) | `original_previewed` · `{file_version}` — 허용 밖 형식(415)은 기록하지 않는다 |
+| `record_original_preview(document_id, file_version)` | 미리보기 경로에서 `get_original_file(preview=True)`가 형식·변환본 상태 확인 뒤 같은 트랜잭션에서 호출 (035) | `original_previewed` · `{file_version}` — **200일 때만** 기록한다. 허용 밖 형식·변환본 없음(415)·변환 실패(415)·준비 중(409)은 기록하지 않는다. 변환본을 보낸 경우도 detail은 같다 |
 | `trg_audit_folder_visibility_changed` | `folders` UPDATE OF `visibility`, 값이 바뀔 때 (031) | `folder_access_changed` · `{kind: visibility, folder_id, folder_name, before, after}` |
 | `trg_audit_folder_grant_changed` | `folder_grants` INSERT / DELETE — 연쇄 삭제 제외 (031) | `folder_access_changed` · `{kind: grant, change, grantee_type, grantee, folder_id, folder_name}` |
 | `trg_audit_document_folder_changed` | `documents` UPDATE OF `follows_folder`·`folder_id` (031) | `access_changed` · `{kind: inherit, before, after}`(`folder`/`own`) · 「폴더 범위 따름」 문서의 이동은 `{kind: folder, before, after}`(폴더 이름) |
@@ -476,6 +496,63 @@ CREATE TRIGGER trg_documents_extraction_requested
 5. **추출 중 잠금**: 추출 중인 문서의 편집·되돌리기·재추출·원본 교체는 409다. 워커 결과가 사람이 고친 텍스트를 덮지 않게 한다. 인식 실패로 텍스트가 빈 문서는 편집·되돌리기만 409이고, 원본 교체·재추출로 다시 시도할 수 있다. 태그·제목·공개범위·삭제는 막지 않는다.
 
 **한계**: 일부러 비운 쪽이 있는 텍스트 PDF도 「텍스트 인식 중」을 거치고, 쪽 번호 같은 텍스트가 얹힌 스캔 쪽은 빈 쪽이 아니라서 인식하지 않는다 (ADR-052 트레이드오프 1). OCR 정확도는 한국어 보도자료 래스터화 실측에서 CER 0.068(깨끗한 판)·0.093(열화판), 쪽당 약 3.3초(맥 M2 Pro · tesseract 5.5)이며, 그 오류는 문서 텍스트에 그대로 남아 편집으로 고친다. Rocky 9 패키지(tesseract 4.1.1 + langpack-kor 4.1.0)는 `rockylinux:9` 컨테이너 실측에서 CER 0.031~0.050·쪽당 3.4~5.5초였다(#135 코멘트, arm64 컨테이너라 x86 호스트 시간과는 다를 수 있다).
+
+### 미리보기 변환 잡 — 한글·오피스 원본을 격리된 변환기로 PDF로 바꾼다 (ADR-058 개정, #228)
+
+브라우저가 열지 못하는 HWP·HWPX·DOCX·XLSX·PPTX 원본 판은 워커가 PDF로 바꿔 `document_file_previews`에 둔다.
+HWP·HWPX는 rhwp, 오피스 3종은 LibreOffice이고 둘 다 bubblewrap 안에서 돈다(`services/preview.py`). 변환기 설치는
+`OPERATIONS.md` 「원본 미리보기 변환기」.
+
+```sql
+-- 변환 대상 판정은 이 함수 한 곳이다 (037). 파이썬 PREVIEW_CONVERTIBLE_EXTENSIONS는 테스트로 대조한다
+CREATE FUNCTION preview_convertible(filename text) RETURNS boolean LANGUAGE sql IMMUTABLE …;
+                                              -- 확장자(대소문자 무관)가 hwp·hwpx·docx·xlsx·pptx
+
+CREATE TRIGGER trg_document_files_preview_requested
+  AFTER INSERT ON document_files              -- 업로드·원본 교체가 판을 쌓을 때
+  FOR EACH ROW WHEN (preview_convertible(NEW.filename))
+  EXECUTE FUNCTION on_document_file_preview_requested();
+  -- 문서 행을 FOR UPDATE로 잠그고 → 변환본 행 'pending' → embedding_jobs (document_id, 'preview')
+  -- (uq_pending_job_per_doc_kind로 코얼레싱) → NOTIFY
+```
+
+- **판은 바뀌지 않으므로 판마다 한 번 변환한다.** 잡은 문서 단위이고, 워커는 그 문서에서 `pending`인 판을 판 번호순으로
+  하나씩 변환해 **판마다 따로 커밋**한다(`finalize_preview` — 문서 행을 잠그고 잡 소유를 확인한 뒤 `status = 'pending'`인
+  행만 바꾼다). 마지막 판 뒤에 잡을 `done`으로 마감한다. 앱은 변환본 행과 잡을 INSERT하지 않고, 워커는 상태·PDF만 UPDATE한다.
+  PDF는 원본 INSERT와 같이 `%b`·서버 바인딩 커서로 보낸다(hex 리터럴이면 두 배 크기로 OpenProxy를 지난다 — ADR-062 결정 2 개정).
+- **선점은 후순위다.** `claim_job`이 `ORDER BY (q.kind = 'preview'), q.id`로 집는다 — 변환이 임베딩·관계·추출을 앞지르지
+  않는다. 다른 종류의 id 순서는 그대로다. 이미 집은 변환이 도는 동안 같은 워커의 다음 잡은 기다린다(OCR과 같은 한계).
+- **변환은 트랜잭션 밖이다.** 판 바이트와 그 판의 문서 텍스트(`text_version`의 버전 본문, NULL이면 현재 `documents.content`)를
+  읽고, `asyncio.to_thread`로 `convert_to_pdf`를 부른다. lease를 잃으면 결과를 쓰지 않는다(ADR-050).
+
+| 변환본 상태 | 만드는 곳 | 의미 |
+|---|---|---|
+| `pending` | 트리거(업로드·교체) · `enqueue_all_preview_jobs()` | 변환 대기. 같은 문서에 `kind='preview'` 잡이 있다 |
+| `ready` | 워커 | `pdf` 있음 |
+| `failed` | 워커 | 다시 해도 같은 결과(`PreviewRenderFailed` — 결과 PDF 없음·읽을 수 없음·쪽 없음·한글이 그려지지 않음)라 재시도 없이. 또는 예외 재시도 예산 소진(`fail_job`·좀비 스윕) |
+| `unavailable` | 워커 | `ConverterUnavailable` — 변환기 실행 파일·한글 글꼴(`fc-list :lang=ko`)·격리 중 하나가 없다. 설치 뒤 `openarchive rebuild-previews`로 다시 건다 |
+
+- **예외 분류**: 시간 초과(`PREVIEW_TIMEOUT_SECONDS`, 기본 900초 — 프로세스 그룹을 SIGKILL)·변환기 비정상 종료는 다른 잡처럼
+  지수 백오프 재시도하고, 예산(3회)을 소진하면 그 문서의 `pending` 판이 `failed`가 된다. `documents`의 임베딩·추출 상태와
+  이미 `ready`인 판은 건드리지 않는다. **예외가 난 판은 미뤄 두고 나머지 판을 끝까지 변환한 뒤** 첫 예외로 재시도한다 — 곧바로
+  올리면 재시도마다 같은 판에서 멈춰 뒤의 판(최신 판 포함)이 시도도 못 한 채 소진 때 함께 `failed`가 된다. 그래서 재시도와
+  소진은 실제로 실패하는 판에만 닿는다.
+- **한글 렌더 검사(두 겹)**: 변환 전 `fc-list :lang=ko family`가 비면 `unavailable`. 변환 뒤 문서 텍스트에 한글(U+AC00–U+D7A3)이
+  있는데 결과 PDF의 텍스트 레이어(pypdf)에 한글이 없으면 `failed`. 종료 코드 0을 성공으로 믿지 않는다 — 글꼴이 없으면 rhwp는
+  빈칸, LibreOffice는 □를 그리고 0으로 끝난다.
+- **격리(ADR-058 결정 9)**: bwrap `--unshare-net --unshare-user --unshare-ipc --unshare-uts --unshare-pid --die-with-parent
+  --new-session --clearenv`, 읽기 전용 `/usr`·`/bin`·`/lib`·`/lib64`와 글꼴·인증서 등 몇 개의 `/etc` 파일, 빈 `/tmp`,
+  읽기 전용 입력 파일 하나, 쓰기 가능한 결과 디렉터리 하나만 보인다. `/usr` 밖의 변환기는 그 파일 하나만 `/converter`로 노출한다.
+  LibreOffice 프로필은 격리 안 `/tmp/lo-profile`이다. **잡마다** 변환 직전 같은 격리로 `/usr/bin/true`를 실행해 보고, 실패하면
+  격리 없이 변환하지 않고 `unavailable`로 둔다.
+- **일괄 재요청**: `enqueue_all_preview_jobs()`(037)가 변환 대상 판 중 변환본이 없는 판은 `pending`으로 만들고, `failed`·
+  `unavailable` 판은 `pending`으로 되돌리며(pdf·error 비움), `pending` 판이 있는 문서마다 잡을 건다. `ready`는 건드리지 않는다.
+  잠금 순서는 트리거·`fail_job`과 같다(문서 id 순). 돌려주는 값은 `pending` 판 수다. 운영자 CLI `openarchive rebuild-previews`가
+  `services/system.py`의 `enqueue_preview_rebuild`를 거쳐 부르고, 기다리지 않는다.
+
+**VM 실측(2026-10-09, Rocky 9.7 x86-64 에뮬레이션 VM·OpenSQL 17.8)**: rhwp 17쪽 179.8초(쪽당 약 10.6초) → 상한 900초.
+실제 호스트에서 PID 네임스페이스 분리 확인(격리 안 프로세스 5개, 네트워크 `lo`만, `/home`·`/var` 안 보임). **재지 못한 것**:
+구형 HWP의 외부 연결 그림(표본 없음 — 격리가 네트워크·파일을 막으므로 따라가도 닿을 곳은 없다), Firefox·Safari 내장 PDF 뷰어.
 
 ### 관계 생성 — 트리거가 잡을 만들고 워커가 판정한다
 
@@ -530,7 +607,7 @@ CREATE TRIGGER trg_build_document_edges                          -- (008) 정의
 
 이후 5초 주기 폴링이 **주 경로**. `LISTEN embedding_jobs` 수신은 폴링을 앞당기는 **최적화**이며, 동작하지 않아도 파이프라인은 정상 작동한다 (ADR-009).
 
-**잡은 세 종류다** (`embedding_jobs.kind`). `embed`는 아래 2·3번의 청킹·임베딩·청크 교체이고, `edges`는 이미 저장된 청크 벡터로 관계만 다시 판정하며, `extract`는 최신 원본 판을 OCR해 문서 텍스트를 채운다(위 「추출 잡」). **큐·claim·백오프·좀비 회수·재시도 예산은 공유하고 처리 본체만 갈린다.** 관계 잡에 우선순위를 주지 않는 이유는 아래 1번에 있다.
+**잡은 네 종류다** (`embedding_jobs.kind`). `embed`는 아래 2·3번의 청킹·임베딩·청크 교체이고, `edges`는 이미 저장된 청크 벡터로 관계만 다시 판정하며, `extract`는 최신 원본 판을 OCR해 문서 텍스트를 채우고, `preview`는 한글·오피스 원본 판을 PDF로 변환한다(위 「추출 잡」·「미리보기 변환 잡」). **큐·claim·백오프·좀비 회수·재시도 예산은 공유하고 처리 본체만 갈린다.** 관계 잡에 우선순위를 주지 않는 이유는 아래 1번에 있다.
 
 1. 폴링 틱 또는 NOTIFY 수신 시 — 잡을 claim하고 **즉시 커밋**:
 ```sql
@@ -540,7 +617,7 @@ UPDATE embedding_jobs j
  WHERE j.id = (SELECT q.id FROM embedding_jobs q
                   JOIN documents d ON d.id = q.document_id
                 WHERE q.status='pending' AND q.next_attempt_at <= now()
-                ORDER BY q.id LIMIT 1
+                ORDER BY (q.kind = 'preview'), q.id LIMIT 1   -- 미리보기 변환만 뒤로 (ADR-058)
                   FOR UPDATE OF q SKIP LOCKED
                   FOR NO KEY UPDATE OF d SKIP LOCKED)   -- 문서 행이 잠긴 잡은 건너뛴다 (#128)
 RETURNING j.id, j.document_id, j.kind;
@@ -551,7 +628,7 @@ UPDATE documents SET embedding_status='processing'
  WHERE id = %(document_id)s AND embedding_status <> 'processing';
 ```
 
-   **종류를 가리지 않고 `id` 순으로 집는다.** 관계 잡에 우선순위를 주면 그 판정이 뒤에 오는 문서의 임베딩보다 먼저 돌아, 아직 청크가 없는 이웃을 못 보고 관계를 놓친다.
+   **미리보기 변환 잡만 뒤로 보내고, 나머지 종류는 가리지 않고 `id` 순으로 집는다.** 관계 잡에 우선순위를 주면 그 판정이 뒤에 오는 문서의 임베딩보다 먼저 돌아, 아직 청크가 없는 이웃을 못 보고 관계를 놓친다.
 
    **문서 행이 잠긴 잡도 건너뛴다** (#128). 임베딩 잡의 claim은 문서 행을 UPDATE하는데, 그 행을 죽은 OpenProxy 노드 너머의 고아 트랜잭션이 쥐고 있으면 기다리는 동안 워커가 서고, 상한을 걸어 실패시켜도 다음 주기에 같은 잡을 또 집어 뒤의 잡이 영영 오지 않는다. 문서 행을 잡 행과 함께 `SKIP LOCKED`로 잠가 두면 아래 UPDATE도 기다리지 않는다. 관계 잡도 종류를 가리지 않고 함께 건너뛴다 — 판정 트랜잭션이 그 문서 행을 먼저 잠그므로 집어 봐야 기다린다.
 
@@ -591,7 +668,7 @@ COMMIT;
 
    **추출 잡(`kind='extract'`)도 2·3번을 타지 않는다.** 최신 원본 판을 OCR해 문서 텍스트를 쓰는 데서 끝나고, 그 UPDATE가 발화시킨 새 `embed` 잡이 2·3번을 탄다(위 「추출 잡」 절). 인식 결과가 비었거나 너무 커도 잡은 `done`으로 마감하고 문서만 `failed`로 표시한다.
 
-4. 실패 시: `attempts` 기반 지수 백오프로 `next_attempt_at` 갱신 후 `pending` 복귀. `attempts`는 claim 시점에 이미 올라 있으므로 **3회를 소진하면**(3회째 실패) job `error` + `documents.embedding_status='error'`. **문서를 `error`로 떨어뜨리는 것은 임베딩 잡뿐이다** — 관계 잡이 소진되면 잡만 `error`로 남고, 추출 잡이 소진되면 `embedding_status`가 아니라 `extraction_status='failed'`가 된다.
+4. 실패 시: `attempts` 기반 지수 백오프로 `next_attempt_at` 갱신 후 `pending` 복귀. `attempts`는 claim 시점에 이미 올라 있으므로 **3회를 소진하면**(3회째 실패) job `error` + `documents.embedding_status='error'`. **문서를 `error`로 떨어뜨리는 것은 임베딩 잡뿐이다** — 관계 잡이 소진되면 잡만 `error`로 남고, 추출 잡이 소진되면 `embedding_status`가 아니라 `extraction_status='failed'`가 되며, 미리보기 잡이 소진되면 그 문서의 `pending` 변환본만 `failed`가 된다.
 
 5. 좀비 회수: **lease가 만료된** `processing` 잡을 `pending`으로 리셋한다 (ADR-050). `claim_job`이 `lease_expires_at = now() + JOB_LEASE_SECONDS`(기본 60초)를 찍고, 워커는 처리하는 동안 **처리 연결과 다른 연결**로 lease의 1/3(20초)마다 연장한다. 연장은 `WHERE id = … AND status = 'processing' AND attempts = …`라 이미 회수된 잡을 되살리지도, 회수 뒤 다른 워커가 다시 집은 잡의 lease를 대신 늘리지도 못한다 — 선점마다 `attempts`가 오르고 스윕은 그것을 건드리지 않으므로 `(id, attempts)`가 한 번의 선점을 가리킨다. 워커가 죽든, 워커는 살아 있는데 연결이 끊기든 연장이 멈추므로 lease 뒤에 회수된다 — 판정 기준이 "얼마나 오래 걸렸나"가 아니라 "소유자가 아직 살아 있나"라서, 정상적으로 오래 걸리는 잡은 회수되지 않는다. `processing`인데 lease가 없는 행은 스윕이 영원히 회수하지 못하므로 제약(`embedding_jobs_processing_has_lease`, 020)이 막는다.
 
@@ -786,10 +863,10 @@ OpenSQL `patroni.yml`의 PostgreSQL 파라미터는 `max_connections: 100`이다
 | `GET /api/documents/count` | 목록과 같은 `status`·`extraction_status`·`tag`·`q`·`content_type`·`folder_id` 조건의 전체 건수 `{total}`. 화면은 이 건수로 페이지를 나눈다 |
 | `GET /api/documents/tags` | 열람 가능한 문서의 태그 목록 `string[]`. 중복 없이 태그순이며 보이지 않는 문서의 태그는 포함하지 않는다 |
 | `GET /api/documents/progress` | 열람 범위 안 문서의 파이프라인 단계별 수(`extracting`·`extraction_failed`·`pending`·`processing`·`ready`·`error`). 인식이 끝난 문서만 임베딩 단계로 센다. 합이 목록의 전체 수다 (#95-d) |
-| `GET /api/documents/{id}` | 상세 + 텍스트 버전 목록 + 청크 수 + 청크 기준 버전 + `files`(원본 판 목록 — 메타데이터만, 바이트는 싣지 않는다) + `folder`(id·이름·경로 — 조회자가 그 폴더를 볼 수 있을 때만, 아니면 `null`) |
+| `GET /api/documents/{id}` | 상세 + 텍스트 버전 목록 + 청크 수 + 청크 기준 버전 + `files`(원본 판 목록 — 메타데이터만, 바이트는 싣지 않는다. 판마다 `preview_status`: PDF·PNG·JPG·JPEG는 `"ready"`, 변환 대상은 변환본 상태(`ready`·`pending`·`failed`·`unavailable`, 행 없으면 `unavailable`), 그 밖 형식은 `null` — 화면은 이 값만 보고 「미리보기」를 그린다) + `folder`(id·이름·경로 — 조회자가 그 폴더를 볼 수 있을 때만, 아니면 `null`) |
 | `PUT /api/documents/{id}/folder` | **문서 폴더 이동.** `{folder_id}`(`null`이면 폴더 밖으로). 문서 소유자만, 쓰기 토큰 허용. 옮길 폴더는 볼 수 있어야 한다. 「폴더 범위 따름」 문서는 새 폴더의 범위로 바뀐다 (ADR-054) |
 | `GET /api/documents/{id}/file` · `GET /api/documents/{id}/files/{n}` | **원본 내려받기** — 최신 판 · 특정 판. 항상 `Content-Disposition: attachment` + `X-Content-Type-Options: nosniff`, 미디어 타입은 확장자 고정 매핑. 볼 수 없는 문서·원본 없음·없는 판은 404 (ADR-046) |
-| `GET /api/documents/{id}/files/{v}/preview` | **원본 미리보기** — PDF·PNG·JPG·JPEG(파일명 확장자, 대소문자 무관)만. `Content-Disposition: inline` + `X-Content-Type-Options: nosniff` + `Content-Security-Policy: sandbox; default-src 'none'`, 미디어 타입은 확장자 고정 매핑. 순서는 열람 확인(404) → 판 조회(404) → 형식 확인(그 밖 형식은 415 「미리보기할 수 없는 형식입니다.」, 기록 없음) → 감사 `original_previewed` → 응답. 공유 토큰은 403(허용 목록 밖) (ADR-058) |
+| `GET /api/documents/{id}/files/{v}/preview` | **원본 미리보기** — PDF·PNG·JPG·JPEG(파일명 확장자, 대소문자 무관)는 원본을, HWP·HWPX·DOCX·XLSX·PPTX는 **변환본 PDF**를 보낸다. `Content-Disposition: inline` + `X-Content-Type-Options: nosniff` + `Content-Security-Policy: sandbox; default-src 'none'`, 미디어 타입은 확장자 고정 매핑(변환본은 `application/pdf`, 파일명 확장자도 `.pdf`). 순서는 열람 확인(404) → 판 조회(404) → 형식·변환본 확인 → 감사 `original_previewed` → 응답. 변환 대상 판은 변환본이 `ready`면 200, `pending`이면 **409** 「미리보기를 준비 중입니다.」, `failed`면 **415** 「미리보기를 만들지 못했습니다.」, `unavailable`·행 없음이면 **415** 「미리보기할 수 없는 형식입니다.」(그 밖 형식과 같은 문구). 감사는 200일 때만. 공유 토큰은 403(허용 목록 밖) (ADR-058) |
 | `PUT /api/documents/{id}/file` | **원본 교체.** multipart `file` + `current_version`. 새 판을 쌓고(이전 판 보존), 추출 텍스트가 달라졌을 때만 새 텍스트 버전(트리거가 이력·잡 생성). 새 원본이 OCR 대상이면 텍스트를 쓰지 않고 추출 잡으로 넘긴다. 최신 판과 같은 바이트면 아무것도 바꾸지 않는다. 버전 불일치·추출 중 409 · 추출 실패 400 · 상한 초과 413 |
 | `POST /api/documents/{id}/reextract` | **재추출.** `{current_version}`. 최신 판에서 다시 추출해 결과가 다르면 새 텍스트 버전, 같으면 무변경(`changed: false`). 새 판은 만들지 않는다. 최신 판이 OCR 대상이면 추출 잡으로 넘기고 `changed: false`와 `extraction_status: "pending"`으로 응답한다. 원본 없는 문서·추출 중 문서는 409 |
 | `PUT /api/documents/{id}` | 편집된 문서 텍스트(`{content, version}` JSON) → `version`+1, `content`, `content_hash` UPDATE. **버전 이력 기록과 재임베딩 잡 생성은 트리거가 수행.** 요청의 `version`이 현재 버전과 다르면 **409** (아래) |
@@ -824,7 +901,7 @@ OpenSQL `patroni.yml`의 PostgreSQL 파라미터는 `max_connections: 100`이다
 | `POST /api/shares` `{name}` · `GET /api/shares` · `DELETE /api/shares/{id}` | 내 공유 생성·목록(포함 문서 id·제목, 토큰 메타)·삭제. 세션 전용 |
 | `PUT /api/shares/{id}/documents/{document_id}` · `DELETE /api/shares/{id}/documents/{document_id}` | 공유에 내 문서 넣기·빼기(멱등 204). 세션 전용 |
 | `POST /api/shares/{id}/tokens` `{name}` · `DELETE /api/shares/{id}/tokens/{token_id}` | 공유 토큰 발급(원문 1회)·폐기. 세션 전용 |
-| `GET /api/system/status` | **로그인 필요 · 운영/데모 전용**: `inet_server_addr()`(현재 접속 노드), pending/processing/error **임베딩** 잡 수(`kind='embed'`), 임베딩 프로바이더명, **정합성 검증 쿼리 결과**(`c.version <> d.version` 건수), **관계 미반영 문서 수**(`kind='edges'` 잡이 `done`이 아닌 문서), **텍스트 인식 대기·실패 문서 수**(`extraction_status`가 `pending`·`failed`). `/admin/status`가 소비하며 사용자 화면은 호출하지 않는다. SQL과 결과 모델은 `services/system.py`에 있고 라우터는 인증과 응답 변환만 맡는다 |
+| `GET /api/system/status` | **로그인 필요 · 운영/데모 전용**: `inet_server_addr()`(현재 접속 노드), pending/processing/error **임베딩** 잡 수(`kind='embed'`), 임베딩 프로바이더명, **정합성 검증 쿼리 결과**(`c.version <> d.version` 건수), **관계 미반영 문서 수**(`kind='edges'` 잡이 `done`이 아닌 문서), **텍스트 인식 대기·실패 문서 수**(`extraction_status`가 `pending`·`failed`), **미리보기 변환 판 수**(`preview_pending`·`preview_failed`·`preview_unavailable` — `document_file_previews.status`별). `/admin/status`가 소비하며 사용자 화면은 호출하지 않는다. SQL과 결과 모델은 `services/system.py`에 있고 라우터는 인증과 응답 변환만 맡는다 |
 
 > **공유 API(#97 c)** — 남의 공유 id는 404, 추가할 문서가 안 보이면 404, 보이는 남의 문서면 403이다. 공유 토큰은 ADR-044 「공유」 결정 5의 읽기 허용 목록만 통과하며 나머지는 403이다. MCP는 바꾸지 않는다.
 

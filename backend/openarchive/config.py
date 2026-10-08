@@ -54,6 +54,14 @@ class Settings(BaseSettings):
     # 프롬프트에 넣는 근거 본문의 글자 예산. 생성 모델에 전달할 문맥량을 제한한다.
     answer_context_chars: int = Field(default=6000, gt=0)
 
+    # 선택 설치 변환기. 없으면 해당 형식은 「변환기 없음」으로 남긴다 (ADR-058).
+    preview_rhwp_bin: str = "rhwp"
+    preview_soffice_bin: str = "soffice"
+    preview_bwrap_bin: str = "bwrap"
+    # 변환 한 판의 시간 상한(초). Rocky 9 x86-64 에뮬레이션 VM 실측 rhwp 쪽당 약 10.6초에서 약 85쪽을
+    # 감당하는 값이다 — 300초는 약 28쪽에서 끊겼다 (#228 G3).
+    preview_timeout_seconds: float = Field(default=900, gt=0)
+
     # 잡 선점 lease(초). 워커는 처리 중 이 값의 1/3마다 연장하고, 연장이 끊긴 잡은 lease
     # 만료 뒤 회수된다 (ADR-050). 스윕도 drain 중 이 주기로 돈다.
     job_lease_seconds: int = Field(default=60, gt=0)

@@ -14,6 +14,9 @@ const status: SystemStatus = {
   stale_edge_documents: 0,
   extraction_pending: 0,
   extraction_failed: 0,
+  preview_pending: 0,
+  preview_failed: 0,
+  preview_unavailable: 0,
   embedding_provider: "fake",
 };
 

@@ -40,6 +40,11 @@ WITH job_counts AS (
   SELECT count(*) FILTER (WHERE extraction_status = 'pending') AS extraction_pending,
          count(*) FILTER (WHERE extraction_status = 'failed') AS extraction_failed
   FROM documents
+), previews AS (
+  SELECT count(*) FILTER (WHERE status = 'pending') AS preview_pending,
+         count(*) FILTER (WHERE status = 'failed') AS preview_failed,
+         count(*) FILTER (WHERE status = 'unavailable') AS preview_unavailable
+  FROM document_file_previews
 ), stale_edges AS (
   SELECT count(DISTINCT document_id) AS stale_edge_documents
   FROM embedding_jobs
@@ -51,8 +56,9 @@ SELECT host(inet_server_addr()) AS node_address,
        j.last_job_finished_at,
        s.inconsistent_documents,
        e.stale_edge_documents,
-       x.extraction_pending, x.extraction_failed
-FROM job_counts j CROSS JOIN consistency s CROSS JOIN stale_edges e CROSS JOIN extraction x
+       x.extraction_pending, x.extraction_failed,
+       p.preview_pending, p.preview_failed, p.preview_unavailable
+FROM job_counts j CROSS JOIN consistency s CROSS JOIN stale_edges e CROSS JOIN extraction x CROSS JOIN previews p
 """
 
 
@@ -75,6 +81,9 @@ class SystemStatusResult:
     stale_edge_documents: int
     extraction_pending: int
     extraction_failed: int
+    preview_pending: int
+    preview_failed: int
+    preview_unavailable: int
     embedding_provider: str
 
 
@@ -105,6 +114,9 @@ async def get_system_status(
         stale_edge_documents=row["stale_edge_documents"],
         extraction_pending=row["extraction_pending"],
         extraction_failed=row["extraction_failed"],
+        preview_pending=row["preview_pending"],
+        preview_failed=row["preview_failed"],
+        preview_unavailable=row["preview_unavailable"],
         embedding_provider=embedding_provider,
     )
 
@@ -131,6 +143,17 @@ async def enqueue_edge_rebuild(conn: psycopg.AsyncConnection) -> EdgeRebuild:
             await conn.execute("SELECT coalesce(max(id), 0) FROM embedding_jobs")
         ).fetchone()
     return EdgeRebuild(documents=documents, last_job_id=last_job_id)
+
+
+async def enqueue_preview_rebuild(conn: psycopg.AsyncConnection) -> int:
+    """변환본이 없거나 실패·변환기 없음인 판에 변환 잡을 건다. 변환은 하지 않는다 — 워커가 한다.
+
+    판 행과 잡은 DB 함수가 만든다(ADR-058 결정 2) — 앱은 embedding_jobs·document_file_previews에
+    쓰지 않는다. 돌려주는 값은 변환 대기(pending) 판 수다.
+    """
+    async with conn.transaction():
+        (plates,) = await (await conn.execute("SELECT enqueue_all_preview_jobs()")).fetchone()
+    return plates
 
 
 async def _edge_rebuild_state(conn: psycopg.AsyncConnection, request: EdgeRebuild) -> tuple[int, int]:

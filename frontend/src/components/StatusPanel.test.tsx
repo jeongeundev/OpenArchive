@@ -8,7 +8,7 @@ const status: SystemStatus = {
   jobs: { pending: 1, processing: 2, recovery_pending: 1, error: 3 },
   job_lease_seconds: 60,
   last_job_finished_at: "2026-08-11T01:23:45Z",
-  inconsistent_documents: 0, stale_edge_documents: 0, extraction_pending: 0, extraction_failed: 0, embedding_provider: "BAAI/bge-m3",
+  inconsistent_documents: 0, stale_edge_documents: 0, extraction_pending: 0, extraction_failed: 0, preview_pending: 0, preview_failed: 0, preview_unavailable: 0, embedding_provider: "BAAI/bge-m3",
 };
 
 describe("StatusPanel", () => {
@@ -85,5 +85,25 @@ describe("StatusPanel", () => {
     expect(card).not.toBeNull();
     expect(within(card as HTMLElement).getByTestId("extraction-pending")).toHaveTextContent("2");
     expect(within(card as HTMLElement).getByTestId("extraction-failed")).toHaveTextContent("1");
+  });
+
+  it("미리보기 변환 대기·실패·변환기 없음 판 수를 보여준다", () => {
+    render(<StatusPanel status={{ ...status, preview_pending: 4, preview_failed: 2, preview_unavailable: 0 }} error={null} />);
+
+    const card = screen.getByText("미리보기 변환").closest("div");
+    expect(card).not.toBeNull();
+    expect(within(card as HTMLElement).getByTestId("preview-pending")).toHaveTextContent("4");
+    expect(within(card as HTMLElement).getByTestId("preview-failed")).toHaveTextContent("2");
+    expect(within(card as HTMLElement).getByTestId("preview-unavailable")).toHaveTextContent("0");
+    expect(screen.queryByText(/rebuild-previews/)).not.toBeInTheDocument();
+  });
+
+  it("변환기 없음이 있으면 설치 확인과 rebuild-previews를 안내한다", () => {
+    render(<StatusPanel status={{ ...status, preview_unavailable: 3 }} error={null} />);
+
+    expect(screen.getByTestId("preview-unavailable")).toHaveTextContent("3");
+    expect(
+      screen.getByText("변환기(rhwp·LibreOffice)·한글 글꼴·bubblewrap 설치를 확인하세요. 설치 뒤 openarchive rebuild-previews로 다시 겁니다."),
+    ).toBeInTheDocument();
   });
 });
