@@ -24,6 +24,7 @@ import type {
   SystemStatus,
   TagSuggestionsResponse,
   TextVersionDetail,
+  VersionDiff,
   TokenCreated,
   TokenScope,
   TokenSummary,
@@ -520,6 +521,18 @@ export function getDocumentVersion(
   const query = chunk === undefined ? "" : `?chunk=${chunk}`;
   return request<TextVersionDetail>(
     `/api/documents/${encodeURIComponent(id)}/versions/${version}${query}`,
+    { signal },
+  );
+}
+
+export function getVersionDiff(
+  id: string,
+  base: number,
+  target: number,
+  signal?: AbortSignal,
+): Promise<VersionDiff> {
+  return request<VersionDiff>(
+    `/api/documents/${encodeURIComponent(id)}/versions/${base}/diff/${target}`,
     { signal },
   );
 }

@@ -23,6 +23,76 @@ describe("VersionHistory", () => {
     vi.unstubAllGlobals();
   });
 
+  function renderHistory(items = versions) {
+    return render(<VersionHistory documentId="document-1" versions={items} currentVersion={3} disabled={false} onRestored={vi.fn()} />);
+  }
+
+  it("버전 하나에는 비교 선택 UI가 없다", () => {
+    renderHistory([versions[1]]);
+    expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "비교" })).not.toBeInTheDocument();
+  });
+
+  it("두 버전만 선택하고 선택 순서와 무관하게 낮은 버전을 base로 비교한다", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ base: 1, target: 3, identical: true, hunks: [] }));
+    vi.stubGlobal("fetch", fetchMock);
+    renderHistory();
+    expect(screen.getAllByRole("checkbox")).toHaveLength(3);
+    const compare = screen.getByRole("button", { name: "비교" });
+    expect(compare).toBeDisabled();
+    fireEvent.click(screen.getByRole("checkbox", { name: "v3 비교 선택" }));
+    expect(compare).toBeDisabled();
+    fireEvent.click(screen.getByRole("checkbox", { name: "v1 비교 선택" }));
+    expect(compare).toBeEnabled();
+    expect(screen.getByRole("checkbox", { name: "v2 비교 선택" })).toBeDisabled();
+    fireEvent.click(compare);
+    await screen.findByText("두 버전의 내용이 같습니다.");
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/documents/document-1/versions/1/diff/3");
+    expect(fetchMock.mock.calls[0][1]?.method ?? "GET").toBe("GET");
+    fireEvent.click(screen.getByRole("checkbox", { name: "v3 비교 선택" }));
+    expect(screen.getByRole("checkbox", { name: "v2 비교 선택" })).toBeEnabled();
+  });
+
+  it("현재와 비교는 과거 버전에만 있고 서버의 줄과 덩어리를 구분해 표시하고 닫는다", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ base: 1, target: 3, identical: false, hunks: [
+      { lines: [{ op: "equal", text: "맥락" }, { op: "removed", text: "이전 줄" }, { op: "added", text: "새 줄" }] },
+      { lines: [{ op: "added", text: "다른 대목" }] },
+    ] }));
+    vi.stubGlobal("fetch", fetchMock);
+    renderHistory();
+    expect(screen.getAllByRole("button", { name: "현재와 비교" })).toHaveLength(2);
+    expect(screen.getByText("v3").closest("li")?.textContent).not.toContain("현재와 비교");
+    fireEvent.click(screen.getAllByRole("button", { name: "현재와 비교" })[1]);
+    await screen.findByRole("heading", { name: "v1 ↔ v3 비교" });
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/documents/document-1/versions/1/diff/3");
+    const added = screen.getByText("+ 새 줄");
+    expect(added).toHaveAttribute("data-op", "added");
+    expect(added).toHaveClass("text-green-400");
+    const removed = screen.getByText("− 이전 줄");
+    expect(removed).toHaveAttribute("data-op", "removed");
+    expect(removed).toHaveClass("text-red-400");
+    expect(screen.getByText("맥락")).toHaveAttribute("data-op", "equal");
+    expect(screen.getByText("맥락")).toHaveClass("text-neutral-400");
+    expect(screen.getByText("…")).toBeInTheDocument();
+    expect(added.closest(".overflow-auto")).toHaveClass("max-h-96", "overflow-auto");
+    fireEvent.click(screen.getByRole("button", { name: "닫기" }));
+    expect(screen.queryByRole("heading", { name: "v1 ↔ v3 비교" })).not.toBeInTheDocument();
+  });
+
+  it("내용은 다르지만 줄 차이가 없으면 줄 끝 개행 차이를 알린다", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({ base: 1, target: 3, identical: false, hunks: [] })));
+    renderHistory();
+    fireEvent.click(screen.getAllByRole("button", { name: "현재와 비교" })[1]);
+    expect(await screen.findByText("줄 끝 개행만 다릅니다.")).toBeInTheDocument();
+  });
+
+  it("비교 오류는 서버 detail을 표시한다", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({ detail: "문서를 찾을 수 없습니다." }, 404)));
+    renderHistory();
+    fireEvent.click(screen.getAllByRole("button", { name: "현재와 비교" })[1]);
+    expect(await screen.findByText("문서를 찾을 수 없습니다.")).toBeInTheDocument();
+  });
+
   it("버전을 내림차순으로 표시하고 현재 버전을 표시한다", () => {
     render(
       <VersionHistory

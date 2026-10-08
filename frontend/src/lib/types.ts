@@ -113,6 +113,22 @@ export interface TextVersion {
   created_at: string;
 }
 
+export interface DiffLine {
+  op: "equal" | "added" | "removed";
+  text: string;
+}
+
+export interface DiffHunk {
+  lines: DiffLine[];
+}
+
+export interface VersionDiff {
+  base: number;
+  target: number;
+  identical: boolean;
+  hunks: DiffHunk[];
+}
+
 export interface TextVersionDetail extends TextVersion {
   content: string;
   /** `?chunk=`로 물은 대목의 위치(UTF-16 단위). 번호에 맞는 청크가 없으면 null이다. */
