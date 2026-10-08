@@ -389,8 +389,8 @@ describe("문서 상세 페이지의 인용 위치", () => {
       return Promise.resolve(jsonResponse({
         ...detail,
         versions: [
-          { version: 1, created_at: "2026-08-05T10:00:00Z" },
-          { version: 2, created_at: "2026-08-05T11:00:00Z" },
+          { version: 1, created_at: "2026-08-05T10:00:00Z", author: null, author_via: null },
+          { version: 2, created_at: "2026-08-05T11:00:00Z", author: null, author_via: null },
         ],
       }));
     });

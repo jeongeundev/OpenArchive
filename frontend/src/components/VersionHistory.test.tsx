@@ -1,12 +1,14 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import type { TextVersion } from "@/lib/types";
+
 import { VersionHistory } from "./VersionHistory";
 
-const versions = [
-  { version: 1, created_at: "2026-08-05T10:00:00Z" },
-  { version: 3, created_at: "2026-08-05T12:00:00Z" },
-  { version: 2, created_at: "2026-08-05T11:00:00Z" },
+const versions: TextVersion[] = [
+  { version: 1, created_at: "2026-08-05T10:00:00Z", author: null, author_via: null },
+  { version: 3, created_at: "2026-08-05T12:00:00Z", author: null, author_via: null },
+  { version: 2, created_at: "2026-08-05T11:00:00Z", author: null, author_via: null },
 ];
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -26,6 +28,25 @@ describe("VersionHistory", () => {
   function renderHistory(items = versions) {
     return render(<VersionHistory documentId="document-1" versions={items} currentVersion={3} disabled={false} onRestored={vi.fn()} />);
   }
+
+  it.each([
+    ["alice", "worker", "alice"],
+    [null, "worker", "워커"],
+    [null, "direct", "직접 접속"],
+    [null, "cli", "운영자 CLI"],
+    [null, null, "기록 없음"],
+    [null, "token", "기록 없음"],
+  ])("작성자 %s·경로 %s와 버전 시각을 표시한다", (author, author_via, label) => {
+    const item = { ...versions[0], author, author_via };
+    renderHistory([item]);
+    const row = screen.getByText("v1").closest("li");
+    const date = new Intl.DateTimeFormat("ko-KR", {
+      dateStyle: "medium",
+      timeStyle: "short",
+    }).format(new Date(item.created_at));
+    expect(row).toHaveTextContent(`${label} · ${date}`);
+    expect(row?.querySelector("time")).toHaveAttribute("datetime", item.created_at);
+  });
 
   it("버전 하나에는 비교 선택 UI가 없다", () => {
     renderHistory([versions[1]]);

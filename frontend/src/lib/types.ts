@@ -111,6 +111,9 @@ export interface DocumentProgress {
 export interface TextVersion {
   version: number;
   created_at: string;
+  /** 표시 문구는 화면이 정한다. */
+  author: string | null;
+  author_via: string | null;
 }
 
 export interface DiffLine {
