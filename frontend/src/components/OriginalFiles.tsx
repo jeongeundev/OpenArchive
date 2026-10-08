@@ -5,6 +5,8 @@ import { useRef, useState } from "react";
 import {
   ApiError,
   originalFileUrl,
+  originalPreviewUrl,
+  isPreviewable,
   reextractDocument,
   replaceOriginalFile,
 } from "@/lib/api";
@@ -137,16 +139,28 @@ export function OriginalFiles({
                 </span>
               </div>
               {/* 브라우저가 직접 받게 둔다 — fetch로 받으면 파일 전체가 탭 메모리에 올라간다. */}
-              <a
-                className="text-xs text-[#0ea5e9] hover:underline"
-                download
-                href={originalFileUrl(
-                  document.id,
-                  file.file_version === latest ? undefined : file.file_version,
-                )}
-              >
-                내려받기
-              </a>
+              <div className="flex items-center gap-3">
+                {isPreviewable(file.filename) ? (
+                  <a
+                    className="text-xs text-[#0ea5e9] hover:underline"
+                    href={originalPreviewUrl(document.id, file.file_version)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    미리보기
+                  </a>
+                ) : null}
+                <a
+                  className="text-xs text-[#0ea5e9] hover:underline"
+                  download
+                  href={originalFileUrl(
+                    document.id,
+                    file.file_version === latest ? undefined : file.file_version,
+                  )}
+                >
+                  내려받기
+                </a>
+              </div>
             </li>
           ))}
         </ol>

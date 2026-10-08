@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { EXTRACTING_NOTICE, type DocumentDetail } from "@/lib/types";
@@ -85,6 +85,25 @@ describe("OriginalFiles", () => {
     expect(links[0]).toHaveAttribute("href", "/api/documents/document-1/file");
     expect(links[1]).toHaveAttribute("href", "/api/documents/document-1/files/1");
     for (const link of links) expect(link).toHaveAttribute("download");
+  });
+
+  it.each(["report.pdf", "scan.PNG", "photo.jpeg"])("%s 판은 새 탭 미리보기와 내려받기를 제공한다", (filename) => {
+    render(<OriginalFiles anonymous={false} disabled={false} document={{ ...document, files: [{ ...document.files[0], filename }] }} onChanged={vi.fn()} />);
+    const preview = screen.getByRole("link", { name: "미리보기" });
+    expect(preview).toHaveAttribute("href", "/api/documents/document-1/files/1/preview");
+    expect(preview).toHaveAttribute("target", "_blank");
+    expect(preview.getAttribute("rel")?.split(" ")).toEqual(expect.arrayContaining(["noopener", "noreferrer"]));
+    expect(preview).not.toHaveAttribute("download");
+    expect(screen.getByRole("link", { name: "내려받기" })).toHaveAttribute("href", "/api/documents/document-1/file");
+  });
+
+  it("지원하지 않는 판은 내려받기만 제공한다", () => {
+    render(<OriginalFiles anonymous={false} disabled={false} document={{ ...document, files: ["a.hwp", "b.docx", "c.txt"].map((filename, index) => ({ ...document.files[0], filename, file_version: index + 1 })) }} onChanged={vi.fn()} />);
+    for (const item of screen.getAllByRole("listitem")) {
+      expect(within(item).queryByRole("link", { name: "미리보기" })).not.toBeInTheDocument();
+      expect(within(item).getByRole("link", { name: "내려받기" })).toHaveAttribute("download");
+      expect(within(item).getAllByRole("link")).toHaveLength(1);
+    }
   });
 
   it("원본이 없는 문서에는 올리기만 보이고 내려받기·다시 추출이 없다", () => {

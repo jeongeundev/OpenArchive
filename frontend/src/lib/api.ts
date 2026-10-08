@@ -24,6 +24,7 @@ import type {
   SystemStatus,
   TagSuggestionsResponse,
   TextVersionDetail,
+  VersionDiff,
   TokenCreated,
   TokenScope,
   TokenSummary,
@@ -524,6 +525,18 @@ export function getDocumentVersion(
   );
 }
 
+export function getVersionDiff(
+  id: string,
+  base: number,
+  target: number,
+  signal?: AbortSignal,
+): Promise<VersionDiff> {
+  return request<VersionDiff>(
+    `/api/documents/${encodeURIComponent(id)}/versions/${base}/diff/${target}`,
+    { signal },
+  );
+}
+
 /** 되감기가 아니라 새 텍스트 버전을 만든다 (ADR-037). */
 export function restoreDocumentVersion(
   id: string,
@@ -544,6 +557,18 @@ export function restoreDocumentVersion(
 export function originalFileUrl(id: string, fileVersion?: number): string {
   const base = `/api/documents/${encodeURIComponent(id)}`;
   return fileVersion === undefined ? `${base}/file` : `${base}/files/${fileVersion}`;
+}
+
+// ADR-058: 서버와 같은 원본 미리보기 허용 목록.
+const PREVIEWABLE_EXTENSIONS = ["pdf", "png", "jpg", "jpeg"];
+
+export function isPreviewable(filename: string): boolean {
+  const extension = filename.slice(filename.lastIndexOf(".") + 1).toLowerCase();
+  return filename.includes(".") && PREVIEWABLE_EXTENSIONS.includes(extension);
+}
+
+export function originalPreviewUrl(id: string, fileVersion: number): string {
+  return `${originalFileUrl(id, fileVersion)}/preview`;
 }
 
 /** 이전 판은 지우지 않고 새 판을 쌓는다. 추출 텍스트가 달라지면 새 텍스트 버전이 생긴다. */

@@ -113,6 +113,24 @@ export interface TextVersion {
   created_at: string;
 }
 
+export interface DiffLine {
+  op: "equal" | "added" | "removed";
+  text: string;
+}
+
+export interface DiffHunk {
+  lines: DiffLine[];
+}
+
+export interface VersionDiff {
+  base: number;
+  target: number;
+  identical: boolean;
+  /** 서버가 비교 상한을 넘어 계산하지 않았다. 그때 hunks는 비어 있다. */
+  too_large: boolean;
+  hunks: DiffHunk[];
+}
+
 export interface TextVersionDetail extends TextVersion {
   content: string;
   /** `?chunk=`로 물은 대목의 위치(UTF-16 단위). 번호에 맞는 청크가 없으면 null이다. */
@@ -297,7 +315,8 @@ export type AuditAction =
   | "folder_access_changed"
   | "group_member_changed"
   | "original_replaced"
-  | "original_downloaded";
+  | "original_downloaded"
+  | "original_previewed";
 
 export type AuditActorVia = "session" | "token" | "mcp" | "cli" | "share" | "worker";
 

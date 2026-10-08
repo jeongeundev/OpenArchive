@@ -1037,3 +1037,44 @@ def test_import_records_actor_for_each_file(archive_db, tmp_path):
     audit = rows(archive_db)
     assert len(audit) == 3
     assert all(row[:3] == ("document_created", "alice", "cli") for row in audit)
+
+
+def test_search_relation_output(searchable_db, capsys):
+    seed(searchable_db, lambda conn: create_text_document(
+        conn, title="연결 문서", content="다른 내용", owner_id="alice",
+    ))
+    run_embedding_worker(searchable_db)
+    with psycopg.connect(searchable_db) as conn:
+        conn.execute("DELETE FROM document_edges")
+        # k=1의 후보 5개를 직접 문서로 채워 이웃은 관계 순회로만 찾는다.
+        conn.execute(
+            """INSERT INTO document_chunks (document_id, chunk_index, content, embedding, version)
+               SELECT c.document_id, n, c.content, c.embedding, c.version
+               FROM document_chunks c JOIN documents d ON d.id = c.document_id,
+                    generate_series(1, 4) n
+               WHERE d.title = '설치 안내' AND c.chunk_index = 0"""
+        )
+        vector = conn.execute(
+            "SELECT c.embedding::text FROM document_chunks c JOIN documents d "
+            "ON d.id = c.document_id WHERE d.title = %s LIMIT 1", ("설치 안내",),
+        ).fetchone()[0]
+        opposite = "[" + ",".join(str(-float(v)) for v in vector[1:-1].split(",")) + "]"
+        conn.execute(
+            "UPDATE document_chunks SET embedding = %s::vector WHERE document_id = "
+            "(SELECT id FROM documents WHERE title = '연결 문서')", (opposite,),
+        )
+        conn.execute(
+            """INSERT INTO document_edges
+               (src_document_id, dst_document_id, kind, src_chunk_index, dst_chunk_index, score)
+               SELECT a.id, b.id, 'related', 0, 0, 0.8
+               FROM documents a, documents b
+               WHERE a.title = '설치 안내' AND b.title = '연결 문서'"""
+        )
+    assert main(["search", "OpenSQL 설치 절차", "-k", "1",
+                 "--user", "bob", "--dsn", searchable_db]) == 0
+    out = capsys.readouterr().out
+    lines = out.splitlines()
+    assert "1. 설치 안내  1.000" in out
+    assert next(line for line in lines if "연결 문서" in line) == "2. 연결 문서"
+    assert "   관계로 찾음: 관련 있음 · 1단계" in lines
+    assert "-0." not in out

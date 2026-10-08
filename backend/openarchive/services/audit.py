@@ -15,6 +15,7 @@ AUDIT_ACTIONS: tuple[str, ...] = (
     "group_member_changed",
     "original_replaced",
     "original_downloaded",
+    "original_previewed",
     "folder_access_changed",
     "document_trashed",
     "document_restored",

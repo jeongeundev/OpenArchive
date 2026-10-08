@@ -26,6 +26,7 @@ const ACTION_LABEL: Record<AuditAction, string> = {
   group_member_changed: "그룹 구성원 변경",
   original_replaced: "원본 교체",
   original_downloaded: "원본 내려받기",
+  original_previewed: "원본 미리보기",
 };
 
 const ACTIONS = Object.keys(ACTION_LABEL) as AuditAction[];
@@ -47,7 +48,7 @@ function visibilityLabel(value: unknown): string {
 function actionLabel(entry: AuditEntry): string {
   const label = ACTION_LABEL[entry.action] ?? entry.action;
   if (entry.action === "text_updated") return `${label}(v${text(entry.detail.version)})`;
-  if (entry.action === "original_replaced" || entry.action === "original_downloaded") {
+  if (entry.action === "original_replaced" || entry.action === "original_downloaded" || entry.action === "original_previewed") {
     return `${label}(판 ${text(entry.detail.file_version)})`;
   }
   return label;
@@ -161,7 +162,7 @@ export default function AuditPage(): React.ReactElement {
       <div>
         <h1 className="text-4xl font-semibold text-white">감사 로그</h1>
         <p className="mt-3 text-sm text-neutral-400">
-          문서와 열람 범위·그룹 구성원의 변경, 원본 내려받기 기록입니다. 기록은 고치거나 지울 수 없습니다.
+          문서와 열람 범위·그룹 구성원의 변경, 원본 내려받기·미리보기 기록입니다. 기록은 고치거나 지울 수 없습니다.
           대상 문서는 제목만 보입니다.
         </p>
       </div>

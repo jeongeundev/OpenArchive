@@ -855,3 +855,55 @@ def test_user_option_keeps_the_operator_path(cli, monkeypatch, command):
 
     assert main([command, "출장비", "--user", "alice"]) == 0
     assert called == ["alice"]
+
+
+@pytest.mark.parametrize(("kind", "label"), [
+    ("overlaps", "여러 대목에서 만난다"),
+    ("points_to", "이 대목에서 만난다"),
+    ("refers", "본문에서 가리킨다"),
+    ("related", "관련 있음"),
+    ("revision", "이전 텍스트 버전"),
+    ("broader", "더 자세한 문서"),
+    ("unknown", "관련 있음"),
+])
+def test_relation_label(kind, label):
+    assert user_cli.relation_label(kind) == label
+
+
+def test_search_relation_output_with_token(cli, travel_docs, migrated_db, capsys):
+    other = put_text(cli, "alice", "연결 문서", "다른 내용")
+    run_embedding_worker(migrated_db)
+    with psycopg.connect(migrated_db) as conn:
+        conn.execute("DELETE FROM document_edges")
+        # k=1의 후보 5개를 직접 문서로 채워 이웃은 관계 순회로만 찾는다.
+        conn.execute(
+            """INSERT INTO document_chunks (document_id, chunk_index, content, embedding, version)
+               SELECT c.document_id, n, c.content, c.embedding, c.version
+               FROM document_chunks c JOIN documents d ON d.id = c.document_id,
+                    generate_series(1, 4) n
+               WHERE d.title = '출장비 규정' AND c.chunk_index = 0"""
+        )
+        vector = conn.execute(
+            "SELECT c.embedding::text FROM document_chunks c JOIN documents d "
+            "ON d.id = c.document_id WHERE d.title = %s LIMIT 1", ("출장비 규정",),
+        ).fetchone()[0]
+        opposite = "[" + ",".join(str(-float(v)) for v in vector[1:-1].split(",")) + "]"
+        conn.execute(
+            "UPDATE document_chunks SET embedding = %s::vector WHERE document_id = "
+            "(SELECT id FROM documents WHERE title = '연결 문서')", (opposite,),
+        )
+        conn.execute(
+            """INSERT INTO document_edges
+               (src_document_id, dst_document_id, kind, src_chunk_index, dst_chunk_index, score)
+               VALUES (%s, %s, 'related', 0, 0, 0.8)""",
+            (travel_docs["public"], other),
+        )
+    login_cli(cli, "alice", scope="read")
+    capsys.readouterr()
+    assert main(["search", "출장비 정산 기한은 귀임 후 7일입니다.", "-k", "1"]) == 0
+    out = capsys.readouterr().out
+    lines = out.splitlines()
+    assert "1. 출장비 규정  1.000" in out
+    assert next(line for line in lines if "연결 문서" in line) == "2. 연결 문서"
+    assert "   관계로 찾음: 관련 있음 · 1단계" in lines
+    assert "-0." not in out

@@ -2,8 +2,8 @@
 
 import { useEffect, useRef, useState } from "react";
 
-import { ApiError, getDocumentVersion, restoreDocumentVersion } from "@/lib/api";
-import type { TextVersion } from "@/lib/types";
+import { ApiError, getDocumentVersion, getVersionDiff, restoreDocumentVersion } from "@/lib/api";
+import type { TextVersion, VersionDiff } from "@/lib/types";
 import { useUnmountSignal } from "@/lib/useUnmountSignal";
 
 function formatDate(value: string): string {
@@ -38,6 +38,9 @@ export function VersionHistory({
   const [confirming, setConfirming] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [selectedVersions, setSelectedVersions] = useState<number[]>([]);
+  const [diff, setDiff] = useState<VersionDiff | null>(null);
+  const [comparing, setComparing] = useState(false);
   const unmountSignal = useUnmountSignal();
   const [passage, setPassage] = useState<{ version: number; start: number; end: number } | null>(null);
   const markRef = useRef<HTMLElement>(null);
@@ -98,6 +101,22 @@ export function VersionHistory({
     }
   }
 
+  async function compare(base: number, target: number): Promise<void> {
+    if (comparing) return;
+    setComparing(true);
+    setDiff(null);
+    setError(null);
+    const signal = unmountSignal();
+    try {
+      setDiff(await getVersionDiff(documentId, base, target, signal));
+    } catch (reason: unknown) {
+      if (signal?.aborted) return;
+      setError(reason instanceof ApiError ? reason.detail : "텍스트 버전을 비교하지 못했습니다.");
+    } finally {
+      setComparing(false);
+    }
+  }
+
   async function restore(version: number): Promise<void> {
     if (busy) return;
     setBusy(true);
@@ -132,6 +151,52 @@ export function VersionHistory({
           {error}
         </p>
       ) : null}
+      {sortedVersions.length >= 2 ? (
+        <button
+          className="rounded-lg bg-white px-3 py-2 text-xs text-black hover:bg-neutral-200 disabled:cursor-not-allowed disabled:opacity-50"
+          disabled={selectedVersions.length !== 2 || comparing}
+          onClick={() => {
+            const [base, target] = [...selectedVersions].sort((a, b) => a - b);
+            void compare(base, target);
+          }}
+          type="button"
+        >
+          비교
+        </button>
+      ) : null}
+      {comparing ? <p className="text-sm text-neutral-400" role="status">비교하는 중…</p> : null}
+      {diff !== null ? (
+        <div className="space-y-3 rounded-lg border border-neutral-800 bg-[#141414] p-4">
+          <div className="flex items-center justify-between gap-4">
+            <h3 className="text-sm text-neutral-300">v{diff.base} ↔ v{diff.target} 비교</h3>
+            <button className="text-xs text-neutral-500 hover:text-neutral-300" onClick={() => setDiff(null)} type="button">닫기</button>
+          </div>
+          {diff.identical ? (
+            <p className="text-sm text-neutral-400">두 버전의 내용이 같습니다.</p>
+          ) : diff.too_large ? (
+            <p className="text-sm text-neutral-400">문서가 커서 비교 결과를 표시할 수 없습니다. 각 버전의 「본문 보기」로 확인하세요.</p>
+          ) : diff.hunks.length === 0 ? (
+            <p className="text-sm text-neutral-400">줄 끝 개행만 다릅니다.</p>
+          ) : (
+            <div className="max-h-96 overflow-auto font-mono text-xs">
+              {diff.hunks.map((hunk, hunkIndex) => (
+                <div key={hunkIndex}>
+                  {hunkIndex > 0 ? <div className="py-2 text-neutral-500">…</div> : null}
+                  {hunk.lines.map((line, lineIndex) => (
+                    <div
+                      key={lineIndex}
+                      data-op={line.op}
+                      className={`whitespace-pre-wrap break-words ${line.op === "added" ? "text-green-400" : line.op === "removed" ? "text-red-400" : "text-neutral-400"}`}
+                    >
+                      {line.op === "added" ? "+ " : line.op === "removed" ? "− " : "  "}{line.text}
+                    </div>
+                  ))}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      ) : null}
       {sortedVersions.length === 0 ? (
         <p className="text-sm text-neutral-500">편집 이력이 없습니다.</p>
       ) : (
@@ -140,6 +205,17 @@ export function VersionHistory({
             <li key={item.version} className="space-y-3 py-4">
               <div className="flex items-center justify-between gap-4">
                 <div className="flex items-center gap-2">
+                  {sortedVersions.length >= 2 ? (
+                    <input
+                      type="checkbox"
+                      aria-label={`v${item.version} 비교 선택`}
+                      checked={selectedVersions.includes(item.version)}
+                      disabled={!selectedVersions.includes(item.version) && selectedVersions.length >= 2}
+                      onChange={(event) => setSelectedVersions((previous) => event.target.checked
+                        ? [...previous, item.version]
+                        : previous.filter((version) => version !== item.version))}
+                    />
+                  ) : null}
                   <span className="text-sm text-neutral-300">v{item.version}</span>
                   {item.version === currentVersion ? (
                     <span className="rounded bg-[#0ea5e9]/10 px-2 py-0.5 text-xs text-[#0ea5e9]">
@@ -155,6 +231,16 @@ export function VersionHistory({
                   >
                     본문 보기
                   </button>
+                  {item.version !== currentVersion ? (
+                    <button
+                      className="text-xs text-neutral-500 hover:text-neutral-300 disabled:cursor-not-allowed disabled:text-neutral-600"
+                      disabled={comparing}
+                      onClick={() => void compare(item.version, currentVersion)}
+                      type="button"
+                    >
+                      현재와 비교
+                    </button>
+                  ) : null}
                   {/* 현재 버전에는 되돌리기를 노출하지 않는다 — 이미 그 내용이다. */}
                   {!disabled && item.version !== currentVersion ? (
                     <button

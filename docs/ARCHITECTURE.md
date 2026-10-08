@@ -323,7 +323,7 @@ CREATE TABLE api_tokens (
 CREATE TABLE audit_log (
   id             bigserial PRIMARY KEY,        -- 정렬·커서 기준 (같은 트랜잭션의 행은 occurred_at이 같다)
   occurred_at    timestamptz NOT NULL DEFAULT now(),
-  action         text NOT NULL,                -- CHECK 10종 (아래 「감사 로그」 절 — 029 7종 + 031·033)
+  action         text NOT NULL,                -- CHECK 11종 (아래 「감사 로그」 절 — 029 7종 + 031·033·035)
   actor          text,                         -- 사용자명 스냅샷. 앱 행위자가 없으면 NULL
   actor_via      text,                         -- session|token|mcp|cli|share|worker, 직접 SQL이면 NULL
   db_role        text NOT NULL DEFAULT current_user,
@@ -431,6 +431,7 @@ CREATE TRIGGER trg_documents_content_changed
 | `trg_audit_grant_changed` | `document_grants` INSERT / DELETE — 공유 부여·연쇄 삭제 제외 | `access_changed` · `{kind: grant, change, grantee_type, grantee}` |
 | `trg_audit_group_member_changed` | `group_members` INSERT / DELETE — 연쇄 삭제 제외 | `group_member_changed` · `{change, group, user}` |
 | `record_original_download(document_id, file_version)` | 원본 판을 읽는 트랜잭션에서 `get_original_file`이 호출 | `original_downloaded` · `{file_version}` |
+| `record_original_preview(document_id, file_version)` | 미리보기 경로에서 `get_original_file(preview=True)`가 형식 확인 뒤 같은 트랜잭션에서 호출 (035) | `original_previewed` · `{file_version}` — 허용 밖 형식(415)은 기록하지 않는다 |
 | `trg_audit_folder_visibility_changed` | `folders` UPDATE OF `visibility`, 값이 바뀔 때 (031) | `folder_access_changed` · `{kind: visibility, folder_id, folder_name, before, after}` |
 | `trg_audit_folder_grant_changed` | `folder_grants` INSERT / DELETE — 연쇄 삭제 제외 (031) | `folder_access_changed` · `{kind: grant, change, grantee_type, grantee, folder_id, folder_name}` |
 | `trg_audit_document_folder_changed` | `documents` UPDATE OF `follows_folder`·`folder_id` (031) | `access_changed` · `{kind: inherit, before, after}`(`folder`/`own`) · 「폴더 범위 따름」 문서의 이동은 `{kind: folder, before, after}`(폴더 이름) |
@@ -788,9 +789,12 @@ OpenSQL `patroni.yml`의 PostgreSQL 파라미터는 `max_connections: 100`이다
 | `GET /api/documents/{id}` | 상세 + 텍스트 버전 목록 + 청크 수 + 청크 기준 버전 + `files`(원본 판 목록 — 메타데이터만, 바이트는 싣지 않는다) + `folder`(id·이름·경로 — 조회자가 그 폴더를 볼 수 있을 때만, 아니면 `null`) |
 | `PUT /api/documents/{id}/folder` | **문서 폴더 이동.** `{folder_id}`(`null`이면 폴더 밖으로). 문서 소유자만, 쓰기 토큰 허용. 옮길 폴더는 볼 수 있어야 한다. 「폴더 범위 따름」 문서는 새 폴더의 범위로 바뀐다 (ADR-054) |
 | `GET /api/documents/{id}/file` · `GET /api/documents/{id}/files/{n}` | **원본 내려받기** — 최신 판 · 특정 판. 항상 `Content-Disposition: attachment` + `X-Content-Type-Options: nosniff`, 미디어 타입은 확장자 고정 매핑. 볼 수 없는 문서·원본 없음·없는 판은 404 (ADR-046) |
+| `GET /api/documents/{id}/files/{v}/preview` | **원본 미리보기** — PDF·PNG·JPG·JPEG(파일명 확장자, 대소문자 무관)만. `Content-Disposition: inline` + `X-Content-Type-Options: nosniff` + `Content-Security-Policy: sandbox; default-src 'none'`, 미디어 타입은 확장자 고정 매핑. 순서는 열람 확인(404) → 판 조회(404) → 형식 확인(그 밖 형식은 415 「미리보기할 수 없는 형식입니다.」, 기록 없음) → 감사 `original_previewed` → 응답. 공유 토큰은 403(허용 목록 밖) (ADR-058) |
 | `PUT /api/documents/{id}/file` | **원본 교체.** multipart `file` + `current_version`. 새 판을 쌓고(이전 판 보존), 추출 텍스트가 달라졌을 때만 새 텍스트 버전(트리거가 이력·잡 생성). 새 원본이 OCR 대상이면 텍스트를 쓰지 않고 추출 잡으로 넘긴다. 최신 판과 같은 바이트면 아무것도 바꾸지 않는다. 버전 불일치·추출 중 409 · 추출 실패 400 · 상한 초과 413 |
 | `POST /api/documents/{id}/reextract` | **재추출.** `{current_version}`. 최신 판에서 다시 추출해 결과가 다르면 새 텍스트 버전, 같으면 무변경(`changed: false`). 새 판은 만들지 않는다. 최신 판이 OCR 대상이면 추출 잡으로 넘기고 `changed: false`와 `extraction_status: "pending"`으로 응답한다. 원본 없는 문서·추출 중 문서는 409 |
 | `PUT /api/documents/{id}` | 편집된 문서 텍스트(`{content, version}` JSON) → `version`+1, `content`, `content_hash` UPDATE. **버전 이력 기록과 재임베딩 잡 생성은 트리거가 수행.** 요청의 `version`이 현재 버전과 다르면 **409** (아래) |
+| `GET /api/documents/{id}/versions/{version}` | 그 텍스트 버전의 본문. 열람 술어를 같은 SQL에 넣어 조회하며 없거나 볼 수 없으면 404 (ADR-037) |
+| `GET /api/documents/{id}/versions/{base}/diff/{target}` | **텍스트 버전 비교.** 서버가 줄 단위로 비교한다(`services/textdiff.py` — Myers O((N+M)D), git의 기본 알고리즘, 새 의존성 없음). 응답 `{base, target, identical, too_large, hunks: [{lines: [{op: equal\|added\|removed, text}]}]}` — 바뀐 곳 앞뒤 **3줄**만 맥락으로 싣고(`difflib.get_grouped_opcodes(3)`와 같은 묶음), `text`에는 줄 끝 개행을 넣지 않는다. `identical`은 두 텍스트가 문자열로 완전히 같을 때만 true이고 그때 `hunks`는 빈 배열. **작업량 예산**: 대각선 하나·직진한 줄 하나·역추적 기록 한 칸을 작업 1로 세다가 `MAX_DIFF_WORK`(500만)를 넘으면 그 자리에서 멈추고 `too_large: true`·빈 `hunks`로 답한다 — 쓴 작업량은 예산 + 2 + min(N, M)을 넘지 않는다(jsdiff `maxEditLength`와 같은 방식). 2026-10-08 실측(크기 4.8K~20K줄 × 반복도 × 고친 곳 10~3,000 × 흩어짐/몰림 × 전체 교체): 작업 100만당 **0.12~0.15초·기록 3.8MB**로 일정해 예산이 최악 약 0.75초·19MB를 보장한다. 작업량은 문서 크기가 아니라 바뀐 줄 수(D)에 따라 늘어 대략 D²이며, 고친 줄이 약 1,100줄을 넘으면 too_large다. 실제 규정 2022판↔현행판 21쌍은 최대 6만 작업·8ms다. 처음 쓴 표준 `difflib`(autojunk 끔)는 같은 줄의 짝 수 × 바뀐 대목 수에 비례해, 빈 줄로 나눈 마크다운 2,000문단을 10문단마다 고치면 23.6초였다(같은 입력 Myers 20ms) — 짝 수로 미리 거르는 상한은 바뀐 대목 수 축에서 깨져 버렸다. 계산은 이벤트 루프 밖 스레드에서 돈다. 두 버전 중 하나라도 없거나 볼 수 없으면 404, 공유 토큰은 403 (#190) |
 | `PUT /api/documents/{id}/tags` | `{tags: string[]}`로 태그 전체 교체. 트리거는 `UPDATE OF content_hash`에만 걸려 있으므로 **재임베딩을 유발하지 않는다** |
 | `DELETE /api/documents/{id}` | **휴지통 이동** — `deleted_at`을 채운다. 소유자만, 쓰기 토큰 허용. `?permanent=true`면 영구 삭제(CASCADE로 벡터·잡·원본 판까지 원자 삭제, 휴지통 밖 문서도 가능) (ADR-060) |
 | `GET /api/documents/trash` · `POST /api/documents/{id}/restore` | 내 휴지통 목록(제목·삭제 일시·영구 삭제 예정일) · 복원(`deleted_at`을 지운다, 재임베딩 없음). 소유자만 — 남의 문서는 관리자에게도 404 |
@@ -807,7 +811,7 @@ OpenSQL `patroni.yml`의 PostgreSQL 파라미터는 `max_connections: 100`이다
 | `GET /api/diagnostics` | **진단.** 고아 문서·깨진 링크·중복 후보 등을 **열람 범위 기준**으로 집계 (ADR-027) |
 | `GET /api/clusters` | **관계 지도.** 관계 그래프의 Louvain 군집. 조회 시점 계산, 열람 범위 기준. 이름은 (군집 안 빈도 − 밖 빈도)가 양수인 태그 중 최대, 없으면 중심 문서 제목 (ADR-042 개정) |
 | `GET /api/admin/users` 등 | 관리자 전용 |
-| `GET /api/admin/audit` | **관리자·세션 전용** 감사 로그 조회. 쿼리 `actor`·`action`(10종, 그 밖은 422)·`limit`(기본 50, 1~200)·`before_id`(id 커서). 응답 `{items, next_before_id}`, id 내림차순. 열람 술어를 걸지 않고 대상 문서 **제목**까지만 보인다(ADR-055 결정 8). 조회 자체는 기록하지 않는다 |
+| `GET /api/admin/audit` | **관리자·세션 전용** 감사 로그 조회. 쿼리 `actor`·`action`(11종, 그 밖은 422)·`limit`(기본 50, 1~200)·`before_id`(id 커서). 응답 `{items, next_before_id}`, id 내림차순. 열람 술어를 걸지 않고 대상 문서 **제목**까지만 보인다(ADR-055 결정 8). 조회 자체는 기록하지 않는다 |
 | `POST /api/admin/groups` · `GET /api/admin/groups` · `DELETE /api/admin/groups/{id}` | **관리자·세션 전용**. 그룹 생성·목록·삭제. 이름 변경 없음 (#97 b) |
 | `PUT /api/admin/groups/{id}/members/{username}` · `DELETE /api/admin/groups/{id}/members/{username}` | **관리자·세션 전용**. 구성원 추가·제거 (#97 b) |
 | `GET /api/principals` | **로그인**. 부여 대상 사용자명·그룹명 목록. 익명은 401 (#97 b) |

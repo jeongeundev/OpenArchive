@@ -4,6 +4,7 @@ HTTP를 알지 못한다 — 실패는 아래 예외로 표현하고, 상태 코
 MCP 서버는 HTTPException을 쓸 수 없으므로 이 경계가 필요하다.
 """
 
+import asyncio
 import hashlib
 import json
 from collections.abc import Awaitable, Callable
@@ -14,6 +15,7 @@ from uuid import UUID
 import psycopg
 from psycopg.rows import dict_row
 
+from openarchive.services import textdiff
 from openarchive.services.chunking import chunk_spans
 from openarchive.services.grants import insert_grants, resolve_grantees
 from openarchive.services.parsing import (
@@ -50,6 +52,7 @@ SUMMARY_COLUMNS = """id, title, filename, content_type, version, owner_id, visib
 
 # 시연 데이터 최대 추출 텍스트(약 90KB)의 5배보다 크고 DB CHECK와 같은 경계다.
 MAX_EXTRACTED_TEXT_LENGTH = 500_000
+PREVIEWABLE_EXTENSIONS: frozenset[str] = frozenset({"pdf", "png", "jpg", "jpeg"})
 TEXT_CONTENT_TYPES: tuple[str, ...] = ("txt", "md")
 EXTRACTION_FAILED_MESSAGE = "문서에서 텍스트를 추출하지 못했습니다."
 
@@ -73,6 +76,10 @@ class DocumentNotFound(Exception):
 
 class OriginalFileNotFound(Exception):
     """볼 수 있는 문서지만 요청한 원본 판이 없는 경우. 문서 없음과 구분해도 누출이 없다."""
+
+
+class OriginalNotPreviewable(Exception):
+    """원본 판의 확장자가 미리보기 허용 목록 밖인 경우."""
 
 
 class DocumentAccessDenied(Exception):
@@ -935,6 +942,7 @@ async def get_original_file(
     *,
     user_id: str | None,
     file_version: int | None = None,
+    preview: bool = False,
 ) -> dict:
     """원본 한 판의 바이트를 돌려준다. `file_version`이 없으면 최신 판이다.
 
@@ -957,8 +965,15 @@ async def get_original_file(
     original = await cur.fetchone()
     if original is None:
         raise OriginalFileNotFound
+    if (
+        preview
+        and PurePath(original["filename"]).suffix.lower().lstrip(".") not in PREVIEWABLE_EXTENSIONS
+    ):
+        raise OriginalNotPreviewable
     await conn.execute(
-        "SELECT record_original_download(%s, %s)",
+        "SELECT record_original_preview(%s, %s)"
+        if preview
+        else "SELECT record_original_download(%s, %s)",
         (document_id, original.pop("file_version")),
     )
     original["media_type"] = media_type_for(original["filename"])
@@ -1267,6 +1282,43 @@ async def get_document_version(
             document_version["passage_start"] = _utf16_len(content[:start])
             document_version["passage_end"] = _utf16_len(content[:end])
     return document_version
+
+
+async def diff_versions(
+    conn: psycopg.AsyncConnection,
+    document_id: UUID,
+    *,
+    user_id: str,
+    base: int,
+    target: int,
+) -> dict:
+    """열람 가능한 문서의 두 텍스트 버전을 한 번에 읽어 비교한다."""
+    cur = conn.cursor(row_factory=dict_row)
+    await cur.execute(
+        f"""
+        SELECT v.version, v.content
+        FROM document_versions v
+        JOIN documents d ON d.id = v.document_id
+        WHERE v.document_id = %(id)s
+          AND v.version IN (%(base)s, %(target)s)
+          AND {VISIBLE_TO_USER}
+        """,
+        {"id": document_id, "base": base, "target": target, "user": user_id},
+    )
+    contents = {row["version"]: row["content"] for row in await cur.fetchall()}
+    if base not in contents or target not in contents:
+        raise DocumentNotFound
+    old, new = contents[base], contents[target]
+    identical = old == new
+    # 예산 안에서도 1초 가까이 걸릴 수 있어 이벤트 루프 밖에서 돌린다.
+    hunks = [] if identical else await asyncio.to_thread(textdiff.diff_hunks, old, new)
+    return {
+        "base": base,
+        "target": target,
+        "identical": identical,
+        "too_large": hunks is None,
+        "hunks": hunks or [],
+    }
 
 
 def _utf16_len(text: str) -> int:

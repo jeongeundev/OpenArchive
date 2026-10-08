@@ -44,6 +44,7 @@ from openarchive.api.schemas import (
     TrashItem,
     UpdateAccessRequest,
     UpdateTagsRequest,
+    VersionDiff,
 )
 from openarchive.config import get_settings
 from openarchive.services import documents as service
@@ -295,23 +296,27 @@ async def move_document(
     )
 
 
-def _original_file_response(original: dict) -> Response:
-    """원본은 항상 내려받기(attachment)로만 보낸다.
+def _original_file_response(original: dict, *, inline: bool = False) -> Response:
+    """원본 내려받기는 attachment, 미리보기는 inline으로 보낸다 (ADR-058).
 
     앱과 같은 오리진(ADR-041)에서 세션 쿠키를 가진 채 사용자가 올린 HTML·SVG가 렌더링되면
-    저장형 XSS가 된다. `nosniff`는 브라우저가 내용을 보고 타입을 바꿔 읽는 것을 막는다.
+    저장형 XSS가 된다. 미리보기는 허용 목록·CSP sandbox로 제한한다.
+    `nosniff`는 브라우저가 내용을 보고 타입을 바꿔 읽는 것을 막는다.
     """
     filename = original["filename"]
     # filename=은 ASCII만 안전하다. 한글 이름은 filename*(RFC 5987)이 나른다.
     fallback = filename.encode("ascii", "replace").decode("ascii").replace('"', "_")
+    disposition = "inline" if inline else "attachment"
+    headers = {"Content-Security-Policy": "sandbox; default-src 'none'"} if inline else {}
     return Response(
         content=original["data"],
         media_type=original["media_type"],
         headers={
             "Content-Disposition": (
-                f"attachment; filename=\"{fallback}\"; filename*=UTF-8''{quote(filename)}"
+                f"{disposition}; filename=\"{fallback}\"; filename*=UTF-8''{quote(filename)}"
             ),
             "X-Content-Type-Options": "nosniff",
+            **headers,
         },
     )
 
@@ -337,6 +342,19 @@ async def download_original(
         conn, document_id, user_id=user_id, file_version=file_version
     )
     return _original_file_response(original)
+
+
+@router.get("/{document_id}/files/{file_version}/preview")
+async def preview_original(
+    document_id: UUID,
+    file_version: Annotated[int, Path(ge=1)],
+    conn: Connection,
+    user_id: Annotated[str, Depends(require_user_id)],
+) -> Response:
+    original = await service.get_original_file(
+        conn, document_id, user_id=user_id, file_version=file_version, preview=True
+    )
+    return _original_file_response(original, inline=True)
 
 
 @router.get("/{document_id}/links", response_model=list[ResolvedLinkItem])
@@ -399,6 +417,20 @@ async def get_document_version(
         conn, document_id, version=version, user_id=user_id, chunk=chunk
     )
     return TextVersionDetail.model_validate(document_version)
+
+
+@router.get("/{document_id}/versions/{base}/diff/{target}", response_model=VersionDiff)
+async def diff_document_versions(
+    document_id: UUID,
+    base: Annotated[int, Path(ge=1)],
+    target: Annotated[int, Path(ge=1)],
+    conn: Connection,
+    user_id: Annotated[str, Depends(require_user_id)],
+) -> VersionDiff:
+    result = await service.diff_versions(
+        conn, document_id, user_id=user_id, base=base, target=target
+    )
+    return VersionDiff.model_validate(result)
 
 
 @router.post(
