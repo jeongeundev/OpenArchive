@@ -1,6 +1,8 @@
 이 프로젝트에서 여러 레이어·모듈에 걸친 신규 기능을 구현할 때 Harness 프레임워크를 사용한다. 아래 워크플로우에 따라 작업을 진행하라.
 
-> 적용 범위 밖: 하네스 자체(`scripts/execute.py`, 이 문서)를 고치는 작업, 단순 버그 수정 등 단일 세션으로 끝나는 작업. 이런 작업은 이 워크플로우를 거치지 않고 바로 TDD로 진행한다.
+> 적용 범위 밖: 하네스 자체(`scripts/execute.py`·`scripts/ship.py`, 이 문서)를 고치는 작업. 이런 작업은 이 워크플로우를 거치지 않고 바로 TDD로 진행한다.
+>
+> 한 모듈 안에서 끝나는 작은 작업(단순 버그 수정 등)도 이 워크플로우로 시작한다 — C에서 step 초안 대신 **TDD 계획**으로 갈라진다(C-2). 판정을 따로 묻지 않는다. 초안의 모양이 곧 판정이다.
 
 ---
 
@@ -14,7 +16,11 @@
 
 구현을 위해 구체화하거나 기술적으로 결정해야 할 사항이 있으면 사용자에게 제시하고 논의한다.
 
-### C. Step 설계
+### C. 계획 초안
+
+탐색 결과로 초안의 종류를 고른다. 초안 첫 줄에 판정과 근거를 한 줄로 밝히고(예: "`services/parsing.py` 한 곳이라 step 없이 TDD로 진행한다"), 판정 때문에 따로 묻지 않는다 — 애매할 때만 묻는다. 사용자는 늘 「초안 승인 → 끝까지 진행」 한 번으로 같다.
+
+#### C-1. Step 설계 — 여러 레이어·모듈에 걸치는 작업
 
 사용자가 구현 계획 작성을 지시하면 여러 step으로 나뉜 초안을 작성해 피드백을 요청한다.
 
@@ -28,7 +34,17 @@
 6. **주의사항은 구체적으로** — "조심해라" 대신 "X를 하지 마라. 이유: Y" 형식으로 적는다.
 7. **네이밍** — step name은 kebab-case slug로, 해당 step의 핵심 모듈/작업을 한두 단어로 표현한다 (예: `project-setup`, `api-layer`, `auth-flow`).
 
+#### C-2. TDD 계획 — 한 모듈 안에서 끝나는 작업
+
+초안: 실패시킬 테스트 목록 · 고칠 파일 · 완료 확인 명령.
+
+승인되면 **같은 세션에서 끝까지 간다**: `fix/`·`feat/` 브랜치 → 실패하는 `test:` 커밋 → 통과시키는 `fix:`/`feat:` 커밋(CLAUDE.md 「수동 작업」 커밋 단위) → 바꾼 범위 테스트 → push·PR → CI 확인. phase 파일·ship.py를 쓰지 않으므로 독립 리뷰가 자동으로 붙지 않는다 — **리뷰는 새 세션 `/code-review`**로 하고, 머지는 승인 뒤에 한다.
+
+진행 중 다른 레이어·모듈로 번지면 그 자리에서 멈추고 C-1로 전환을 제안한다.
+
 ### D. 파일 생성
+
+D 이후(파일 생성·실행·ship.py)는 C-1 경로다.
 
 사용자가 승인하면 아래 파일들을 생성한다.
 
@@ -194,14 +210,15 @@ python3 scripts/ship.py {task-name} --merge --vm-verified  # needs_vm phase: G3 
 | execute | pending step이 있으면 `execute.py`를 부른다. phase 디렉토리에 커밋 안 된 변경이 있으면 G1로 멈춘다 |
 | verify | PR 전 검증 — 전 step completed, working tree 깨끗함, 구현 변경에 테스트 변경 동반, 바뀐 테스트 파일 재실행 |
 | pr | push 후 PR 생성(이미 있으면 재사용). 본문 첫 줄 `Closes #N` |
-| review | **새 `claude -p` 프로세스**가 `phases/{task}/review-N.json`을 쓴다. 지적은 `fix`·`decision`·`follow-up`. 결과는 커밋하고 PR 코멘트로 남긴다 |
+| review | **새 `claude -p` 프로세스**가 `phases/{task}/review-N.json`을 쓴다. 지적은 `fix`·`decision`·`follow-up`. 결과는 커밋하고 PR 코멘트로 남긴다. 리뷰 결과 커밋을 `reviewed_head`로 기록하고, 다음 리뷰에는 `git diff <reviewed_head>..HEAD`를 「직전 리뷰 이후 변경」으로 따로 준다(전체 diff도 함께) |
 | fix | `fix` 지적만 같은 PR 브랜치에 수정 커밋으로 추가한다. 최대 2회, 리뷰 최대 3회 — 두 번째 수정 뒤에도 독립 리뷰로 확인한다 |
-| ci | `gh pr checks --watch`. 실패하면 로그를 넘겨 1회 자동 수정한다 (재리뷰 없음 — ready 요약에 따로 표시) |
+| ci | `gh pr checks --watch`. 실패하면 로그를 넘겨 1회 자동 수정하고 **review로 돌아가 재리뷰**받는다(리뷰 한도면 멈춘다) |
 | ready | 요약·이슈 후보·알림을 내고 멈춘다 |
 
 멈추는 곳:
 
 - **G1** 설계 미커밋 · **G2** `decision` 지적 · **G3** `needs_vm` phase(`--vm-verified` 없이는 머지 거부) · **G4** 머지(`--merge`)
+- **리뷰받은 커밋만 머지한다** — `--merge`는 PR head가 `reviewed_head`가 아니면 거부하고(「리뷰 뒤 커밋 N개」), `gh pr merge --match-head-commit <reviewed_head>`로 머지한다. 머지 대기(ready) 뒤에 세션·사람이 직접 커밋했으면 `--from review`로 다시 리뷰받는다. 실무의 「새 커밋이 오면 승인 무효」를 1인 저장소에서는 GitHub 브랜치 보호로 걸 수 없어(본인 PR 승인 불가) ship.py가 강제한다
 - 자동 수정 한도 초과, CI 재실패, CI 대기 시간 초과(자동 수정하지 않음), PR 전 테스트 실패, 리뷰어가 결과 파일 밖을 바꿈
 - **변조 검사** — 모든 자동 수정(리뷰 fix·CI fix)은 테스트 파일 삭제, 테스트 함수 삭제(`def test_…`·`it(`·`test(` 이름이 다시 추가되지 않음), `skip`·`xfail` 추가가 있으면 커밋하지 않고 working tree에 남긴 채 멈춘다. 단언 약화는 잡지 못한다 — 사람이 diff로 본다
 - 에이전트 세션은 권한 확인 없이 돌지만 `gh issue create`·`gh api`·`gh pr merge`·`git commit`·`git push`는 `--disallowedTools`로 막는다 — 커밋·push는 변조 검사를 거쳐 ship.py만 한다
@@ -210,7 +227,7 @@ python3 scripts/ship.py {task-name} --merge --vm-verified  # needs_vm phase: G3 
 
 `follow-up` 지적은 **이슈를 만들지 않는다.** review JSON과 ready 요약에 이슈 후보(title·reason·severity)로만 남고, 등록은 사람이 판단한다.
 
-상태는 `.git/ship/{task}.json`(작업 트리 밖)에 stage·issue·branch·pr·리뷰/수정 횟수·last_commit·review artifact를 남긴다. 멈춘 뒤 다시 실행하면 그 단계부터 재개한다.
+상태는 `.git/ship/{task}.json`(작업 트리 밖)에 stage·issue·branch·pr·리뷰/수정 횟수·last_commit·reviewed_head·review artifact를 남긴다. 멈춘 뒤 다시 실행하면 그 단계부터 재개한다.
 
 ### 머지
 
