@@ -4,6 +4,7 @@ import type { Metadata } from "next";
 import { GeistSans } from "geist/font/sans";
 import { GeistMono } from "geist/font/mono";
 import { SiteHeader } from "@/components/SiteHeader";
+import { SiteFooter } from "@/components/SiteFooter";
 import { AuthProvider } from "@/components/AuthProvider";
 import { RequireAuth } from "@/components/RequireAuth";
 import { RetryNotice } from "@/components/RetryNotice";
@@ -27,6 +28,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
             <RetryNotice />
             <RequireAuth>{children}</RequireAuth>
           </main>
+          <SiteFooter />
         </AuthProvider>
       </body>
     </html>

@@ -386,3 +386,9 @@ replica에 닿지 않은 커밋은 사라질 수 있고, 복구 구간에는 쓰
 | [공식 구성과 다른 점](docs/OPENSQL_DEVIATIONS.md) | HA 환경이 OpenSQL 문서·배포판과 다른 설정과 그 이유 |
 | [UI Guide](docs/UI_GUIDE.md) | 디자인 원칙, 화면 구성 |
 | [Contributing](CONTRIBUTING.md) | 개발 규약, 브랜치·커밋 컨벤션 |
+
+---
+
+## 고지
+
+본 제품은 한컴의 HWP 문서 파일(.hwp) 공개 문서를 참고하여 개발하였습니다.
