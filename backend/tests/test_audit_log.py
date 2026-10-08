@@ -30,7 +30,7 @@ def test_audit_defaults(conn):
 @pytest.mark.parametrize("action", [
     "document_created", "text_updated", "document_deleted", "access_changed",
     "group_member_changed", "original_replaced", "original_downloaded", "folder_access_changed",
-    "document_trashed", "document_restored",
+    "document_trashed", "document_restored", "original_previewed",
 ])
 def test_allowed_actions(conn, action):
     assert conn.execute(
@@ -276,6 +276,23 @@ def test_group_members_record_admin_and_ignore_conflicts(conn):
             "group_member_changed", "admin", "session", None, None,
             {"change": "removed", "group": "개발팀", "user": "bob"},
         )
+
+
+def test_original_preview_snapshot_and_missing_document(conn):
+    with conn.transaction():
+        set_actor(conn, actor="kim", via="token")
+        doc = create_document(conn)
+        add_file(conn, doc, 2)
+        conn.execute("UPDATE documents SET title = '미리보기 시점 제목' WHERE id = %s", (doc,))
+        before = audit_rows(conn)
+        conn.execute("SELECT record_original_preview(%s, 2)", (doc,))
+        assert audit_rows(conn) == before + [(
+            "original_previewed", "kim", "token", doc, "미리보기 시점 제목",
+            {"file_version": 2},
+        )]
+        before = audit_rows(conn)
+        conn.execute("SELECT record_original_preview(%s, 2)", (uuid4(),))
+        assert audit_rows(conn) == before
 
 
 def test_original_download_snapshot_and_missing_document(conn):
