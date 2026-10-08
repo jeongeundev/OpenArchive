@@ -469,7 +469,12 @@ async def finalize_preview(
     pdf: bytes | None,
     error: str | None,
 ) -> bool:
-    """판 하나를 별도 커밋한다. 소유권을 잃거나 문서가 삭제됐으면 결과를 버린다."""
+    """판 하나를 별도 커밋한다. 소유권을 잃거나 문서가 삭제됐으면 결과를 버린다.
+
+    PDF는 원본 INSERT와 같은 이유로 `%b`(이진 포맷)·서버 바인딩 커서로 보낸다 — 풀의 기본
+    커서는 파라미터를 문장에 넣어 hex 리터럴이 되고, 원본과 비슷한 크기의 변환본이 두 배
+    크기 문장으로 OpenProxy를 지난다 (ADR-062 결정 2 개정, #228).
+    """
     async with conn.transaction():
         await bound_lock_wait(conn)
         cur = await conn.execute(
@@ -477,12 +482,13 @@ async def finalize_preview(
         )
         if await cur.fetchone() is None or not await lock_owned_job(conn, job):
             return False
-        await conn.execute(
-            "UPDATE document_file_previews SET status = %s, pdf = %s, error = %s,"
-            " updated_at = now() WHERE document_id = %s AND file_version = %s"
-            " AND status = 'pending'",
-            (status, pdf, error, job.document_id, file_version),
-        )
+        async with psycopg.AsyncCursor(conn) as binary:
+            await binary.execute(
+                "UPDATE document_file_previews SET status = %s, pdf = %b, error = %s,"
+                " updated_at = now() WHERE document_id = %s AND file_version = %s"
+                " AND status = 'pending'",
+                (status, pdf, error, job.document_id, file_version),
+            )
     return True
 
 
@@ -851,6 +857,10 @@ async def process_once(
             return True
         if job.kind == PREVIEW_JOB_KIND:
             originals = await load_pending_previews(conn, job.document_id)
+            # 판 하나의 예외(시간 초과·비정상 종료)는 미뤄 두고 나머지 판을 끝까지 처리한다.
+            # 곧바로 올리면 재시도마다 같은 판에서 멈춰, 뒤의 판은 시도도 못 한 채 소진 때
+            # 함께 실패가 된다. 끝에서 첫 예외를 올리면 재시도는 아직 pending인 판만 한다.
+            deferred: Exception | None = None
             for file_version, filename, data, document_text in originals:
                 if lost.is_set():
                     return True
@@ -867,10 +877,19 @@ async def process_once(
                     status, error = "unavailable", str(exc)
                 except PreviewRenderFailed as exc:
                     status, error = "failed", str(exc)
+                except Exception as exc:
+                    logger.exception(
+                        "미리보기 변환 실패 — document_id=%s file_version=%s",
+                        job.document_id, file_version,
+                    )
+                    deferred = deferred or exc
+                    continue
                 if lost.is_set():
                     return True
                 if not await finalize_preview(conn, job, file_version, status, pdf, error):
                     return True
+            if deferred is not None:
+                raise deferred
             # 마지막 판 반영 뒤에도 회수될 수 있으므로 마감 역시 소유권 아래에서 한다.
             async with conn.transaction():
                 await bound_lock_wait(conn)

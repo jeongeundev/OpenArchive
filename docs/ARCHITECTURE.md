@@ -519,6 +519,7 @@ CREATE TRIGGER trg_document_files_preview_requested
 - **판은 바뀌지 않으므로 판마다 한 번 변환한다.** 잡은 문서 단위이고, 워커는 그 문서에서 `pending`인 판을 판 번호순으로
   하나씩 변환해 **판마다 따로 커밋**한다(`finalize_preview` — 문서 행을 잠그고 잡 소유를 확인한 뒤 `status = 'pending'`인
   행만 바꾼다). 마지막 판 뒤에 잡을 `done`으로 마감한다. 앱은 변환본 행과 잡을 INSERT하지 않고, 워커는 상태·PDF만 UPDATE한다.
+  PDF는 원본 INSERT와 같이 `%b`·서버 바인딩 커서로 보낸다(hex 리터럴이면 두 배 크기로 OpenProxy를 지난다 — ADR-062 결정 2 개정).
 - **선점은 후순위다.** `claim_job`이 `ORDER BY (q.kind = 'preview'), q.id`로 집는다 — 변환이 임베딩·관계·추출을 앞지르지
   않는다. 다른 종류의 id 순서는 그대로다. 이미 집은 변환이 도는 동안 같은 워커의 다음 잡은 기다린다(OCR과 같은 한계).
 - **변환은 트랜잭션 밖이다.** 판 바이트와 그 판의 문서 텍스트(`text_version`의 버전 본문, NULL이면 현재 `documents.content`)를
@@ -533,7 +534,9 @@ CREATE TRIGGER trg_document_files_preview_requested
 
 - **예외 분류**: 시간 초과(`PREVIEW_TIMEOUT_SECONDS`, 기본 300초 — 프로세스 그룹을 SIGKILL)·변환기 비정상 종료는 다른 잡처럼
   지수 백오프 재시도하고, 예산(3회)을 소진하면 그 문서의 `pending` 판이 `failed`가 된다. `documents`의 임베딩·추출 상태와
-  이미 `ready`인 판은 건드리지 않는다.
+  이미 `ready`인 판은 건드리지 않는다. **예외가 난 판은 미뤄 두고 나머지 판을 끝까지 변환한 뒤** 첫 예외로 재시도한다 — 곧바로
+  올리면 재시도마다 같은 판에서 멈춰 뒤의 판(최신 판 포함)이 시도도 못 한 채 소진 때 함께 `failed`가 된다. 그래서 재시도와
+  소진은 실제로 실패하는 판에만 닿는다.
 - **한글 렌더 검사(두 겹)**: 변환 전 `fc-list :lang=ko family`가 비면 `unavailable`. 변환 뒤 문서 텍스트에 한글(U+AC00–U+D7A3)이
   있는데 결과 PDF의 텍스트 레이어(pypdf)에 한글이 없으면 `failed`. 종료 코드 0을 성공으로 믿지 않는다 — 글꼴이 없으면 rhwp는
   빈칸, LibreOffice는 □를 그리고 0으로 끝난다.
