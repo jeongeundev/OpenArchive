@@ -759,7 +759,7 @@ openarchive search "출장비 정산 기한"                           # --user 
 | 명령 | 하는 일 | 필요한 범위 |
 |---|---|---|
 | `doc list` | 볼 수 있는 문서를 최근 수정순으로 — ID·제목·유형·버전·처리 상태(웹 목록과 같은 라벨) | read |
-| `doc show <ID> [--version N]` | 문서 텍스트(현재 또는 텍스트 버전 N)만 출력 | read |
+| `doc show <ID> [--version N]` | 문서 텍스트는 stdout에 출력. `--version N`이면 `v{N} · {작성자} · {로컬 시각}` 한 줄을 stderr에 추가하며, 옵션 없으면 기존 출력 유지 | read |
 | `doc download <ID> [-o 경로]` | 최신 원본 파일 저장. 이미 있는 파일은 덮어쓰지 않음. 크기와 sha256 앞부분 출력 | read |
 | `doc upload <파일> [--title …] [--tag …]` | 파일을 올려 새 문서. 문서 ID 출력 | read_write |
 | `doc edit <ID> --file <텍스트 파일> [--base-version N]` | 문서 텍스트를 UTF-8 파일 내용으로 바꿔 새 텍스트 버전 | read_write |
