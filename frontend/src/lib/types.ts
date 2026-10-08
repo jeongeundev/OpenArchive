@@ -126,6 +126,8 @@ export interface VersionDiff {
   base: number;
   target: number;
   identical: boolean;
+  /** 서버가 비교 상한을 넘어 계산하지 않았다. 그때 hunks는 비어 있다. */
+  too_large: boolean;
   hunks: DiffHunk[];
 }
 

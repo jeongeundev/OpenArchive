@@ -120,6 +120,8 @@ class VersionDiff(BaseModel):
     base: int
     target: int
     identical: bool
+    # 같은 줄의 짝이 상한을 넘어 계산하지 않았다 — 그때 hunks는 비어 있다.
+    too_large: bool
     hunks: list[DiffHunk]
 
 

@@ -173,6 +173,8 @@ export function VersionHistory({
           </div>
           {diff.identical ? (
             <p className="text-sm text-neutral-400">두 버전의 내용이 같습니다.</p>
+          ) : diff.too_large ? (
+            <p className="text-sm text-neutral-400">문서가 커서 비교 결과를 표시할 수 없습니다. 각 버전의 「본문 보기」로 확인하세요.</p>
           ) : diff.hunks.length === 0 ? (
             <p className="text-sm text-neutral-400">줄 끝 개행만 다릅니다.</p>
           ) : (
