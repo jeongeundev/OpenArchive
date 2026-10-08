@@ -41,6 +41,9 @@ export function SiteHeader(): React.ReactElement {
                 <Link className="text-neutral-400 hover:text-[#0ea5e9]" href="/admin/audit">
                   감사 로그
                 </Link>
+                <Link className="text-neutral-400 hover:text-[#0ea5e9]" href="/admin/status">
+                  시스템 상태
+                </Link>
               </>
             ) : null}
           </nav>

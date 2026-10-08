@@ -31,8 +31,7 @@ describe("SiteHeader", () => {
     expect(screen.queryByRole("link", { name: "사용자 관리" })).not.toBeInTheDocument();
   });
 
-  it("운영 화면을 사용자 내비게이션에 노출하지 않는다", async () => {
-    // `/admin/status`는 관측 채널이라 사용자 메뉴에 두지 않는다 (UI_GUIDE 디자인 원칙 3·4).
+  it("관리자 메뉴에 시스템 상태를 제공한다", async () => {
     // 문서 진단은 "내가 볼 수 있는 문서"의 상태라 사용자 화면이며 `/diagnostics`에 있다.
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response({
       authenticated: true,
@@ -45,7 +44,7 @@ describe("SiteHeader", () => {
     await screen.findByText("root");
     const menu = screen.getByRole("navigation", { name: "주요 메뉴" });
     const hrefs = Array.from(menu.querySelectorAll("a")).map((link) => link.getAttribute("href"));
-    expect(hrefs).not.toContain("/admin/status");
+    expect(screen.getByRole("link", { name: "시스템 상태" })).toHaveAttribute("href", "/admin/status");
     expect(hrefs).toContain("/diagnostics");
   });
 
@@ -63,6 +62,7 @@ describe("SiteHeader", () => {
     expect(screen.queryByRole("link", { name: "사용자 관리" })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "그룹 관리" })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "감사 로그" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "시스템 상태" })).not.toBeInTheDocument();
   });
 
   it("관리자에게만 사용자 관리 진입점을 제공한다", async () => {

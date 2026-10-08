@@ -94,6 +94,7 @@ describe("감사 로그 화면", () => {
       entry({ action: "group_member_changed", actor: "admin", document_id: null, document_title: null, detail: { change: "removed", group: "재무팀", user: "bob" } }),
       entry({ action: "original_replaced", detail: { file_version: 2 } }),
       entry({ action: "original_downloaded", detail: { file_version: 1 } }),
+      entry({ action: "original_previewed", detail: { file_version: 2 } }),
     ];
     vi.stubGlobal("fetch", routedFetch(admin, [{ items, next_before_id: null }]).fetchMock);
 
@@ -108,7 +109,7 @@ describe("감사 로그 화면", () => {
     expect(within(table).getByText("되살린 문서")).toBeInTheDocument();
     const options = within(screen.getByRole("combobox", { name: "동작" }))
       .getAllByRole("option").map((option) => option.textContent);
-    expect(options).toEqual(expect.arrayContaining(["휴지통 이동", "복원", "영구 삭제"]));
+    expect(options).toEqual(expect.arrayContaining(["휴지통 이동", "복원", "영구 삭제", "원본 미리보기"]));
     expect(within(table).getAllByText("열람 범위 변경")).toHaveLength(3);
     expect(within(table).getByText("조직 공개 → 제한")).toBeInTheDocument();
     expect(within(table).getByText("사용자 bob 추가")).toBeInTheDocument();
@@ -118,6 +119,7 @@ describe("감사 로그 화면", () => {
     expect(within(table).getByText("재무팀에서 bob 제거")).toBeInTheDocument();
     expect(within(table).getByText("원본 교체(판 2)")).toBeInTheDocument();
     expect(within(table).getByText("원본 내려받기(판 1)")).toBeInTheDocument();
+    expect(within(table).getByText("원본 미리보기(판 2)")).toBeInTheDocument();
     const memberRow = rows()[6];
     expect(within(memberRow).getByText("admin")).toBeInTheDocument();
     expect(within(memberRow).getByText("—")).toBeInTheDocument();

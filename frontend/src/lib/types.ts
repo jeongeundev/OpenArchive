@@ -297,7 +297,8 @@ export type AuditAction =
   | "folder_access_changed"
   | "group_member_changed"
   | "original_replaced"
-  | "original_downloaded";
+  | "original_downloaded"
+  | "original_previewed";
 
 export type AuditActorVia = "session" | "token" | "mcp" | "cli" | "share" | "worker";
 
