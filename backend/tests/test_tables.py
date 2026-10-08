@@ -65,6 +65,7 @@ CORE_TABLES = {
     "api_tokens",
     "shares",
     "document_files",
+    "document_file_previews",
     "idempotency_keys",
     "groups",
     "group_members",
@@ -254,7 +255,7 @@ def test_a_finished_job_frees_the_slot_for_a_new_pending_job(conn: psycopg.Conne
 
 
 def test_a_job_kind_outside_the_known_values_is_rejected(conn: psycopg.Connection):
-    """잡 종류는 `embed`·`edges`·`extract` 셋뿐이다 (016, 021).
+    """잡 종류는 `embed`·`edges`·`extract`·`preview` 넷뿐이다 (016, 021, 036).
 
     워커는 `kind`로 처리 본체를 가른다. 제약이 없으면 오타 하나가 어느 분기에도
     걸리지 않는 잡을 만들고, 그 잡은 claim은 되지만 아무 일도 하지 않은 채 영원히
@@ -262,6 +263,15 @@ def test_a_job_kind_outside_the_known_values_is_rejected(conn: psycopg.Connectio
     """
     doc_id = insert_document(conn)
     conn.execute("UPDATE embedding_jobs SET status = 'done' WHERE document_id = %s", (doc_id,))
+
+    for kind in ("embed", "edges", "extract", "preview"):
+        conn.execute(
+            "INSERT INTO embedding_jobs (document_id, kind) VALUES (%s, %s)", (doc_id, kind)
+        )
+    assert {row[0] for row in conn.execute(
+        "SELECT kind FROM embedding_jobs WHERE document_id = %s AND status = 'pending'",
+        (doc_id,),
+    )} == {"embed", "edges", "extract", "preview"}
 
     with pytest.raises(psycopg.errors.CheckViolation) as exc:
         conn.execute(
@@ -1386,3 +1396,72 @@ def test_document_folder_columns_preserve_folderless_inserts(conn):
             "UPDATE documents SET folder_id = '00000000-0000-0000-0000-000000000000'"
             " WHERE id = %s", (doc,)
         )
+
+
+# --- document_file_previews: 원본 판의 파생 PDF (036) -----------------------------
+
+@pytest.mark.parametrize("status", ["pending", "ready", "failed", "unavailable"])
+def test_preview_status_and_updated_at_default(conn, status):
+    doc = insert_document(conn)
+    insert_file(conn, doc)
+    pdf = ORIGINAL_BYTES if status == "ready" else None
+    row = conn.execute(
+        "INSERT INTO document_file_previews (document_id, file_version, status, pdf)"
+        " VALUES (%s, 1, %s, %b) RETURNING status, pdf, updated_at, now()",
+        (doc, status, pdf),
+    ).fetchone()
+    assert row[0] == status
+    assert (bytes(row[1]) if row[1] is not None else None) == pdf
+    assert row[2] == row[3]
+
+
+@pytest.mark.parametrize("file_version", [1, 2])
+def test_preview_requires_an_existing_original_edition(conn, file_version):
+    doc = insert_document(conn)
+    if file_version == 2:
+        insert_file(conn, doc)
+    with pytest.raises(psycopg.errors.ForeignKeyViolation):
+        conn.execute(
+            "INSERT INTO document_file_previews (document_id, file_version, status)"
+            " VALUES (%s, %s, 'pending')", (doc, file_version),
+        )
+
+
+@pytest.mark.parametrize(("status", "pdf"), [
+    ("unknown", None), ("ready", None), ("ready", b""),
+    ("pending", ORIGINAL_BYTES), ("failed", ORIGINAL_BYTES),
+    ("unavailable", ORIGINAL_BYTES),
+])
+def test_preview_rejects_invalid_status_or_pdf(conn, status, pdf):
+    doc = insert_document(conn)
+    insert_file(conn, doc)
+    with pytest.raises(psycopg.errors.CheckViolation):
+        conn.execute(
+            "INSERT INTO document_file_previews (document_id, file_version, status, pdf)"
+            " VALUES (%s, 1, %s, %b)", (doc, status, pdf),
+        )
+
+
+def test_preview_is_unique_per_original_edition(conn):
+    doc = insert_document(conn)
+    insert_file(conn, doc)
+    query = ("INSERT INTO document_file_previews (document_id, file_version, status)"
+             " VALUES (%s, 1, 'pending')")
+    conn.execute(query, (doc,))
+    with pytest.raises(psycopg.errors.UniqueViolation) as exc:
+        conn.execute(query, (doc,))
+    assert "document_file_previews_pkey" in str(exc.value)
+
+
+def test_hard_deleting_document_cascades_to_originals_and_previews(conn):
+    doc = insert_document(conn)
+    for edition in (1, 2):
+        insert_file(conn, doc, file_version=edition)
+        conn.execute(
+            "INSERT INTO document_file_previews (document_id, file_version, status)"
+            " VALUES (%s, %s, 'pending')", (doc, edition),
+        )
+    assert conn.execute("SELECT count(*) FROM document_file_previews").fetchone()[0] == 2
+    conn.execute("DELETE FROM documents WHERE id = %s", (doc,))
+    assert conn.execute("SELECT count(*) FROM document_files").fetchone()[0] == 0
+    assert conn.execute("SELECT count(*) FROM document_file_previews").fetchone()[0] == 0
