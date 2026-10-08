@@ -41,7 +41,7 @@ mkdir -p ~/.openarchive && cp backend/.env.example ~/.openarchive/.env   # 예�
 | `PREVIEW_RHWP_BIN` | `rhwp` | HWP·HWPX 미리보기 변환기. 이름이면 PATH에서 찾고, 경로를 줘도 된다. 없으면 그 형식은 「변환기 없음」. 아래 「원본 미리보기 변환기」 |
 | `PREVIEW_SOFFICE_BIN` | `soffice` | DOCX·XLSX·PPTX 미리보기 변환기(LibreOffice) |
 | `PREVIEW_BWRAP_BIN` | `bwrap` | 변환기를 격리해 실행하는 bubblewrap. 없거나 격리를 쓸 수 없으면 모든 변환이 「변환기 없음」 |
-| `PREVIEW_TIMEOUT_SECONDS` | `300` | 변환 한 판의 시간 상한(초, 0보다 큰 실수). 넘기면 재시도 대상 실패. **300은 Rocky 9 x86-64 실측 전 임시값**이다(arm64 컨테이너 17쪽 HWP 약 51초의 약 6배) |
+| `PREVIEW_TIMEOUT_SECONDS` | `900` | 변환 한 판의 시간 상한(초, 0보다 큰 실수). 넘기면 재시도 대상 실패. Rocky 9 x86-64 **에뮬레이션** VM(Apple Silicon 위) 실측 rhwp 쪽당 약 10.6초에서 약 85쪽을 감당한다. 네이티브 x86·arm64는 쪽당 2~3초라 수백 쪽이다. 더 큰 문서가 흔하면 올린다 |
 
 ## 임베딩 프로바이더
 
@@ -103,10 +103,11 @@ brew install tesseract tesseract-lang                    # macOS
 변환은 원본 판이 들어올 때(업로드·원본 교체) 트리거가 거는 미리보기 잡(`kind='preview'`)으로 하며,
 판마다 한 번입니다. 미리보기 잡은 임베딩·관계·추출 잡보다 뒤에 집습니다.
 
-**Rocky Linux 9 설치** — 모두 AppStream 패키지입니다(LibreOffice 7.1.8, 약 354MB).
+**Rocky Linux 9 설치** — 모두 AppStream 패키지입니다(LibreOffice 7.1.8, 약 354MB). `git`·`gcc`는 rhwp 빌드용이며
+최소 설치(Minimal)에는 `git`이 없습니다.
 
 ```bash
-sudo dnf install bubblewrap libreoffice-writer libreoffice-calc libreoffice-impress \
+sudo dnf install git gcc bubblewrap libreoffice-writer libreoffice-calc libreoffice-impress \
                  google-noto-sans-cjk-ttc-fonts google-noto-serif-cjk-ttc-fonts
 ```
 
@@ -117,9 +118,13 @@ rhwp는 **소스에서 빌드합니다.** 배포판 리눅스 바이너리는 GL
 ```bash
 curl --proto '=https' -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal   # Rust 툴체인
 git clone --depth 1 --branch v0.8.7 https://github.com/edwardkim/rhwp
-cd rhwp && cargo build --release --locked --bin rhwp                             # Rocky 9 컨테이너 실측 약 6분
+cd rhwp && cargo build --release --locked --bin rhwp                             # 아래 「빌드 시간·크기」
 sudo install -m 755 target/release/rhwp /usr/local/bin/rhwp
 ```
+
+**빌드 시간·크기** — rhwp 저장소는 `--depth 1`로 받아도 작업 트리까지 **약 8.9GB**입니다(샘플 문서 포함). 빌드는 arm64
+네이티브 Rocky 9 컨테이너에서 약 6분, Apple Silicon 위 **x86-64 에뮬레이션 VM에서 약 81분**(4코어·8GB, 2026-10-09)이었습니다 —
+본체 크레이트 하나를 단일 스레드로 오래 컴파일합니다. 빌드한 바이너리(약 27MB, GLIBC_2.34)만 다른 Rocky 9 호스트로 옮겨도 됩니다.
 
 `/usr` 아래에 두면 격리 안에서 그대로 보입니다. 다른 곳에 두면 `PREVIEW_RHWP_BIN`에 경로를 주고, 워커가
 그 파일 하나만 격리 안에 노출합니다.
@@ -138,6 +143,10 @@ Ubuntu 24.04는 `kernel.apparmor_restrict_unprivileged_userns=1`이 기본이라
 있습니다. 그러면 bwrap에 AppArmor 프로필을 주거나 이 값을 0으로 둡니다 — 막힌 채로 두면 모든 변환이
 「변환기 없음」입니다. **macOS에는 bubblewrap이 없어 변환이 꺼집니다**(맥 개발 환경에서 한글·오피스 판은
 「내려받기」만).
+
+**워커는 변환기를 설치한 리눅스 호스트에만 둡니다.** 변환은 워커가 도는 호스트에서 일어나고, 워커는 잡 종류를 가리지
+않고 집습니다. 변환기 없는 워커(맥 등)가 함께 떠 있으면 그 워커가 변환 잡을 먼저 집어 「변환기 없음」으로 끝낼 수 있습니다 —
+그렇게 된 판은 워커 배치를 고친 뒤 `openarchive rebuild-previews`로 다시 겁니다.
 
 **왜 격리하나** — 사용자가 올린 문서는 변환기에게 신뢰할 수 없는 입력입니다. 격리 없이 LibreOffice를 돌리면
 문서 안 외부 링크 그림을 서버가 받아 오고(SSRF), `file://` 그림으로 서버 디스크의 그림이 변환 PDF에
@@ -162,8 +171,9 @@ fc-list :lang=ko family          # 한 줄 이상 나와야 한다
 결과는 `/admin/status`의 **「미리보기 변환」** 카드에서 봅니다 — 대기·실패·변환기 없음 **판 수**. 변환기 없음이
 0보다 크면 위 설치를 마친 뒤 `openarchive rebuild-previews`로 다시 겁니다(아래 「프로세스 구성」).
 
-- **시간** — rhwp PDF 변환은 쪽당 약 3초(arm64 컨테이너 17쪽 49~51초), LibreOffice는 문서당 0.5~1초입니다.
-  Rocky 9 x86-64 호스트의 시간은 **아직 재지 않았습니다**. 워커는 잡을 하나씩 처리하므로 긴 문서를 변환하는
+- **시간** — rhwp PDF 변환은 arm64 네이티브 컨테이너에서 쪽당 2~3초(17쪽 37~51초), LibreOffice는 문서당 0.5~1초입니다.
+  Apple Silicon 위 Rocky 9 x86-64 **에뮬레이션** VM에서는 rhwp 1쪽 3.3초·4쪽 45.7초·17쪽 179.8초(쪽당 약 10.6초),
+  LibreOffice 문서당 10~11초였습니다(2026-10-09) — 변환은 워커 호스트의 CPU에서 일어나므로 에뮬레이션만큼 느려집니다. 워커는 잡을 하나씩 처리하므로 긴 문서를 변환하는
   동안 같은 워커의 다음 잡(임베딩 포함)이 기다립니다.
 - **크기** — 변환본은 원본과 비슷한 크기의 PDF이고(17쪽 HWP 2.1MB) DB에 쌓이므로 백업도 그만큼 커집니다.
   원본 판이 지워지면(문서 영구 삭제) 함께 지워집니다.

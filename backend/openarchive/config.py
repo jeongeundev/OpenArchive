@@ -58,8 +58,9 @@ class Settings(BaseSettings):
     preview_rhwp_bin: str = "rhwp"
     preview_soffice_bin: str = "soffice"
     preview_bwrap_bin: str = "bwrap"
-    # 300초는 VM 실측 전 임시값이다.
-    preview_timeout_seconds: float = Field(default=300, gt=0)
+    # 변환 한 판의 시간 상한(초). Rocky 9 x86-64 에뮬레이션 VM 실측 rhwp 쪽당 약 10.6초에서 약 85쪽을
+    # 감당하는 값이다 — 300초는 약 28쪽에서 끊겼다 (#228 G3).
+    preview_timeout_seconds: float = Field(default=900, gt=0)
 
     # 잡 선점 lease(초). 워커는 처리 중 이 값의 1/3마다 연장하고, 연장이 끊긴 잡은 lease
     # 만료 뒤 회수된다 (ADR-050). 스윕도 drain 중 이 주기로 돈다.

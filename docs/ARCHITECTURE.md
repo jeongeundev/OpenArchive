@@ -532,7 +532,7 @@ CREATE TRIGGER trg_document_files_preview_requested
 | `failed` | 워커 | 다시 해도 같은 결과(`PreviewRenderFailed` — 결과 PDF 없음·읽을 수 없음·쪽 없음·한글이 그려지지 않음)라 재시도 없이. 또는 예외 재시도 예산 소진(`fail_job`·좀비 스윕) |
 | `unavailable` | 워커 | `ConverterUnavailable` — 변환기 실행 파일·한글 글꼴(`fc-list :lang=ko`)·격리 중 하나가 없다. 설치 뒤 `openarchive rebuild-previews`로 다시 건다 |
 
-- **예외 분류**: 시간 초과(`PREVIEW_TIMEOUT_SECONDS`, 기본 300초 — 프로세스 그룹을 SIGKILL)·변환기 비정상 종료는 다른 잡처럼
+- **예외 분류**: 시간 초과(`PREVIEW_TIMEOUT_SECONDS`, 기본 900초 — 프로세스 그룹을 SIGKILL)·변환기 비정상 종료는 다른 잡처럼
   지수 백오프 재시도하고, 예산(3회)을 소진하면 그 문서의 `pending` 판이 `failed`가 된다. `documents`의 임베딩·추출 상태와
   이미 `ready`인 판은 건드리지 않는다. **예외가 난 판은 미뤄 두고 나머지 판을 끝까지 변환한 뒤** 첫 예외로 재시도한다 — 곧바로
   올리면 재시도마다 같은 판에서 멈춰 뒤의 판(최신 판 포함)이 시도도 못 한 채 소진 때 함께 `failed`가 된다. 그래서 재시도와
@@ -550,8 +550,9 @@ CREATE TRIGGER trg_document_files_preview_requested
   잠금 순서는 트리거·`fail_job`과 같다(문서 id 순). 돌려주는 값은 `pending` 판 수다. 운영자 CLI `openarchive rebuild-previews`가
   `services/system.py`의 `enqueue_preview_rebuild`를 거쳐 부르고, 기다리지 않는다.
 
-**아직 재지 않은 것**: Rocky 9 x86-64에서의 변환 시간(300초 상한의 근거), 실제 호스트의 PID 네임스페이스 분리, 구형 HWP의
-외부 연결 그림 — VM 실측 대기다.
+**VM 실측(2026-10-09, Rocky 9.7 x86-64 에뮬레이션 VM·OpenSQL 17.8)**: rhwp 17쪽 179.8초(쪽당 약 10.6초) → 상한 900초.
+실제 호스트에서 PID 네임스페이스 분리 확인(격리 안 프로세스 5개, 네트워크 `lo`만, `/home`·`/var` 안 보임). **재지 못한 것**:
+구형 HWP의 외부 연결 그림(표본 없음 — 격리가 네트워크·파일을 막으므로 따라가도 닿을 곳은 없다), Firefox·Safari 내장 PDF 뷰어.
 
 ### 관계 생성 — 트리거가 잡을 만들고 워커가 판정한다
 
