@@ -1395,3 +1395,149 @@ def test_enqueue_all_edge_jobs_wakes_the_worker(conn, listener):
     conn.execute("SELECT enqueue_all_edge_jobs()")
 
     assert [n.channel for n in listener.notifies(timeout=5, stop_after=1)] == [CHANNEL]
+
+
+# --- 미리보기 변환 잡 (037, ADR-058) -----------------------------------------------
+
+
+@pytest.mark.parametrize("filename, expected", [
+    ("a.hwp", True), ("B.HWPX", True), ("c.docx", True),
+    ("d.xlsx", True), ("e.Pptx", True), ("f.pdf", False),
+    ("g.png", False), ("h.txt", False), ("i.md", False),
+    ("hwp", False), ("j.hwp.txt", False), (None, False),
+])
+def test_preview_convertible(conn, filename, expected):
+    result = conn.execute("SELECT preview_convertible(%s)", (filename,)).fetchone()[0]
+    assert bool(result) is expected
+
+
+def insert_preview_original(conn, doc_id, filename="a.hwp", file_version=1):
+    conn.execute(
+        "INSERT INTO document_files"
+        " (document_id, file_version, filename, data, text_version, uploaded_by)"
+        " VALUES (%s, %s, %s, %s, 1, 'alice')",
+        (doc_id, file_version, filename, b"original"),
+    )
+
+
+def preview_jobs(conn, doc_id):
+    return conn.execute(
+        "SELECT status FROM embedding_jobs WHERE document_id = %s"
+        " AND kind = 'preview' ORDER BY id", (doc_id,),
+    ).fetchall()
+
+
+@pytest.mark.parametrize("filename", ["a.hwp", "B.HWPX", "c.docx", "d.xlsx", "e.Pptx"])
+def test_preview_original_insert_creates_pending_preview_and_job(conn, filename):
+    doc_id = insert_document(conn)
+    insert_preview_original(conn, doc_id, filename)
+    assert conn.execute(
+        "SELECT file_version, status, pdf, error FROM document_file_previews"
+        " WHERE document_id = %s", (doc_id,),
+    ).fetchall() == [(1, "pending", None, None)]
+    assert preview_jobs(conn, doc_id) == [("pending",)]
+
+
+@pytest.mark.parametrize("filename", ["a.pdf", "b.png", "c.txt"])
+def test_preview_original_outside_formats_create_nothing(conn, filename):
+    doc_id = insert_document(conn)
+    insert_preview_original(conn, doc_id, filename)
+    assert conn.execute("SELECT count(*) FROM document_file_previews").fetchone() == (0,)
+    assert preview_jobs(conn, doc_id) == []
+
+
+def test_preview_original_plates_coalesce_jobs(conn):
+    doc_id = insert_document(conn)
+    insert_preview_original(conn, doc_id)
+    insert_preview_original(conn, doc_id, "b.docx", 2)
+    assert conn.execute(
+        "SELECT file_version, status FROM document_file_previews ORDER BY file_version"
+    ).fetchall() == [(1, "pending"), (2, "pending")]
+    assert preview_jobs(conn, doc_id) == [("pending",)]
+
+
+def test_preview_original_queues_beside_processing_job(conn):
+    doc_id = insert_document(conn)
+    insert_preview_original(conn, doc_id)
+    conn.execute(
+        "UPDATE embedding_jobs SET status = 'processing',"
+        " lease_expires_at = now() + interval '1 minute' WHERE kind = 'preview'"
+    )
+    insert_preview_original(conn, doc_id, file_version=2)
+    assert preview_jobs(conn, doc_id) == [("processing",), ("pending",)]
+
+
+def test_preview_original_notifies(conn, listener):
+    doc_id = insert_document(conn)
+    list(listener.notifies(timeout=1))
+    insert_preview_original(conn, doc_id)
+    assert [(n.channel, n.payload) for n in listener.notifies(timeout=5, stop_after=1)] == [
+        (CHANNEL, "")
+    ]
+
+
+def test_enqueue_all_preview_jobs_retries_plates_and_preserves_ready(conn, listener):
+    first = insert_document(conn)
+    second = insert_document(conn)
+    for version in range(1, 6):
+        insert_preview_original(conn, first, file_version=version)
+    insert_preview_original(conn, second, "b.docx")
+    insert_preview_original(conn, second, "c.pdf", 2)
+    conn.execute("DELETE FROM document_file_previews WHERE file_version = 1")
+    conn.execute(
+        "UPDATE document_file_previews SET status = 'failed', error = 'bad'"
+        " WHERE file_version = 2"
+    )
+    conn.execute(
+        "UPDATE document_file_previews SET status = 'unavailable', error = 'missing'"
+        " WHERE file_version = 3"
+    )
+    conn.execute(
+        "UPDATE document_file_previews SET status = 'ready', pdf = %s, error = NULL"
+        " WHERE file_version = 4", (b"pdf",),
+    )
+    ready_before = conn.execute(
+        "SELECT * FROM document_file_previews WHERE file_version = 4"
+    ).fetchone()
+    conn.execute(
+        "UPDATE embedding_jobs SET status = 'done' WHERE kind = 'preview'"
+        " AND document_id = %s", (second,),
+    )
+    list(listener.notifies(timeout=1))
+
+    assert conn.execute("SELECT enqueue_all_preview_jobs()").fetchone() == (5,)
+    assert [(n.channel, n.payload) for n in listener.notifies(timeout=5, stop_after=1)] == [
+        (CHANNEL, "")
+    ]
+    assert conn.execute(
+        "SELECT status, pdf, error FROM document_file_previews WHERE status <> 'ready'"
+    ).fetchall() == [("pending", None, None)] * 5
+    assert conn.execute(
+        "SELECT * FROM document_file_previews WHERE file_version = 4"
+    ).fetchone() == ready_before
+    assert preview_jobs(conn, first) == [("pending",)]
+    assert preview_jobs(conn, second) == [("done",), ("pending",)]
+    assert conn.execute(
+        "SELECT count(*) FROM document_file_previews WHERE document_id = %s"
+        " AND file_version = 2", (second,),
+    ).fetchone() == (0,)
+    assert conn.execute("SELECT enqueue_all_preview_jobs()").fetchone() == (5,)
+    assert preview_jobs(conn, first) == [("pending",)]
+    assert preview_jobs(conn, second) == [("done",), ("pending",)]
+
+
+@pytest.mark.parametrize("lock", ["FOR UPDATE", "FOR NO KEY UPDATE"])
+@pytest.mark.parametrize("bulk", [False, True])
+def test_preview_job_creation_locks_document(conn, migrated_db, lock, bulk):
+    """NO KEY UPDATE는 FK 검사를 막지 않아 트리거 자체의 잠금도 검증한다."""
+    doc_id = insert_document(conn)
+    if bulk:
+        insert_preview_original(conn, doc_id)
+    with psycopg.connect(migrated_db) as holder:
+        holder.execute(f"SELECT id FROM documents WHERE id = %s {lock}", (doc_id,))
+        with pytest.raises(psycopg.errors.LockNotAvailable), conn.transaction():
+            conn.execute("SET LOCAL lock_timeout = '200ms'")
+            if bulk:
+                conn.execute("SELECT enqueue_all_preview_jobs()")
+            else:
+                insert_preview_original(conn, doc_id)
