@@ -5,12 +5,19 @@ from pathlib import Path
 import psycopg
 import pytest
 from conftest import insert_test_document, process_all_embedding_jobs
-from test_triggers import edges_for, insert_document, mark_document_ready, unit_vector
+from test_triggers import (
+    edges_for,
+    insert_document,
+    insert_preview_original,
+    mark_document_ready,
+    unit_vector,
+)
 
 from openarchive.embeddings import FakeProvider
 from openarchive.services.documents import DocumentNotFound, OriginalFileMissing, create_document
 from openarchive.services.system import (
     enqueue_edge_rebuild,
+    enqueue_preview_rebuild,
     get_system_status,
     reextract_all,
     reextract_one,
@@ -563,3 +570,18 @@ async def test_reextract_all_counts_ocr_targets_and_skips_documents_in_extractio
 
     assert (summary.changed, summary.unchanged, summary.awaiting_ocr) == (0, 0, 1)
     assert [document_id for document_id, _ in summary.failed] == [in_progress["id"]]
+
+
+async def test_preview_rebuild_returns_the_pending_plate_count(system_conn, migrated_db):
+    with psycopg.connect(migrated_db, autocommit=True) as conn:
+        doc = insert_document(conn)
+        insert_preview_original(conn, doc, "a.hwp")
+        insert_preview_original(conn, doc, "b.pdf", 2)
+        conn.execute(
+            "UPDATE document_file_previews SET status = 'unavailable', error = 'missing'"
+        )
+
+    assert await enqueue_preview_rebuild(system_conn) == 1
+    assert await (await system_conn.execute(
+        "SELECT status FROM document_file_previews"
+    )).fetchall() == [("pending",)]

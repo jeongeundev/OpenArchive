@@ -145,6 +145,17 @@ async def enqueue_edge_rebuild(conn: psycopg.AsyncConnection) -> EdgeRebuild:
     return EdgeRebuild(documents=documents, last_job_id=last_job_id)
 
 
+async def enqueue_preview_rebuild(conn: psycopg.AsyncConnection) -> int:
+    """변환본이 없거나 실패·변환기 없음인 판에 변환 잡을 건다. 변환은 하지 않는다 — 워커가 한다.
+
+    판 행과 잡은 DB 함수가 만든다(ADR-058 결정 2) — 앱은 embedding_jobs·document_file_previews에
+    쓰지 않는다. 돌려주는 값은 변환 대기(pending) 판 수다.
+    """
+    async with conn.transaction():
+        (plates,) = await (await conn.execute("SELECT enqueue_all_preview_jobs()")).fetchone()
+    return plates
+
+
 async def _edge_rebuild_state(conn: psycopg.AsyncConnection, request: EdgeRebuild) -> tuple[int, int]:
     """(아직 처리되지 않은 요청 잡 수, 관계 판정이 격리된 문서 수)."""
     # 트랜잭션 안에서 읽는다 — 밖의 SELECT는 HA에서 replica로 가 진행을 늦게 본다 (ADR-010).
