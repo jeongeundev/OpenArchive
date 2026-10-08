@@ -106,6 +106,11 @@ async def _original_file_not_found(request: Request, error: Exception) -> JSONRe
     return JSONResponse(status_code=404, content={"detail": "원본 파일이 없습니다."})
 
 
+@app.exception_handler(documents_service.OriginalNotPreviewable)
+async def _original_not_previewable(request: Request, error: Exception) -> JSONResponse:
+    return JSONResponse(status_code=415, content={"detail": "미리보기할 수 없는 형식입니다."})
+
+
 @app.exception_handler(documents_service.OriginalFileMissing)
 async def _original_file_missing(request: Request, error: Exception) -> JSONResponse:
     return JSONResponse(

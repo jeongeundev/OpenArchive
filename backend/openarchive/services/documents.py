@@ -50,6 +50,7 @@ SUMMARY_COLUMNS = """id, title, filename, content_type, version, owner_id, visib
 
 # 시연 데이터 최대 추출 텍스트(약 90KB)의 5배보다 크고 DB CHECK와 같은 경계다.
 MAX_EXTRACTED_TEXT_LENGTH = 500_000
+PREVIEWABLE_EXTENSIONS: frozenset[str] = frozenset({"pdf", "png", "jpg", "jpeg"})
 TEXT_CONTENT_TYPES: tuple[str, ...] = ("txt", "md")
 EXTRACTION_FAILED_MESSAGE = "문서에서 텍스트를 추출하지 못했습니다."
 
@@ -73,6 +74,10 @@ class DocumentNotFound(Exception):
 
 class OriginalFileNotFound(Exception):
     """볼 수 있는 문서지만 요청한 원본 판이 없는 경우. 문서 없음과 구분해도 누출이 없다."""
+
+
+class OriginalNotPreviewable(Exception):
+    """원본 판의 확장자가 미리보기 허용 목록 밖인 경우."""
 
 
 class DocumentAccessDenied(Exception):
@@ -935,6 +940,7 @@ async def get_original_file(
     *,
     user_id: str | None,
     file_version: int | None = None,
+    preview: bool = False,
 ) -> dict:
     """원본 한 판의 바이트를 돌려준다. `file_version`이 없으면 최신 판이다.
 
@@ -957,8 +963,15 @@ async def get_original_file(
     original = await cur.fetchone()
     if original is None:
         raise OriginalFileNotFound
+    if (
+        preview
+        and PurePath(original["filename"]).suffix.lower().lstrip(".") not in PREVIEWABLE_EXTENSIONS
+    ):
+        raise OriginalNotPreviewable
     await conn.execute(
-        "SELECT record_original_download(%s, %s)",
+        "SELECT record_original_preview(%s, %s)"
+        if preview
+        else "SELECT record_original_download(%s, %s)",
         (document_id, original.pop("file_version")),
     )
     original["media_type"] = media_type_for(original["filename"])
