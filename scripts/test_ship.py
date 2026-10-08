@@ -108,6 +108,8 @@ class FakeRunner:
         self.on(lambda c: "pytest" in c, ok("1 passed"))
         self.on(lambda c: c[:2] == ["npm", "test"], ok())
         self.on(lambda c: c[0] == "claude", self._review_clean)
+        # PR head = push된 브랜치 끝. ship.py는 모든 커밋을 바로 push하므로 로컬 HEAD와 같다.
+        self.on(lambda c: c[:3] == ["gh", "pr", "view"], lambda c, _: ok(git(root, "rev-parse", "HEAD") + "\n"))
 
     def on(self, match, result):
         self.handlers.append((match, result))
@@ -492,6 +494,25 @@ class TestReviewFixLoop:
         fix_prompt = r.prompts("[ship:fix]")[0]
         assert "상수 이름" in fix_prompt
 
+    def test_rereview_focuses_on_changes_since_last_review(self, repo):
+        r = FakeRunner(repo)
+        r.on(lambda c: c[0] == "claude", r.agent(review_rounds=[[FIX], []]))
+        assert make(repo, r).run() == ship.EXIT_OK
+        first, second = r.prompts("[ship:review]")
+        assert "직전 리뷰 이후 변경" not in first
+        # 1차 리뷰 결과 커밋이 1차 리뷰가 본 판이다 — 그 뒤의 수정 커밋만 따로 보여 준다
+        first_reviewed = git(repo, "log", "-1", "--format=%H", "--grep", f"{PHASE} 리뷰 1차 결과")
+        assert f"git diff {first_reviewed}..HEAD" in second
+        assert "git diff origin/main...HEAD" in second  # 전체 맥락도 계속 준다
+
+    def test_each_review_records_reviewed_head(self, repo):
+        r = FakeRunner(repo)
+        r.on(lambda c: c[0] == "claude", r.agent(review_rounds=[[FIX], []]))
+        assert make(repo, r).run() == ship.EXIT_OK
+        st = ship.load_state(repo, PHASE)
+        assert st["reviewed_head"] == git(repo, "rev-parse", "HEAD")
+        assert git(repo, "log", "-1", "--format=%s") == f"chore: {PHASE} 리뷰 2차 결과"
+
     def test_max_two_fixes_three_reviews_then_gate(self, repo):
         r = FakeRunner(repo)
         r.on(lambda c: c[0] == "claude", r.agent(review_rounds=[[FIX]]))
@@ -614,7 +635,21 @@ class TestCI:
         assert st["ci_fixes"] == 1 and len(st["ci_fix_commits"]) == 1
         assert "boom" in r.prompts("[ship:ci-fix]")[0]
         assert f"fix: {PHASE} CI 실패 수정" in git(repo, "log", "--format=%s", "-3")
-        assert "리뷰 뒤 CI 수정 커밋" in capsys.readouterr().out
+        # 리뷰 뒤 커밋이므로 바뀐 부분 중심으로 다시 리뷰받고 나서야 머지 대기가 된다
+        assert st["reviews"] == 2
+        first_reviewed = git(repo, "log", "-1", "--format=%H", "--grep", f"{PHASE} 리뷰 1차 결과")
+        assert f"git diff {first_reviewed}..HEAD" in r.prompts("[ship:review]")[1]
+        assert st["reviewed_head"] == git(repo, "rev-parse", "HEAD")
+
+    def test_ci_fix_after_review_limit_gates_for_human_review(self, repo):
+        r = FakeRunner(repo)
+        self._with_logs(r)
+        r.on(lambda c: c[0] == "claude", r.agent(review_rounds=[[FIX], [FIX], []]))
+        r.on(lambda c: c[:3] == ["gh", "pr", "checks"], checks_sequence(1, 0))
+        assert make(repo, r).run() == ship.EXIT_GATE
+        st = ship.load_state(repo, PHASE)
+        assert st["stage"] == "review" and st["ci_fixes"] == 1
+        assert "리뷰 한도" in st["gate"]
 
     def test_ci_failing_twice_gates(self, repo):
         r = FakeRunner(repo)
@@ -672,6 +707,17 @@ class TestResumeAndGates:
         assert st["reviews"] == 1  # --from review는 횟수를 초기화한다
         assert st["review_artifacts"][-1] == f"phases/{PHASE}/review-2.json"
 
+    def test_from_review_after_ready_reviews_the_human_commit(self, repo):
+        make(repo, FakeRunner(repo)).run()
+        reviewed = ship.load_state(repo, PHASE)["reviewed_head"]
+        append_impl(repo)
+        commit_all(repo, "fix(api): 머지 대기 뒤 직접 수정")
+        git(repo, "push", "-q", "origin", f"feat/{PHASE}")
+        r = FakeRunner(repo)
+        assert make(repo, r).run(from_stage="review") == ship.EXIT_OK
+        assert f"git diff {reviewed}..HEAD" in r.prompts("[ship:review]")[0]
+        assert ship.load_state(repo, PHASE)["reviewed_head"] == git(repo, "rev-parse", "HEAD")
+
     def test_rerun_from_pr_reuses_recorded_pr(self, repo):
         make(repo, FakeRunner(repo)).run()
         r = FakeRunner(repo)
@@ -728,6 +774,38 @@ class TestMerge:
         m = next(c for c in r.calls if c[:3] == ["gh", "pr", "merge"])
         assert "7" in m and "--squash" in m
         assert ship.load_state(repo, PHASE)["stage"] == "merged"
+
+    def test_merge_pins_the_reviewed_commit(self, repo):
+        self._ready(repo)
+        r = FakeRunner(repo)
+        r.on(lambda c: c[:3] == ["gh", "pr", "merge"], ok())
+        r.on(lambda c: c[:3] == ["gh", "issue", "view"], ok("CLOSED\n"))
+        assert make(repo, r).merge() == ship.EXIT_OK
+        m = next(c for c in r.calls if c[:3] == ["gh", "pr", "merge"])
+        reviewed = ship.load_state(repo, PHASE)["reviewed_head"]
+        assert m[m.index("--match-head-commit") + 1] == reviewed
+
+    def test_merge_refuses_commits_pushed_after_review(self, repo):
+        self._ready(repo)
+        append_impl(repo)
+        commit_all(repo, "fix(api): 리뷰 뒤 직접 수정")
+        git(repo, "push", "-q", "origin", f"feat/{PHASE}")
+        r = FakeRunner(repo)
+        r.on(lambda c: c[:3] == ["gh", "pr", "merge"], ok())
+        assert make(repo, r).merge() == ship.EXIT_GATE
+        assert r.count(lambda c: c[:3] == ["gh", "pr", "merge"]) == 0
+        gate = ship.load_state(repo, PHASE)["gate"]
+        assert "--from review" in gate and "1개" in gate
+
+    def test_merge_refuses_state_without_reviewed_head(self, repo):
+        self._ready(repo)
+        st = ship.load_state(repo, PHASE)
+        st.pop("reviewed_head", None)
+        ship.save_state(repo, PHASE, st)
+        r = FakeRunner(repo)
+        r.on(lambda c: c[:3] == ["gh", "pr", "merge"], ok())
+        assert make(repo, r).merge() == ship.EXIT_GATE
+        assert r.count(lambda c: c[:3] == ["gh", "pr", "merge"]) == 0
 
     def test_merge_warns_when_issue_still_open(self, repo, capsys):
         self._ready(repo)
