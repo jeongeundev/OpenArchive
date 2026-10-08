@@ -3,7 +3,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ApiError,
   originalPreviewUrl,
-  isPreviewable,
   listFolders, createFolder, renameFolder, deleteFolder, getFolderAccess, setFolderAccess, moveDocument,
   addGroupMember,
   addShareDocument,
@@ -968,11 +967,5 @@ describe("folder client contracts", () => {
 describe("원본 미리보기 경로와 형식", () => {
   it("문서 id를 인코딩한 판별 경로를 만든다", () => {
     expect(originalPreviewUrl("doc /한글", 2)).toBe(`/api/documents/${encodeURIComponent("doc /한글")}/files/2/preview`);
-  });
-  it.each(["report.pdf", "scan.PNG", "photo.jpg", "photo.JPEG"])("%s는 미리보기할 수 있다", (filename) => {
-    expect(isPreviewable(filename)).toBe(true);
-  });
-  it.each(["a.hwp", "b.docx", "c.txt", "pdf", "a.pdf.exe", "a.pdf."])("%s는 미리보기할 수 없다", (filename) => {
-    expect(isPreviewable(filename)).toBe(false);
   });
 });

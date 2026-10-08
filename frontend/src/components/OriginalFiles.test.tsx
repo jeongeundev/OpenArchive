@@ -28,6 +28,7 @@ const document: DocumentDetail = {
       size: 2048,
       sha256: "a".repeat(64),
       text_version: 1,
+      preview_status: "ready",
       uploaded_by: "alice",
       uploaded_at: "2026-09-20T10:00:00Z",
     },
@@ -37,6 +38,7 @@ const document: DocumentDetail = {
       size: 3_500_000,
       sha256: "b".repeat(64),
       text_version: 3,
+      preview_status: "ready",
       uploaded_by: "alice",
       uploaded_at: "2026-09-23T11:00:00Z",
     },
@@ -87,23 +89,39 @@ describe("OriginalFiles", () => {
     for (const link of links) expect(link).toHaveAttribute("download");
   });
 
-  it.each(["report.pdf", "scan.PNG", "photo.jpeg"])("%s 판은 새 탭 미리보기와 내려받기를 제공한다", (filename) => {
-    render(<OriginalFiles anonymous={false} disabled={false} document={{ ...document, files: [{ ...document.files[0], filename }] }} onChanged={vi.fn()} />);
+  it.each(["report.pdf", "scan.PNG", "photo.jpeg", "회의록.hwp", "보고.docx"])("%s 판은 미리보기가 준비됐으면 새 탭 미리보기와 내려받기를 제공한다", (filename) => {
+    render(<OriginalFiles anonymous={false} disabled={false} document={{ ...document, files: [{ ...document.files[0], filename, preview_status: "ready" }] }} onChanged={vi.fn()} />);
     const preview = screen.getByRole("link", { name: "미리보기" });
     expect(preview).toHaveAttribute("href", "/api/documents/document-1/files/1/preview");
     expect(preview).toHaveAttribute("target", "_blank");
     expect(preview.getAttribute("rel")?.split(" ")).toEqual(expect.arrayContaining(["noopener", "noreferrer"]));
     expect(preview).not.toHaveAttribute("download");
     expect(screen.getByRole("link", { name: "내려받기" })).toHaveAttribute("href", "/api/documents/document-1/file");
+    expect(screen.queryByText("미리보기 준비 중")).not.toBeInTheDocument();
   });
 
-  it("지원하지 않는 판은 내려받기만 제공한다", () => {
-    render(<OriginalFiles anonymous={false} disabled={false} document={{ ...document, files: ["a.hwp", "b.docx", "c.txt"].map((filename, index) => ({ ...document.files[0], filename, file_version: index + 1 })) }} onChanged={vi.fn()} />);
+  it("변환 중인 판은 미리보기 링크 대신 「미리보기 준비 중」을 보인다", () => {
+    render(<OriginalFiles anonymous={false} disabled={false} document={{ ...document, files: [{ ...document.files[0], filename: "회의록.hwp", preview_status: "pending" }] }} onChanged={vi.fn()} />);
+    const item = screen.getByRole("listitem");
+    expect(within(item).getByText("미리보기 준비 중")).toBeInTheDocument();
+    expect(within(item).queryByRole("link", { name: "미리보기" })).not.toBeInTheDocument();
+    expect(within(item).queryByRole("button", { name: /미리보기/ })).not.toBeInTheDocument();
+    expect(within(item).getByRole("link", { name: "내려받기" })).toHaveAttribute("download");
+  });
+
+  it.each(["failed", "unavailable", null] as const)("미리보기 상태가 %s인 판은 내려받기만 제공한다", (previewStatus) => {
+    render(<OriginalFiles anonymous={false} disabled={false} document={{ ...document, files: ["a.hwp", "b.docx", "c.txt"].map((filename, index) => ({ ...document.files[0], filename, file_version: index + 1, preview_status: previewStatus })) }} onChanged={vi.fn()} />);
     for (const item of screen.getAllByRole("listitem")) {
       expect(within(item).queryByRole("link", { name: "미리보기" })).not.toBeInTheDocument();
+      expect(within(item).queryByText("미리보기 준비 중")).not.toBeInTheDocument();
       expect(within(item).getByRole("link", { name: "내려받기" })).toHaveAttribute("download");
       expect(within(item).getAllByRole("link")).toHaveLength(1);
     }
+  });
+
+  it("미리보기 여부는 파일명이 아니라 서버의 preview_status로 정한다", () => {
+    render(<OriginalFiles anonymous={false} disabled={false} document={{ ...document, files: [{ ...document.files[0], filename: "report.pdf", preview_status: null }] }} onChanged={vi.fn()} />);
+    expect(screen.queryByRole("link", { name: "미리보기" })).not.toBeInTheDocument();
   });
 
   it("원본이 없는 문서에는 올리기만 보이고 내려받기·다시 추출이 없다", () => {

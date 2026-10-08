@@ -559,14 +559,6 @@ export function originalFileUrl(id: string, fileVersion?: number): string {
   return fileVersion === undefined ? `${base}/file` : `${base}/files/${fileVersion}`;
 }
 
-// ADR-058: 서버와 같은 원본 미리보기 허용 목록.
-const PREVIEWABLE_EXTENSIONS = ["pdf", "png", "jpg", "jpeg"];
-
-export function isPreviewable(filename: string): boolean {
-  const extension = filename.slice(filename.lastIndexOf(".") + 1).toLowerCase();
-  return filename.includes(".") && PREVIEWABLE_EXTENSIONS.includes(extension);
-}
-
 export function originalPreviewUrl(id: string, fileVersion: number): string {
   return `${originalFileUrl(id, fileVersion)}/preview`;
 }

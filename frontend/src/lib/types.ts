@@ -146,6 +146,11 @@ export interface OriginalFile {
   sha256: string;
   /** 이 판의 텍스트가 아직 인식되지 않았으면 null이다. */
   text_version: number | null;
+  /**
+   * 서버가 판정한 미리보기 상태(ADR-058). ready만 미리보기를 열 수 있다 — 화면은 확장자로 다시 판정하지 않는다.
+   * 미리보기 대상이 아닌 형식이면 null.
+   */
+  preview_status: "ready" | "pending" | "failed" | "unavailable" | null;
   uploaded_by: string;
   uploaded_at: string;
 }
@@ -273,6 +278,9 @@ export interface SystemStatus {
   stale_edge_documents: number;
   extraction_pending: number;
   extraction_failed: number;
+  preview_pending: number;
+  preview_failed: number;
+  preview_unavailable: number;
   embedding_provider: string;
 }
 
