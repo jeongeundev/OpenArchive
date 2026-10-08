@@ -1541,3 +1541,72 @@ def test_preview_job_creation_locks_document(conn, migrated_db, lock, bulk):
                 conn.execute("SELECT enqueue_all_preview_jobs()")
             else:
                 insert_preview_original(conn, doc_id)
+
+
+@pytest.mark.parametrize("via", ["session", "token", "mcp", "cli"])
+def test_version_author_records_actor_on_insert_and_edit(conn, via):
+    with conn.transaction():
+        conn.execute("SELECT set_config('openarchive.actor_id', 'alice', true)")
+        conn.execute("SELECT set_config('openarchive.actor_via', %s, true)", (via,))
+        doc_id = insert_document(conn)
+        edit_content(conn, doc_id, "새 텍스트", "sha256:v2")
+    assert conn.execute(
+        "SELECT version, author, author_via FROM document_versions "
+        "WHERE document_id = %s ORDER BY version",
+        (doc_id,),
+    ).fetchall() == [(1, "alice", via), (2, "alice", via)]
+
+
+@pytest.mark.parametrize("via", [None, "", "worker"])
+def test_version_author_handles_direct_and_worker_edits(conn, via):
+    doc_id = insert_document(conn)
+    with conn.transaction():
+        if via is not None:
+            conn.execute("SELECT set_config('openarchive.actor_id', '', true)")
+            conn.execute("SELECT set_config('openarchive.actor_via', %s, true)", (via,))
+        edit_content(conn, doc_id, "새 텍스트", "sha256:v2")
+    assert conn.execute(
+        "SELECT author, author_via FROM document_versions WHERE document_id = %s AND version = 2",
+        (doc_id,),
+    ).fetchone() == (None, via or "direct")
+
+
+def test_version_author_records_worker_on_first_scanned_text(conn):
+    doc_id = insert_extracting_document(conn)
+    assert history(conn, doc_id) == []
+    with conn.transaction():
+        conn.execute("SELECT set_config('openarchive.actor_id', '', true)")
+        conn.execute("SELECT set_config('openarchive.actor_via', 'worker', true)")
+        conn.execute(
+            "UPDATE documents SET content = '인식한 텍스트', content_hash = 'sha256:ocr', "
+            "extraction_status = 'done' WHERE id = %s",
+            (doc_id,),
+        )
+    assert conn.execute(
+        "SELECT version, author, author_via FROM document_versions WHERE document_id = %s",
+        (doc_id,),
+    ).fetchall() == [(1, None, "worker")]
+
+
+@pytest.mark.parametrize(
+    "source, expected", [("extraction", (None, "worker")), ("", ("alice", "session"))]
+)
+def test_version_author_text_source_preserves_audit_actor(conn, source, expected):
+    doc_id = insert_document(conn)
+    with conn.transaction():
+        conn.execute("SELECT set_config('openarchive.actor_id', 'alice', true)")
+        conn.execute("SELECT set_config('openarchive.actor_via', 'session', true)")
+        conn.execute("SELECT set_config('openarchive.text_source', %s, true)", (source,))
+        edit_content(conn, doc_id, "다시 추출한 텍스트", "sha256:v2")
+    assert (
+        conn.execute(
+            "SELECT author, author_via FROM document_versions "
+            "WHERE document_id = %s AND version = 2",
+            (doc_id,),
+        ).fetchone()
+        == expected
+    )
+    assert conn.execute(
+        "SELECT actor, actor_via FROM audit_log WHERE document_id = %s AND action = 'text_updated'",
+        (doc_id,),
+    ).fetchall() == [("alice", "session")]
