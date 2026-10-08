@@ -4467,7 +4467,7 @@ MCP로 붙을 수 있게 되는 것도 이 경로가 생겨서다 — stdio는 D
 ---
 
 ### ADR-058: 원본 미리보기는 PDF·PNG·JPG(JPEG)만 허용 목록으로 연다 — 나머지는 내려받기다
-**상태**: 2026-10-05 신규 — 채택(결정) · **2026-10-08 구현됨 #190**(아래 「2026-10-08 구현」) · **2026-10-08 개정 — HWP·HWPX·DOCX·XLSX·PPTX를 서버에서 격리된 변환기로 PDF로 바꿔 미리보기한다, 결정·미구현**(아래 「2026-10-08 개정」). ADR-046 결정 4("내려받기는 항상 `attachment`와 `nosniff`")를 개정한다.
+**상태**: 2026-10-05 신규 — 채택(결정) · **2026-10-08 구현됨 #190**(아래 「2026-10-08 구현」) · **2026-10-08 개정 — HWP·HWPX·DOCX·XLSX·PPTX를 서버에서 격리된 변환기로 PDF로 바꿔 미리보기한다, 결정**(아래 「2026-10-08 개정」) · **2026-10-08 개정 구현됨 #228**(그 끝의 「2026-10-08 구현(#228)」 — Rocky 9 x86-64 실측 대기). ADR-046 결정 4("내려받기는 항상 `attachment`와 `nosniff`")를 개정한다.
 
 **맥락**: 원본 판을 보관하게 되었지만(ADR-046) 원본을 확인하려면 매번 내려받아 열어야 한다. 기능명세서는 PDF·이미지의
 브라우저 미리보기를 요구한다. ADR-046이 항상 `attachment`로 둔 이유 — 앱과 같은 오리진(ADR-041)에서 세션 쿠키를 가진
@@ -4609,6 +4609,37 @@ MCP로 붙을 수 있게 되는 것도 이 경로가 생겨서다 — stdio는 D
 구현 방식(claim 순서), 변환 시간 상한 값(Rocky 9 x86-64 실측), PDF 한글 렌더 여부 판정 방법(결정 6), 일괄 함수와 운영자 CLI 명령 이름,
 `/admin/status`에 변환 대기·실패 수를 보일지, 감사 detail에 변환본임을 적을지, bubblewrap 인자의 정확한 목록과 격리 가능 여부 점검
 방법(시작 시 한 번 / 잡마다), LibreOffice 프로필 디렉터리 위치(격리 안 임시 디렉터리), 변환기 판 고정 방식.
+>
+> → **2026-10-08 구현(#228).** 위 항목을 다음으로 닫는다.
+> - **테이블·마이그레이션**: `document_file_previews`(PK `(document_id, file_version)`, `document_files`로 FK `ON DELETE CASCADE`,
+>   `status` `pending`·`ready`·`failed`·`unavailable`, `pdf bytea`·`error`·`updated_at`, `ready`와 `pdf` 존재가 같다는 CHECK) —
+>   `036_preview_tables.sql`(테이블 + `embedding_jobs.kind`에 `preview`). 판정 함수 `preview_convertible(filename)`·트리거
+>   `trg_document_files_preview_requested`(`document_files` AFTER INSERT)·일괄 함수 — `037_preview_triggers.sql`.
+> - **상태 코드·응답 본문**: 변환 대상 판의 미리보기는 `ready` → 200 변환본 PDF(지금 헤더 그대로), `pending` → 409
+>   「미리보기를 준비 중입니다.」, `failed` → 415 「미리보기를 만들지 못했습니다.」, `unavailable`·행 없음 → 415 「미리보기할 수
+>   없는 형식입니다.」(목록 밖 형식과 같은 문구). 판 목록에는 판마다 `preview_status`를 싣고 화면은 그 값만 본다.
+> - **잡 우선순위**: `claim_job`이 `ORDER BY (q.kind = 'preview'), q.id`로 집는다 — 미리보기만 뒤로 가고 다른 종류의 순서는 그대로다.
+> - **시간 상한**: `PREVIEW_TIMEOUT_SECONDS` 기본 300초. arm64 컨테이너 17쪽 HWP 약 51초의 약 6배로 둔 **임시값이며 Rocky 9
+>   x86-64 실측 대기**다. 넘기면 프로세스 그룹을 죽이고 재시도 대상 실패로 다룬다.
+> - **한글 렌더 판정(결정 6)**: 두 겹이다. 변환 전 `fc-list :lang=ko family`가 비면 「변환기 없음」(설치 문제), 변환 뒤 그 판의
+>   문서 텍스트(`text_version`의 버전 본문, 없으면 현재 문서 텍스트)에 한글이 있는데 결과 PDF 텍스트 레이어(pypdf)에 한글이
+>   없으면 재시도 없는 「실패」. Ubuntu 24.04 arm64 실측: 글꼴이 전혀 없으면 LibreOffice는 PDF를 만들지 못하고(종료 코드 134),
+>   한글 없는 글꼴만 있으면 PDF 텍스트 레이어에는 한글이 남는다(□로 그려져도) — 첫 겹(`fc-list`)이 그 경우를 막는다.
+> - **일괄 함수·CLI**: `enqueue_all_preview_jobs()`(변환본 없는 판·`failed`·`unavailable` 판을 `pending`으로, `ready`는 보존,
+>   반환값은 `pending` 판 수) · `openarchive rebuild-previews`(기다리지 않는다).
+> - **`/admin/status`**: 넣었다 — 「미리보기 변환」 카드에 대기·실패·변환기 없음 판 수.
+> - **감사 detail**: 바꾸지 않았다 — 변환본을 보내도 `original_previewed` · `{file_version}`이고, 200일 때만 기록한다.
+> - **bubblewrap 인자·점검**: `--unshare-net --unshare-user --unshare-ipc --unshare-uts --unshare-pid --die-with-parent --new-session
+>   --clearenv`, 읽기 전용 `/usr`·`/bin`·`/lib`·`/lib64`와 글꼴·공개 인증서 등 `/etc` 일부, 빈 `/tmp`, 읽기 전용 입력 파일 하나,
+>   결과 디렉터리 하나. `/usr` 밖 변환기는 그 파일만 `/converter`로 노출한다. 점검은 **잡마다** 변환 직전 같은 인자로
+>   `/usr/bin/true`를 실행한다(캐시 없음). 실패하면 「변환기 없음」. Ubuntu 24.04 arm64 일반 사용자에서 PID 분리 포함 실변환과
+>   네트워크 제거(SSRF 차단)를 확인했다. **실제 Rocky 9 호스트의 PID 네임스페이스는 VM 실측 대기**다.
+> - **LibreOffice 프로필**: 격리 안 `/tmp/lo-profile`(빈 tmpfs라 변환마다 새로 만든다).
+> - **판 고정**: rhwp는 v0.8.7 태그를 `cargo build --release --locked`로 빌드한다(Rocky 9). CI(Ubuntu)는 배포판 바이너리를
+>   SHA256으로 고정해 받는다. 판올림은 품질·시간 실측을 다시 돌린 뒤 한다(트레이드오프 4). 설치 절차는 `OPERATIONS.md`
+>   「원본 미리보기 변환기」.
+> - **실변환기 테스트**: `@pytest.mark.converters` — 도구가 없으면 skip, `OPENARCHIVE_REQUIRE_CONVERTERS=1`이면 실패(CI는 켠다).
+> - **VM 실측 대기**: Rocky 9 x86-64 변환 시간, 실제 호스트의 PID 네임스페이스, 구형 HWP의 외부 연결 그림.
 
 ---
 
