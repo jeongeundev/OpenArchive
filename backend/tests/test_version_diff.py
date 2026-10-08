@@ -26,7 +26,7 @@ def compare(client, doc, base=1, target=2):
 def test_changed_lines(db_client):
     response = compare(db_client, versions(db_client))
     assert response.status_code == 200
-    assert response.json() == {"base": 1, "target": 2, "identical": False, "hunks": [{"lines": [
+    assert response.json() == {"base": 1, "target": 2, "identical": False, "too_large": False, "hunks": [{"lines": [
         {"op": "equal", "text": "가"}, {"op": "removed", "text": "나"},
         {"op": "added", "text": "나2"}, {"op": "equal", "text": "다"},
         {"op": "added", "text": "라"},
@@ -42,7 +42,9 @@ def test_identical_versions(db_client):
     for base, target in [(1, 3), (3, 1), (2, 2)]:
         response = compare(db_client, doc, base, target)
         assert response.status_code == 200
-        assert response.json() == {"base": base, "target": target, "identical": True, "hunks": []}
+        assert response.json() == {
+            "base": base, "target": target, "identical": True, "too_large": False, "hunks": [],
+        }
 
 
 @pytest.mark.parametrize("positions", [(14,), (4, 24)])
@@ -126,3 +128,47 @@ async def test_diff_runs_off_event_loop(db_client, migrated_db, monkeypatch):
         result = await documents.diff_versions(conn, UUID(doc), user_id="alice", base=1, target=2)
     assert len(threads) == 1 and threads[0] != loop_thread
     assert result["hunks"][0]["lines"][1] == {"op": "removed", "text": "나"}
+
+
+def test_line_pairs_counts_matching_line_pairs():
+    # 「a」 2×1 + 「b」 1×2 — difflib이 맞춰 볼 같은 줄의 짝 수다.
+    assert documents._line_pairs("a\na\nb", "a\nb\nb") == 4
+    assert documents._line_pairs("a", "b") == 0
+
+
+# 빈 줄 3000개 — 같은 줄의 짝이 3001² ≈ 900만으로 상한(500만)을 넘는다.
+REPEATED = "\n" * 3000
+
+
+def test_large_diff_is_not_computed(db_client, monkeypatch):
+    """같은 줄의 짝이 상한을 넘으면 계산하지 않고 too_large로 알린다."""
+    def must_not_run(old, new):
+        raise AssertionError("상한을 넘는 비교를 계산했다")
+
+    monkeypatch.setattr(documents, "_diff_lines", must_not_run)
+    response = compare(db_client, versions(db_client, REPEATED + "끝 1", REPEATED + "끝 2"))
+    assert response.status_code == 200
+    assert response.json() == {
+        "base": 1, "target": 2, "identical": False, "too_large": True, "hunks": [],
+    }
+
+
+def test_large_identical_versions_are_still_identical(db_client):
+    """같은 내용 판정은 문자열 비교라 상한과 무관하다."""
+    doc = versions(db_client, REPEATED + "끝 1", REPEATED + "끝 2")
+    response = db_client.post(f"/api/documents/{doc}/versions/1/restore", json={"current_version": 2})
+    assert response.status_code == 200
+    response = compare(db_client, doc, 1, 3)
+    assert response.json()["identical"] is True
+    assert response.json()["too_large"] is False
+
+
+@pytest.mark.parametrize(("limit", "too_large"), [(4, False), (3, True)])
+def test_limit_boundary(db_client, monkeypatch, limit, too_large):
+    """짝 수가 상한과 같으면 계산하고, 넘을 때만 too_large다."""
+    old, new = "가\n가\n다", "가\n다\n다"
+    assert documents._line_pairs(old, new) == 4
+    monkeypatch.setattr(documents, "MAX_DIFF_LINE_PAIRS", limit)
+    response = compare(db_client, versions(db_client, old, new))
+    assert response.json()["too_large"] is too_large
+    assert (response.json()["hunks"] == []) is too_large

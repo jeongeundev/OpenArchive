@@ -34,7 +34,7 @@ describe("VersionHistory", () => {
   });
 
   it("두 버전만 선택하고 선택 순서와 무관하게 낮은 버전을 base로 비교한다", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ base: 1, target: 3, identical: true, hunks: [] }));
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ base: 1, target: 3, identical: true, too_large: false, hunks: [] }));
     vi.stubGlobal("fetch", fetchMock);
     renderHistory();
     expect(screen.getAllByRole("checkbox")).toHaveLength(3);
@@ -54,7 +54,7 @@ describe("VersionHistory", () => {
   });
 
   it("현재와 비교는 과거 버전에만 있고 서버의 줄과 덩어리를 구분해 표시하고 닫는다", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ base: 1, target: 3, identical: false, hunks: [
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ base: 1, target: 3, identical: false, too_large: false, hunks: [
       { lines: [{ op: "equal", text: "맥락" }, { op: "removed", text: "이전 줄" }, { op: "added", text: "새 줄" }] },
       { lines: [{ op: "added", text: "다른 대목" }] },
     ] }));
@@ -80,10 +80,18 @@ describe("VersionHistory", () => {
   });
 
   it("내용은 다르지만 줄 차이가 없으면 줄 끝 개행 차이를 알린다", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({ base: 1, target: 3, identical: false, hunks: [] })));
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({ base: 1, target: 3, identical: false, too_large: false, hunks: [] })));
     renderHistory();
     fireEvent.click(screen.getAllByRole("button", { name: "현재와 비교" })[1]);
     expect(await screen.findByText("줄 끝 개행만 다릅니다.")).toBeInTheDocument();
+  });
+
+  it("비교가 너무 크면 결과 대신 본문 보기를 안내한다", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({ base: 1, target: 3, identical: false, too_large: true, hunks: [] })));
+    renderHistory();
+    fireEvent.click(screen.getAllByRole("button", { name: "현재와 비교" })[1]);
+    expect(await screen.findByText("문서가 커서 비교 결과를 표시할 수 없습니다. 각 버전의 「본문 보기」로 확인하세요.")).toBeInTheDocument();
+    expect(screen.queryByText("줄 끝 개행만 다릅니다.")).not.toBeInTheDocument();
   });
 
   it("비교 오류는 서버 detail을 표시한다", async () => {
