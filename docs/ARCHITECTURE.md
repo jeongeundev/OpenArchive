@@ -493,6 +493,7 @@ CREATE TRIGGER trg_documents_content_changed
 | `trg_audit_folder_visibility_changed` | `folders` UPDATE OF `visibility`, 값이 바뀔 때 (031) | `folder_access_changed` · `{kind: visibility, folder_id, folder_name, before, after}` |
 | `trg_audit_folder_grant_changed` | `folder_grants` INSERT / DELETE — 연쇄 삭제 제외 (031) | `folder_access_changed` · `{kind: grant, change, grantee_type, grantee, folder_id, folder_name}` |
 | `trg_audit_document_folder_changed` | `documents` UPDATE OF `follows_folder`·`folder_id` (031) | `access_changed` · `{kind: inherit, before, after}`(`folder`/`own`) · 「폴더 범위 따름」 문서의 이동은 `{kind: folder, before, after}`(폴더 이름) |
+| `trg_audit_document_owner_changed` / `trg_audit_folder_owner_changed` | `documents` UPDATE OF `owner_id` / `folders` UPDATE OF `created_by`, 실제 값 변경만 (040) | `owner_changed`(소유자 변경) · 문서 `{kind: document, before, after}`, 폴더 `{kind: folder, folder_id, folder_name, before, after}`. 폴더는 대상 문서 id·제목 NULL |
 | `trg_audit_log_reject_change` / `trg_audit_log_reject_truncate` | `audit_log` UPDATE·DELETE(행) / TRUNCATE(문) | 예외 — 거부 |
 
 - **부여 대상(사용자·그룹)의 추가·제거도 「열람 범위 변경」이다.** 「제한」 문서의 열람자는 부여 행으로 바뀐다. 그래서 `set_access`는 부여를 전량 교체하지 않고 **차이만** DELETE·INSERT한다 — 바뀌지 않은 대상이 「제거→추가」로 기록되지 않게.
@@ -926,7 +927,10 @@ OpenSQL `patroni.yml`의 PostgreSQL 파라미터는 `max_connections: 100`이다
 | `GET /api/diagnostics` | **진단.** 고아 문서·깨진 링크·중복 후보 등을 **열람 범위 기준**으로 집계 (ADR-027) |
 | `GET /api/clusters` | **관계 지도.** 관계 그래프의 Louvain 군집. 조회 시점 계산, 열람 범위 기준. 이름은 (군집 안 빈도 − 밖 빈도)가 양수인 태그 중 최대, 없으면 중심 문서 제목 (ADR-042 개정) |
 | `GET /api/admin/users` 등 | 관리자 전용 |
-| `GET /api/admin/audit` | **관리자·세션 전용** 감사 로그 조회. 쿼리 `actor`·`action`(11종, 그 밖은 422)·`limit`(기본 50, 1~200)·`before_id`(id 커서). 응답 `{items, next_before_id}`, id 내림차순. 열람 술어를 걸지 않고 대상 문서 **제목**까지만 보인다(ADR-055 결정 8). 조회 자체는 기록하지 않는다 |
+| `DELETE /api/admin/users/{id}?transfer_to=<username>` | **관리자·세션 전용**. 휴지통 포함 모든 소유 문서·폴더를 이전한 뒤 같은 트랜잭션에서 계정 삭제(204). 공유·토큰은 CASCADE로 삭제. 대상 미지정이면 소유물 있는 사용자는 기존 409, 잘못된 이전 대상은 400. 관리자 열람 부여 없음 (#200) |
+| `PUT /api/documents/{id}/owner` `{owner}` | **소유자·세션 전용**. 응답 `{owner_id, still_visible}`. 이전 소유자의 공유에서 제거·새 소유자의 직접 사용자 부여 정리. 보이는 비소유자 403, 안 보이면 404, 본인·없는 대상 400 (#200) |
+| `PUT /api/folders/{id}/owner` `{owner}` | **만든 사람·세션 전용**, 관리자 우회 없음. 한 폴더 행만 이전(하위 폴더·문서 그대로), 새 소유자의 사용자 부여 정리. 응답 `{created_by, still_visible}`. 비소유자 403, 안 보이면 404, 본인·없는 대상 400 (#200) |
+| `GET /api/admin/audit` | **관리자·세션 전용** 감사 로그 조회. 쿼리 `actor`·`action`(12종, 그 밖은 422)·`limit`(기본 50, 1~200)·`before_id`(id 커서). 응답 `{items, next_before_id}`, id 내림차순. 열람 술어를 걸지 않고 대상 문서 **제목**까지만 보인다(ADR-055 결정 8). 조회 자체는 기록하지 않는다 |
 | `POST /api/admin/groups` · `GET /api/admin/groups` · `DELETE /api/admin/groups/{id}` | **관리자·세션 전용**. 그룹 생성·목록·삭제. 이름 변경 없음 (#97 b) |
 | `PUT /api/admin/groups/{id}/members/{username}` · `DELETE /api/admin/groups/{id}/members/{username}` | **관리자·세션 전용**. 구성원 추가·제거 (#97 b) |
 | `GET /api/principals` | **로그인**. 부여 대상 사용자명·그룹명 목록. 익명은 401 (#97 b) |
