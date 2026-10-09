@@ -28,6 +28,7 @@ describe("SiteHeader", () => {
       "href",
       "/diagnostics",
     );
+    expect(screen.queryByRole("link", { name: "외부 공유" })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "사용자 관리" })).not.toBeInTheDocument();
   });
 
@@ -59,6 +60,7 @@ describe("SiteHeader", () => {
 
     expect(await screen.findByText("alice")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "로그아웃" })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "외부 공유" })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "사용자 관리" })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "그룹 관리" })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "감사 로그" })).not.toBeInTheDocument();
@@ -78,6 +80,7 @@ describe("SiteHeader", () => {
       "href",
       "/admin/users",
     );
+    expect(screen.getByRole("link", { name: "외부 공유" })).toHaveAttribute("href", "/admin/shares");
     expect(screen.getByRole("link", { name: "그룹 관리" })).toHaveAttribute("href", "/admin/groups");
     expect(screen.getByRole("link", { name: "감사 로그" })).toHaveAttribute("href", "/admin/audit");
   });

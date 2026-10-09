@@ -234,7 +234,8 @@ describe("감사 로그 화면", () => {
 
     const title = await screen.findByText("보안 지침");
     expect(title.closest("a")).toBeNull();
-    expect(screen.queryAllByRole("link")).toHaveLength(0);
+    expect(screen.queryAllByRole("link")).toHaveLength(1);
+    expect(screen.getByRole("link")).toHaveTextContent("CSV 내려받기");
   });
 });
 
@@ -246,4 +247,34 @@ it("소유자 변경 동작과 문서·폴더 설명을 표시한다", async () 
   expect(screen.getByText("폴더 「RFP」 kim → lee")).toBeInTheDocument();
   expect(screen.getByRole("option", { name: "소유자 변경" })).toHaveValue("owner_changed");
   expect(screen.getAllByText("소유자 변경")).toHaveLength(3);
+});
+
+
+it("공유·그룹·사용자 변경의 종류와 공유 주인을 표시한다", async () => {
+  const changes = ["created", "deleted", "document_added", "document_removed", "token_issued", "token_revoked"];
+  const items = changes.map(change => entry({ action: "share_changed", actor: "admin", document_title: null, detail: { change, share_name: "협업", owner: "kim", token_name: "외부봇" } }));
+  for (const change of ["created", "deleted"]) {
+    items.push(entry({ action: "group_changed", detail: { change, group: "개발팀" } }));
+    items.push(entry({ action: "user_changed", detail: { change, user: "lee" } }));
+  }
+  vi.stubGlobal("fetch", routedFetch(admin, [{ items, next_before_id: null }]).fetchMock);
+  render(<AuthProvider><AuditPage /></AuthProvider>);
+  const table = await screen.findByRole("table");
+  for (const label of ["공유 「협업」 생성", "공유 「협업」 삭제", "「협업」에 문서 추가", "「협업」에서 문서 제거", "「협업」 토큰 「외부봇」 발급", "「협업」 토큰 「외부봇」 폐기"]) expect(within(table).getByText(`${label} (소유자 kim)`)).toBeInTheDocument();
+  for (const label of ["그룹 개발팀 생성", "그룹 개발팀 삭제", "사용자 lee 생성", "사용자 lee 삭제"]) expect(within(table).getByText(label)).toBeInTheDocument();
+  for (const label of ["외부 공유 변경", "그룹 변경", "사용자 변경"]) expect(screen.getByRole("option", { name: label })).toBeInTheDocument();
+});
+it("CSV 링크가 현재 사용자·동작 필터를 인코딩한다", async () => {
+  users.push({ ...users[0], id: "encoded", username: "kim & lee" });
+  try {
+    vi.stubGlobal("fetch", routedFetch(admin, [{ items: [], next_before_id: null }]).fetchMock);
+    render(<AuthProvider><AuditPage /></AuthProvider>);
+    const link = await screen.findByRole("link", { name: "CSV 내려받기" });
+    expect(link).toHaveAttribute("href", "/api/admin/audit?format=csv");
+    await screen.findByRole("option", { name: "kim & lee" });
+    fireEvent.change(screen.getByRole("combobox", { name: "사용자" }), { target: { value: "kim & lee" } });
+    fireEvent.change(screen.getByRole("combobox", { name: "동작" }), { target: { value: "share_changed" } });
+    expect(link).toHaveAttribute("href", "/api/admin/audit?format=csv&actor=kim+%26+lee&action=share_changed");
+    expect(link).toHaveAttribute("download");
+  } finally { users.pop(); }
 });

@@ -38,6 +38,9 @@ export function SiteHeader(): React.ReactElement {
                 <Link className="text-neutral-400 hover:text-[#0ea5e9]" href="/admin/groups">
                   그룹 관리
                 </Link>
+                <Link className="text-neutral-400 hover:text-[#0ea5e9]" href="/admin/shares">
+                  외부 공유
+                </Link>
                 <Link className="text-neutral-400 hover:text-[#0ea5e9]" href="/admin/audit">
                   감사 로그
                 </Link>

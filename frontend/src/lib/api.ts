@@ -1,4 +1,5 @@
 import type {
+  AdminShareSummary,
   AskResponse,
   AuditAction,
   AuditPage,
@@ -761,4 +762,23 @@ export function transferFolderOwner(id: string, owner: string): Promise<{ create
   return request(`/api/folders/${encodeURIComponent(id)}/owner`, {
     method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ owner }),
   });
+}
+
+export function listAdminShares(signal?: AbortSignal): Promise<AdminShareSummary[]> {
+  return request<AdminShareSummary[]>("/api/admin/shares", { signal });
+}
+
+export function revokeAdminShareToken(shareId: string, tokenId: string): Promise<void> {
+  return request<void>(
+    `/api/admin/shares/${encodeURIComponent(shareId)}/tokens/${encodeURIComponent(tokenId)}`,
+    { method: "DELETE" },
+    { parse: false },
+  );
+}
+
+export function auditCsvUrl(filters: { actor?: string; action?: AuditAction | "" }): string {
+  const params = new URLSearchParams({ format: "csv" });
+  if (filters.actor) params.set("actor", filters.actor);
+  if (filters.action) params.set("action", filters.action);
+  return `/api/admin/audit?${params.toString()}`;
 }

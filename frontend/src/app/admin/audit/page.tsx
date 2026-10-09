@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 
 import { useAuth } from "@/components/AuthProvider";
-import { ApiError, listAudit, listUsers } from "@/lib/api";
+import { ApiError, auditCsvUrl, listAudit, listUsers } from "@/lib/api";
 import {
   VISIBILITY_LABEL,
   type AuditAction,
@@ -16,6 +16,9 @@ import { useUnmountSignal } from "@/lib/useUnmountSignal";
 const PAGE_SIZE = 50;
 
 const ACTION_LABEL: Record<AuditAction, string> = {
+  share_changed: "외부 공유 변경",
+  group_changed: "그룹 변경",
+  user_changed: "사용자 변경",
   owner_changed: "소유자 변경",
   document_created: "문서 생성",
   text_updated: "텍스트 수정",
@@ -58,6 +61,23 @@ function actionLabel(entry: AuditEntry): string {
 /** 동작에 덧붙는 설명 — 무엇이 어떻게 바뀌었나. 없으면 null. */
 function actionDescription(entry: AuditEntry): string | null {
   const { detail } = entry;
+  if (entry.action === "share_changed") {
+    const share = `「${text(detail.share_name)}」`;
+    const descriptions: Record<string, string> = {
+      created: `공유 ${share} 생성`,
+      deleted: `공유 ${share} 삭제`,
+      document_added: `${share}에 문서 추가`,
+      document_removed: `${share}에서 문서 제거`,
+      token_issued: `${share} 토큰 「${text(detail.token_name)}」 발급`,
+      token_revoked: `${share} 토큰 「${text(detail.token_name)}」 폐기`,
+    };
+    const owner = text(detail.owner);
+    return `${descriptions[text(detail.change)] ?? share}${owner && owner !== entry.actor ? ` (소유자 ${owner})` : ""}`;
+  }
+  if (entry.action === "group_changed" || entry.action === "user_changed") {
+    const subject = entry.action === "group_changed" ? `그룹 ${text(detail.group)}` : `사용자 ${text(detail.user)}`;
+    return `${subject} ${detail.change === "deleted" ? "삭제" : "생성"}`;
+  }
   if (entry.action === "owner_changed") {
     return `${detail.kind === "folder" ? `폴더 「${text(detail.folder_name)}」 ` : ""}${text(detail.before)} → ${text(detail.after)}`;
   }
@@ -166,7 +186,7 @@ export default function AuditPage(): React.ReactElement {
       <div>
         <h1 className="text-4xl font-semibold text-white">감사 로그</h1>
         <p className="mt-3 text-sm text-neutral-400">
-          문서와 열람 범위·그룹 구성원의 변경, 원본 내려받기·미리보기 기록입니다. 기록은 고치거나 지울 수 없습니다.
+          문서와 열람 범위·외부 공유·그룹·사용자의 변경, 원본 내려받기·미리보기 기록입니다. 기록은 고치거나 지울 수 없습니다.
           대상 문서는 제목만 보입니다.
         </p>
       </div>
@@ -184,6 +204,7 @@ export default function AuditPage(): React.ReactElement {
             {ACTIONS.map((value) => <option key={value} value={value}>{ACTION_LABEL[value]}</option>)}
           </select>
         </label>
+        <a className="text-sm text-neutral-400 hover:text-[#0ea5e9]" download href={auditCsvUrl({ actor, action })}>CSV 내려받기</a>
       </div>
 
       {!loaded && error === null ? <p className="text-sm text-neutral-500">불러오는 중…</p> : null}
