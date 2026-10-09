@@ -16,6 +16,7 @@ import psycopg
 from psycopg.rows import dict_row
 
 from openarchive.services import textdiff
+from openarchive.services.audit import mark_text_from_extraction
 from openarchive.services.chunking import chunk_spans
 from openarchive.services.grants import insert_grants, resolve_grantees
 from openarchive.services.parsing import (
@@ -878,8 +879,8 @@ async def get_document(
 
     await cur.execute(
         """
-        SELECT version, created_at
-        FROM document_versions
+        SELECT v.version, v.created_at, v.author, v.author_via
+        FROM document_versions v
         WHERE document_id = %s
         ORDER BY version
         """,
@@ -1249,6 +1250,7 @@ async def reextract_text(
         )
         return await cur.fetchone(), False
 
+    await mark_text_from_extraction(conn)
     document = await _write_text(
         conn,
         document_id,
@@ -1292,7 +1294,7 @@ async def get_document_version(
     cur = conn.cursor(row_factory=dict_row)
     await cur.execute(
         f"""
-        SELECT v.version, v.content, v.created_at
+        SELECT v.version, v.content, v.created_at, v.author, v.author_via
         FROM document_versions v
         JOIN documents d ON d.id = v.document_id
         WHERE v.document_id = %(id)s

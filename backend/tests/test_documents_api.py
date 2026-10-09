@@ -1069,6 +1069,11 @@ def test_past_version_endpoint_returns_that_versions_text(db_client: TestClient)
     assert response.status_code == 200
     assert response.json()["content"] == "처음 내용"
     assert response.json()["version"] == 1
+    assert (response.json()["author"], response.json()["author_via"]) == ("alice", "session")
+    versions = db_client.get(f"/api/documents/{created['id']}").json()["versions"]
+    assert [(v["author"], v["author_via"]) for v in versions] == [
+        ("alice", "session"), ("alice", "session")
+    ]
 
 
 def test_past_version_endpoint_hides_private_documents_from_others(
@@ -1672,9 +1677,14 @@ def test_reextract_creates_a_new_text_version_when_text_differs(
     assert body["content"] == "OpenSQL original text"
     with psycopg.connect(migrated_db) as conn:
         assert conn.execute(
-            "SELECT content FROM document_versions WHERE document_id = %s AND version = 3",
+            "SELECT content, author, author_via FROM document_versions WHERE document_id = %s AND version = 3",
             (document_id,),
-        ).fetchone() == ("OpenSQL original text",)
+        ).fetchone() == ("OpenSQL original text", None, "worker")
+        assert conn.execute(
+            "SELECT actor, actor_via FROM audit_log WHERE document_id = %s "
+            "AND action = 'text_updated' AND detail->>'version' = '3'",
+            (document_id,),
+        ).fetchall() == [("alice", "session")]
     assert pending_embed_jobs(migrated_db, document_id) == 1
     # 원본은 그대로다 — 재추출은 판을 만들지 않는다.
     assert len(file_rows(migrated_db, document_id)) == 1
@@ -2290,3 +2300,18 @@ def test_move_missing_document_and_invalid_folder_input(db_client):
         assert db_client.put(f"/api/documents/{doc['id']}/folder", json=body).status_code == 422
     for path in ("/api/documents", "/api/documents/count"):
         assert db_client.get(path, params={"folder_id": "invalid"}).status_code == 422
+
+
+def test_token_edit_records_version_author(db_client: TestClient):
+    document_id = upload(db_client).json()["id"]
+    token = db_client.post("/api/auth/tokens", json={"name": "version-author", "scope": "read_write"}).json()["token"]
+    db_client.cookies.clear()
+    headers = {"Authorization": f"Bearer {token}"}
+    response = db_client.put(
+        f"/api/documents/{document_id}",
+        json={"content": "token edited text", "version": 1},
+        headers=headers,
+    )
+    assert response.status_code == 200
+    version = db_client.get(f"/api/documents/{document_id}/versions/2", headers=headers).json()
+    assert (version["author"], version["author_via"]) == ("alice", "token")

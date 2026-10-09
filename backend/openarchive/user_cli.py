@@ -148,6 +148,16 @@ def run_doc_list() -> int:
     return _run(action)
 
 
+def version_author_label(version: dict) -> str:
+    if version.get("author"):
+        return version["author"]
+    return {
+        "worker": "워커",
+        "direct": "직접 접속",
+        "cli": "운영자 CLI",
+    }.get(version.get("author_via"), "기록 없음")
+
+
 def run_doc_show(*, document_id: str, version: int | None) -> int:
     path = _document_path(document_id)
     if path is None:
@@ -156,8 +166,14 @@ def run_doc_show(*, document_id: str, version: int | None) -> int:
 
     def action(api: ApiClient) -> int:
         target = path if version is None else f"{path}/versions/{version}"
-        content = api.request("GET", target).json()["content"]
+        document = api.request("GET", target).json()
+        content = document["content"]
         sys.stdout.write(content if content.endswith("\n") else content + "\n")
+        if version is not None:
+            print(
+                f"v{version} · {version_author_label(document)} · {_local_time(document['created_at'])}",
+                file=sys.stderr,
+            )
         return 0
 
     return _run(action)

@@ -479,6 +479,11 @@ async def test_reextract_one_reports_changed_then_unchanged(system_conn, migrate
     assert (first.changed, first.unchanged, first.failed) == (1, 0, [])
     assert (second.changed, second.unchanged, second.failed) == (0, 1, [])
     assert text_of(migrated_db, document_id) == (3, "original")
+    row = await (await system_conn.execute(
+        "SELECT author, author_via FROM document_versions WHERE document_id = %s AND version = 3",
+        (document_id,),
+    )).fetchone()
+    assert row == (None, "worker")
 
 
 async def test_reextract_one_reports_an_extraction_failure_as_failed(

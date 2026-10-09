@@ -157,7 +157,12 @@ CREATE TABLE document_versions (
   content      text NOT NULL,
   content_hash text NOT NULL,
   created_at   timestamptz NOT NULL DEFAULT now(),
-  PRIMARY KEY (document_id, version)
+  author       text, -- 사용자 이름 스냅샷, FK 없음 (038)
+  author_via   text,
+  PRIMARY KEY (document_id, version),
+  CONSTRAINT document_versions_author_via_valid CHECK (author_via IN (
+    'session', 'token', 'mcp', 'cli', 'share', 'worker', 'direct'
+  ))
 );
 
 -- document_files: 업로드된 원본 파일의 판 이력 (018, ADR-046). append-only — 교체는 새 판이다
@@ -402,11 +407,17 @@ CREATE INDEX idx_chunks_embedding ON document_chunks
 ### 트리거
 
 ```sql
-CREATE FUNCTION on_document_content_changed() RETURNS trigger AS $$
+CREATE OR REPLACE FUNCTION on_document_content_changed() RETURNS trigger AS $$
+DECLARE
+  v_actor text := NULLIF(current_setting('openarchive.actor_id', true), '');
+  v_via text := NULLIF(current_setting('openarchive.actor_via', true), '');
+  v_source text := NULLIF(current_setting('openarchive.text_source', true), '');
 BEGIN
   -- (1) 버전 이력 기록 — INSERT의 v1도 포함해 append-only 이력을 완성한다
-  INSERT INTO document_versions (document_id, version, content, content_hash)
-  VALUES (NEW.id, NEW.version, NEW.content, NEW.content_hash)
+  INSERT INTO document_versions (document_id, version, content, content_hash, author, author_via)
+  VALUES (NEW.id, NEW.version, NEW.content, NEW.content_hash,
+          CASE WHEN v_source = 'extraction' THEN NULL ELSE v_actor END,
+          CASE WHEN v_source = 'extraction' THEN 'worker' ELSE COALESCE(v_via, 'direct') END)
   ON CONFLICT (document_id, version) DO NOTHING;
 
   -- (2) 임베딩 대기 상태로 전환
@@ -436,6 +447,33 @@ CREATE TRIGGER trg_documents_content_changed
 - **PUT 시**: API는 `documents`의 `version`(+1), `content`, `content_hash`만 UPDATE한다. 이력 기록은 트리거가 **같은 트랜잭션에서** 수행하므로, 본문만 바뀌고 이력이 누락되는 상태가 구조적으로 불가능하다.
 - `ON CONFLICT (document_id, version) DO NOTHING`은 재실행 안전장치다. 같은 버전 번호로 트리거가 두 번 발화해도 이력이 중복되지 않는다.
 - **추출 중 문서(`extraction_status <> 'done'`)에서는 발화하지 않는다.** 스캔 문서는 빈 텍스트로 INSERT되는데, 여기서 발화하면 빈 v1이 이력에 남고 청크가 나올 수 없는 임베딩 잡이 돈다. v1은 워커가 첫 텍스트를 쓰는 UPDATE가 기록한다 (아래 「추출 잡」).
+
+**텍스트 버전 작성자(038·039, ADR-061 결정 6).** 트리거가 위 GUC에서 `author`·`author_via`를 채운다.
+빈 placeholder는 `NULLIF(..., '')`로 읽는다. 추출 출처이면 NULL·`worker`, 아니면 행위자 이름과 경로를 쓰고
+경로가 없으면 `direct`다. OCR은 워커 경로로 기록하고, 동기 재추출은 `mark_text_from_extraction`을 새 텍스트 쓰기 직전에
+호출한다. 감사 행위자는 바꾸지 않아 재추출을 요청한 사람도 별도로 남는다. 작성자 원칙은 **행동 기준**이다 — 업로드·원본
+교체·편집·복원은 요청한 사람, OCR 반영·재추출은 워커다(스캔 파일 업로드·교체의 텍스트 버전은 비동기 OCR이 써서 워커, ADR-061 결정 6).
+
+| GUC | 값 · 전달 규칙 |
+|---|---|
+| `openarchive.actor_id` | 사용자 이름 또는 빈 값 — 버전 작성자와 감사 행위자의 이름 |
+| `openarchive.actor_via` | `session`·`token`·`mcp`·`cli`·`share`·`worker` — 행위자의 경로 |
+| `openarchive.text_source` | `extraction`이면 재추출이 다시 만든 텍스트 — 버전 작성자는 워커, 감사 행위자는 유지 |
+
+모두 `set_config(..., true)`로 트랜잭션 범위에만 전달한다. 세션 `SET`은 쓰지 않는다.
+038은 기존 행을 같은 문서와 `occurred_at = created_at`인 감사 행으로 채운다. v1은 `document_created`, v2 이상은
+`text_updated`의 `detail.version`까지 맞추며 여러 짝이면 최소 감사 id를 쓴다. 짝 없는 행은 NULL·NULL이다.
+스캔 문서 v1은 생성과 시각이 달라 짝이 없을 수 있고, 과거 동기 재추출은 당시 감사 행위자로 남는 한계가 있다.
+
+화면·CLI는 다음 순서로 작성자를 표시한다. 서버는 문구를 만들지 않고 nullable 두 필드를 반환한다.
+
+| 조건 (위에서 먼저 적용) | 표시 |
+|---|---|
+| `author`가 있음 | 사용자 이름 |
+| 이름 없음 · `author_via = 'worker'` | 워커 |
+| 이름 없음 · `author_via = 'direct'` | 직접 접속 |
+| 이름 없음 · `author_via = 'cli'` | 운영자 CLI |
+| 그 밖에 이름 없음(NULL 포함) | 기록 없음 |
 
 ### 감사 로그 — 트리거가 같은 트랜잭션에서 남긴다 (ADR-055)
 
@@ -863,14 +901,14 @@ OpenSQL `patroni.yml`의 PostgreSQL 파라미터는 `max_connections: 100`이다
 | `GET /api/documents/count` | 목록과 같은 `status`·`extraction_status`·`tag`·`q`·`content_type`·`folder_id` 조건의 전체 건수 `{total}`. 화면은 이 건수로 페이지를 나눈다 |
 | `GET /api/documents/tags` | 열람 가능한 문서의 태그 목록 `string[]`. 중복 없이 태그순이며 보이지 않는 문서의 태그는 포함하지 않는다 |
 | `GET /api/documents/progress` | 열람 범위 안 문서의 파이프라인 단계별 수(`extracting`·`extraction_failed`·`pending`·`processing`·`ready`·`error`). 인식이 끝난 문서만 임베딩 단계로 센다. 합이 목록의 전체 수다 (#95-d) |
-| `GET /api/documents/{id}` | 상세 + 텍스트 버전 목록 + 청크 수 + 청크 기준 버전 + `files`(원본 판 목록 — 메타데이터만, 바이트는 싣지 않는다. 판마다 `preview_status`: PDF·PNG·JPG·JPEG는 `"ready"`, 변환 대상은 변환본 상태(`ready`·`pending`·`failed`·`unavailable`, 행 없으면 `unavailable`), 그 밖 형식은 `null` — 화면은 이 값만 보고 「미리보기」를 그린다) + `folder`(id·이름·경로 — 조회자가 그 폴더를 볼 수 있을 때만, 아니면 `null`) |
+| `GET /api/documents/{id}` | 상세 + 텍스트 버전 목록(`versions`: `version`·`created_at`·nullable `author`·`author_via`, MCP `get_document`도 동일) + 청크 수 + 청크 기준 버전 + `files`(원본 판 목록 — 메타데이터만, 바이트는 싣지 않는다. 판마다 `preview_status`: PDF·PNG·JPG·JPEG는 `"ready"`, 변환 대상은 변환본 상태(`ready`·`pending`·`failed`·`unavailable`, 행 없으면 `unavailable`), 그 밖 형식은 `null` — 화면은 이 값만 보고 「미리보기」를 그린다) + `folder`(id·이름·경로 — 조회자가 그 폴더를 볼 수 있을 때만, 아니면 `null`) |
 | `PUT /api/documents/{id}/folder` | **문서 폴더 이동.** `{folder_id}`(`null`이면 폴더 밖으로). 문서 소유자만, 쓰기 토큰 허용. 옮길 폴더는 볼 수 있어야 한다. 「폴더 범위 따름」 문서는 새 폴더의 범위로 바뀐다 (ADR-054) |
 | `GET /api/documents/{id}/file` · `GET /api/documents/{id}/files/{n}` | **원본 내려받기** — 최신 판 · 특정 판. 항상 `Content-Disposition: attachment` + `X-Content-Type-Options: nosniff`, 미디어 타입은 확장자 고정 매핑. 볼 수 없는 문서·원본 없음·없는 판은 404 (ADR-046) |
 | `GET /api/documents/{id}/files/{v}/preview` | **원본 미리보기** — PDF·PNG·JPG·JPEG(파일명 확장자, 대소문자 무관)는 원본을, HWP·HWPX·DOCX·XLSX·PPTX는 **변환본 PDF**를 보낸다. `Content-Disposition: inline` + `X-Content-Type-Options: nosniff` + `Content-Security-Policy: sandbox; default-src 'none'`, 미디어 타입은 확장자 고정 매핑(변환본은 `application/pdf`, 파일명 확장자도 `.pdf`). 순서는 열람 확인(404) → 판 조회(404) → 형식·변환본 확인 → 감사 `original_previewed` → 응답. 변환 대상 판은 변환본이 `ready`면 200, `pending`이면 **409** 「미리보기를 준비 중입니다.」, `failed`면 **415** 「미리보기를 만들지 못했습니다.」, `unavailable`·행 없음이면 **415** 「미리보기할 수 없는 형식입니다.」(그 밖 형식과 같은 문구). 감사는 200일 때만. 공유 토큰은 403(허용 목록 밖) (ADR-058) |
 | `PUT /api/documents/{id}/file` | **원본 교체.** multipart `file` + `current_version`. 새 판을 쌓고(이전 판 보존), 추출 텍스트가 달라졌을 때만 새 텍스트 버전(트리거가 이력·잡 생성). 새 원본이 OCR 대상이면 텍스트를 쓰지 않고 추출 잡으로 넘긴다. 최신 판과 같은 바이트면 아무것도 바꾸지 않는다. 버전 불일치·추출 중 409 · 추출 실패 400 · 상한 초과 413 |
 | `POST /api/documents/{id}/reextract` | **재추출.** `{current_version}`. 최신 판에서 다시 추출해 결과가 다르면 새 텍스트 버전, 같으면 무변경(`changed: false`). 새 판은 만들지 않는다. 최신 판이 OCR 대상이면 추출 잡으로 넘기고 `changed: false`와 `extraction_status: "pending"`으로 응답한다. 원본 없는 문서·추출 중 문서는 409 |
 | `PUT /api/documents/{id}` | 편집된 문서 텍스트(`{content, version}` JSON) → `version`+1, `content`, `content_hash` UPDATE. **버전 이력 기록과 재임베딩 잡 생성은 트리거가 수행.** 요청의 `version`이 현재 버전과 다르면 **409** (아래) |
-| `GET /api/documents/{id}/versions/{version}` | 그 텍스트 버전의 본문. 열람 술어를 같은 SQL에 넣어 조회하며 없거나 볼 수 없으면 404 (ADR-037) |
+| `GET /api/documents/{id}/versions/{version}` | 그 텍스트 버전의 본문과 `version`·`created_at`·nullable `author`·`author_via`. 열람 술어를 같은 SQL에 넣어 조회하며 없거나 볼 수 없으면 404 (ADR-037) |
 | `GET /api/documents/{id}/versions/{base}/diff/{target}` | **텍스트 버전 비교.** 서버가 줄 단위로 비교한다(`services/textdiff.py` — Myers O((N+M)D), git의 기본 알고리즘, 새 의존성 없음). 응답 `{base, target, identical, too_large, hunks: [{lines: [{op: equal\|added\|removed, text}]}]}` — 바뀐 곳 앞뒤 **3줄**만 맥락으로 싣고(`difflib.get_grouped_opcodes(3)`와 같은 묶음), `text`에는 줄 끝 개행을 넣지 않는다. `identical`은 두 텍스트가 문자열로 완전히 같을 때만 true이고 그때 `hunks`는 빈 배열. **작업량 예산**: 대각선 하나·직진한 줄 하나·역추적 기록 한 칸을 작업 1로 세다가 `MAX_DIFF_WORK`(500만)를 넘으면 그 자리에서 멈추고 `too_large: true`·빈 `hunks`로 답한다 — 쓴 작업량은 예산 + 2 + min(N, M)을 넘지 않는다(jsdiff `maxEditLength`와 같은 방식). 2026-10-08 실측(크기 4.8K~20K줄 × 반복도 × 고친 곳 10~3,000 × 흩어짐/몰림 × 전체 교체): 작업 100만당 **0.12~0.15초·기록 3.8MB**로 일정해 예산이 최악 약 0.75초·19MB를 보장한다. 작업량은 문서 크기가 아니라 바뀐 줄 수(D)에 따라 늘어 대략 D²이며, 고친 줄이 약 1,100줄을 넘으면 too_large다. 실제 규정 2022판↔현행판 21쌍은 최대 6만 작업·8ms다. 처음 쓴 표준 `difflib`(autojunk 끔)는 같은 줄의 짝 수 × 바뀐 대목 수에 비례해, 빈 줄로 나눈 마크다운 2,000문단을 10문단마다 고치면 23.6초였다(같은 입력 Myers 20ms) — 짝 수로 미리 거르는 상한은 바뀐 대목 수 축에서 깨져 버렸다. 계산은 이벤트 루프 밖 스레드에서 돈다. 두 버전 중 하나라도 없거나 볼 수 없으면 404, 공유 토큰은 403 (#190) |
 | `PUT /api/documents/{id}/tags` | `{tags: string[]}`로 태그 전체 교체. 트리거는 `UPDATE OF content_hash`에만 걸려 있으므로 **재임베딩을 유발하지 않는다** |
 | `DELETE /api/documents/{id}` | **휴지통 이동** — `deleted_at`을 채운다. 소유자만, 쓰기 토큰 허용. `?permanent=true`면 영구 삭제(CASCADE로 벡터·잡·원본 판까지 원자 삭제, 휴지통 밖 문서도 가능) (ADR-060) |

@@ -21,7 +21,7 @@ const document: DocumentDetail = {
   extraction_status: "done",
   created_at: "2026-08-05T10:00:00Z",
   updated_at: "2026-08-05T11:00:00Z",
-  versions: [{ version: 1, created_at: "2026-08-05T10:00:00Z" }],
+  versions: [{ version: 1, created_at: "2026-08-05T10:00:00Z", author: null, author_via: null }],
   files: [],
   chunk_count: 0,
   chunk_version: null,

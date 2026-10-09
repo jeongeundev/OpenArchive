@@ -320,7 +320,8 @@ def test_doc_list_without_documents(cli, capsys):
     assert "문서가 없습니다." in capsys.readouterr().out
 
 
-def test_doc_show_prints_current_or_requested_version(cli, capsys):
+def test_doc_show_prints_current_or_requested_version(cli, capsys, caplog):
+    caplog.set_level("WARNING", logger="httpx")
     document_id = put_text(cli, "alice", "버전 문서", "첫 번째 본문")
     edited = cli.put(f"/api/documents/{document_id}", json={"content": "두 번째 본문", "version": 1})
     assert edited.status_code == 200
@@ -328,10 +329,35 @@ def test_doc_show_prints_current_or_requested_version(cli, capsys):
     capsys.readouterr()
 
     assert main(["doc", "show", document_id]) == 0
-    assert capsys.readouterr().out.strip() == "두 번째 본문"
+    current = capsys.readouterr()
+    assert current.out == "두 번째 본문\n"
+    assert current.err == ""
 
     assert main(["doc", "show", document_id, "--version", "1"]) == 0
-    assert capsys.readouterr().out.strip() == "첫 번째 본문"
+    requested = capsys.readouterr()
+    assert requested.out == "첫 번째 본문\n"
+    detail = cli.get(f"/api/documents/{document_id}/versions/1").json()
+    created_at = datetime.fromisoformat(detail["created_at"]).astimezone().strftime("%Y-%m-%d %H:%M")
+    assert requested.err == f"v1 · alice · {created_at}\n"
+
+
+@pytest.mark.parametrize(
+    ("author", "via", "expected"),
+    [
+        ("alice", "session", "alice"),
+        ("alice", "worker", "alice"),
+        (None, "worker", "워커"),
+        (None, "direct", "직접 접속"),
+        (None, "cli", "운영자 CLI"),
+        (None, None, "기록 없음"),
+        (None, "token", "기록 없음"),
+        (None, "mcp", "기록 없음"),
+        (None, "share", "기록 없음"),
+        (None, "session", "기록 없음"),
+    ],
+)
+def test_version_author_label(author, via, expected):
+    assert user_cli.version_author_label({"author": author, "author_via": via}) == expected
 
 
 @pytest.mark.parametrize("command", ["show", "download"])

@@ -13,6 +13,14 @@ function formatDate(value: string): string {
   }).format(new Date(value));
 }
 
+function versionAuthorLabel(item: TextVersion): string {
+  if (item.author) return item.author;
+  if (item.author_via === "worker") return "워커";
+  if (item.author_via === "direct") return "직접 접속";
+  if (item.author_via === "cli") return "운영자 CLI";
+  return "기록 없음";
+}
+
 export function VersionHistory({
   documentId,
   versions,
@@ -252,11 +260,13 @@ export function VersionHistory({
                       되돌리기
                     </button>
                   ) : null}
-                  <time className="text-xs text-neutral-500" dateTime={item.created_at}>
-                    {formatDate(item.created_at)}
-                  </time>
                 </div>
               </div>
+
+              <p className="text-xs text-neutral-500">
+                {versionAuthorLabel(item)} · {" "}
+                <time dateTime={item.created_at}>{formatDate(item.created_at)}</time>
+              </p>
 
               {openVersion === item.version ? (
                 <pre className="whitespace-pre-wrap rounded border border-neutral-800 bg-[#0f0f0f] p-3 text-xs text-neutral-300">

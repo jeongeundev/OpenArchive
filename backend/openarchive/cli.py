@@ -1535,7 +1535,7 @@ def main(argv: list[str] | None = None) -> int:
     doc_commands.add_parser("list", help="볼 수 있는 문서를 최근 수정순으로 보입니다.")
     doc_show = doc_commands.add_parser("show", help="문서 텍스트를 출력합니다.")
     doc_show.add_argument("document_id", help="문서 ID")
-    doc_show.add_argument("--version", type=int, help="텍스트 버전 (생략하면 현재 버전)")
+    doc_show.add_argument("--version", type=int, help="텍스트 버전 — 작성자를 함께 표시 (생략하면 현재 버전)")
     doc_download = doc_commands.add_parser("download", help="최신 원본 파일을 내려받습니다.")
     doc_download.add_argument("document_id", help="문서 ID")
     doc_download.add_argument(

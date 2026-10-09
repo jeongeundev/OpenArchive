@@ -350,6 +350,8 @@ async def test_mcp_user_setting_controls_private_access_for_all_tools(
     assert owner_detail["document_id"] == str(private_id)
     assert owner_detail["content"] == "OpenSQL 비공개 정합성 근거"
     assert owner_detail["versions"]
+    assert "author" in owner_detail["versions"][0]
+    assert owner_detail["versions"][0]["author_via"] == "direct"
     assert owner_detail["chunk_count"] == 1
     assert owner_detail["chunk_version"] == 1
 
