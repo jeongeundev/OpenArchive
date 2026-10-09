@@ -262,3 +262,63 @@ async def test_share_token_expiry_issue_validate_and_list(conn, expiry):
     expired = (await list_shares(conn, owner="alice"))[0]["tokens"][0]
     assert expired["expired"] is True
     assert expired["last_used_at"] == listed["last_used_at"]
+
+
+async def test_list_all_shares_metadata_and_trash(conn):
+    import json
+
+    from openarchive.services.shares import list_all_shares
+
+    bob = await create_share(conn, owner="bob", name="A")
+    zeta = await create_share(conn, owner="alice", name="Z")
+    alpha = await create_share(conn, owner="alice", name="A")
+    doc = await insert_test_document(conn, title="비밀 제목", content="본문")
+    trash = await insert_test_document(conn, title="휴지통 비밀", content="본문")
+    for document in (doc, trash):
+        await add_document(conn, alpha["id"], document, owner="alice")
+    await conn.execute("UPDATE documents SET deleted_at = now() WHERE id = %s", (trash,))
+    token = await issue_share_token(conn, alpha["id"], owner="alice", name="만료 토큰")
+    await conn.execute(
+        "UPDATE api_tokens SET expires_at = now() - interval '1 second' WHERE id = %s",
+        (token["id"],),
+    )
+    result = await list_all_shares(conn)
+    assert [s["id"] for s in result] == [alpha["id"], zeta["id"], bob["id"]]
+    assert all(set(s) == {"id", "name", "owner", "created_at", "document_count", "tokens"} for s in result)
+    assert [s["owner"] for s in result] == ["alice", "alice", "bob"]
+    assert [s["document_count"] for s in result] == [1, 0, 0]
+    assert result[1]["tokens"] == result[2]["tokens"] == []
+    [listed] = result[0]["tokens"]
+    assert set(listed) == {"id", "name", "created_at", "expires_at", "last_used_at", "expired"}
+    assert listed["id"] == token["id"] and listed["expired"] is True
+    serialized = json.dumps(result, default=str)
+    for hidden in ("비밀 제목", "휴지통 비밀", str(doc), str(trash), token["token"]):
+        assert hidden not in serialized
+
+
+async def test_admin_revoke_share_token_boundaries(conn):
+    from openarchive.services.audit import list_audit, set_actor
+    from openarchive.services.auth import AuthenticationFailed, validate_token
+    from openarchive.services.shares import admin_revoke_share_token
+
+    share = await create_share(conn, owner="bob", name="남의 공유")
+    other = await create_share(conn, owner="alice", name="다른 공유")
+    token = await issue_share_token(conn, share["id"], owner="bob", name="폐기")
+    other_token = await issue_share_token(conn, other["id"], owner="alice", name="유지")
+    user_id = (await (await conn.execute("SELECT id FROM users WHERE username = 'alice'")).fetchone())[0]
+    user_token = await create_token(conn, user_id, name="사용자")
+    for wrong in (other_token["id"], user_token["id"], uuid4()):
+        with pytest.raises(TokenNotFound):
+            await admin_revoke_share_token(conn, share["id"], wrong)
+    assert await validate_token(conn, other_token["token"])
+    assert await validate_token(conn, user_token["token"])
+    assert await validate_token(conn, token["token"])
+    async with conn.transaction():
+        await set_actor(conn, actor="root", via="session")
+        await admin_revoke_share_token(conn, share["id"], token["id"])
+    assert await share_token_rows(conn, share["id"]) == []
+    with pytest.raises(AuthenticationFailed):
+        await validate_token(conn, token["token"])
+    [event] = await list_audit(conn, actor="root", action="share_changed")
+    assert event["detail"]["owner"] == "bob"
+    assert event["detail"]["change"] == "token_revoked"

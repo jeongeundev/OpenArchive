@@ -216,3 +216,50 @@ def test_invisible_original_does_not_record_download(db_client, migrated_db):
 
 def test_trash_actions_are_available_for_audit_filters():
     assert {"document_trashed", "document_restored"} <= set(AUDIT_ACTIONS)
+
+
+async def test_list_audit_unlimited_preserves_filters_and_order(migrated_db):
+    from openarchive.services.audit import list_audit
+
+    async with await psycopg.AsyncConnection.connect(migrated_db) as conn:
+        await set_actor(conn, actor="exporter", via="session")
+        for i in range(55):
+            await insert_test_document(conn, title=str(i), content="글")
+        await set_actor(conn, actor="other", via="session")
+        await insert_test_document(conn, title="제외", content="글")
+        result = await list_audit(conn, actor="exporter", action="document_created", limit=None)
+        assert len(result) == 55
+        assert [r["id"] for r in result] == sorted((r["id"] for r in result), reverse=True)
+        assert all(r["actor"] == "exporter" and r["action"] == "document_created" for r in result)
+        assert len(await list_audit(conn, actor="exporter")) == 50
+        assert await list_audit(conn, actor="other", action="share_changed", limit=None) == []
+
+
+@pytest.mark.parametrize("title", ["=SUM(1)", "+1", "-1", "@x", "\t제목", "\r제목", '일반, "제목"\n다음'])
+def test_render_audit_csv_roundtrip_and_formula_safety(title):
+    import csv
+    import io
+    import json
+    from datetime import UTC, datetime
+
+    from openarchive.services.audit import render_audit_csv
+
+    occurred = datetime(2026, 10, 9, 12, 0, tzinfo=UTC)
+    detail = {"share_name": '한글, "공유"\n다음'}
+    row = {
+        "id": 1, "occurred_at": occurred, "actor": "+관리자", "actor_via": "session",
+        "db_role": "app", "action": "share_changed", "document_id": None,
+        "document_title": title, "detail": detail,
+    }
+    output = render_audit_csv([row])
+    assert output.startswith("\ufeffid,occurred_at,actor,actor_via,db_role,action,document_id,document_title,detail\r\n")
+    [parsed] = list(csv.DictReader(io.StringIO(output.removeprefix("\ufeff"))))
+    assert parsed["occurred_at"] == occurred.isoformat()
+    assert parsed["document_id"] == ""
+    assert parsed["actor"] == "'+관리자"
+    assert parsed["document_title"] == ("'" + title if title[0] in "=+-@\t\r" else title)
+    assert json.loads(parsed["detail"]) == detail
+    assert "한글" in parsed["detail"]
+    row["actor"] = row["actor_via"] = row["document_title"] = None
+    [nulls] = list(csv.DictReader(io.StringIO(render_audit_csv([row])[1:])))
+    assert nulls["actor"] == nulls["actor_via"] == nulls["document_title"] == ""
