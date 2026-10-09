@@ -13,7 +13,8 @@ from openpyxl import Workbook
 from PIL import Image
 from pptx import Presentation
 from pptx.util import Inches
-from pypdf import PdfReader
+from pypdf import PdfReader, PdfWriter
+from pypdf.generic import NameObject
 
 from openarchive.services.parsing import (
     TextDecodeError,
@@ -26,8 +27,12 @@ from openarchive.services.parsing import (
 )
 
 
-def minimal_pdf(text: str) -> bytes:
-    """xref 테이블 오프셋을 계산해 넣은 최소 PDF. text는 ASCII만 가능하다."""
+def minimal_pdf(text: str, font: bytes = b"<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>",
+                *extra_objs: bytes) -> bytes:
+    """xref 테이블 오프셋을 계산해 넣은 최소 PDF. text는 ASCII만 가능하다.
+
+    `font`는 4번 객체, `extra_objs`는 6번부터 붙는다(글꼴이 참조하는 객체용).
+    """
     stream = f"BT /F1 24 Tf 72 700 Td ({text}) Tj ET".encode()
     objs = [
         b"<</Type/Catalog/Pages 2 0 R>>",
@@ -36,8 +41,9 @@ def minimal_pdf(text: str) -> bytes:
             b"<</Type/Page/Parent 2 0 R/Resources<</Font<</F1 4 0 R>>>>"
             b"/MediaBox[0 0 612 792]/Contents 5 0 R>>"
         ),
-        b"<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>",
+        font,
         b"<</Length %d>>\nstream\n%s\nendstream" % (len(stream), stream),
+        *extra_objs,
     ]
     out = bytearray(b"%PDF-1.4\n")
     offsets = []
@@ -420,6 +426,63 @@ def test_needs_ocr_for_images_only_among_non_pdf_types(content_type: str) -> Non
 )
 def test_needs_ocr_for_pdf_when_any_page_has_no_text_layer(data: bytes, expected: bool) -> None:
     assert needs_ocr("pdf", data) is expected
+
+
+def type3_pdf(glyph: str) -> bytes:
+    """`A`를 `glyph` 이름의 글리프로 그리는 Type3 글꼴 PDF. ToUnicode가 없다."""
+    name = glyph.encode()
+    font = (
+        b"<</Type/Font/Subtype/Type3/FontBBox[0 0 1000 1000]/FontMatrix[0.001 0 0 0.001 0 0]"
+        b"/CharProcs<</%s 6 0 R>>/Encoding<</Type/Encoding/Differences[65/%s]>>"
+        b"/FirstChar 65/LastChar 65/Widths[500]/Resources<<>>>>" % (name, name)
+    )
+    return minimal_pdf("AAA", font, b"<</Length 8>>\nstream\n500 0 d0\nendstream")
+
+
+def first_page_of(data: bytes, *, strip_to_unicode: bool = False) -> bytes:
+    writer = PdfWriter(clone_from=PdfReader(io.BytesIO(data)))
+    for index in range(len(writer.pages) - 1, 0, -1):
+        writer.remove_page(index)
+    if strip_to_unicode:
+        for font in writer.pages[0]["/Resources"]["/Font"].values():
+            del font.get_object()[NameObject("/ToUnicode")]
+    out = io.BytesIO()
+    writer.write(out)
+    return out.getvalue()
+
+
+@pytest.mark.parametrize(
+    ("data", "expected"),
+    [
+        # macOS cupsfilter가 만든 PDF — Type0·Identity-H 글꼴에 ToUnicode가 없어, 레이어 텍스트가
+        # 글리프 번호를 글자로 읽은 '࠺ ࢑ ӏ…'다(빈 쪽이 아니다)
+        (fixture("garbled_travel_rule.pdf"), True),
+        # 한글 보도자료 1쪽(Type0·Identity-H) — ToUnicode를 지우기 전후
+        (first_page_of(fixture("mixed_tax_pages.pdf")), False),
+        (first_page_of(fixture("mixed_tax_pages.pdf"), strip_to_unicode=True), True),
+        # Type3: 표준 글리프 이름은 글자로 읽히지만 HWP의 `/HFT1` 같은 자체 이름은 이름이 그대로 새어 나온다
+        (type3_pdf("A"), False),
+        (type3_pdf("g1"), True),
+    ],
+    ids=["no-to-unicode-fixture", "type0-with-to-unicode", "type0-without-to-unicode",
+         "type3-standard-names", "type3-private-names"],
+)
+def test_needs_ocr_for_pdf_when_a_page_text_layer_is_garbled(data: bytes, expected: bool) -> None:
+    """레이어 텍스트가 있어도 글자 정보(ToUnicode)가 없어 글자로 읽을 수 없는 쪽은 OCR한다(#191).
+
+    판정은 텍스트 통계가 아니라 글꼴 구조로 한다. 실측: 정상 PDF 4,704쪽 중 걸린 쪽 0, 같은 PDF에서
+    ToUnicode만 지운 4,704쪽은 전부 걸림 — 의심 문자 비율(5%)은 Type3 글리프 이름이 ASCII라 52쪽을 놓쳤다.
+    """
+    assert extract_text(data, "pdf").strip()  # 빈 쪽 판정과 무관하다
+    assert needs_ocr("pdf", data) is expected
+
+
+def test_ocr_reads_a_garbled_text_layer_page_as_korean() -> None:
+    text = normalize_ocr(ocr_text(fixture("garbled_travel_rule.pdf"), "pdf"))
+
+    assert "출장비정산규정" in text
+    expected = normalize_ocr(fixture("garbled_travel_rule.txt").decode())
+    assert SequenceMatcher(None, expected, text, autojunk=False).ratio() >= 0.85
 
 
 def test_ocr_keeps_text_layer_pages_and_reads_only_the_scanned_page(monkeypatch) -> None:

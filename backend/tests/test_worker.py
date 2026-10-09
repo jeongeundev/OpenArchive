@@ -2500,6 +2500,8 @@ class BlockingOcr:
         ("scan_tax_page1.jpg", "scan_tax_page1.txt"),
         ("scan_tax_pages.pdf", "scan_tax_pages.txt"),
         ("mixed_tax_pages.pdf", "mixed_tax_pages.txt"),
+        # 글자 정보(ToUnicode)가 없어 레이어 텍스트가 깨진 PDF — 깨진 글자가 아니라 인식한 한글로 채운다(#191)
+        ("garbled_travel_rule.pdf", "garbled_travel_rule.txt"),
     ],
 )
 async def test_worker_ocrs_a_scan_and_the_pipeline_continues_to_ready(
