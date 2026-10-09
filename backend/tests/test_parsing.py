@@ -259,9 +259,18 @@ def hwp_without_text(path: Path) -> bytes:
 
 
 def hwpx_without_text() -> bytes:
-    """픽스처 HWPX에서 글자 요소를 모두 비운 사본. 문단·표 구조는 남는다."""
+    """픽스처 HWPX에서 글자 요소를 모두 비우고 그림(BinData)을 뺀 사본. 문단·표 구조는 남는다.
+
+    그림이 남으면 그림뿐인 문서로 OCR 대상이 된다(#177).
+    """
     section = re.sub(r"<hp:t\b[^>/]*>.*?</hp:t>", "<hp:t/>", fixture_section_xml(), flags=re.DOTALL)
-    return hwpx_with_sections([section])
+    source = zipfile.ZipFile(io.BytesIO(hwpx_with_sections([section])))
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as target:
+        for item in source.infolist():
+            if not item.filename.startswith("BinData/"):
+                target.writestr(item, source.read(item))
+    return buf.getvalue()
 
 
 def test_extract_text_returns_empty_string_for_hangul_document_without_text(
@@ -405,10 +414,116 @@ def test_extract_text_does_not_ocr(monkeypatch) -> None:
     assert extract_text(fixture("scan_tax_pages.pdf"), "pdf").strip() == ""
 
 
-@pytest.mark.parametrize("content_type", ["png", "jpg", "jpeg",
-                                         "docx", "hwp", "hwpx", "txt", "md", "xlsx", "pptx"])
-def test_needs_ocr_for_images_only_among_non_pdf_types(content_type: str) -> None:
+@pytest.mark.parametrize("content_type", ["png", "jpg", "jpeg", "hwp", "txt", "md"])
+def test_needs_ocr_for_images_only_among_non_pdf_non_office_types(content_type: str) -> None:
     assert needs_ocr(content_type, b"") is (content_type in ("png", "jpg", "jpeg"))
+
+
+def pptx_bytes(slides: list[list[str]]) -> bytes:
+    """슬라이드마다 항목 목록 — `"그림"`은 스캔 이미지 그림, 그 밖의 문자열은 글상자다."""
+    presentation = Presentation()
+    for items in slides:
+        slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+        for item in items:
+            if item == "그림":
+                slide.shapes.add_picture(
+                    io.BytesIO(fixture("scan_tax_page1.jpg")), Inches(0.5), Inches(0.2), height=Inches(7)
+                )
+            else:
+                slide.shapes.add_textbox(Inches(1), Inches(1), Inches(2), Inches(1)).text = item
+    buf = io.BytesIO()
+    presentation.save(buf)
+    return buf.getvalue()
+
+
+def docx_bytes(text: str = "", picture: bool = True) -> bytes:
+    document = Document()
+    if text:
+        document.add_paragraph(text)
+    if picture:
+        document.add_picture(io.BytesIO(fixture("scan_tax_page1.jpg")), width=Inches(6))
+    buf = io.BytesIO()
+    document.save(buf)
+    return buf.getvalue()
+
+
+def xlsx_bytes(text: str = "", picture: bool = True) -> bytes:
+    from openpyxl.drawing.image import Image as SheetImage
+
+    workbook = Workbook()
+    if text:
+        workbook.active["A1"] = text
+    if picture:
+        workbook.active.add_image(SheetImage(io.BytesIO(fixture("scan_tax_page1.jpg"))), "B2")
+    buf = io.BytesIO()
+    workbook.save(buf)
+    return buf.getvalue()
+
+
+def hwpx_with_only_picture() -> bytes:
+    """글자도 그림도 없는 HWPX에 스캔 이미지 한 장을 그림(BinData)으로 넣은 사본."""
+    buf = io.BytesIO(hwpx_without_text())
+    with zipfile.ZipFile(buf, "a") as archive:
+        archive.writestr("BinData/image1.jpg", fixture("scan_tax_page1.jpg"))
+    return buf.getvalue()
+
+
+@pytest.mark.parametrize(
+    ("content_type", "data", "expected"),
+    [
+        ("pptx", fixture("scan_tax_page1_slide.pptx"), True),
+        # 쪽 단위 — 텍스트 슬라이드 사이에 그림뿐인 슬라이드가 끼어 있다(혼합 PDF와 같은 기준)
+        ("pptx", pptx_bytes([["첫 슬라이드"], ["그림"], ["셋째 슬라이드"]]), True),
+        # 텍스트가 있는 슬라이드의 그림은 인식하지 않는다
+        ("pptx", pptx_bytes([["첫 슬라이드", "그림"]]), False),
+        ("pptx", fixture("office_briefing.pptx"), False),
+        # 쪽이 없는 형식은 문서 전체의 텍스트가 빌 때만 그림을 인식한다
+        ("docx", docx_bytes(), True),
+        ("docx", docx_bytes("본문"), False),
+        ("docx", docx_bytes(picture=False), False),
+        ("xlsx", xlsx_bytes(), True),
+        ("xlsx", xlsx_bytes("값"), False),
+        ("xlsx", fixture("office_budget.xlsx"), False),
+        ("hwpx", hwpx_with_only_picture(), True),
+        # 본문이 있는 한글 문서의 기관 로고는 인식하지 않는다
+        ("hwpx", fixture("committee_result.hwpx"), False),
+        ("hwpx", hwpx_without_text(), False),
+    ],
+    ids=["pptx-picture-only", "pptx-picture-slide-between-text", "pptx-picture-on-text-slide",
+         "pptx-text", "docx-picture-only", "docx-text-and-picture", "docx-empty",
+         "xlsx-picture-only", "xlsx-text-and-picture", "xlsx-text", "hwpx-picture-only",
+         "hwpx-text-and-logos", "hwpx-empty"],
+)
+def test_needs_ocr_for_office_documents_whose_pictures_carry_the_only_text(
+    content_type: str, data: bytes, expected: bool
+) -> None:
+    """그림뿐인 오피스 문서는 거부하지 않고 그림 속 글자를 인식한다(#177, ADR-052 결정 2)."""
+    assert needs_ocr(content_type, data) is expected
+
+
+@pytest.mark.parametrize(
+    ("content_type", "data"),
+    [
+        ("pptx", fixture("scan_tax_page1_slide.pptx")),
+        ("docx", docx_bytes()),
+        ("xlsx", xlsx_bytes()),
+        ("hwpx", hwpx_with_only_picture()),
+    ],
+    ids=["pptx", "docx", "xlsx", "hwpx"],
+)
+def test_ocr_reads_the_pictures_of_a_picture_only_office_document(
+    content_type: str, data: bytes
+) -> None:
+    assert_ocr_matches(ocr_text(data, content_type), "scan_tax_page1.txt")
+
+
+def test_ocr_keeps_text_slides_and_reads_only_the_picture_slide() -> None:
+    text = ocr_text(pptx_bytes([["첫 슬라이드"], ["그림"], ["셋째 슬라이드"]]), "pptx")
+
+    first, *middle, last = text.split("\n\n")
+    assert first == "첫 슬라이드"
+    assert last == "셋째 슬라이드"
+    assert "국세행정개혁위원회" in normalize_ocr("".join(middle))
 
 
 @pytest.mark.parametrize(

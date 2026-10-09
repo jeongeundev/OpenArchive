@@ -624,7 +624,8 @@ async def file_text_versions(conn: psycopg.AsyncConnection, document_id) -> list
 
 @pytest.mark.parametrize(
     "fixture_name",
-    ["scan_tax_page1.jpg", "scan_tax_pages.pdf", "mixed_tax_pages.pdf", "garbled_travel_rule.pdf"],
+    ["scan_tax_page1.jpg", "scan_tax_pages.pdf", "mixed_tax_pages.pdf", "garbled_travel_rule.pdf",
+     "scan_tax_page1_slide.pptx"],
 )
 async def test_ocr_target_upload_becomes_a_pending_document_with_an_extract_job(
     documents_conn, fixture_name
