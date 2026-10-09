@@ -22,8 +22,9 @@ dependencies = [
     # 사용자 CLI(openarchive/client.py)가 REST에 붙는다. BSD-3. mcp가 끌고 오던 것을 직접
     # import하므로 명시한다.
     "httpx",
-    # 문서 파싱 — 업로드 phase에서 services/parsing.py가 사용한다.
-    "pypdf",
+    # 문서 파싱 — 업로드 phase에서 services/parsing.py가 사용한다. 깨진 글꼴 판정(#191)이 비공개 모듈
+    # `pypdf._codecs.adobe_glyphs`를 import하므로 확인한 메이저 버전으로 묶는다.
+    "pypdf>=6,<7",
     # 로컬 OCR(ADR-052). 시스템 tesseract·한국어 모델이 별도로 필요하다.
     "pytesseract",  # Apache-2.0
     "pypdfium2",  # BSD-3/Apache-2.0 — PDF 래스터화, poppler 불필요

@@ -22,6 +22,8 @@ HWP 파서 테스트는 한 쌍의 추출 결과가 같은지를 본다.
 | `scan_tax_page1.txt`, `scan_tax_pages.txt` | 같은 PDF판의 텍스트 레이어(`pdftotext`) — OCR 정확도 테스트의 정답 | 공공누리 제1유형(출처표시) |
 | `mixed_tax_pages.pdf` | 위 국세청 보도자료의 PDF판(정책브리핑 첨부, 4쪽)에서 1·3쪽을 그대로 두고 그 사이에 `scan_tax_pages.pdf`의 2쪽(스캔 가공)을 끼워 `pypdf`로 묶었다(2026-10-04). 1·3쪽은 텍스트 레이어가 있고 2쪽은 없다 — 혼합 PDF 쪽 단위 OCR 테스트용 | 공공누리 제1유형(출처표시) |
 | `mixed_tax_pages.txt` | 같은 PDF판 1~3쪽의 텍스트 레이어(`pdftotext -f 1 -l 3`) — 혼합 PDF OCR 결과의 정답 | 공공누리 제1유형(출처표시) |
+| `garbled_travel_rule.pdf` | 이 저장소에서 직접 작성한 세 줄짜리 출장비 규정을 macOS `cupsfilter`로 PDF로 만들었다(2026-10-02). 한글 글꼴(Apple SD Gothic Neo 부분 집합)이 Type0·`Identity-H`인데 ToUnicode가 없어(`pdffonts`의 `uni=no`) 텍스트 레이어가 글리프 번호를 글자로 읽은 깨진 문자열이 된다 — 깨진 쪽 OCR 테스트용(#191) | 저장소 라이선스 |
+| `garbled_travel_rule.txt` | 위 PDF를 만든 세 줄 텍스트 그대로 — 깨진 PDF OCR 결과의 정답 | 저장소 라이선스 |
 
 정답의 읽기 순서는 PDF 텍스트 레이어를 따른다. OCR 결과와는 공백·줄바꿈이 다르므로 테스트는 공백을 지우고
 비교한다. 가공 전 원본 기준의 엔진 실측(tesseract·EasyOCR·PaddleOCR)은 #135 코멘트에 있다.

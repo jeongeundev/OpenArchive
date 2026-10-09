@@ -31,6 +31,7 @@ from pptx.enum.shapes import MSO_SHAPE_TYPE
 from pptx.shapes.base import BaseShape
 from pptx.text.text import TextFrame
 from pypdf import PdfReader
+from pypdf._codecs.adobe_glyphs import adobe_glyphs
 
 SUPPORTED_CONTENT_TYPES: tuple[str, ...] = (
     "pdf", "docx", "txt", "md", "hwp", "hwpx", "xlsx", "pptx", "png", "jpg", "jpeg"
@@ -141,8 +142,9 @@ def extract_text(data: bytes, content_type: str) -> str:
 
 
 def needs_ocr(content_type: str, data: bytes) -> bool:
-    """이미지는 항상, PDF는 텍스트 레이어가 빈 쪽이 하나라도 있을 때 OCR한다.
+    """이미지는 항상, PDF는 텍스트 레이어를 글자로 읽을 수 없는 쪽이 하나라도 있을 때 OCR한다.
 
+    읽을 수 없는 쪽은 텍스트 레이어가 빈 쪽과 글자 정보가 깨진 쪽이다(`_pdf_ocr_pages`).
     문서 전체의 텍스트로 판정하면 텍스트 쪽과 스캔 쪽이 섞인 PDF의 스캔 쪽이 빈 채로 남는다.
     호출부는 extract_text가 읽을 수 있음을 확인한 뒤에 부른다.
     """
@@ -150,18 +152,67 @@ def needs_ocr(content_type: str, data: bytes) -> bool:
         return True
     if content_type != "pdf":
         return False
-    return any(not text.strip() for text in _pdf_page_texts(data))
+    return any(ocr for _, ocr in _pdf_ocr_pages(PdfReader(io.BytesIO(data))))
 
 
 def _pdf_page_texts(data: bytes) -> list[str]:
     return [page.extract_text() or "" for page in PdfReader(io.BytesIO(data)).pages]
 
 
+def _pdf_ocr_pages(reader: PdfReader) -> list[tuple[str, bool]]:
+    """쪽마다 (레이어 텍스트, OCR할지) — 텍스트 레이어가 비었거나 글자 정보가 깨진 글꼴을 쓰면 OCR한다(#191).
+
+    깨짐은 추출한 텍스트가 아니라 글꼴 구조로 판정한다. 깨진 글자는 글꼴마다 모양이 달라
+    (부분 집합 글꼴은 제어 문자, 통 글꼴은 여러 문자 체계, Type3는 ASCII 글리프 이름) 문자 비율로는
+    놓친다. 정상 PDF 4,705쪽에서 이 판정에 걸린 쪽은 없었다.
+    """
+    pages = []
+    for page in reader.pages:
+        text = page.extract_text() or ""
+        pages.append(
+            (text, not text.strip() or _has_unmapped_font(page.get("/Resources"), set()))
+        )
+    return pages
+
+
+def _has_unmapped_font(resources, seen: set[int]) -> bool:
+    """ToUnicode가 없고 pypdf가 글자로 옮길 수 없는 글꼴이 이 자원(폼 XObject 포함)에 있는가.
+
+    - Type0·`Identity-H`/`Identity-V`: 글리프 번호가 그대로 글자로 나온다.
+    - `/Differences`에 Adobe 글리프 목록에 없는 이름: pypdf가 `/HFT1` 같은 이름을 그대로 낸다.
+    그 밖의 ToUnicode 없는 글꼴(WinAnsi·MacRoman 단순 글꼴 등)은 인코딩으로 정상 추출된다.
+    """
+    if resources is None:
+        return False
+    resources = resources.get_object()
+    if id(resources) in seen:
+        return False
+    seen.add(id(resources))
+    for font in (resources.get("/Font") or {}).values():
+        font = font.get_object()
+        if "/ToUnicode" in font:
+            continue
+        encoding = font.get("/Encoding")
+        encoding = encoding.get_object() if encoding is not None else None
+        if font.get("/Subtype") == "/Type0" and encoding in ("/Identity-H", "/Identity-V"):
+            return True
+        if isinstance(encoding, dict) and any(
+            isinstance(name, str) and name not in adobe_glyphs
+            for name in encoding.get("/Differences", [])
+        ):
+            return True
+    return any(
+        xobject.get_object().get("/Subtype") == "/Form"
+        and _has_unmapped_font(xobject.get_object().get("/Resources"), seen)
+        for xobject in (resources.get("/XObject") or {}).values()
+    )
+
+
 def ocr_text(data: bytes, content_type: str) -> str:
     """로컬 OCR로 텍스트를 읽는다. 파일 오류는 ValueError, 설치 오류는 그대로 전파한다.
 
-    PDF는 텍스트 레이어가 빈 쪽만 인식하고, 나머지 쪽은 extract_text와 같은 레이어 텍스트를
-    쓴다. 쪽 순서는 원본 그대로다.
+    PDF는 텍스트 레이어가 빈 쪽과 글자 정보가 깨진 쪽만 인식하고, 나머지 쪽은 extract_text와 같은
+    레이어 텍스트를 쓴다. 쪽 순서는 원본 그대로다.
     """
     if content_type not in (*IMAGE_CONTENT_TYPES, "pdf"):
         raise UnsupportedFileType(f"지원하지 않는 OCR 파일 형식입니다: {content_type}")
@@ -174,10 +225,12 @@ def ocr_text(data: bytes, content_type: str) -> str:
             ):
                 return pytesseract.image_to_string(image, lang=OCR_LANGUAGE, config=OCR_CONFIG)
 
-        texts = _pdf_page_texts(data)
+        pages = _pdf_ocr_pages(PdfReader(io.BytesIO(data)))
+        texts = [text for text, _ in pages]
+        ocr_pages = [ocr for _, ocr in pages]
         with pypdfium2.PdfDocument(data) as document:
             for index in range(len(document)):
-                if texts[index].strip():
+                if not ocr_pages[index]:
                     continue
                 page = document[index]
                 try:
