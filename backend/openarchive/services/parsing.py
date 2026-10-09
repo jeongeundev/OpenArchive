@@ -169,27 +169,73 @@ def needs_ocr(content_type: str, data: bytes) -> bool:
         ).strip()
     if content_type != "pdf":
         return False
-    return any(ocr for _, ocr in _pdf_ocr_pages(PdfReader(io.BytesIO(data))))
+    return any(ocr for _, ocr in _pdf_ocr_pages(PdfReader(io.BytesIO(data)), data))
 
 
 def _pdf_page_texts(data: bytes) -> list[str]:
-    return [page.extract_text() or "" for page in PdfReader(io.BytesIO(data)).pages]
+    return _pdf_layer_texts(PdfReader(io.BytesIO(data)), data)
 
 
-def _pdf_ocr_pages(reader: PdfReader) -> list[tuple[str, bool]]:
+def _pdf_layer_texts(reader: PdfReader, data: bytes) -> list[str]:
+    """쪽마다 텍스트 레이어 — pypdf 텍스트에 pdfium이 본 같은 줄 간격을 공백으로 더한다(#176).
+
+    pypdf는 줄 끝에서 낱말 중간에 바뀐 줄을 바르게 잇지만, 덩어리마다 그래픽 상태를 따로 여닫는
+    PDF(한글 오피스 출력의 표 셀)에서는 셀 사이 간격을 버려 `16,8155,209`처럼 붙인다. pdfium은
+    반대로 셀 간격은 지키지만 줄마다 줄바꿈을 넣어 `판⏎단하는`처럼 낱말을 끊는다. 그래서 pypdf를
+    기준으로 두고 pdfium의 같은 줄 공백만 빌린다. pdfium이 열지 못하는 파일은 pypdf 텍스트 그대로다.
+    """
+    texts = [page.extract_text() or "" for page in reader.pages]
+    try:
+        with pypdfium2.PdfDocument(data) as document:
+            for index in range(min(len(document), len(texts))):
+                page = document[index]
+                try:
+                    textpage = page.get_textpage()
+                    try:
+                        texts[index] = _add_gap_spaces(texts[index], textpage.get_text_range())
+                    finally:
+                        textpage.close()
+                finally:
+                    page.close()
+    except pypdfium2.PdfiumError:
+        pass
+    return texts
+
+
+def _add_gap_spaces(base: str, other: str) -> str:
+    """`base`가 붙여 쓴 글자 사이 중 `other`가 같은 줄에서 띄운 자리에만 공백을 넣는다.
+
+    공백을 빼거나 줄바꿈을 더하지 않는다 — `base`의 구분은 그대로 남는다. 공백이 아닌 글자의 순서가
+    다르면(읽기 순서가 다른 쪽, 글자 정보가 깨진 쪽) 대응을 믿을 수 없으므로 `base`를 그대로 돌려준다.
+    정상 PDF 4,661쪽 중 98%가 같은 순서였다.
+    """
+    base_chars = [match.start() for match in re.finditer(r"\S", base)]
+    other_chars = list(re.finditer(r"\S", other))
+    if [base[index] for index in base_chars] != [match[0] for match in other_chars]:
+        return base
+    parts = []
+    start = 0
+    for position in range(len(base_chars) - 1):
+        end = base_chars[position] + 1
+        gap = other[other_chars[position].end() : other_chars[position + 1].start()]
+        if end == base_chars[position + 1] and gap and "\n" not in gap and "\r" not in gap:
+            parts.append(base[start:end])
+            start = end
+    parts.append(base[start:])
+    return " ".join(parts)
+
+
+def _pdf_ocr_pages(reader: PdfReader, data: bytes) -> list[tuple[str, bool]]:
     """쪽마다 (레이어 텍스트, OCR할지) — 텍스트 레이어가 비었거나 글자 정보가 깨진 글꼴을 쓰면 OCR한다(#191).
 
     깨짐은 추출한 텍스트가 아니라 글꼴 구조로 판정한다. 깨진 글자는 글꼴마다 모양이 달라
     (부분 집합 글꼴은 제어 문자, 통 글꼴은 여러 문자 체계, Type3는 ASCII 글리프 이름) 문자 비율로는
     놓친다. 정상 PDF 4,705쪽에서 이 판정에 걸린 쪽은 없었다.
     """
-    pages = []
-    for page in reader.pages:
-        text = page.extract_text() or ""
-        pages.append(
-            (text, not text.strip() or _has_unmapped_font(page.get("/Resources"), set()))
-        )
-    return pages
+    return [
+        (text, not text.strip() or _has_unmapped_font(page.get("/Resources"), set()))
+        for page, text in zip(reader.pages, _pdf_layer_texts(reader, data), strict=True)
+    ]
 
 
 def _has_unmapped_font(resources, seen: set[int]) -> bool:
@@ -247,7 +293,7 @@ def ocr_text(data: bytes, content_type: str) -> str:
                 _ocr_image(picture) for picture in _office_pictures(data, content_type)
             )
 
-        pages = _pdf_ocr_pages(PdfReader(io.BytesIO(data)))
+        pages = _pdf_ocr_pages(PdfReader(io.BytesIO(data)), data)
         texts = [text for text, _ in pages]
         ocr_pages = [ocr for _, ocr in pages]
         with pypdfium2.PdfDocument(data) as document:

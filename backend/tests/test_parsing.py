@@ -617,6 +617,17 @@ def type3_pdf(glyph: str) -> bytes:
     return minimal_pdf("AAA", font, b"<</Length 8>>\nstream\n500 0 d0\nendstream")
 
 
+def page_of(data: bytes, keep: int) -> bytes:
+    """한 쪽만 남긴 PDF."""
+    writer = PdfWriter(clone_from=PdfReader(io.BytesIO(data)))
+    for index in range(len(writer.pages) - 1, -1, -1):
+        if index != keep:
+            writer.remove_page(index)
+    out = io.BytesIO()
+    writer.write(out)
+    return out.getvalue()
+
+
 def first_page_of(data: bytes, *, strip_to_unicode: bool = False) -> bytes:
     writer = PdfWriter(clone_from=PdfReader(io.BytesIO(data)))
     for index in range(len(writer.pages) - 1, 0, -1):
@@ -679,7 +690,8 @@ def test_ocr_keeps_text_layer_pages_and_reads_only_the_scanned_page(monkeypatch)
     text = ocr_text(data, "pdf")
 
     assert len(calls) == 1  # 텍스트 레이어가 있는 1·3쪽은 인식하지 않는다
-    pages = [page.extract_text() for page in PdfReader(io.BytesIO(data)).pages]
+    # 레이어 텍스트는 업로드 추출과 같은 것이다(#176 — pypdf 원시 텍스트에 셀 간격 공백을 더한 것)
+    pages = [extract_text(page_of(data, index), "pdf") for index in range(3)]
     assert text.count(pages[0]) == 1 and text.count(pages[2]) == 1  # 레이어 그대로, 한 번씩
     normalized = normalize_ocr(text)
     ocr_page = normalized.index("하반기세무조사운영방향")  # 2쪽에만 있는 안건 제목
