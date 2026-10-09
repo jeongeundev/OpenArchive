@@ -127,7 +127,8 @@ async def test_load_creates_private_tagged_documents_replaces_and_records_reject
             source("v1.md", "9월 계수 1.21392", title="계수", owner="evaluator",
                    replaced_by=source("v2.md", "10월 계수 1.21169")),
             source("secret.md", "국내총책 A씨", title="비밀", owner="other"),
-            source("empty.pptx", derive_image_pptx(MIXED_PDF.read_bytes(), page=1), title="그림뿐", owner="evaluator"),
+            # 그림뿐인 슬라이드는 #177부터 OCR 대상이라 거부되지 않는다 — 추출 텍스트가 빈 문서로 거부를 본다
+            source("empty.md", " \n", title="빈 문서", owner="evaluator"),
         ],
     }
     outcomes = await load(evalset, tmp_path, migrated_db)

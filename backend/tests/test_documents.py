@@ -6,7 +6,7 @@ from uuid import uuid4
 import psycopg
 import pytest
 from conftest import insert_test_document, seed_extraction_states
-from test_parsing import minimal_pdf
+from test_parsing import docx_bytes, hwpx_with_only_picture, minimal_pdf, xlsx_bytes
 
 from openarchive.services.documents import (
     MAX_EXTRACTED_TEXT_LENGTH,
@@ -623,17 +623,26 @@ async def file_text_versions(conn: psycopg.AsyncConnection, document_id) -> list
 
 
 @pytest.mark.parametrize(
-    "fixture_name",
-    ["scan_tax_page1.jpg", "scan_tax_pages.pdf", "mixed_tax_pages.pdf", "garbled_travel_rule.pdf"],
+    ("filename", "data"),
+    [
+        *((name, (FIXTURES / name).read_bytes()) for name in (
+            "scan_tax_page1.jpg", "scan_tax_pages.pdf", "mixed_tax_pages.pdf",
+            "garbled_travel_rule.pdf", "scan_tax_page1_slide.pptx",
+        )),
+        # 그림뿐인 오피스 문서(#177)
+        ("scan.docx", docx_bytes()),
+        ("scan.xlsx", xlsx_bytes()),
+        ("scan.hwpx", hwpx_with_only_picture()),
+    ],
 )
 async def test_ocr_target_upload_becomes_a_pending_document_with_an_extract_job(
-    documents_conn, fixture_name
+    documents_conn, filename, data
 ):
     """스캔 문서는 요청 안에서 OCR하지 않고 「추출 중」 문서로 먼저 생긴다 (ADR-052 결정 3·5)."""
     document = await create_document(
         documents_conn,
-        filename=fixture_name,
-        data=(FIXTURES / fixture_name).read_bytes(),
+        filename=filename,
+        data=data,
         owner_id="alice",
     )
 
@@ -641,7 +650,9 @@ async def test_ocr_target_upload_becomes_a_pending_document_with_an_extract_job(
     assert await document_state(documents_conn, document["id"]) == (1, "", "pending")
     assert await text_versions(documents_conn, document["id"]) == []
     assert await file_text_versions(documents_conn, document["id"]) == [None]
-    assert await job_kinds(documents_conn, document["id"]) == ["extract"]
+    # 오피스 원본은 미리보기 변환 잡도 함께 생긴다(ADR-058)
+    office = ["preview"] if filename.endswith((".pptx", ".docx", ".xlsx", ".hwpx")) else []
+    assert await job_kinds(documents_conn, document["id"]) == ["extract", *office]
 
 
 async def test_upload_with_text_stays_done_with_an_embed_job(documents_conn):

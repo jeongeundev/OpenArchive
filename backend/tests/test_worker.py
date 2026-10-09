@@ -2502,6 +2502,8 @@ class BlockingOcr:
         ("mixed_tax_pages.pdf", "mixed_tax_pages.txt"),
         # 글자 정보(ToUnicode)가 없어 레이어 텍스트가 깨진 PDF — 깨진 글자가 아니라 인식한 한글로 채운다(#191)
         ("garbled_travel_rule.pdf", "garbled_travel_rule.txt"),
+        # 그림 한 장뿐인 슬라이드 — 거부하지 않고 그림 속 글자로 채운다(#177)
+        ("scan_tax_page1_slide.pptx", "scan_tax_page1.txt"),
     ],
 )
 async def test_worker_ocrs_a_scan_and_the_pipeline_continues_to_ready(
