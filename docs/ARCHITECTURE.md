@@ -76,10 +76,11 @@ OpenArchive/
 │   │   │                         #   폴더(030 — folders·folder_grants·documents.folder_id / 031 — 폴더 감사 트리거, ADR-054),
 │   │   │                         #   휴지통(032·033 — ADR-060), 토큰 만료(034 — ADR-061), 미리보기 감사(035),
 │   │   │                         #   미리보기 변환본(036 — document_file_previews / 037 — 변환 잡 트리거, ADR-058)
+│   │   │                         #   외부 공유·그룹·사용자 감사(041_share_principal_audit_triggers.sql, #201)
 │   │   ├── cli.py                # `openarchive init`(첫 관리자 포함)·`serve`·`create-user`·`reset-password`·`rebuild-edges`·`rebuild-previews`·`reextract`
 │   │   │                         #   ·`import`·`export`·`search`·`ask`·`demo` — 운영자 CLI, DB에 직접 붙는다 (ADR-039·040·046)
 │   │   ├── api/                  # 라우터: documents, search, ask, system, auth, admin, groups(+principals),
-│   │   │                         #   shares, audit(감사 로그 조회), folders(폴더), diagnostics, clusters / 미들웨어 retry (+ deps, schemas)
+│   │   │                         #   shares, admin_shares.py(관리자 공유 조회·토큰 폐기), audit(감사 로그 조회·CSV), folders(폴더), diagnostics, clusters / 미들웨어 retry (+ deps, schemas)
 │   │   ├── services/             # parsing, chunking, documents, search, related,
 │   │   │                         #   links, diagnostics, clusters, auth, system, visibility,
 │   │   │                         #   grants(그룹·부여), shares(외부 공유), folders(폴더 트리·범위, ADR-054), audit(행위자 전달·조회, ADR-055), answer(근거 조립·답변 생성, ADR-043)
@@ -94,7 +95,7 @@ OpenArchive/
     └── src/
         ├── app/                  # /(목록+업로드), /documents/[id], /search(+답변 패널), /login, /settings,
         │                         #   /diagnostics, /clusters, /admin/status, /admin/users, /admin/groups,
-        │                         #   /admin/audit
+        │                         #   /admin/audit, /admin/shares
         ├── components/
         ├── types/
         └── lib/                  # API 클라이언트 (fetch 래퍼)
@@ -348,7 +349,7 @@ CREATE TABLE api_tokens (
 CREATE TABLE audit_log (
   id             bigserial PRIMARY KEY,        -- 정렬·커서 기준 (같은 트랜잭션의 행은 occurred_at이 같다)
   occurred_at    timestamptz NOT NULL DEFAULT now(),
-  action         text NOT NULL,                -- CHECK 11종 (아래 「감사 로그」 절 — 029 7종 + 031·033·035)
+  action         text NOT NULL,                -- CHECK 15종 (아래 「감사 로그」 절 — 029 7종 + 031·033·035·040·041)
   actor          text,                         -- 사용자명 스냅샷. 앱 행위자가 없으면 NULL
   actor_via      text,                         -- session|token|mcp|cli|share|worker, 직접 SQL이면 NULL
   db_role        text NOT NULL DEFAULT current_user,
@@ -494,10 +495,15 @@ CREATE TRIGGER trg_documents_content_changed
 | `trg_audit_folder_grant_changed` | `folder_grants` INSERT / DELETE — 연쇄 삭제 제외 (031) | `folder_access_changed` · `{kind: grant, change, grantee_type, grantee, folder_id, folder_name}` |
 | `trg_audit_document_folder_changed` | `documents` UPDATE OF `follows_folder`·`folder_id` (031) | `access_changed` · `{kind: inherit, before, after}`(`folder`/`own`) · 「폴더 범위 따름」 문서의 이동은 `{kind: folder, before, after}`(폴더 이름) |
 | `trg_audit_document_owner_changed` / `trg_audit_folder_owner_changed` | `documents` UPDATE OF `owner_id` / `folders` UPDATE OF `created_by`, 실제 값 변경만 (040) | `owner_changed`(소유자 변경) · 문서 `{kind: document, before, after}`, 폴더 `{kind: folder, folder_id, folder_name, before, after}`. 폴더는 대상 문서 id·제목 NULL |
+| `trg_audit_share_changed` | `shares` INSERT / DELETE — 연쇄 삭제 제외 (041) | `share_changed` · `{change: created/deleted, share_id, share_name, owner}` |
+| `trg_audit_share_grant_changed` | `document_grants` INSERT / DELETE — `share_id IS NOT NULL`, 연쇄 삭제 제외 (041) | `share_changed` · `{change: document_added/document_removed, share_id, share_name, owner}` · 대상 문서 id·제목 |
+| `trg_audit_share_token_changed` | `api_tokens` INSERT / DELETE — `share_id IS NOT NULL`, 연쇄 삭제 제외 (041) | `share_changed` · `{change: token_issued/token_revoked, share_id, share_name, owner, token_name}` |
+| `trg_audit_group_changed` / `trg_audit_user_changed` | `groups` / `users` INSERT / DELETE (041) | `group_changed` · `{change: created/deleted, group}` / `user_changed` · `{change: created/deleted, user}` |
 | `trg_audit_log_reject_change` / `trg_audit_log_reject_truncate` | `audit_log` UPDATE·DELETE(행) / TRUNCATE(문) | 예외 — 거부 |
 
 - **부여 대상(사용자·그룹)의 추가·제거도 「열람 범위 변경」이다.** 「제한」 문서의 열람자는 부여 행으로 바뀐다. 그래서 `set_access`는 부여를 전량 교체하지 않고 **차이만** DELETE·INSERT한다 — 바뀌지 않은 대상이 「제거→추가」로 기록되지 않게.
 - **연쇄 삭제는 건너뛴다.** 문서·그룹·사용자를 지울 때 함께 지워지는 부여·구성원 행은 부모가 이미 없으므로 기록하지 않는다 — 실제 사건(문서 삭제)이 「부여 제거」 기록에 덮이지 않게. 그 대가로 그룹·사용자 삭제로 사라진 권한은 감사 로그에 없다(ADR-055 트레이드오프 6).
+- 공유 삭제는 `share_changed`의 `deleted` 1건, 사용자 삭제는 `user_changed` 1건만 남는다. 사용자 토큰 발급·폐기는 제외한다. 공유 부여는 `access_changed`가 아니라 `share_changed`다. `share_id`는 UUID 문자열, `owner`는 공유 주인 사용자명이고 공유 문서 부여 이외의 새 동작은 대상 문서 id·제목이 NULL이다.
 - 감사 행은 문서에 FK를 걸지 않고 제목·사용자명을 스냅샷으로 둔다. 문서를 지워도 그 문서의 기록과 제목이 남는다.
 
 **행위자 전달 흐름.** 진입점이 트랜잭션 안에서 `services/audit.py`의 `set_actor`를 부르면, 그것이 트랜잭션 범위 GUC 세 개(`openarchive.actor_id`·`actor_via`·`share_id`)를 `set_config(…, true)`로 건다. 트리거의 `audit_record()`가 그 값을 `NULLIF(current_setting(name, true), '')`로 읽는다 — HA 풀 백엔드에서는 값이 없을 때 NULL이 아니라 `''`이 온다.
