@@ -523,7 +523,7 @@ CREATE TRIGGER trg_documents_content_changed
 
 ### 추출 잡 — 스캔 문서는 텍스트 없이 먼저 생긴다
 
-이미지(`png`·`jpg`·`jpeg`)와 텍스트 레이어가 빈 쪽이 있는 PDF는 tesseract로 OCR한다(`kor+eng`, `--psm 4`, PDF는 빈 쪽만 300dpi로 래스터화하고 나머지 쪽은 레이어 텍스트를 쪽 순서대로 잇는다 — `services/parsing.py`). 쪽당 수 초라 업로드 요청 안에서 끝낼 수 없으므로 **추출도 워커 잡이 한다** (ADR-052). 모든 쪽에 텍스트 레이어가 있는 PDF와 나머지 형식은 지금처럼 요청 안에서 동기로 추출한다.
+이미지(`png`·`jpg`·`jpeg`)와 텍스트 레이어가 빈 쪽이나 글자 정보가 깨진 쪽이 있는 PDF는 tesseract로 OCR한다(`kor+eng`, `--psm 4`, PDF는 그 쪽만 300dpi로 래스터화하고 나머지 쪽은 레이어 텍스트를 쪽 순서대로 잇는다 — `services/parsing.py`). 쪽당 수 초라 업로드 요청 안에서 끝낼 수 없으므로 **추출도 워커 잡이 한다** (ADR-052). 글자 정보가 깨진 쪽은 ToUnicode 없는 Type0·`Identity` 글꼴이나 Adobe 글리프 목록에 없는 `/Differences` 이름을 쓰는 쪽이다 — 텍스트가 아니라 글꼴 구조로 판정한다(#191, ADR-052 결정 2). 모든 쪽을 글자로 읽을 수 있는 PDF와 나머지 형식은 지금처럼 요청 안에서 동기로 추출한다.
 
 ```sql
 -- 추출 중으로 들어오거나(새 스캔 문서) 추출 중으로 바뀌면(OCR 대상의 재추출·원본 교체) 추출 잡을 남긴다 (022)
@@ -901,7 +901,7 @@ OpenSQL `patroni.yml`의 PostgreSQL 파라미터는 `max_connections: 100`이다
 
 | 엔드포인트 | 내용 |
 |---|---|
-| `POST /api/documents` | multipart 업로드. 형식별 파서로 추출 → INSERT. 여기서 트리거가 파이프라인을 자동 기동 — 임베딩 관련 코드 없음. **이미지와 텍스트 레이어가 빈 쪽이 있는 PDF는 추출하지 않고 `extraction_status='pending'`으로 INSERT해 OCR을 워커 잡에 넘긴다** (「추출 잡」). 그 밖의 형식에서 **텍스트 추출 결과가 비면 400** (아래). **원본 파일은 같은 트랜잭션에서 `document_files`에 1판으로 저장한다** — 원본 저장이 실패하면 문서·텍스트 버전·잡도 남지 않는다. 상한 `MAX_UPLOAD_MB`(기본 50) 초과는 413. 선택 헤더 `Idempotency-Key`(아래) |
+| `POST /api/documents` | multipart 업로드. 형식별 파서로 추출 → INSERT. 여기서 트리거가 파이프라인을 자동 기동 — 임베딩 관련 코드 없음. **이미지와 텍스트 레이어가 빈 쪽·글자 정보가 깨진 쪽이 있는 PDF는 추출하지 않고 `extraction_status='pending'`으로 INSERT해 OCR을 워커 잡에 넘긴다** (「추출 잡」). 그 밖의 형식에서 **텍스트 추출 결과가 비면 400** (아래). **원본 파일은 같은 트랜잭션에서 `document_files`에 1판으로 저장한다** — 원본 저장이 실패하면 문서·텍스트 버전·잡도 남지 않는다. 상한 `MAX_UPLOAD_MB`(기본 50) 초과는 413. 선택 헤더 `Idempotency-Key`(아래) |
 | `POST /api/documents/text` | JSON 텍스트 공급(`txt`·`md`). 선택 `folder_id`는 업로드 Form과 같다(아래 「폴더」). `filename`은 NULL이며, 파생 데이터는 업로드 경로와 동일하게 DB 트리거가 만든다. 빈 문서 텍스트와 500,000자 초과는 400. 선택 헤더 `Idempotency-Key`(아래) |
 | `GET /api/documents` | 목록 + `status`(임베딩 상태)/`extraction_status`/`tag`/`q`(제목 부분 일치)/`content_type` 필터. `folder_id`(그 폴더에 **직접** 든 문서만, 하위 폴더 제외) 필터. `sort=updated`(기본, 최근 수정순) 또는 `title`(제목순). embedding_status·extraction_status 포함. 요약·상세에는 문서 자신의 `visibility`와 함께 실제로 적용되는 공개범위 `effective_visibility`(「폴더 범위 따름」이면 최상위 폴더의 값 — 폴더로 만든 문서의 자기 범위는 `private`로 닫혀 있다)를 싣는다. 인식 실패 문서는 `status=pending`에 남으므로 곧 임베딩될 문서는 `extraction_status=done`을 함께 준다 (ADR-052 결정 4 보강) |
 | `GET /api/documents?limit=&offset=` | 같은 목록의 한 페이지(`limit` 1~100). 빼면 전부 — MCP·export는 전체를 본다. 첫 화면은 50건씩 쓴다 (#95-d) |
@@ -988,7 +988,7 @@ DB가 잠시 응답할 수 없으면(연결 끊김·페일오버·switchover 중
 
 ### 빈 파싱 결과 처리 (`POST /api/documents`)
 
-OCR 대상(이미지, 텍스트 레이어가 빈 쪽이 있는 PDF)이 아닌 형식에서 파싱 결과가 공백 제거 후 빈 문자열이면 **400을 반환하고 저장하지 않는다.** 텍스트 레이어가 빈 쪽이 있는 PDF는 여기서 거부하지 않고 OCR로 넘긴다 (「추출 잡」, ADR-052).
+OCR 대상(이미지, 텍스트 레이어가 빈 쪽·글자 정보가 깨진 쪽이 있는 PDF)이 아닌 형식에서 파싱 결과가 공백 제거 후 빈 문자열이면 **400을 반환하고 저장하지 않는다.** 텍스트 레이어가 빈 쪽이 있는 PDF는 여기서 거부하지 않고 OCR로 넘긴다 (「추출 잡」, ADR-052).
 
 ```
 400 Bad Request
