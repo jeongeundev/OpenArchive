@@ -597,13 +597,14 @@ def test_import_keep_folders_follows_the_folder_and_says_frontmatter_visibility_
     write(source, "공개.md", "---\ntitle: 공개 메모\nvisibility: public\n---\n공개 본문\n")
     write(source, "보통.md", "---\ntitle: 보통 메모\n---\n보통 본문\n")
 
+    before = rows(archive_db)
     assert main(["import", str(source), "--user", "bob", "--keep-folders", "--dsn", archive_db]) == 0
 
     docs = placement(archive_db)
     assert all(d["folder"] == "팀" and d["follows"] for d in docs.values())
     assert "frontmatter의 visibility를 쓰지 않음 2건" in capsys.readouterr().out
     # 생성 뒤에 범위를 바꾸지 않는다 — 열람 범위 변경은 세션 전용이다.
-    assert {row[0] for row in rows(archive_db)} == {"document_created"}
+    assert {row[0] for row in rows(archive_db)[len(before):]} == {"document_created"}
 
 
 def test_import_checks_existing_folders_inside_a_transaction_so_ha_reads_the_primary(
@@ -1033,8 +1034,9 @@ def test_import_records_actor_for_each_file(archive_db, tmp_path):
     write(tmp_path, "one.txt", "first file")
     write(tmp_path, "two.md", "# second file")
     write(tmp_path, "three.md", "---\ntitle: Third\ntags: audit\n---\nthird file")
+    before = rows(archive_db)
     assert main(["import", str(tmp_path), "--user", "alice", "--dsn", archive_db]) == 0
-    audit = rows(archive_db)
+    audit = rows(archive_db)[len(before):]
     assert len(audit) == 3
     assert all(row[:3] == ("document_created", "alice", "cli") for row in audit)
 

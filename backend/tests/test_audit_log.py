@@ -30,7 +30,7 @@ def test_audit_defaults(conn):
 @pytest.mark.parametrize("action", [
     "document_created", "text_updated", "document_deleted", "access_changed",
     "group_member_changed", "original_replaced", "original_downloaded", "folder_access_changed",
-    "document_trashed", "document_restored", "original_previewed", "owner_changed",
+    "document_trashed", "document_restored", "original_previewed", "owner_changed", "share_changed", "group_changed", "user_changed",
 ])
 def test_allowed_actions(conn, action):
     assert conn.execute(
@@ -236,7 +236,11 @@ def test_grants_record_names_and_exclude_shares(conn):
             "INSERT INTO document_grants (document_id, share_id) VALUES (%s, %s)", (doc, share),
         )
         conn.execute("DELETE FROM document_grants WHERE share_id=%s", (share,))
-        assert audit_rows(conn) == before
+        assert audit_rows(conn)[len(before):] == [
+            ("share_changed", "alice", "session", doc, "감사 대상",
+             {"change": change, "share_id": str(share), "share_name": "협업", "owner": "bob"})
+            for change in ("document_added", "document_removed")
+        ]
 
 
 @pytest.mark.parametrize("parent", ["groups", "users"])
@@ -252,7 +256,12 @@ def test_principal_delete_does_not_audit_cascades(conn, parent):
         )
         before = audit_rows(conn)
         conn.execute(f"DELETE FROM {parent} WHERE id=%s", (target,))
-        assert audit_rows(conn) == before
+        action, key, name = ("group_changed", "group", "개발팀") if parent == "groups" else (
+            "user_changed", "user", "bob",
+        )
+        assert audit_rows(conn)[len(before):] == [
+            (action, "alice", "session", None, None, {"change": "deleted", key: name}),
+        ]
         assert conn.execute("SELECT count(*) FROM group_members").fetchone()[0] == 0
         assert conn.execute("SELECT count(*) FROM document_grants").fetchone()[0] == 0
 
@@ -261,8 +270,9 @@ def test_group_members_record_admin_and_ignore_conflicts(conn):
     with conn.transaction():
         set_actor(conn, "admin")
         user, group = principals(conn)
+        before = audit_rows(conn)
         conn.execute("INSERT INTO group_members VALUES (%s, %s)", (group, user))
-        assert audit_rows(conn) == [
+        assert audit_rows(conn)[len(before):] == [
             ("group_member_changed", "admin", "session", None, None,
              {"change": "added", "group": "개발팀", "user": "bob"}),
         ]
@@ -376,6 +386,7 @@ def test_folder_grant_audit(conn, grantee_type):
     folder = create_folder(conn)
     user, group = principals(conn)
     conn.execute("UPDATE groups SET name = '사업팀' WHERE id = %s", (group,))
+    before = audit_rows(conn)
     target = user if grantee_type == "user" else group
     column = "user_id" if grantee_type == "user" else "group_id"
     with conn.transaction():
@@ -385,7 +396,7 @@ def test_folder_grant_audit(conn, grantee_type):
             (folder, target),
         )
         conn.execute("DELETE FROM folder_grants WHERE folder_id = %s", (folder,))
-    assert audit_rows(conn) == [
+    assert audit_rows(conn)[len(before):] == [
         ("folder_access_changed", "kim", "session", None, None, {
             "kind": "grant", "change": change, "grantee_type": grantee_type,
             "grantee": "bob" if grantee_type == "user" else "사업팀",
@@ -403,7 +414,12 @@ def test_folder_grant_cascade_is_not_access_change(conn, parent):
     before = audit_rows(conn)
     target = {"folders": folder, "users": user, "groups": group}[parent]
     conn.execute(f"DELETE FROM {parent} WHERE id = %s", (target,))
-    assert audit_rows(conn) == before
+    kind = "user" if parent == "users" else "group"
+    expected = [] if parent == "folders" else [
+        (kind + "_changed", None, None, None, None,
+         {"change": "deleted", kind: "bob" if parent == "users" else "개발팀"}),
+    ]
+    assert audit_rows(conn)[len(before):] == expected
     assert conn.execute("SELECT count(*) FROM folder_grants").fetchone()[0] == (
         0 if parent == "folders" else 1
     )
@@ -551,3 +567,126 @@ def test_owner_changed_without_actor_and_rollback(conn, table, column):
     assert conn.execute(f"SELECT {column} FROM {table} WHERE id = %s", (target,)).fetchone() == (
         "alice",
     )
+
+
+def create_share(conn, user):
+    return conn.execute(
+        "INSERT INTO shares (owner_user_id, name) VALUES (%s, '외부 협업') RETURNING id", (user,),
+    ).fetchone()[0]
+
+
+def create_share_token(conn, share):
+    return conn.execute(
+        "INSERT INTO api_tokens (share_id, name, token_hash, scope) "
+        "VALUES (%s, '파트너', %s, 'read') RETURNING id", (share, str(uuid4())),
+    ).fetchone()[0]
+
+
+def share_event(share, change, actor="alice", doc=None, token=False):
+    detail = {"change": change, "share_id": str(share), "share_name": "외부 협업", "owner": "bob"}
+    if token:
+        detail["token_name"] = "파트너"
+    return ("share_changed", actor, "session", doc, "감사 대상" if doc else None, detail)
+
+
+def test_share_creation_and_deletion_skip_cascades(conn):
+    with conn.transaction():
+        set_actor(conn)
+        user, _ = principals(conn)
+        doc = create_document(conn)
+        before = audit_rows(conn)
+        share = create_share(conn, user)
+        assert audit_rows(conn)[len(before):] == [share_event(share, "created")]
+        conn.execute("INSERT INTO document_grants (document_id, share_id) VALUES (%s, %s)",
+                     (doc, share))
+        create_share_token(conn, share)
+        before = audit_rows(conn)
+        conn.execute("DELETE FROM shares WHERE id=%s", (share,))
+        assert audit_rows(conn)[len(before):] == [share_event(share, "deleted")]
+
+
+def test_share_grants_ignore_conflicts_and_document_delete(conn):
+    with conn.transaction():
+        set_actor(conn)
+        user, _ = principals(conn)
+        share = create_share(conn, user)
+        doc = create_document(conn)
+        before = audit_rows(conn)
+        sql = "INSERT INTO document_grants (document_id, share_id) VALUES (%s, %s)"
+        conn.execute(sql, (doc, share))
+        conn.execute(sql + " ON CONFLICT DO NOTHING", (doc, share))
+        assert audit_rows(conn)[len(before):] == [share_event(share, "document_added", doc=doc)]
+        before = audit_rows(conn)
+        conn.execute("DELETE FROM documents WHERE id=%s", (doc,))
+        assert audit_rows(conn)[len(before):] == [
+            ("document_deleted", "alice", "session", doc, "감사 대상", {}),
+        ]
+
+
+def test_share_tokens_and_admin_revocation(conn):
+    with conn.transaction():
+        set_actor(conn)
+        user, _ = principals(conn)
+        share = create_share(conn, user)
+        before = audit_rows(conn)
+        token = create_share_token(conn, share)
+        assert audit_rows(conn)[len(before):] == [share_event(share, "token_issued", token=True)]
+        conn.execute("DELETE FROM api_tokens WHERE id=%s", (token,))
+        assert audit_rows(conn)[-1] == share_event(share, "token_revoked", token=True)
+        token = create_share_token(conn, share)
+        set_actor(conn, "admin")
+        conn.execute("DELETE FROM api_tokens WHERE id=%s", (token,))
+        assert audit_rows(conn)[-1] == share_event(share, "token_revoked", "admin", token=True)
+        before = audit_rows(conn)
+        token = conn.execute(
+            "INSERT INTO api_tokens (user_id, name, token_hash, scope) "
+            "VALUES (%s, '개인', %s, 'read') RETURNING id", (user, str(uuid4())),
+        ).fetchone()[0]
+        conn.execute("DELETE FROM api_tokens WHERE id=%s", (token,))
+        assert audit_rows(conn) == before
+
+
+@pytest.mark.parametrize("table,key,name", [("users", "username", "새 사용자"),
+                                          ("groups", "name", "새 그룹")])
+def test_principal_creation_and_deletion(conn, table, key, name):
+    with conn.transaction():
+        set_actor(conn, "admin")
+        before = audit_rows(conn)
+        extra = ", password_hash" if table == "users" else ""
+        values = ", 'hash'" if table == "users" else ""
+        target = conn.execute(
+            f"INSERT INTO {table} ({key}{extra}) VALUES (%s{values}) RETURNING id", (name,),
+        ).fetchone()[0]
+        conn.execute(f"DELETE FROM {table} WHERE id=%s", (target,))
+        kind = "user" if table == "users" else "group"
+        assert audit_rows(conn)[len(before):] == [
+            (kind + "_changed", "admin", "session", None, None, {"change": change, kind: name})
+            for change in ("created", "deleted")
+        ]
+
+
+def test_user_delete_skips_all_share_and_principal_cascades(conn):
+    with conn.transaction():
+        set_actor(conn, "admin")
+        user, group = principals(conn)
+        share = create_share(conn, user)
+        doc = create_document(conn)
+        create_share_token(conn, share)
+        conn.execute("INSERT INTO group_members VALUES (%s, %s)", (group, user))
+        conn.execute("INSERT INTO document_grants (document_id, user_id) VALUES (%s, %s)",
+                     (doc, user))
+        conn.execute("INSERT INTO document_grants (document_id, share_id) VALUES (%s, %s)",
+                     (doc, share))
+        before = audit_rows(conn)
+        conn.execute("DELETE FROM users WHERE id=%s", (user,))
+        assert audit_rows(conn)[len(before):] == [
+            ("user_changed", "admin", "session", None, None, {"change": "deleted", "user": "bob"}),
+        ]
+
+
+def test_group_creation_without_actor(conn):
+    before = audit_rows(conn)
+    conn.execute("INSERT INTO groups (name) VALUES ('직접 생성')")
+    assert audit_rows(conn)[len(before):] == [
+        ("group_changed", None, None, None, None, {"change": "created", "group": "직접 생성"}),
+    ]

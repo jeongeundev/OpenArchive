@@ -328,7 +328,10 @@ export type AuditAction =
   | "group_member_changed"
   | "original_replaced"
   | "original_downloaded"
-  | "original_previewed";
+  | "original_previewed"
+  | "share_changed"
+  | "group_changed"
+  | "user_changed";
 
 export type AuditActorVia = "session" | "token" | "mcp" | "cli" | "share" | "worker";
 
@@ -446,3 +449,12 @@ export const EXTRACTING_NOTICE =
 
 // backend/openarchive/services/search.py의 MAX_K와 같아야 하며, 초과하면 API가 422를 반환한다.
 export const MAX_K = 20;
+
+export interface AdminShareSummary {
+  id: string;
+  name: string;
+  owner: string;
+  created_at: string;
+  document_count: number;
+  tokens: Omit<TokenSummary, "scope">[];
+}

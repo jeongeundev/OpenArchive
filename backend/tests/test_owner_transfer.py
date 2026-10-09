@@ -8,6 +8,7 @@ from conftest import insert_test_document
 from openarchive.services import auth
 from openarchive.services import documents as d
 from openarchive.services import folders as f
+from openarchive.services.audit import set_actor
 from openarchive.services.grants import create_group, insert_grants, resolve_grantees
 from openarchive.services.shares import add_document, create_share
 
@@ -83,7 +84,18 @@ async def test_document_transfer_removes_share_and_new_owner_grants_only(conn):
     await insert_grants(conn, id, users, groups)
     share = await create_share(conn, owner="kim", name="공유")
     await add_document(conn, share["id"], id, owner="kim")
-    await d.transfer_owner(conn, id, user_id="kim", new_owner="lee")
+    before = await scalar(conn, "SELECT coalesce(max(id), 0) FROM audit_log")
+    async with conn.transaction():
+        await set_actor(conn, actor="kim", via="session")
+        await d.transfer_owner(conn, id, user_id="kim", new_owner="lee")
+    rows = await (await conn.execute(
+        "SELECT actor, actor_via, document_id, document_title, detail FROM audit_log "
+        "WHERE id > %s AND action='share_changed'", (before,),
+    )).fetchall()
+    assert rows == [("kim", "session", id, "문서", {
+        "change": "document_removed", "share_id": str(share["id"]), "share_name": "공유",
+        "owner": "kim",
+    })]
     access = await d.get_access(conn, id, user_id="lee")
     assert access["users"] == ["other"] and access["groups"] == ["팀"]
     assert await scalar(conn, "SELECT count(*) FROM document_grants WHERE share_id=%s", (share["id"],)) == 0

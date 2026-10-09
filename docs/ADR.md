@@ -4199,7 +4199,7 @@ OpenProxy 풀 연결에도 적용된다(실측).
 **상태**: 2026-10-05 신규 — 채택(결정) · **2026-10-06 구현 #186(m23)** — `028_audit_tables.sql`·`029_audit_triggers.sql`,
 `services/audit.py`, `GET /api/admin/audit`, 관리 화면 `/admin/audit`. 결정 1 표의 「폴더 열람 범위 변경」만 폴더가 생기는
 **#187**로 넘겼다(결정 1 아래 「구현」) · **2026-10-06 폴더 기록 구현 #187(m25)** — `031_folder_audit_triggers.sql`, `folder_access_changed`. ADR-027·040(관리자는 문서를 보지 못한다)에 **감사 화면의 문서 제목**
-이라는 명시적 예외 하나를 둔다(결정 8).
+이라는 명시적 예외 하나를 둔다(결정 8). **2026-10-09 #201 구현(041)** — 외부 공유·그룹·사용자 감사 기록을 더했다.
 
 **맥락 — 기록하는 자리가 앱이면 경로마다 빠진다.** "누가 언제 무엇을 바꿨나"는 조직 문서관리의 기준선이다. 문서에
 닿는 경로는 웹·REST·원격/stdio MCP·사용자 CLI·운영자 CLI·psql 직접 SQL로 늘었다. 기록을 서비스 계층에 두면 경로가
@@ -4219,6 +4219,23 @@ OpenProxy 풀 연결에도 적용된다(실측).
    | 그룹 구성원 변경 | 그룹 · 대상 사용자 · 수행한 관리자 (ADR-044 관리 경로 1 보강) |
    | 원본 교체 | 판 번호 |
    | 원본 내려받기 | 판 번호 |
+
+   > → **2026-10-09 개정 — 구현됨(#201).** `041_share_principal_audit_triggers.sql`이 다음 기록 지점을 더했다. CHECK는 15종이다.
+   >
+   > | 대상 테이블 | 조건 | `action` · `detail` |
+   > |---|---|---|
+   > | `shares` INSERT / DELETE | 연쇄 삭제 제외 | `share_changed` · `{change: created/deleted, share_id, share_name, owner}` |
+   > | `document_grants` INSERT / DELETE | `share_id IS NOT NULL` · 연쇄 삭제 제외 | `share_changed` · `{change: document_added/document_removed, share_id, share_name, owner}` |
+   > | `api_tokens` INSERT / DELETE | `share_id IS NOT NULL` · 연쇄 삭제 제외 | `share_changed` · `{change: token_issued/token_revoked, share_id, share_name, owner, token_name}` |
+   > | `groups` INSERT / DELETE | — | `group_changed` · `{change: created/deleted, group}` |
+   > | `users` INSERT / DELETE | — | `user_changed` · `{change: created/deleted, user}` |
+   >
+   > `share_id`는 UUID 문자열, `owner`는 공유 주인의 사용자명이다. 공유 문서 추가·제거만 대상 문서 id·제목을 남기고 나머지는 NULL이다.
+   > 아래 기존 「외부 공유 부여는 … 세지 않는다」는 `access_changed`에 관한 기록이다. 이제 공유 부여는 별도 `share_changed`로 남긴다.
+   > 공유 삭제는 주인 사용자가, 공유 부여 삭제는 공유·주인·문서가, 공유 토큰 삭제는 공유·주인이 이미 없으면 건너뛴다.
+   > 공유 삭제는 `deleted` 1건, 사용자 삭제는 `user_changed` 1건, 문서 영구 삭제는 `document_deleted` 1건만 남는다.
+   > 소유권 이전으로 이전 소유자의 공유에서 빠지는 문서는 연쇄 삭제가 아니므로 `document_removed`로 기록한다.
+   > 사용자 토큰(`share_id IS NULL`) 발급·폐기는 기록하지 않는다. 행위자는 기존 `SET LOCAL` 경로이고 앱 INSERT는 없다.
 
    > → **2026-10-09 개정 — 구현됨(#200).** 감사 동작에 `owner_changed`(「소유자 변경」)를 더했다(040).
    > 문서 `owner_id`·폴더 `created_by`의 실제 변경을 DB 트리거가 기록하며 detail은 ADR-061 결정 2 D5와 같다.
@@ -4314,6 +4331,9 @@ OpenProxy 풀 연결에도 적용된다(실측).
 5. 기록 대상 쓰기마다 INSERT가 하나 더해진다.
 6. **그룹·사용자 삭제로 함께 사라진 부여·구성원은 기록되지 않는다.** 연쇄 삭제를 건너뛰는 규칙(결정 1 구현)의 결과이고,
    그룹·사용자 삭제 자체는 기록 대상이 아니다. 그 삭제로 누가 열람 권한을 잃었는지는 감사 로그로 재구성할 수 없다.
+
+   > → **2026-10-09 개정 — 구현됨(#201).** 그룹·사용자의 생성·삭제 자체는 이제 기록된다(041). 결정 6 보강과 ADR-061 결정 4의
+   > 「닫힌다」는 삭제 사건 미기록에만 해당한다. 연쇄로 사라진 구성원·부여·공유는 개별 기록되지 않아 「누가 열람 권한을 잃었나」는 여전히 재구성할 수 없다.
 
 **구현 때 정함** — 2026-10-05 사용자 결정(#186 코멘트)으로 닫았다.
 1. **행위자 전달 방식은 유지한다.** 결정 3의 실측에서 트랜잭션 범위 값은 새지 않았다.
@@ -4796,7 +4816,7 @@ ROADMAP·CLAUDE.md의 「휴지통 없음」을 **뒤집는다**. ADR-053(PITR)�
 ---
 
 ### ADR-061: 실무 기준선 보강 — 토큰 만료·소유권 이전·공유 관리·감사 대상·버전 작성자·미리보기 감사·정확 구문 (2026-10-06 대조)
-**상태**: 2026-10-06 신규 — 채택(결정). 구현 #199(결정 1, 2026-10-07 구현됨)·#200(2, 2026-10-09 구현됨)·#201(3·4·5)·#202(6)·#190(7)은 시연 전, #168(8)은 시연 뒤.
+**상태**: 2026-10-06 신규 — 채택(결정). 구현 #199(결정 1, 2026-10-07 구현됨)·#200(2, 2026-10-09 구현됨)·#201(3·4·5, 2026-10-09 구현됨)·#202(6)·#190(7)은 시연 전, #168(8)은 시연 뒤.
 ADR-034 결정 4·ADR-037·ADR-044 트레이드오프·ADR-055 결정 6·ADR-058 「구현 때 정함」·ADR-016 트레이드오프에 각각 개정 표기를 달았다.
 
 **맥락.** 기능명세서 확정 전에 실무 문서관리 플랫폼 9영역을 벤더 1차 문서로 대조했다(`notes/practice-audit-20261006.md`,
@@ -4839,11 +4859,33 @@ ADR-034 결정 4·ADR-037·ADR-044 트레이드오프·ADR-055 결정 6·ADR-058
 
 3. **관리자의 외부 공유 전수 조회·비상 폐기**(#201). 공유 이름·소유자·문서 수·토큰 상태·마지막 사용·폐기. **문서 제목은 보이지
    않는다** — ADR-055 결정 8의 제목 예외는 감사 화면 하나다. 실무: 7개 제품 전부 조직 수준 조회·끄기.
+
+   > → **2026-10-09 개정 — 구현됨(#201).** 관리자 세션 전용 `GET /api/admin/shares`가
+   > `{id, name, owner, created_at, document_count, tokens}`를 반환한다. `tokens`는
+   > `{id, name, created_at, expires_at, last_used_at, expired}` 목록이다. 문서 id·제목, 토큰 해시·원문은 없다.
+   > 문서 수는 `NOT_TRASHED`로 휴지통 문서를 제외한다. 관리자는 토큰 폐기만 한다 — 공유 삭제·문서 제거는 제공하지 않는다.
+   > `DELETE /api/admin/shares/{share_id}/tokens/{token_id}`는 해당 공유의 토큰만 폐기하고 204를 반환한다.
+   > 없거나 다른 공유의 토큰이면 404 「토큰을 찾을 수 없습니다.」다. 폐기 뒤 토큰 요청은 401이고 감사 행위자는 관리자다.
+
 4. **감사 기록 대상 확장**(#201): 외부 공유 동작(생성·삭제·문서 추가/제거·토큰 발급/폐기 → `share_changed`), 그룹·사용자
    생성·삭제(`group_changed`·`user_changed`). 전부 트리거(ADR-055 결정 2) — 조직 밖으로 여는 행위와 주체의 생멸은
    SharePoint·Confluence·Nextcloud·M-Files 어디서나 기록된다. ADR-055 트레이드오프 6이 닫힌다.
+
+   > → **2026-10-09 개정 — 구현됨(#201).** 041의 DB 트리거가 `share_changed`·`group_changed`·`user_changed`를
+   > 원래 작업과 같은 트랜잭션에서 남긴다. 기록 지점·detail은 ADR-055 결정 1의 이번 개정 표다.
+   > 공유 부여는 `access_changed`가 아닌 `share_changed`다. 연쇄 삭제는 건너뛰므로 공유 삭제·사용자 삭제는 각각 1건만 남는다.
+   > 위 「트레이드오프 6이 닫힌다」는 생성·삭제 사건에 한정한다 — 함께 사라진 구성원·부여·공유의 개별 기록은 여전히 없다.
+
 5. **감사 로그 CSV 내보내기**(#201). `GET /api/admin/audit?format=csv`, 현재 필터 그대로. 실무: 없는 제품은 Paperless·
    Nextcloud(파일 로그)뿐.
+
+   > → **2026-10-09 개정 — 구현됨(#201).** 관리자 세션 전용 `GET /api/admin/audit?format=csv`는 `actor`·`action`
+   > 필터의 전부를 id DESC로 내보낸다. `limit`·`before_id`는 페이지 선택에 쓰지 않는다.
+   > 열은 `id,occurred_at,actor,actor_via,db_role,action,document_id,document_title,detail`이며 원시 코드·ISO 8601 시각·
+   > 한글을 유지한 JSON detail·NULL 빈 칸을 사용한다. UTF-8 BOM으로 시작하고 `=`, `+`, `-`, `@`, 탭, CR로 시작하는 셀에
+   > `'`를 붙여 수식 주입을 막는다. 응답은 메모리에서 한 번에 만들며 서버 커서·스트리밍은 없다(ADR-062).
+   > `Content-Type: text/csv; charset=utf-8`, 파일명은 UTC 기준 `audit-<YYYYMMDD-HHMMSS>.csv`(attachment)다. 조회 자체는 기록하지 않는다.
+
 6. **텍스트 버전 작성자**(#202). `document_versions.author`를 버전 트리거가 감사 행위자(`SET LOCAL`, ADR-055 결정 3)에서
    채운다 — 워커·직접 접속은 NULL + 표기. 실무: 전부 작성자 표시. 변경 설명(코멘트)은 ROADMAP 후보.
 

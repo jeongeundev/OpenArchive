@@ -1,6 +1,7 @@
+from datetime import UTC, datetime
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Response
 
 from openarchive.api.deps import Connection, require_admin
 from openarchive.api.schemas import AuditEntry, AuditPage
@@ -24,7 +25,17 @@ async def list_audit(
     action: AuditAction | None = None,
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
     before_id: int | None = None,
-) -> AuditPage:
+    format: Literal["json", "csv"] = "json",
+) -> AuditPage | Response:
+    """CSV 파일명의 시각은 UTC다."""
+    if format == "csv":
+        rows = await service.list_audit(conn, actor=actor, action=action, limit=None)
+        filename = datetime.now(UTC).strftime("audit-%Y%m%d-%H%M%S.csv")
+        return Response(
+            content=service.render_audit_csv(rows),
+            media_type="text/csv; charset=utf-8",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
     rows = await service.list_audit(
         conn, actor=actor, action=action, limit=limit, before_id=before_id
     )

@@ -1,5 +1,8 @@
 """감사 행위자는 트랜잭션 범위로만 DB에 전달한다."""
 
+import csv
+import io
+import json
 from uuid import UUID
 
 import psycopg
@@ -20,6 +23,9 @@ AUDIT_ACTIONS: tuple[str, ...] = (
     "document_trashed",
     "document_restored",
     "owner_changed",
+    "share_changed",
+    "group_changed",
+    "user_changed",
 )
 
 # 같은 트랜잭션의 행은 occurred_at이 같으므로 정렬·커서는 id로 한다.
@@ -77,7 +83,7 @@ async def list_audit(
     *,
     actor: str | None = None,
     action: str | None = None,
-    limit: int = 50,
+    limit: int | None = 50,
     before_id: int | None = None,
 ) -> list[dict]:
     """감사 기록을 최신순으로 돌려준다. 조회 자체는 기록하지 않는다 (ADR-055 결정 6)."""
@@ -89,3 +95,32 @@ async def list_audit(
             {"actor": actor, "action": action, "limit": limit, "before_id": before_id},
         )
         return await cur.fetchall()
+
+
+def render_audit_csv(rows: list[dict]) -> str:
+    """원시 감사 값을 BOM이 있는 CSV로 만들고 셀의 수식 해석을 막는다."""
+    columns = (
+        "id", "occurred_at", "actor", "actor_via", "db_role", "action",
+        "document_id", "document_title", "detail",
+    )
+    output = io.StringIO()
+    output.write("\ufeff")
+    writer = csv.writer(output)
+    writer.writerow(columns)
+    for row in rows:
+        cells = []
+        for column in columns:
+            value = row[column]
+            if value is None:
+                cell = ""
+            elif column == "occurred_at":
+                cell = value.isoformat()
+            elif column == "detail":
+                cell = json.dumps(value, ensure_ascii=False)
+            else:
+                cell = str(value)
+            if cell.startswith(("=", "+", "-", "@", "\t", "\r")):
+                cell = "'" + cell
+            cells.append(cell)
+        writer.writerow(cells)
+    return output.getvalue()

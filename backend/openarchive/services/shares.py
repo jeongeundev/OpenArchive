@@ -7,6 +7,8 @@
 - 남의 공유와 없는 공유는 구별하지 않는다(`ShareNotFound`). 공유의 존재가 새지 않는다.
 - 문서는 자기 것만 넣는다. 보이는 남의 문서(조직 공개 포함)를 넣을 수 있으면 조직 안
   열람 범위가 조직 밖으로 번진다. 관리자도 예외가 아니다.
+- 관리자 전수 조회·비상 토큰 폐기는 소유자 확인 없이 관리자 라우터가 호출한다.
+- 관리자 목록은 문서 제목·id를 싣지 않는다 — 제목 예외는 감사 화면 하나다(ADR-061 결정 3).
 - 공유 토큰은 `read` 고정이고 DB에는 sha256만 남는다(ADR-034).
 """
 
@@ -174,6 +176,48 @@ async def revoke_share_token(
     conn: psycopg.AsyncConnection, share_id: UUID, token_id: UUID, *, owner: str
 ) -> None:
     await _own_share(conn, share_id, owner)
+    cur = await conn.execute(
+        "DELETE FROM api_tokens WHERE id = %s AND share_id = %s", (token_id, share_id)
+    )
+    if cur.rowcount == 0:
+        raise TokenNotFound("토큰을 찾을 수 없습니다.")
+
+
+async def list_all_shares(conn: psycopg.AsyncConnection) -> list[dict]:
+    """관리자 전용 공유 메타데이터. 문서는 휴지통을 제외한 수만 제공한다."""
+    cur = conn.cursor(row_factory=dict_row)
+    await cur.execute(
+        f"""
+        SELECT s.id, s.name, u.username AS owner, s.created_at,
+               (SELECT count(*) FROM document_grants g
+                JOIN documents d ON d.id = g.document_id
+                WHERE g.share_id = s.id AND {NOT_TRASHED}) AS document_count
+        FROM shares s JOIN users u ON u.id = s.owner_user_id
+        ORDER BY u.username, s.name, s.id
+        """
+    )
+    shares = await cur.fetchall()
+    await cur.execute(
+        """
+        SELECT share_id, id, name, created_at, expires_at, last_used_at,
+               expires_at IS NOT NULL AND expires_at <= now() AS expired
+        FROM api_tokens WHERE share_id = ANY(%s)
+        ORDER BY created_at, id
+        """,
+        ([share["id"] for share in shares],),
+    )
+    tokens_by_share = {share["id"]: [] for share in shares}
+    for token in await cur.fetchall():
+        tokens_by_share[token.pop("share_id")].append(token)
+    for share in shares:
+        share["tokens"] = tokens_by_share[share["id"]]
+    return shares
+
+
+async def admin_revoke_share_token(
+    conn: psycopg.AsyncConnection, share_id: UUID, token_id: UUID
+) -> None:
+    """관리자 전용 비상 폐기. 호출 라우터의 require_admin이 권한을 판정한다."""
     cur = await conn.execute(
         "DELETE FROM api_tokens WHERE id = %s AND share_id = %s", (token_id, share_id)
     )
