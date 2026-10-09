@@ -61,7 +61,11 @@ async def set_actor(
 
 
 async def mark_text_from_extraction(conn: psycopg.AsyncConnection) -> None:
-    """작성자는 텍스트를 쓴 주체인 워커로 기록하고 감사 행위자는 그대로 둔다 (D3)."""
+    """재추출이 다시 만든 텍스트의 버전 작성자를 워커로 기록한다. 감사 행위자는 그대로 둔다.
+
+    작성자는 행동 기준이다 — 업로드·원본 교체·편집·복원은 요청한 사람, OCR 반영·재추출은 워커다
+    (ADR-061 결정 6). 그래서 이 표시는 재추출 경로에만 건다.
+    """
     if conn.autocommit and conn.info.transaction_status == TransactionStatus.IDLE:
         raise RuntimeError("추출 출처 설정은 트랜잭션 안에서 불러야 한다.")
     await conn.execute("SELECT set_config('openarchive.text_source', 'extraction', true)")

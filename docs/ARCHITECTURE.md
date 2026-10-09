@@ -451,13 +451,14 @@ CREATE TRIGGER trg_documents_content_changed
 **텍스트 버전 작성자(038·039, ADR-061 결정 6).** 트리거가 위 GUC에서 `author`·`author_via`를 채운다.
 빈 placeholder는 `NULLIF(..., '')`로 읽는다. 추출 출처이면 NULL·`worker`, 아니면 행위자 이름과 경로를 쓰고
 경로가 없으면 `direct`다. OCR은 워커 경로로 기록하고, 동기 재추출은 `mark_text_from_extraction`을 새 텍스트 쓰기 직전에
-호출한다. 감사 행위자는 바꾸지 않아 재추출을 요청한 사람도 별도로 남는다.
+호출한다. 감사 행위자는 바꾸지 않아 재추출을 요청한 사람도 별도로 남는다. 작성자 원칙은 **행동 기준**이다 — 업로드·원본
+교체·편집·복원은 요청한 사람, OCR 반영·재추출은 워커다(스캔 파일 업로드·교체의 텍스트 버전은 비동기 OCR이 써서 워커, ADR-061 결정 6).
 
 | GUC | 값 · 전달 규칙 |
 |---|---|
 | `openarchive.actor_id` | 사용자 이름 또는 빈 값 — 버전 작성자와 감사 행위자의 이름 |
 | `openarchive.actor_via` | `session`·`token`·`mcp`·`cli`·`share`·`worker` — 행위자의 경로 |
-| `openarchive.text_source` | `extraction`이면 추출이 쓴 텍스트 — 버전 작성자는 워커, 감사 행위자는 유지 |
+| `openarchive.text_source` | `extraction`이면 재추출이 다시 만든 텍스트 — 버전 작성자는 워커, 감사 행위자는 유지 |
 
 모두 `set_config(..., true)`로 트랜잭션 범위에만 전달한다. 세션 `SET`은 쓰지 않는다.
 038은 기존 행을 같은 문서와 `occurred_at = created_at`인 감사 행으로 채운다. v1은 `document_created`, v2 이상은
