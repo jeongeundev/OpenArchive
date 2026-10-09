@@ -30,6 +30,7 @@ from pptx import Presentation
 from pptx.enum.shapes import MSO_SHAPE_TYPE
 from pptx.shapes.base import BaseShape
 from pptx.shapes.picture import Picture
+from pptx.slide import Slide
 from pptx.text.text import TextFrame
 from pypdf import PdfReader
 from pypdf._codecs.adobe_glyphs import adobe_glyphs
@@ -43,7 +44,7 @@ OCR_LANGUAGE = "kor+eng"
 # 기본 psm 3은 깨끗한 300dpi 원본의 문단 블록을 누락했다(#135):
 # 1,095자 중 879자, CER 0.35 → psm 4에서 0.07.
 OCR_CONFIG = "--psm 4"
-# 그림뿐인 오피스 문서(#177): 쪽이 없는 형식은 문서 텍스트가 빌 때 이 경로의 그림을 이름 순서대로
+# 그림뿐인 오피스 문서(#177): 쪽이 없는 형식은 추출 텍스트가 빌 때 이 경로의 그림을 이름 순서대로
 # 인식한다. tesseract가 읽는 래스터 그림만 — EMF·WMF 같은 벡터 그림은 건너뛴다.
 _OFFICE_MEDIA_DIRS = {"docx": "word/media/", "xlsx": "xl/media/", "hwpx": "BinData/"}
 _RASTER_EXTENSIONS = ("png", "jpg", "jpeg", "gif", "bmp", "tif", "tiff")
@@ -152,7 +153,7 @@ def needs_ocr(content_type: str, data: bytes) -> bool:
     읽을 수 없는 쪽은 텍스트 레이어가 빈 쪽과 글자 정보가 깨진 쪽이다(`_pdf_ocr_pages`).
     문서 전체의 텍스트로 판정하면 텍스트 쪽과 스캔 쪽이 섞인 PDF의 스캔 쪽이 빈 채로 남는다.
     오피스 문서도 같은 기준이다(#177) — PPTX는 텍스트 없이 그림만 있는 슬라이드가 있을 때,
-    쪽이 없는 DOCX·XLSX·HWPX는 문서 텍스트가 비고 그림이 있을 때 OCR한다.
+    쪽이 없는 DOCX·XLSX·HWPX는 추출 텍스트가 비고 그림이 있을 때 OCR한다.
     호출부는 extract_text가 읽을 수 있음을 확인한 뒤에 부른다.
     """
     if content_type in IMAGE_CONTENT_TYPES:
@@ -440,7 +441,7 @@ def _pptx_slides(data: bytes, read_picture: Callable[[bytes], str] | None = None
     """
     for slide in Presentation(io.BytesIO(data)).slides:
         lines = list(_pptx_shape_texts(slide.shapes))
-        if read_picture is not None and not _pptx_slide_has_text(slide):
+        if read_picture is not None and not any(line.strip() for line in lines):
             lines = [read_picture(picture) for picture in _pptx_pictures(slide.shapes)]
         if slide.has_notes_slide and slide.notes_slide.notes_text_frame is not None:
             lines.append(_pptx_frame_text(slide.notes_slide.notes_text_frame))
@@ -458,7 +459,7 @@ def _pptx_shape_texts(shapes: Iterable[BaseShape]) -> Iterator[str]:
                 yield _tab_row(_pptx_frame_text(cell.text_frame) for cell in row.cells)
 
 
-def _pptx_slide_has_text(slide) -> bool:
+def _pptx_slide_has_text(slide: Slide) -> bool:
     return any(line.strip() for line in _pptx_shape_texts(slide.shapes))
 
 
@@ -466,7 +467,12 @@ def _pptx_pictures(shapes: Iterable[BaseShape]) -> Iterator[bytes]:
     for shape in shapes:
         if shape.shape_type == MSO_SHAPE_TYPE.GROUP:
             yield from _pptx_pictures(shape.shapes)
-        elif isinstance(shape, Picture) and shape.image.ext.lower() in _RASTER_EXTENSIONS:
+        # 외부 링크만 건 그림은 파일 안에 없어 읽을 수 없다(`image`가 ValueError)
+        elif (
+            isinstance(shape, Picture)
+            and shape._pic.blip_rId is not None
+            and shape.image.ext.lower() in _RASTER_EXTENSIONS
+        ):
             yield shape.image.blob
 
 
