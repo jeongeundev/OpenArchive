@@ -33,7 +33,12 @@ def minimal_pdf(text: str, font: bytes = b"<</Type/Font/Subtype/Type1/BaseFont/H
 
     `font`는 4번 객체, `extra_objs`는 6번부터 붙는다(글꼴이 참조하는 객체용).
     """
-    stream = f"BT /F1 24 Tf 72 700 Td ({text}) Tj ET".encode()
+    return pdf_from_stream(f"BT /F1 24 Tf 72 700 Td ({text}) Tj ET".encode(), font, *extra_objs)
+
+
+def pdf_from_stream(stream: bytes, font: bytes = b"<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>",
+                    *extra_objs: bytes) -> bytes:
+    """내용 스트림을 그대로 담은 한 쪽짜리 PDF. 글꼴은 `/F1`이다."""
     objs = [
         b"<</Type/Catalog/Pages 2 0 R>>",
         b"<</Type/Pages/Kids[3 0 R]/Count 1>>",
@@ -110,6 +115,43 @@ def test_extract_text_reads_docx_paragraphs_in_order() -> None:
 
 def test_extract_text_reads_pdf() -> None:
     assert extract_text(minimal_pdf("embedding job trigger"), "pdf") == "embedding job trigger"
+
+
+def hwp_style_pdf(*runs: tuple[int, int, str]) -> bytes:
+    """한글 오피스 출력 모양 — 글자 덩어리마다 `q · cm(축소·상하 반전) · BT · Tm · TJ · ET · Q`로 따로 그린다.
+
+    `runs`는 (x, y, 텍스트)이고 좌표는 축소 전 단위(1/0.12pt), y는 아래로 커진다.
+    """
+    return pdf_from_stream(b"".join(
+        b"q 0.12 0 0 -0.12 0 841 cm BT /F1 100 Tf 1 0 0 -1 %d %d Tm [(%s)] TJ ET Q\n"
+        % (x, y, text.encode())
+        for x, y, text in runs
+    ))
+
+
+def test_extract_text_separates_pdf_table_cells_drawn_apart_on_one_line() -> None:
+    """표 셀 사이에 공백 글자가 없어도 같은 줄에서 떨어져 그려졌으면 공백으로 가른다(#176)."""
+    data = hwp_style_pdf((1000, 1800, "16,815"), (1500, 1800, "5,209"), (2000, 1800, "11,320"))
+
+    assert extract_text(data, "pdf") == "16,815 5,209 11,320"
+
+
+def test_extract_text_keeps_a_word_wrapped_at_line_end_joined() -> None:
+    """줄 끝에서 낱말 중간에 바뀐 줄은 잇는다 — 한국어 규정 PDF에 흔하다(#176)."""
+    data = hwp_style_pdf((1000, 1800, "Infor"), (1000, 1950, "mation"))
+
+    assert extract_text(data, "pdf") == "Information"
+
+
+def test_ocr_keeps_the_same_layer_text_as_extract_text_for_text_pages() -> None:
+    """OCR 경로의 텍스트 쪽도 업로드 추출과 같은 셀 구분을 쓴다(#176)."""
+    data = hwp_style_pdf((1000, 1800, "16,815"), (1500, 1800, "5,209"))
+    writer = PdfWriter(clone_from=PdfReader(io.BytesIO(data)))
+    writer.add_blank_page(612, 792)  # 텍스트 레이어가 빈 쪽 — OCR 대상
+    buffer = io.BytesIO()
+    writer.write(buffer)
+
+    assert ocr_text(buffer.getvalue(), "pdf").split("\n\n")[0] == "16,815 5,209"
 
 
 def test_extract_text_returns_empty_string_for_pdf_without_text() -> None:
