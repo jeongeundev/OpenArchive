@@ -38,14 +38,14 @@ describe("사용자 관리 화면", () => {
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(4));
   });
 
-  it("삭제 전에 소유 문서를 먼저 삭제해야 함을 알린다", async () => {
+  it("삭제 전에 소유물 이전 흐름을 알린다", async () => {
     vi.stubGlobal("fetch", vi.fn()
       .mockResolvedValueOnce(response(admin))
       .mockResolvedValueOnce(response(users)));
 
     render(<AuthProvider><UsersPage /></AuthProvider>);
 
-    expect(await screen.findByText(/소유 문서가 있는 사용자는 삭제할 수 없습니다/)).toBeInTheDocument();
+    expect(await screen.findByText(/문서나 폴더를 소유한 사용자는 이전받을 사용자를 고른 뒤 삭제합니다/)).toBeInTheDocument();
   });
 
   it("확인 후 사용자를 삭제하고 목록을 갱신한다", async () => {
@@ -117,4 +117,25 @@ describe("사용자 관리 화면 — 동작 뒤 조회 취소", () => {
     expect(fetchMock.mock.calls[3][1]?.signal?.aborted).toBe(true);
     vi.unstubAllGlobals();
   });
+});
+
+
+it("409인 행에서 자신을 제외한 이전 대상을 골라 삭제한다", async () => {
+  const lee = { ...users[0], id: "user-2", username: "lee" };
+  const fetchMock = vi.fn().mockResolvedValueOnce(response(admin)).mockResolvedValueOnce(response([...users, lee]))
+    .mockResolvedValueOnce(response({ detail: "소유한 문서나 만든 폴더가 있어 삭제할 수 없습니다." }, 409))
+    .mockResolvedValueOnce(new Response(null, { status: 204 })).mockResolvedValueOnce(response([lee]));
+  vi.stubGlobal("fetch", fetchMock);
+  vi.spyOn(window, "confirm").mockReturnValue(true);
+  render(<AuthProvider><UsersPage /></AuthProvider>);
+  await screen.findByText("alice");
+  fireEvent.click(screen.getAllByRole("button", { name: "삭제" })[0]);
+  expect(await screen.findByRole("alert")).toHaveTextContent("소유한 문서나 만든 폴더가 있어 삭제할 수 없습니다.");
+  const select = screen.getByLabelText("이전받을 사용자");
+  expect(select.querySelector('option[value="alice"]')).toBeNull();
+  expect(screen.getByRole("button", { name: "이전 후 삭제" })).toBeDisabled();
+  fireEvent.change(select, { target: { value: "lee" } });
+  fireEvent.click(screen.getByRole("button", { name: "이전 후 삭제" }));
+  await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/admin/users/user-1?transfer_to=lee", expect.objectContaining({ method: "DELETE" })));
+  await waitFor(() => expect(screen.queryByText("alice")).not.toBeInTheDocument());
 });

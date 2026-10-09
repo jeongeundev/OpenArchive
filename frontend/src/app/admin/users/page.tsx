@@ -14,6 +14,8 @@ export default function UsersPage(): React.ReactElement {
   const [password, setPassword] = useState("");
   const [isAdmin, setIsAdmin] = useState(false);
   const [working, setWorking] = useState(false);
+  const [transferUser, setTransferUser] = useState<string | null>(null);
+  const [transferTo, setTransferTo] = useState("");
   const [error, setError] = useState<string | null>(null);
   const unmountSignal = useUnmountSignal();
 
@@ -55,15 +57,18 @@ export default function UsersPage(): React.ReactElement {
     }
   }
 
-  async function remove(user: UserSummary): Promise<void> {
-    if (!window.confirm(`${user.username} 사용자를 삭제하시겠습니까?`)) return;
+  async function remove(user: UserSummary, target?: string): Promise<void> {
+    if (!window.confirm(target ? `${user.username} 사용자의 문서와 폴더를 ${target} 사용자에게 이전한 뒤 삭제하시겠습니까? 이전해도 열람 범위는 바뀌지 않습니다.` : `${user.username} 사용자를 삭제하시겠습니까?`)) return;
     setWorking(true);
     setError(null);
     try {
-      await deleteUser(user.id);
+      await deleteUser(user.id, target);
+      setTransferUser(null);
+      setTransferTo("");
       await refresh();
     } catch (reason: unknown) {
       setError(reason instanceof ApiError ? reason.detail : "사용자를 삭제하지 못했습니다.");
+      if (reason instanceof ApiError && reason.status === 409) { setTransferUser(user.id); setTransferTo(""); }
     } finally {
       setWorking(false);
     }
@@ -93,7 +98,7 @@ export default function UsersPage(): React.ReactElement {
       </form>
 
       <div className="space-y-3">
-        <p className="text-sm text-neutral-500">소유 문서가 있는 사용자는 삭제할 수 없습니다. 문서를 먼저 삭제하세요.</p>
+        <p className="text-sm text-neutral-500">문서나 폴더를 소유한 사용자는 이전받을 사용자를 고른 뒤 삭제합니다. 이전해도 열람 범위는 바뀌지 않습니다.</p>
         <div className="overflow-x-auto rounded-lg border border-neutral-800 bg-[#141414]">
           <table className="w-full text-left text-sm">
             <thead className="border-b border-neutral-800 text-neutral-500"><tr><th className="px-4 py-3 font-medium">사용자명</th><th className="px-4 py-3 font-medium">권한</th><th className="px-4 py-3"><span className="sr-only">작업</span></th></tr></thead>
@@ -101,7 +106,17 @@ export default function UsersPage(): React.ReactElement {
               <tr className="border-b border-neutral-800 last:border-0" key={user.id}>
                 <td className="px-4 py-3 text-white">{user.username}</td>
                 <td className="px-4 py-3 text-neutral-400">{user.is_admin ? "관리자" : "일반 사용자"}</td>
-                <td className="px-4 py-3 text-right"><button className="text-neutral-500 hover:text-neutral-300 disabled:text-neutral-600" disabled={working} onClick={() => void remove(user)} type="button">삭제</button></td>
+                <td className="px-4 py-3 text-right"><button className="text-neutral-500 hover:text-neutral-300 disabled:text-neutral-600" disabled={working} onClick={() => void remove(user)} type="button">삭제</button>
+                  {transferUser === user.id ? <div className="mt-3 space-y-3 text-left">
+                    <label className="block text-neutral-400">이전받을 사용자
+                      <select className="mt-2 block rounded-lg border border-neutral-800 bg-neutral-900 px-4 py-3 text-neutral-300" disabled={working} value={transferTo} onChange={event => setTransferTo(event.target.value)}>
+                        <option value="">사용자를 고르세요</option>
+                        {users.filter(item => item.id !== user.id).map(item => <option key={item.id} value={item.username}>{item.username}</option>)}
+                      </select>
+                    </label>
+                    <button className="rounded-lg bg-white px-4 py-2 text-black hover:bg-neutral-200 disabled:bg-neutral-700 disabled:text-neutral-400" disabled={working || !transferTo} onClick={() => void remove(user, transferTo)} type="button">이전 후 삭제</button>
+                  </div> : null}
+                </td>
               </tr>
             ))}</tbody>
           </table>

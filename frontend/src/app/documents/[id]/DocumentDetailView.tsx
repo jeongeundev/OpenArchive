@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 
+import { OwnerTransfer } from "@/components/OwnerTransfer";
 import { AccessPanel } from "@/components/AccessPanel";
 import { DocumentActions } from "@/components/DocumentActions";
 import { DocumentFolderSection } from "@/components/DocumentFolderSection";
@@ -130,7 +131,10 @@ export function DocumentDetailView(): React.ReactElement {
         <>
           <DocumentActions disabled={editing} document={document} onChanged={refresh} />
           {isOwner ? (
-            <AccessPanel key={folderKey} disabled={editing} documentId={document.id} onSaved={refresh} />
+            <>
+              <AccessPanel key={folderKey} disabled={editing} documentId={document.id} onSaved={refresh} />
+              <OwnerTransfer documentId={document.id} owner={document.owner_id} disabled={editing} onTransferred={refresh} />
+            </>
           ) : null}
           <TagEditor disabled={editing} error={tagError} onChange={setDraftTags} onSave={() => void saveTags(tags)} saving={savingTags} tags={tags} />
         </>

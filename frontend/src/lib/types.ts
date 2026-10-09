@@ -317,6 +317,7 @@ export interface TrashItem {
 
 /** 감사 로그의 동작. DB 트리거·함수가 기록한다 (ADR-055). */
 export type AuditAction =
+  | "owner_changed"
   | "document_created"
   | "text_updated"
   | "document_deleted"

@@ -277,9 +277,9 @@ export function createUser(input: {
   });
 }
 
-export function deleteUser(id: string): Promise<void> {
+export function deleteUser(id: string, transferTo?: string): Promise<void> {
   return request<void>(
-    `/api/admin/users/${encodeURIComponent(id)}`,
+    `/api/admin/users/${encodeURIComponent(id)}${transferTo === undefined ? "" : `?transfer_to=${encodeURIComponent(transferTo)}`}`,
     { method: "DELETE" },
     { parse: false },
   );
@@ -747,5 +747,18 @@ export function setFolderAccess(id: string, scope: FolderScope): Promise<FolderS
 export function moveDocument(id: string, folderId: string | null): Promise<DocumentDetail> {
   return request<DocumentDetail>(`/api/documents/${encodeURIComponent(id)}/folder`, {
     method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ folder_id: folderId }),
+  });
+}
+
+
+export function transferDocumentOwner(id: string, owner: string): Promise<{ owner_id: string; still_visible: boolean }> {
+  return request(`/api/documents/${encodeURIComponent(id)}/owner`, {
+    method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ owner }),
+  });
+}
+
+export function transferFolderOwner(id: string, owner: string): Promise<{ created_by: string; still_visible: boolean }> {
+  return request(`/api/folders/${encodeURIComponent(id)}/owner`, {
+    method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ owner }),
   });
 }
