@@ -161,6 +161,18 @@ async def test_delete_invalid_target_changes_nothing(conn, target):
     assert await scalar(conn, "SELECT count(*) FROM users WHERE id=%s", (uid,)) == 1
 
 
+async def test_delete_rejects_transfer_to_acting_admin(conn):
+    # 관리자는 이전만 하고 열람을 얻지 않는다(ADR-061 결정 2) — 자기에게 옮기면 소유자로서 읽게 된다.
+    id = await doc(conn, visibility="private")
+    uid = await scalar(conn, "SELECT id FROM users WHERE username='kim'")
+    with pytest.raises(d.InvalidNewOwner):
+        await auth.delete_user(conn, uid, transfer_to="admin", actor="admin")
+    assert await scalar(conn, "SELECT owner_id FROM documents WHERE id=%s", (id,)) == "kim"
+    assert await scalar(conn, "SELECT count(*) FROM users WHERE id=%s", (uid,)) == 1
+    await auth.delete_user(conn, uid, transfer_to="lee", actor="admin")
+    assert await scalar(conn, "SELECT owner_id FROM documents WHERE id=%s", (id,)) == "lee"
+
+
 async def test_delete_empty_user_with_transfer_and_missing_source(conn):
     uid = await scalar(conn, "SELECT id FROM users WHERE username='kim'")
     await auth.delete_user(conn, uid, transfer_to="lee")

@@ -111,7 +111,7 @@ export default function UsersPage(): React.ReactElement {
                     <label className="block text-neutral-400">이전받을 사용자
                       <select className="mt-2 block rounded-lg border border-neutral-800 bg-neutral-900 px-4 py-3 text-neutral-300" disabled={working} value={transferTo} onChange={event => setTransferTo(event.target.value)}>
                         <option value="">사용자를 고르세요</option>
-                        {users.filter(item => item.id !== user.id).map(item => <option key={item.id} value={item.username}>{item.username}</option>)}
+                        {users.filter(item => item.id !== user.id && item.username !== auth.username).map(item => <option key={item.id} value={item.username}>{item.username}</option>)}
                       </select>
                     </label>
                     <button className="rounded-lg bg-white px-4 py-2 text-black hover:bg-neutral-200 disabled:bg-neutral-700 disabled:text-neutral-400" disabled={working || !transferTo} onClick={() => void remove(user, transferTo)} type="button">이전 후 삭제</button>

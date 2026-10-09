@@ -4828,6 +4828,8 @@ ADR-034 결정 4·ADR-037·ADR-044 트레이드오프·ADR-055 결정 6·ADR-058
    > - **D4** 관리자 `DELETE /api/admin/users/{id}?transfer_to=<username>`은 휴지통을 포함한 모든 소유 문서와 폴더를
    >   이전한 뒤 같은 트랜잭션에서 계정을 삭제한다. 이전 대상 없이는 기존 409 거부를 유지한다. 화면은 삭제 시도 후
    >   409면 「이전받을 사용자」 선택과 「이전 후 삭제」를 펼친다. 공유·토큰은 계정 삭제와 함께 사라진다.
+   >   **삭제를 수행하는 관리자 자신은 이전 대상이 될 수 없다**(400, 화면 선택지에서도 뺀다) — 자기에게 옮기면 소유자로서
+   >   문서를 읽게 되어, 감사에 남는 그룹 구성원 변경이라는 정해진 비상 경로(ADR-040)를 우회한다(PR #232 리뷰).
    > - **D5** `040_owner_audit_triggers.sql`이 실제 값 변경만 `owner_changed`(「소유자 변경」) 하나로 기록한다.
    >   문서는 대상 id·제목과 `{kind: document, before, after}`, 폴더는 대상 id·제목 NULL과
    >   `{kind: folder, folder_id, folder_name, before, after}`다. 행위자는 기존 `SET LOCAL` GUC이며 일괄 이전은 관리자다.

@@ -162,9 +162,17 @@ async def resolve_new_owner(conn, *, current_owner: str, new_owner: str) -> UUID
 
 
 async def delete_user(
-    conn: psycopg.AsyncConnection, user_id: UUID, *, transfer_to: str | None = None
+    conn: psycopg.AsyncConnection,
+    user_id: UUID,
+    *,
+    transfer_to: str | None = None,
+    actor: str | None = None,
 ) -> None:
-    """소유물을 일괄 이전한 뒤 삭제하거나, 이전 대상이 없으면 기존처럼 거부한다."""
+    """소유물을 일괄 이전한 뒤 삭제하거나, 이전 대상이 없으면 기존처럼 거부한다.
+
+    `actor`는 삭제를 수행하는 관리자다. 자기에게 옮기면 소유자로서 문서를 읽게 되므로
+    거부한다 — 관리자는 이전만 하고 열람을 얻지 않는다(ADR-061 결정 2, ADR-040).
+    """
     async with conn.transaction():
         row = await (
             await conn.execute("SELECT username FROM users WHERE id=%s FOR UPDATE", (user_id,))
@@ -173,6 +181,8 @@ async def delete_user(
             raise UserNotFound
         owner = row[0]
         if transfer_to is not None:
+            if actor is not None and transfer_to == actor:
+                raise InvalidNewOwner("삭제를 수행하는 관리자 자신에게는 이전할 수 없습니다.")
             target_id = await resolve_new_owner(conn, current_owner=owner, new_owner=transfer_to)
             await conn.execute(
                 """DELETE FROM document_grants WHERE user_id=%s AND share_id IS NULL

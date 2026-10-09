@@ -120,19 +120,22 @@ describe("사용자 관리 화면 — 동작 뒤 조회 취소", () => {
 });
 
 
-it("409인 행에서 자신을 제외한 이전 대상을 골라 삭제한다", async () => {
+it("409인 행에서 자신과 삭제하는 관리자를 제외한 이전 대상을 골라 삭제한다", async () => {
   const lee = { ...users[0], id: "user-2", username: "lee" };
-  const fetchMock = vi.fn().mockResolvedValueOnce(response(admin)).mockResolvedValueOnce(response([...users, lee]))
+  const self = { ...users[0], id: "user-0", username: "admin", is_admin: true };
+  const fetchMock = vi.fn().mockResolvedValueOnce(response(admin)).mockResolvedValueOnce(response([self, ...users, lee]))
     .mockResolvedValueOnce(response({ detail: "소유한 문서나 만든 폴더가 있어 삭제할 수 없습니다." }, 409))
     .mockResolvedValueOnce(new Response(null, { status: 204 })).mockResolvedValueOnce(response([lee]));
   vi.stubGlobal("fetch", fetchMock);
   vi.spyOn(window, "confirm").mockReturnValue(true);
   render(<AuthProvider><UsersPage /></AuthProvider>);
   await screen.findByText("alice");
-  fireEvent.click(screen.getAllByRole("button", { name: "삭제" })[0]);
+  fireEvent.click(screen.getAllByRole("button", { name: "삭제" })[1]);
   expect(await screen.findByRole("alert")).toHaveTextContent("소유한 문서나 만든 폴더가 있어 삭제할 수 없습니다.");
   const select = screen.getByLabelText("이전받을 사용자");
   expect(select.querySelector('option[value="alice"]')).toBeNull();
+  // 관리자는 이전만 하고 열람을 얻지 않는다 — 자기에게 옮기면 소유자로서 읽게 된다(ADR-061 결정 2).
+  expect(select.querySelector('option[value="admin"]')).toBeNull();
   expect(screen.getByRole("button", { name: "이전 후 삭제" })).toBeDisabled();
   fireEvent.change(select, { target: { value: "lee" } });
   fireEvent.click(screen.getByRole("button", { name: "이전 후 삭제" }));

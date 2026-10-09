@@ -536,7 +536,7 @@ def test_me_is_anonymous_for_an_expired_or_revoked_token(
     }
 
 
-@pytest.mark.parametrize("target,code", [(None, 409), ("ghost", 400), ("kim", 400), ("lee", 204)])
+@pytest.mark.parametrize("target,code", [(None, 409), ("ghost", 400), ("kim", 400), ("boss", 400), ("lee", 204)])
 def test_admin_delete_user_transfers_owned_items_atomically(db_client, migrated_db, target, code):
     from conftest import login_as
     from test_folders_api import folder
