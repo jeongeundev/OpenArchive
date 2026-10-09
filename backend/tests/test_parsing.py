@@ -436,6 +436,23 @@ def pptx_bytes(slides: list[list[str]]) -> bytes:
     return buf.getvalue()
 
 
+def pptx_with_linked_picture(slides: list[list[str]]) -> bytes:
+    """마지막 슬라이드에 내장하지 않고 외부 링크만 건 그림을 더한 사본."""
+    from pptx.opc.constants import RELATIONSHIP_TYPE
+    from pptx.oxml.ns import qn
+
+    presentation = Presentation(io.BytesIO(pptx_bytes([*slides, ["그림"]])))
+    slide = presentation.slides[-1]
+    blip = slide.shapes[0]._pic.blipFill.blip
+    del blip.attrib[qn("r:embed")]
+    blip.set(qn("r:link"), slide.part.relate_to(
+        "https://example.com/scan.jpg", RELATIONSHIP_TYPE.IMAGE, is_external=True
+    ))
+    buf = io.BytesIO()
+    presentation.save(buf)
+    return buf.getvalue()
+
+
 def docx_bytes(text: str = "", picture: bool = True) -> bytes:
     document = Document()
     if text:
@@ -477,6 +494,8 @@ def hwpx_with_only_picture() -> bytes:
         # 텍스트가 있는 슬라이드의 그림은 인식하지 않는다
         ("pptx", pptx_bytes([["첫 슬라이드", "그림"]]), False),
         ("pptx", fixture("office_briefing.pptx"), False),
+        # 외부 링크만 건 그림은 파일 안에 없다 — 읽을 그림이 없는 슬라이드로 본다
+        ("pptx", pptx_with_linked_picture([["첫 슬라이드"]]), False),
         # 쪽이 없는 형식은 문서 전체의 텍스트가 빌 때만 그림을 인식한다
         ("docx", docx_bytes(), True),
         ("docx", docx_bytes("본문"), False),
@@ -490,7 +509,7 @@ def hwpx_with_only_picture() -> bytes:
         ("hwpx", hwpx_without_text(), False),
     ],
     ids=["pptx-picture-only", "pptx-picture-slide-between-text", "pptx-picture-on-text-slide",
-         "pptx-text", "docx-picture-only", "docx-text-and-picture", "docx-empty",
+         "pptx-text", "pptx-linked-picture", "docx-picture-only", "docx-text-and-picture", "docx-empty",
          "xlsx-picture-only", "xlsx-text-and-picture", "xlsx-text", "hwpx-picture-only",
          "hwpx-text-and-logos", "hwpx-empty"],
 )
@@ -508,8 +527,10 @@ def test_needs_ocr_for_office_documents_whose_pictures_carry_the_only_text(
         ("docx", docx_bytes()),
         ("xlsx", xlsx_bytes()),
         ("hwpx", hwpx_with_only_picture()),
+        # 링크 그림만 있는 슬라이드가 함께 있어도 내장 그림은 인식한다
+        ("pptx", pptx_with_linked_picture([["그림"]])),
     ],
-    ids=["pptx", "docx", "xlsx", "hwpx"],
+    ids=["pptx", "docx", "xlsx", "hwpx", "pptx-with-linked-picture-slide"],
 )
 def test_ocr_reads_the_pictures_of_a_picture_only_office_document(
     content_type: str, data: bytes
