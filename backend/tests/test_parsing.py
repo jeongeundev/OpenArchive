@@ -470,7 +470,7 @@ def first_page_of(data: bytes, *, strip_to_unicode: bool = False) -> bytes:
 def test_needs_ocr_for_pdf_when_a_page_text_layer_is_garbled(data: bytes, expected: bool) -> None:
     """레이어 텍스트가 있어도 글자 정보(ToUnicode)가 없어 글자로 읽을 수 없는 쪽은 OCR한다(#191).
 
-    판정은 텍스트 통계가 아니라 글꼴 구조로 한다. 실측: 정상 PDF 4,704쪽 중 걸린 쪽 0, 같은 PDF에서
+    판정은 텍스트 통계가 아니라 글꼴 구조로 한다. 실측: 정상 PDF 4,705쪽 중 걸린 쪽 0, 같은 PDF에서
     ToUnicode만 지운 4,704쪽은 전부 걸림 — 의심 문자 비율(5%)은 Type3 글리프 이름이 ASCII라 52쪽을 놓쳤다.
     """
     assert extract_text(data, "pdf").strip()  # 빈 쪽 판정과 무관하다

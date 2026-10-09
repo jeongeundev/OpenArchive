@@ -152,24 +152,27 @@ def needs_ocr(content_type: str, data: bytes) -> bool:
         return True
     if content_type != "pdf":
         return False
-    return any(_pdf_ocr_pages(PdfReader(io.BytesIO(data))))
+    return any(ocr for _, ocr in _pdf_ocr_pages(PdfReader(io.BytesIO(data))))
 
 
 def _pdf_page_texts(data: bytes) -> list[str]:
     return [page.extract_text() or "" for page in PdfReader(io.BytesIO(data)).pages]
 
 
-def _pdf_ocr_pages(reader: PdfReader) -> list[bool]:
-    """쪽마다 OCR할지 — 텍스트 레이어가 비었거나 글자 정보가 깨진 글꼴을 쓰면 참이다(#191).
+def _pdf_ocr_pages(reader: PdfReader) -> list[tuple[str, bool]]:
+    """쪽마다 (레이어 텍스트, OCR할지) — 텍스트 레이어가 비었거나 글자 정보가 깨진 글꼴을 쓰면 OCR한다(#191).
 
     깨짐은 추출한 텍스트가 아니라 글꼴 구조로 판정한다. 깨진 글자는 글꼴마다 모양이 달라
     (부분 집합 글꼴은 제어 문자, 통 글꼴은 여러 문자 체계, Type3는 ASCII 글리프 이름) 문자 비율로는
-    놓친다. 정상 PDF 4,704쪽에서 이 판정에 걸린 쪽은 없었다.
+    놓친다. 정상 PDF 4,705쪽에서 이 판정에 걸린 쪽은 없었다.
     """
-    return [
-        not (page.extract_text() or "").strip() or _has_unmapped_font(page.get("/Resources"), set())
-        for page in reader.pages
-    ]
+    pages = []
+    for page in reader.pages:
+        text = page.extract_text() or ""
+        pages.append(
+            (text, not text.strip() or _has_unmapped_font(page.get("/Resources"), set()))
+        )
+    return pages
 
 
 def _has_unmapped_font(resources, seen: set[int]) -> bool:
@@ -222,9 +225,9 @@ def ocr_text(data: bytes, content_type: str) -> str:
             ):
                 return pytesseract.image_to_string(image, lang=OCR_LANGUAGE, config=OCR_CONFIG)
 
-        reader = PdfReader(io.BytesIO(data))
-        texts = [page.extract_text() or "" for page in reader.pages]
-        ocr_pages = _pdf_ocr_pages(reader)
+        pages = _pdf_ocr_pages(PdfReader(io.BytesIO(data)))
+        texts = [text for text, _ in pages]
+        ocr_pages = [ocr for _, ocr in pages]
         with pypdfium2.PdfDocument(data) as document:
             for index in range(len(document)):
                 if not ocr_pages[index]:
