@@ -571,3 +571,17 @@ class ClustersResponse(BaseModel):
 
     clusters: list[ClusterItem]
     connections: list[ClusterConnectionItem]
+
+
+class TransferOwnerRequest(BaseModel):
+    owner: str = Field(min_length=1)
+
+
+class DocumentOwnerTransferred(BaseModel):
+    owner_id: str
+    still_visible: bool
+
+
+class FolderOwnerTransferred(BaseModel):
+    created_by: str
+    still_visible: bool

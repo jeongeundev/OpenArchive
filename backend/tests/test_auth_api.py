@@ -534,3 +534,49 @@ def test_me_is_anonymous_for_an_expired_or_revoked_token(
         "scope": None,
         "expires_at": None,
     }
+
+
+@pytest.mark.parametrize("target,code", [(None, 409), ("ghost", 400), ("kim", 400), ("lee", 204)])
+def test_admin_delete_user_transfers_owned_items_atomically(db_client, migrated_db, target, code):
+    from conftest import login_as
+    from test_folders_api import folder
+    from test_groups_api import login_admin
+
+    login_as(db_client, "lee")
+    login_as(db_client, "kim")
+    doc = db_client.post("/api/documents/text", json={
+        "title": "제한", "content": "내용", "visibility": "private",
+    }).json()["id"]
+    root = folder(db_client)
+    login_admin(db_client, migrated_db)
+    users = db_client.get("/api/admin/users").json()
+    kim = next(row for row in users if row["username"] == "kim")
+    response = db_client.delete(f"/api/admin/users/{kim['id']}", params={} if target is None else {"transfer_to": target})
+    assert response.status_code == code
+    if code == 409:
+        assert response.json()["detail"] == "소유한 문서나 만든 폴더가 있어 삭제할 수 없습니다."
+    remaining = db_client.get("/api/admin/users").json()
+    assert ("kim" in [row["username"] for row in remaining]) == (code != 204)
+    assert db_client.get(f"/api/documents/{doc}").status_code == 404
+    entries = db_client.get("/api/admin/audit", params={"action": "owner_changed"}).json()["items"]
+    if code == 204:
+        assert len(entries) == 2
+        assert {row["actor"] for row in entries} == {"boss"}
+        assert {row["detail"]["kind"] for row in entries} == {"document", "folder"}
+        assert all(row["detail"]["before"] == "kim" and row["detail"]["after"] == "lee" for row in entries)
+    else:
+        assert entries == []
+    login_as(db_client, "lee" if code == 204 else "kim")
+    assert db_client.get(f"/api/documents/{doc}").json()["owner_id"] == ("lee" if code == 204 else "kim")
+    assert next(row for row in db_client.get("/api/folders").json() if row["id"] == root["id"])["created_by"] == ("lee" if code == 204 else "kim")
+
+
+def test_admin_delete_user_without_owned_items(db_client, migrated_db):
+    from conftest import login_as
+    from test_groups_api import login_admin
+
+    login_as(db_client, "empty")
+    login_admin(db_client, migrated_db)
+    user = next(row for row in db_client.get("/api/admin/users").json() if row["username"] == "empty")
+    assert db_client.delete(f"/api/admin/users/{user['id']}").status_code == 204
+    assert "empty" not in [row["username"] for row in db_client.get("/api/admin/users").json()]

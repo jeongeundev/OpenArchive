@@ -13,8 +13,10 @@ from openarchive.api.deps import (
 from openarchive.api.schemas import (
     CreateFolderRequest,
     Folder,
+    FolderOwnerTransferred,
     FolderScope,
     RenameFolderRequest,
+    TransferOwnerRequest,
     UpdateFolderAccessRequest,
 )
 from openarchive.services import folders as service
@@ -115,5 +117,20 @@ async def set_folder_access(
             visibility=body.visibility,
             users=body.users,
             groups=body.groups,
+        )
+    )
+
+
+# 세션 전용: 소유자 이전은 열람 범위 변경과 같은 관리 경계(ADR-034 결정 6, ADR-061 결정 2).
+@router.put("/{folder_id}/owner", response_model=FolderOwnerTransferred)
+async def transfer_owner(
+    folder_id: UUID,
+    body: TransferOwnerRequest,
+    conn: Connection,
+    user: Annotated[dict, Depends(require_session_user)],
+) -> FolderOwnerTransferred:
+    return FolderOwnerTransferred.model_validate(
+        await service.transfer_folder_owner(
+            conn, folder_id, user_id=user["username"], new_owner=body.owner
         )
     )

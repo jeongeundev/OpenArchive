@@ -351,3 +351,60 @@ def test_follow_folder_with_scope_values_is_rejected(db_client):
     assert response.json()["detail"] == "폴더 범위를 따르면 공개범위·부여 대상을 함께 지정할 수 없습니다."
     access = db_client.get(f"/api/documents/{doc['id']}/access").json()
     assert access["follows_folder"] is False and access["visibility"] == "private"
+
+
+@pytest.mark.parametrize("visibility,still_visible,denied", [("public", True, 403), ("private", False, 404)])
+def test_transfer_owner_moves_all_write_permissions(db_client, migrated_db, visibility, still_visible, denied):
+    ensure_users(db_client, "lee")
+    login_as(db_client, "kim")
+    doc = db_client.post("/api/documents/text", json={
+        "title": "이전", "content": "내용", "visibility": visibility,
+    }).json()["id"]
+    response = db_client.put(f"/api/documents/{doc}/owner", json={"owner": "lee"})
+    assert response.status_code == 200
+    assert response.json() == {"owner_id": "lee", "still_visible": still_visible}
+    for method, suffix, body in (
+        ("PUT", "", {"content": "수정", "version": 1}),
+        ("PUT", "/tags", {"tags": ["이전"]}),
+        ("PUT", "/access", {"visibility": visibility}),
+        ("DELETE", "", None),
+    ):
+        assert db_client.request(method, f"/api/documents/{doc}{suffix}", json=body).status_code == denied
+    login_as(db_client, "lee")
+    assert db_client.put(f"/api/documents/{doc}", json={"content": "수정", "version": 1}).status_code == 200
+    assert db_client.put(f"/api/documents/{doc}/tags", json={"tags": ["이전"]}).status_code == 200
+    assert db_client.put(f"/api/documents/{doc}/access", json={"visibility": visibility}).status_code == 200
+    assert db_client.delete(f"/api/documents/{doc}").status_code == 204
+    login_admin(db_client, migrated_db)
+    entries = db_client.get("/api/admin/audit", params={"action": "owner_changed"}).json()["items"]
+    assert len(entries) == 1
+    assert entries[0]["actor"] == "kim"
+    assert entries[0]["actor_via"] == "session"
+    assert entries[0]["detail"] == {"kind": "document", "before": "kim", "after": "lee"}
+
+
+@pytest.mark.parametrize("target,code", [("ghost", 400), ("alice", 400), ("", 422), (None, 422)])
+def test_transfer_owner_invalid_target_leaves_owner(db_client, target, code):
+    doc = create_private(db_client)
+    response = db_client.put(f"/api/documents/{doc}/owner", json=None if target is None else {"owner": target})
+    assert response.status_code == code
+    assert db_client.get(f"/api/documents/{doc}").json()["owner_id"] == "alice"
+
+
+@pytest.mark.parametrize("visibility,code", [("public", 403), ("private", 404)])
+def test_transfer_owner_non_owner(db_client, visibility, code):
+    doc = create_private(db_client)
+    db_client.put(f"/api/documents/{doc}/access", json={"visibility": visibility})
+    login_as(db_client, "bob")
+    assert db_client.put(f"/api/documents/{doc}/owner", json={"owner": "bob"}).status_code == code
+
+
+def test_transfer_owner_requires_session(db_client):
+    ensure_users(db_client, "lee")
+    doc = create_private(db_client)
+    token = issue_token(db_client, "alice", scope="read_write")["token"]
+    response = db_client.put(f"/api/documents/{doc}/owner", json={"owner": "lee"}, headers=bearer(token))
+    assert response.status_code == 403
+    assert response.json()["detail"] == "로그인 세션이 필요합니다."
+    db_client.cookies.clear()
+    assert db_client.put(f"/api/documents/{doc}/owner", json={"owner": "lee"}).status_code == 401
