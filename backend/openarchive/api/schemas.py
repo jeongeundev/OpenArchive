@@ -585,3 +585,21 @@ class DocumentOwnerTransferred(BaseModel):
 class FolderOwnerTransferred(BaseModel):
     created_by: str
     still_visible: bool
+
+
+class AdminShareTokenSummary(BaseModel):
+    id: UUID
+    name: str
+    created_at: datetime
+    expires_at: datetime | None
+    last_used_at: datetime | None
+    expired: bool
+
+
+class AdminShareSummary(BaseModel):
+    id: UUID
+    name: str
+    owner: str
+    created_at: datetime
+    document_count: int
+    tokens: list[AdminShareTokenSummary]

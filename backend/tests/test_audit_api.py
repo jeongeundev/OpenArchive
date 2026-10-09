@@ -186,3 +186,53 @@ def test_listing_does_not_record(db_client: TestClient, migrated_db: str):
     assert db_client.get("/api/admin/audit", params={"actor": "alice"}).status_code == 200
 
     assert audit_count(migrated_db) == before
+
+
+def test_csv_exports_all_filtered_rows_without_recording(db_client, migrated_db):
+    import csv
+    import io
+    import re
+
+    login_as(db_client, "alice")
+    for i in range(55):
+        response = db_client.post(
+            "/api/documents/text", json={"title": f"CSV {i}", "content": "글"}
+        )
+        assert response.status_code == 201
+    create_text(db_client, "bob", "제외")
+    login_admin(db_client, migrated_db)
+    before = audit_count(migrated_db)
+    response = db_client.get("/api/admin/audit", params={
+        "format": "csv", "actor": "alice", "action": "document_created",
+        "limit": 1, "before_id": 1,
+    })
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/csv")
+    assert re.fullmatch(r'attachment; filename="audit-\d{8}-\d{6}\.csv"',
+                        response.headers["content-disposition"])
+    assert response.text.startswith("\ufeff")
+    reader = csv.DictReader(io.StringIO(response.text[1:]))
+    assert reader.fieldnames == [
+        "id", "occurred_at", "actor", "actor_via", "db_role", "action",
+        "document_id", "document_title", "detail",
+    ]
+    rows = list(reader)
+    assert len(rows) == 55
+    assert {row["actor"] for row in rows} == {"alice"}
+    assert {row["action"] for row in rows} == {"document_created"}
+    assert [int(row["id"]) for row in rows] == sorted(
+        (int(row["id"]) for row in rows), reverse=True
+    )
+    assert audit_count(migrated_db) == before
+
+
+def test_csv_auth_and_invalid_queries(db_client, migrated_db):
+    assert db_client.get("/api/admin/audit?format=csv").status_code == 401
+    login_as(db_client, "alice")
+    assert db_client.get("/api/admin/audit?format=csv").status_code == 403
+    login_admin(db_client, migrated_db)
+    assert db_client.get("/api/admin/audit?format=unknown").status_code == 422
+    assert db_client.get("/api/admin/audit?format=csv&action=unknown").status_code == 422
+    token = issue_admin_token(migrated_db)
+    db_client.cookies.clear()
+    assert db_client.get("/api/admin/audit?format=csv", headers=bearer(token)).status_code == 403

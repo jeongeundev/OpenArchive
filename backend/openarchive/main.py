@@ -7,6 +7,7 @@ from starlette.routing import Route
 
 from openarchive.answers import OllamaProvider, get_answer_provider
 from openarchive.api.admin import router as admin_router
+from openarchive.api.admin_shares import router as admin_shares_router
 from openarchive.api.ask import router as ask_router
 from openarchive.api.audit import router as audit_router
 from openarchive.api.auth import router as auth_router
@@ -59,6 +60,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="OpenArchive API", lifespan=lifespan)
 app.add_middleware(RetryOnUnavailable)
 app.include_router(admin_router)
+app.include_router(admin_shares_router)
 app.include_router(groups_router)
 app.include_router(audit_router)
 app.include_router(principals_router)
