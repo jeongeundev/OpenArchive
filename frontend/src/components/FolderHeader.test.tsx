@@ -148,3 +148,32 @@ describe("FolderHeader", () => {
     expect(screen.queryByRole("button", { name: "열람 범위" })).not.toBeInTheDocument();
   });
 });
+
+
+it.each([root, child])("폴더 $id 이전 버튼은 권한 없이도 표시되고 저장 후 갱신한다", async folder => {
+  vi.spyOn(window, "confirm").mockReturnValue(true);
+  const fetchMock = vi.fn((url: string) => respond(200, url === "/api/principals" ? { users: ["kim", "lee"], groups: [] } : { created_by: "lee", still_visible: true }));
+  vi.stubGlobal("fetch", fetchMock);
+  const onChanged = vi.fn();
+  render(<FolderHeader folder={{ ...folder, can_manage: false }} folders={[root, child]} onChanged={onChanged} onDeleted={vi.fn()} />);
+  fireEvent.click(screen.getByRole("button", { name: "소유자 이전" }));
+  await screen.findByRole("option", { name: "lee" });
+  fireEvent.change(screen.getByLabelText("이전받을 사용자"), { target: { value: "lee" } });
+  fireEvent.click(screen.getByRole("button", { name: "이전" }));
+  await waitFor(() => expect(onChanged).toHaveBeenCalled());
+  expect(fetchMock).toHaveBeenCalledWith(`/api/folders/${folder.id}/owner`, expect.objectContaining({ method: "PUT", body: JSON.stringify({ owner: "lee" }) }));
+  vi.unstubAllGlobals(); vi.restoreAllMocks();
+});
+it.each([403, 200])("폴더 이전 결과 %s는 거부 또는 선택 해제를 반영한다", async status => {
+  vi.spyOn(window, "confirm").mockReturnValue(true);
+  vi.stubGlobal("fetch", vi.fn((url: string) => respond(url === "/api/principals" ? 200 : status, url === "/api/principals" ? { users: ["lee"], groups: [] } : status === 403 ? { detail: "폴더를 관리할 권한이 없습니다." } : { still_visible: false })));
+  const onDeleted = vi.fn();
+  render(<FolderHeader folder={root} folders={[root]} onChanged={vi.fn()} onDeleted={onDeleted} />);
+  fireEvent.click(screen.getByRole("button", { name: "소유자 이전" }));
+  await screen.findByRole("option", { name: "lee" });
+  fireEvent.change(screen.getByLabelText("이전받을 사용자"), { target: { value: "lee" } });
+  fireEvent.click(screen.getByRole("button", { name: "이전" }));
+  if (status === 403) expect(await screen.findByRole("alert")).toHaveTextContent("폴더를 관리할 권한이 없습니다.");
+  else await waitFor(() => expect(onDeleted).toHaveBeenCalled());
+  vi.unstubAllGlobals(); vi.restoreAllMocks();
+});

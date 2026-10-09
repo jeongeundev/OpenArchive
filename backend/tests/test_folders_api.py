@@ -284,3 +284,53 @@ def test_read_token_cannot_write_folders(db_client):
         assert response.status_code == 403
         assert response.json()["detail"] == "쓰기 권한이 필요합니다."
     assert db_client.get("/api/folders", headers=headers).status_code == 200
+
+
+@pytest.mark.parametrize("visibility,still_visible,denied", [("public", True, 403), ("private", False, 404)])
+def test_transfer_folder_owner_changes_access_authority(db_client, visibility, still_visible, denied):
+    login_as(db_client, "lee")
+    login_as(db_client, "kim")
+    root = folder(db_client)
+    path = f"/api/folders/{root['id']}"
+    assert db_client.put(path + "/access", json={"visibility": visibility}).status_code == 200
+    response = db_client.put(path + "/owner", json={"owner": "lee"})
+    assert response.status_code == 200
+    assert response.json() == {"created_by": "lee", "still_visible": still_visible}
+    assert db_client.put(path + "/access", json={"visibility": visibility}).status_code == denied
+    login_as(db_client, "lee")
+    assert db_client.put(path + "/access", json={"visibility": visibility}).status_code == 200
+
+
+@pytest.mark.parametrize("target,code", [("ghost", 400), ("alice", 400), ("", 422), (None, 422)])
+def test_transfer_folder_owner_invalid_target(db_client, target, code):
+    login_as(db_client, "alice")
+    root = folder(db_client)
+    response = db_client.put(f"/api/folders/{root['id']}/owner", json=None if target is None else {"owner": target})
+    assert response.status_code == code
+    assert db_client.get("/api/folders").json()[0]["created_by"] == "alice"
+
+
+@pytest.mark.parametrize("visibility,admin,code", [("public", False, 403), ("private", False, 404), ("public", True, 403)])
+def test_transfer_folder_owner_non_creator(db_client, migrated_db, visibility, admin, code):
+    login_as(db_client, "alice")
+    root = folder(db_client)
+    path = f"/api/folders/{root['id']}"
+    db_client.put(path + "/access", json={"visibility": visibility})
+    if admin:
+        login_admin(db_client, migrated_db)
+    else:
+        login_as(db_client, "bob")
+    assert db_client.put(path + "/owner", json={"owner": "alice"}).status_code == code
+
+
+def test_transfer_folder_owner_requires_session(db_client):
+    login_as(db_client, "lee")
+    login_as(db_client, "alice")
+    root = folder(db_client)
+    token = issue_token(db_client, "alice", scope="read_write")["token"]
+    path = f"/api/folders/{root['id']}/owner"
+    response = db_client.put(path, json={"owner": "lee"}, headers=bearer(token))
+    assert response.status_code == 403
+    assert response.json()["detail"] == "로그인 세션이 필요합니다."
+    db_client.cookies.clear()
+    assert db_client.put(path, json={"owner": "lee"}).status_code == 401

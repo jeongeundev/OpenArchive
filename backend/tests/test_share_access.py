@@ -297,6 +297,8 @@ def forbidden_requests(scenario):
         ("GET", "/api/system/status", None),
         ("GET", "/api/auth/me", None),
         ("GET", f"/api/documents/{document_id}/access", None),
+        ("PUT", f"/api/documents/{document_id}/owner", {"owner": "bob"}),
+        ("PUT", "/api/folders/00000000-0000-0000-0000-000000000000/owner", {"owner": "bob"}),
         ("GET", f"/api/documents/{document_id}/tag-suggestions", None),
         ("POST", "/api/documents/text",
          {"title": "침입", "content": "공유 토큰이 쓴 문서", "content_type": "md"}),
@@ -429,6 +431,19 @@ def test_ask_rejects_a_share_principal(db_client, scenario):
     공유 차단은 이 행위 단언이 지킨다."""
     response = db_client.post(
         "/api/ask", json={"query": QUERY}, headers=bearer(scenario["token"]["token"])
+    )
+    assert response.status_code == 403
+    assert response.json()["detail"] == FORBIDDEN_DETAIL
+
+
+@pytest.mark.parametrize("resource", ["documents", "folders"])
+def test_owner_transfer_rejects_share_token(db_client, resource):
+    login_as(db_client, "alice")
+    share = db_client.post("/api/shares", json={"name": "공유"}).json()
+    token = issue_share_token(db_client, share["id"])["token"]
+    response = db_client.put(
+        f"/api/{resource}/00000000-0000-0000-0000-000000000000/owner",
+        json={"owner": "lee"}, headers=bearer(token),
     )
     assert response.status_code == 403
     assert response.json()["detail"] == FORBIDDEN_DETAIL

@@ -2,9 +2,10 @@
 
 import { useState } from "react";
 
-import { ApiError, createFolder, deleteFolder, renameFolder } from "@/lib/api";
+import { ApiError, createFolder, deleteFolder, renameFolder, transferFolderOwner } from "@/lib/api";
 import { scopeLabel } from "@/lib/folders";
 import type { Folder } from "@/lib/types";
+import { OwnerTransferForm } from "./OwnerTransfer";
 import { FolderAccessPanel } from "./FolderAccessPanel";
 import { FolderNameForm } from "./FolderTree";
 
@@ -32,7 +33,7 @@ export function FolderHeader({ folder, folders, onChanged, onDeleted, onAccessSa
   onDeleted: () => void;
   onAccessSaved?: () => void;
 }): React.ReactElement {
-  const [mode, setMode] = useState<"idle" | "child" | "rename">("idle");
+  const [mode, setMode] = useState<"idle" | "child" | "rename" | "owner">("idle");
   const [accessOpen, setAccessOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const label = folder.parent_id === null ? scopeLabel(folder.scope) : `상위 폴더 범위 따름(${scopeLabel(folder.scope)})`;
@@ -58,6 +59,7 @@ export function FolderHeader({ folder, folders, onChanged, onDeleted, onAccessSa
         <button type="button" onClick={() => { setMode("child"); setError(null); }} className="text-neutral-500 hover:text-neutral-300">하위 폴더</button>
         <button type="button" onClick={() => { setMode("rename"); setError(null); }} className="text-neutral-500 hover:text-neutral-300">이름 변경</button>
         <button type="button" onClick={remove} className="text-neutral-500 hover:text-neutral-300">삭제</button>
+        <button type="button" onClick={() => { setMode(mode === "owner" ? "idle" : "owner"); setError(null); }} className="text-neutral-500 hover:text-neutral-300">소유자 이전</button>
         {folder.parent_id === null ? (
           <button type="button" aria-expanded={accessOpen} onClick={() => setAccessOpen(open => !open)}
             className="text-neutral-500 hover:text-neutral-300">열람 범위</button>
@@ -71,6 +73,11 @@ export function FolderHeader({ folder, folders, onChanged, onDeleted, onAccessSa
         <FolderNameForm key="rename" label="폴더 이름" initial={folder.name} submitLabel="저장" onCancel={() => setMode("idle")}
           onSubmit={async name => { await renameFolder(folder.id, name); setMode("idle"); onChanged(); }} />
       ) : null}
+      {mode === "owner" ? <OwnerTransferForm key={folder.id + folder.created_by} owner={folder.created_by} kind="folder" submitLabel="이전" onTransfer={async owner => {
+        const result = await transferFolderOwner(folder.id, owner);
+        setMode("idle");
+        if (result.still_visible) onChanged(); else onDeleted();
+      }} /> : null}
       {error !== null ? <p role="alert" className="text-sm text-[#ef4444]">{error}</p> : null}
       {accessOpen && folder.parent_id === null ? (
         <FolderAccessPanel folder={folder} onSaved={onAccessSaved ?? onChanged} />

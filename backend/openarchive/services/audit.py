@@ -19,6 +19,7 @@ AUDIT_ACTIONS: tuple[str, ...] = (
     "folder_access_changed",
     "document_trashed",
     "document_restored",
+    "owner_changed",
 )
 
 # 같은 트랜잭션의 행은 occurred_at이 같으므로 정렬·커서는 id로 한다.

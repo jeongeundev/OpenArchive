@@ -237,3 +237,13 @@ describe("감사 로그 화면", () => {
     expect(screen.queryAllByRole("link")).toHaveLength(0);
   });
 });
+
+it("소유자 변경 동작과 문서·폴더 설명을 표시한다", async () => {
+  const { fetchMock } = routedFetch(admin, [{ items: [entry({ action: "owner_changed", detail: { kind: "document", before: "kim", after: "lee" } }), entry({ action: "owner_changed", document_title: null, detail: { kind: "folder", folder_name: "RFP", before: "kim", after: "lee" } })], next_before_id: null }]);
+  vi.stubGlobal("fetch", fetchMock);
+  render(<AuthProvider><AuditPage /></AuthProvider>);
+  expect(await screen.findByText("kim → lee")).toBeInTheDocument();
+  expect(screen.getByText("폴더 「RFP」 kim → lee")).toBeInTheDocument();
+  expect(screen.getByRole("option", { name: "소유자 변경" })).toHaveValue("owner_changed");
+  expect(screen.getAllByText("소유자 변경")).toHaveLength(3);
+});

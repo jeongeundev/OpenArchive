@@ -357,6 +357,7 @@ describe("문서 상세의 열람 범위 패널", () => {
     const urls = fetchMock.mock.calls.map(([url]) => String(url));
     expect(urls.some((url) => url.endsWith("/access"))).toBe(false);
     expect(urls).not.toContain("/api/principals");
+    expect(screen.queryByRole("button", { name: "소유자 이전" })).not.toBeInTheDocument();
     expect(urls).not.toContain("/api/shares");
   });
 });
@@ -378,6 +379,7 @@ describe("문서 상세 페이지의 인용 위치", () => {
       if (url.endsWith("/links") || url.endsWith("/backlinks")) return Promise.resolve(jsonResponse([]));
       if (url.endsWith("/related")) return Promise.resolve(jsonResponse(related));
       if (url.endsWith("/tag-suggestions")) return Promise.resolve(jsonResponse(suggestions));
+      if (url === "/api/principals") return Promise.resolve(jsonResponse({ users: ["alice", "lee"], groups: [] }));
       if (url === "/api/folders") return Promise.resolve(jsonResponse([]));
       if (url.endsWith("/access")) return Promise.resolve(jsonResponse({ visibility: "public", users: [], groups: [] }));
       if (url.includes("/versions/1")) {
@@ -433,4 +435,10 @@ describe("볼 수 없는 폴더 안 자기 문서", () => {
     expect(await screen.findByText("볼 수 없는 폴더")).toBeInTheDocument();
     expect(await screen.findByRole("radio", { name: "폴더 범위 따름(볼 수 없는 폴더)" })).toBeChecked();
   });
+});
+
+it("소유자 상세에는 소유자 이전을 표시한다", async () => {
+  stubFetch(() => jsonResponse(detail));
+  render(<AuthProvider><DocumentDetailView /></AuthProvider>);
+  expect(await screen.findByRole("button", { name: "소유자 이전" })).toBeInTheDocument();
 });

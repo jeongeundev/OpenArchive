@@ -17,6 +17,10 @@ from psycopg.rows import dict_row
 
 from openarchive.services import textdiff
 from openarchive.services.audit import mark_text_from_extraction
+from openarchive.services.auth import (  # noqa: F401 — 서비스 예외 공개
+    InvalidNewOwner,
+    resolve_new_owner,
+)
 from openarchive.services.chunking import chunk_spans
 from openarchive.services.grants import insert_grants, resolve_grantees
 from openarchive.services.parsing import (
@@ -1423,6 +1427,35 @@ async def _load_owner_document(
     if user_id is None:
         raise DocumentNotFound
     await _load_for_write(conn, document_id, user_id)
+
+
+async def transfer_owner(
+    conn: psycopg.AsyncConnection, document_id: UUID, *, user_id: str | None, new_owner: str
+) -> dict:
+    """소유자만 이전하며 이전 소유자의 공유와 새 소유자 부여를 정리한다."""
+    async with conn.transaction():
+        await conn.execute(
+            "SELECT 1 FROM documents WHERE id=%s FOR NO KEY UPDATE", (document_id,)
+        )
+        await _load_owner_document(conn, document_id, user_id)
+        target_id = await resolve_new_owner(conn, current_owner=user_id, new_owner=new_owner)
+        await conn.execute(
+            "UPDATE documents SET owner_id=%s, updated_at=now() WHERE id=%s",
+            (new_owner, document_id),
+        )
+        await conn.execute(
+            """DELETE FROM document_grants WHERE document_id=%s AND share_id IN (
+            SELECT s.id FROM shares s JOIN users u ON u.id=s.owner_user_id
+            WHERE u.username=%s)""", (document_id, user_id),
+        )
+        await conn.execute(
+            "DELETE FROM document_grants WHERE document_id=%s AND user_id=%s AND share_id IS NULL",
+            (document_id, target_id),
+        )
+        visible = await (
+            await conn.execute(SUBJECT_VISIBLE_SQL, {"id": document_id, "user": user_id})
+        ).fetchone()
+        return {"owner_id": new_owner, "still_visible": visible is not None}
 
 
 async def _folder_info(conn, folder_id, user_id):

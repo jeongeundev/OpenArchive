@@ -16,6 +16,7 @@ import { useUnmountSignal } from "@/lib/useUnmountSignal";
 const PAGE_SIZE = 50;
 
 const ACTION_LABEL: Record<AuditAction, string> = {
+  owner_changed: "소유자 변경",
   document_created: "문서 생성",
   text_updated: "텍스트 수정",
   document_deleted: "영구 삭제",
@@ -57,6 +58,9 @@ function actionLabel(entry: AuditEntry): string {
 /** 동작에 덧붙는 설명 — 무엇이 어떻게 바뀌었나. 없으면 null. */
 function actionDescription(entry: AuditEntry): string | null {
   const { detail } = entry;
+  if (entry.action === "owner_changed") {
+    return `${detail.kind === "folder" ? `폴더 「${text(detail.folder_name)}」 ` : ""}${text(detail.before)} → ${text(detail.after)}`;
+  }
   if (entry.action === "access_changed" || entry.action === "folder_access_changed") {
     if (detail.kind === "inherit") {
       const before = detail.before === "folder" ? "폴더 범위 따름" : "개별 지정";

@@ -29,6 +29,7 @@ from openarchive.api.schemas import (
     DocumentAccess,
     DocumentCount,
     DocumentDetail,
+    DocumentOwnerTransferred,
     DocumentProgress,
     DocumentSummary,
     EditDocumentRequest,
@@ -41,6 +42,7 @@ from openarchive.api.schemas import (
     RestoreVersionRequest,
     TagSuggestionsResponse,
     TextVersionDetail,
+    TransferOwnerRequest,
     TrashItem,
     UpdateAccessRequest,
     UpdateTagsRequest,
@@ -552,3 +554,18 @@ async def reembed_document(
 ) -> DocumentSummary:
     document = await service.request_reembedding(conn, document_id, user_id=user_id)
     return DocumentSummary.model_validate(document)
+
+
+# 세션 전용: 소유자 이전은 열람 범위 변경과 같은 관리 경계(ADR-034 결정 6, ADR-061 결정 2).
+@router.put("/{document_id}/owner", response_model=DocumentOwnerTransferred)
+async def transfer_owner(
+    document_id: UUID,
+    body: TransferOwnerRequest,
+    conn: Connection,
+    user: Annotated[dict, Depends(require_session_user)],
+) -> DocumentOwnerTransferred:
+    return DocumentOwnerTransferred.model_validate(
+        await service.transfer_owner(
+            conn, document_id, user_id=user["username"], new_owner=body.owner
+        )
+    )

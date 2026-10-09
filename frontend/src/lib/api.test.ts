@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   ApiError,
+  transferDocumentOwner, transferFolderOwner, deleteUser,
   originalPreviewUrl,
   listFolders, createFolder, renameFolder, deleteFolder, getFolderAccess, setFolderAccess, moveDocument,
   addGroupMember,
@@ -967,5 +968,24 @@ describe("folder client contracts", () => {
 describe("원본 미리보기 경로와 형식", () => {
   it("문서 id를 인코딩한 판별 경로를 만든다", () => {
     expect(originalPreviewUrl("doc /한글", 2)).toBe(`/api/documents/${encodeURIComponent("doc /한글")}/files/2/preview`);
+  });
+});
+
+
+describe("owner transfer requests", () => {
+  afterEach(() => vi.unstubAllGlobals());
+  it("sends PUT owner bodies with session cookies", async () => {
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(new Response(JSON.stringify({ still_visible: true }))));
+    vi.stubGlobal("fetch", fetchMock);
+    await transferDocumentOwner("doc", "lee");
+    await transferFolderOwner("folder", "lee");
+    expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/documents/doc/owner", expect.objectContaining({ method: "PUT", body: JSON.stringify({ owner: "lee" }), credentials: "same-origin" }));
+    expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/folders/folder/owner", expect.objectContaining({ method: "PUT", body: JSON.stringify({ owner: "lee" }) }));
+  });
+  it("encodes the optional deletion transfer target", async () => {
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(new Response(null, { status: 204 })));
+    vi.stubGlobal("fetch", fetchMock);
+    await deleteUser("u", "lee & kim");
+    expect(fetchMock).toHaveBeenCalledWith("/api/admin/users/u?transfer_to=lee%20%26%20kim", expect.objectContaining({ method: "DELETE" }));
   });
 });

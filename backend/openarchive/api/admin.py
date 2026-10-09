@@ -1,3 +1,4 @@
+from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
@@ -30,9 +31,16 @@ async def list_users(conn: Connection) -> list[UserSummary]:
 
 
 @router.delete("/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_user(user_id: UUID, conn: Connection) -> Response:
+async def delete_user(
+    user_id: UUID,
+    conn: Connection,
+    admin: Annotated[dict, Depends(require_admin)],
+    transfer_to: str | None = None,
+) -> Response:
     try:
-        await service.delete_user(conn, user_id)
+        await service.delete_user(
+            conn, user_id, transfer_to=transfer_to, actor=admin["username"]
+        )
     except service.UserOwnsDocuments as error:
         raise HTTPException(
             status_code=409,
