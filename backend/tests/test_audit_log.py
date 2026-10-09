@@ -30,7 +30,7 @@ def test_audit_defaults(conn):
 @pytest.mark.parametrize("action", [
     "document_created", "text_updated", "document_deleted", "access_changed",
     "group_member_changed", "original_replaced", "original_downloaded", "folder_access_changed",
-    "document_trashed", "document_restored", "original_previewed",
+    "document_trashed", "document_restored", "original_previewed", "owner_changed",
 ])
 def test_allowed_actions(conn, action):
     assert conn.execute(
@@ -497,3 +497,57 @@ def test_worker_delete_records_worker_without_actor(conn):
         set_actor(conn, actor="", via="worker")
         conn.execute("DELETE FROM documents WHERE id = %s", (doc,))
     assert audit_rows(conn)[-1] == ("document_deleted", None, "worker", doc, "감사 대상", {})
+
+
+def test_document_owner_changed_audit(conn):
+    doc = conn.execute(
+        "INSERT INTO documents (title, content_type, content, content_hash, owner_id) "
+        "VALUES ('감사 대상', 'md', '텍스트', 'hash1', 'kim') RETURNING id"
+    ).fetchone()[0]
+    with conn.transaction():
+        set_actor(conn, actor="kim")
+        conn.execute("UPDATE documents SET owner_id = 'lee' WHERE id = %s", (doc,))
+    expected = [("owner_changed", "kim", "session", doc, "감사 대상", {
+        "kind": "document", "before": "kim", "after": "lee",
+    })]
+    assert audit_rows(conn)[1:] == expected
+    conn.execute("UPDATE documents SET owner_id = 'lee' WHERE id = %s", (doc,))
+    conn.execute("UPDATE documents SET title = '새 제목' WHERE id = %s", (doc,))
+    assert audit_rows(conn)[1:] == expected
+
+
+@pytest.mark.parametrize("child", [False, True])
+def test_folder_owner_changed_audit(conn, child):
+    folder = create_folder(conn)
+    if child:
+        folder = conn.execute(
+            "INSERT INTO folders (name, created_by, parent_id) "
+            "VALUES ('사업 자료', 'alice', %s) RETURNING id", (folder,),
+        ).fetchone()[0]
+    with conn.transaction():
+        set_actor(conn, actor="kim", via="cli")
+        conn.execute("UPDATE folders SET created_by = 'lee' WHERE id = %s", (folder,))
+    expected = [("owner_changed", "kim", "cli", None, None, {
+        "kind": "folder", "folder_id": str(folder), "folder_name": "사업 자료",
+        "before": "alice", "after": "lee",
+    })]
+    assert audit_rows(conn) == expected
+    conn.execute("UPDATE folders SET created_by = 'lee' WHERE id = %s", (folder,))
+    assert audit_rows(conn) == expected
+
+
+@pytest.mark.parametrize("table,column", [("documents", "owner_id"), ("folders", "created_by")])
+def test_owner_changed_without_actor_and_rollback(conn, table, column):
+    target = create_document(conn) if table == "documents" else create_folder(conn)
+    before = audit_rows(conn)
+    with pytest.raises(RuntimeError, match="rollback"), conn.transaction():
+        conn.execute(f"UPDATE {table} SET {column} = 'lee' WHERE id = %s", (target,))
+        row = audit_rows(conn)[-1]
+        assert row[:3] == ("owner_changed", None, None)
+        assert row[5]["before"] == "alice"
+        assert row[5]["after"] == "lee"
+        raise RuntimeError("rollback")
+    assert audit_rows(conn) == before
+    assert conn.execute(f"SELECT {column} FROM {table} WHERE id = %s", (target,)).fetchone() == (
+        "alice",
+    )
