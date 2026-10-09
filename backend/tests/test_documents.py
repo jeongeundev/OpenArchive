@@ -642,7 +642,9 @@ async def test_ocr_target_upload_becomes_a_pending_document_with_an_extract_job(
     assert await document_state(documents_conn, document["id"]) == (1, "", "pending")
     assert await text_versions(documents_conn, document["id"]) == []
     assert await file_text_versions(documents_conn, document["id"]) == [None]
-    assert await job_kinds(documents_conn, document["id"]) == ["extract"]
+    # 오피스 원본은 미리보기 변환 잡도 함께 생긴다(ADR-058)
+    office = ["preview"] if fixture_name.endswith(".pptx") else []
+    assert await job_kinds(documents_conn, document["id"]) == ["extract", *office]
 
 
 async def test_upload_with_text_stays_done_with_an_embed_job(documents_conn):

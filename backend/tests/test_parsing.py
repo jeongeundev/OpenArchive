@@ -520,10 +520,10 @@ def test_ocr_reads_the_pictures_of_a_picture_only_office_document(
 def test_ocr_keeps_text_slides_and_reads_only_the_picture_slide() -> None:
     text = ocr_text(pptx_bytes([["첫 슬라이드"], ["그림"], ["셋째 슬라이드"]]), "pptx")
 
-    first, *middle, last = text.split("\n\n")
-    assert first == "첫 슬라이드"
-    assert last == "셋째 슬라이드"
-    assert "국세행정개혁위원회" in normalize_ocr("".join(middle))
+    # 인식 결과의 앞뒤 공백·줄바꿈은 tesseract가 정한다 — 슬라이드 순서와 경계만 본다
+    assert text.startswith("첫 슬라이드\n\n")
+    assert text.endswith("\n\n셋째 슬라이드")
+    assert "국세행정개혁위원회" in normalize_ocr(text.removeprefix("첫 슬라이드").removesuffix("셋째 슬라이드"))
 
 
 @pytest.mark.parametrize(
