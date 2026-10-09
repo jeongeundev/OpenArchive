@@ -139,10 +139,11 @@ def test_group_changes_record_admin(db_client, migrated_db):
     login_admin(db_client, migrated_db)
     ensure_user(migrated_db, "bob")
     group = create_group(db_client)
+    before = rows(migrated_db)
     path = f"/api/admin/groups/{group['id']}/members/bob"
     assert db_client.put(path).status_code == 204
     assert db_client.delete(path).status_code == 204
-    assert rows(migrated_db) == [
+    assert rows(migrated_db)[len(before):] == [
         (
             "group_member_changed",
             "boss",
