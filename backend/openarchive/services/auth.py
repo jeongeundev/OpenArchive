@@ -146,20 +146,61 @@ async def list_users(conn: psycopg.AsyncConnection) -> list[dict]:
     return await cur.fetchall()
 
 
-async def delete_user(conn: psycopg.AsyncConnection, user_id: UUID) -> None:
-    """소유 문서나 만든 폴더가 있으면 삭제를 거부해 작성자가 사라지지 않게 한다."""
-    owns_document = await (
-        await conn.execute(
-            "SELECT EXISTS (SELECT 1 FROM documents WHERE owner_id = (SELECT username FROM users WHERE id = %s)) "
-            "OR EXISTS (SELECT 1 FROM folders WHERE created_by = (SELECT username FROM users WHERE id = %s))",
-            (user_id, user_id),
-        )
+class InvalidNewOwner(ValueError):
+    """소유권 이전 대상이 없거나 현재 소유자와 같다."""
+
+
+async def resolve_new_owner(conn, *, current_owner: str, new_owner: str) -> UUID:
+    if new_owner == current_owner:
+        raise InvalidNewOwner("자기 자신에게는 이전할 수 없습니다.")
+    row = await (
+        await conn.execute("SELECT id FROM users WHERE username=%s FOR KEY SHARE", (new_owner,))
     ).fetchone()
-    if owns_document[0]:
-        raise UserOwnsDocuments
-    deleted = await conn.execute("DELETE FROM users WHERE id = %s", (user_id,))
-    if deleted.rowcount == 0:
-        raise UserNotFound
+    if row is None:
+        raise InvalidNewOwner("이전받을 사용자를 찾을 수 없습니다.")
+    return row[0]
+
+
+async def delete_user(
+    conn: psycopg.AsyncConnection, user_id: UUID, *, transfer_to: str | None = None
+) -> None:
+    """소유물을 일괄 이전한 뒤 삭제하거나, 이전 대상이 없으면 기존처럼 거부한다."""
+    async with conn.transaction():
+        row = await (
+            await conn.execute("SELECT username FROM users WHERE id=%s FOR UPDATE", (user_id,))
+        ).fetchone()
+        if row is None:
+            raise UserNotFound
+        owner = row[0]
+        if transfer_to is not None:
+            target_id = await resolve_new_owner(conn, current_owner=owner, new_owner=transfer_to)
+            await conn.execute(
+                """DELETE FROM document_grants WHERE user_id=%s AND share_id IS NULL
+                AND document_id IN (SELECT id FROM documents WHERE owner_id=%s)""",
+                (target_id, owner),
+            )
+            await conn.execute(
+                """DELETE FROM folder_grants WHERE user_id=%s
+                AND folder_id IN (SELECT id FROM folders WHERE created_by=%s)""",
+                (target_id, owner),
+            )
+            await conn.execute(
+                "UPDATE documents SET owner_id=%s, updated_at=now() WHERE owner_id=%s",
+                (transfer_to, owner),
+            )
+            await conn.execute(
+                "UPDATE folders SET created_by=%s, updated_at=now() WHERE created_by=%s",
+                (transfer_to, owner),
+            )
+        owns = await (
+            await conn.execute(
+                "SELECT EXISTS (SELECT 1 FROM documents WHERE owner_id=%s) "
+                "OR EXISTS (SELECT 1 FROM folders WHERE created_by=%s)", (owner, owner),
+            )
+        ).fetchone()
+        if owns[0]:
+            raise UserOwnsDocuments
+        await conn.execute("DELETE FROM users WHERE id=%s", (user_id,))
 
 
 async def _replace_password(

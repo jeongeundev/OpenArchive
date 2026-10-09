@@ -5,6 +5,7 @@ from uuid import UUID
 import psycopg
 from psycopg.rows import dict_row
 
+from openarchive.services.auth import resolve_new_owner
 from openarchive.services.documents import InvalidVisibility, _check_grantees
 from openarchive.services.grants import resolve_grantees
 from openarchive.services.visibility import (
@@ -272,3 +273,30 @@ async def set_folder_access(
             [g for g in group_ids if g not in old_groups],
         )
         return await _read_access(conn, folder_id)
+
+
+async def transfer_folder_owner(
+    conn, folder_id: UUID, *, user_id: str, new_owner: str
+) -> dict:
+    """자기가 만든 폴더 한 행만 이전한다. 하위 폴더와 문서는 그대로 둔다."""
+    async with conn.transaction():
+        await conn.execute(
+            "SELECT 1 FROM folders WHERE id=%s FOR NO KEY UPDATE", (folder_id,)
+        )
+        row = await ensure_folder_visible(conn, folder_id, user_id=user_id)
+        if row["created_by"] != user_id:
+            raise NotFolderCreator
+        target_id = await resolve_new_owner(conn, current_owner=user_id, new_owner=new_owner)
+        await conn.execute(
+            "UPDATE folders SET created_by=%s, updated_at=now() WHERE id=%s", (new_owner, folder_id)
+        )
+        await conn.execute(
+            "DELETE FROM folder_grants WHERE folder_id=%s AND user_id=%s", (folder_id, target_id)
+        )
+        visible = await (
+            await conn.execute(
+                f"SELECT 1 FROM folders f WHERE f.id=%(id)s AND {FOLDER_VISIBLE_TO_USER}",
+                {"id": folder_id, "user": user_id},
+            )
+        ).fetchone()
+        return {"created_by": new_owner, "still_visible": visible is not None}
