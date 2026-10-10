@@ -6,7 +6,7 @@ import SharesPage from "./page";
 
 const admin = { authenticated: true, username: "admin", is_admin: true };
 const token = { id: "t1", name: "外部봇", created_at: "2026-10-01T00:00:00Z", expires_at: "2026-10-12T09:30:00Z", last_used_at: "2026-10-08T09:30:00Z", expired: true };
-const shares = [{ id: "s1", name: "협업", owner: "kim", created_at: token.created_at, document_count: 3, tokens: [token, { ...token, id: "t2", name: "미사용", expires_at: null, last_used_at: null, expired: false }] }, { id: "s2", name: "빈 공유", owner: "lee", created_at: token.created_at, document_count: 0, tokens: [] }];
+const shares = [{ id: "s1", name: "협업", owner: "kim", created_at: token.created_at, document_count: 3, folder_count: 2, tokens: [token, { ...token, id: "t2", name: "미사용", expires_at: null, last_used_at: null, expired: false }] }, { id: "s2", name: "빈 공유", owner: "lee", created_at: token.created_at, document_count: 0, folder_count: 1, tokens: [] }];
 function response(body: unknown, status = 200) { return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } }); }
 function setup(items = shares, auth = admin, failure = false) {
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -22,7 +22,7 @@ afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 it("공유와 토큰 메타데이터만 표시한다", async () => {
   setup();
   expect(await screen.findByText("협업")).toBeInTheDocument();
-  for (const label of ["kim", "lee", "3", "0", "外部봇", "만료", `만료 ${formatExpiry(token.expires_at)}`, "만료 없음", "사용 기록 없음", "토큰 없음"]) expect(screen.getByText(label)).toBeInTheDocument();
+  for (const label of ["kim", "lee", "3", "0", "2", "1", "폴더 수", "外部봇", "만료", `만료 ${formatExpiry(token.expires_at)}`, "만료 없음", "사용 기록 없음", "토큰 없음"]) expect(screen.getByText(label)).toBeInTheDocument();
   const date = new Intl.DateTimeFormat("ko-KR", { dateStyle: "medium", timeStyle: "short" }).format(new Date(token.last_used_at));
   expect(screen.getByText(`마지막 사용 ${date}`)).toBeInTheDocument();
   expect(screen.queryByRole("link")).not.toBeInTheDocument();

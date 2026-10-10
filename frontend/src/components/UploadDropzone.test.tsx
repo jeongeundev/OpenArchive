@@ -556,12 +556,12 @@ describe("UploadDropzone", () => {
     const rfp: Folder = {
       id: "f-rfp", parent_id: null, name: "RFP", created_by: "kim", document_count: 0,
       scope: { visibility: "private", users: [], groups: ["사업팀"] },
-      inherited: false, can_manage: true, can_change_access: true,
+      inherited: false, can_manage: true, can_change_access: true, can_share: false,
     };
     const hr: Folder = {
       id: "f-hr", parent_id: null, name: "인사", created_by: "lee", document_count: 0,
       scope: { visibility: "public", users: [], groups: [] },
-      inherited: false, can_manage: false, can_change_access: false,
+      inherited: false, can_manage: false, can_change_access: false, can_share: false,
     };
 
     function renderWithAuth(ui: React.ReactElement) {

@@ -15,6 +15,7 @@ const partner = {
   name: "B사 협업",
   created_at: "2026-10-02T00:00:00Z",
   documents: [{ id: "d-1", title: "제품 소개서" }],
+  folders: [],
   tokens: [{ id: "t-1", name: "B사 MCP", scope: "read", created_at: "2026-10-02T00:00:00Z", expires_at: null, last_used_at: null, expired: false }],
 };
 
@@ -80,7 +81,7 @@ describe("외부 공유 절", () => {
   });
 
   it("이름으로 공유를 만들면 목록에 나타난다", async () => {
-    const created = { ...partner, id: "s-2", name: "C사", documents: [], tokens: [] };
+    const created = { ...partner, id: "s-2", name: "C사", documents: [], folders: [], tokens: [] };
     const fetchMock = routedFetch([[], [created]], (url, method) =>
       url === "/api/shares" && method === "POST" ? response(created, 201) : undefined,
     );
@@ -301,5 +302,19 @@ describe("외부 공유 절", () => {
 
     expect(await screen.findByRole("alert")).toHaveTextContent("공유 목록 조회 실패");
     expect(screen.queryByText("아직 공유가 없습니다.")).not.toBeInTheDocument();
+  });
+
+  it("넣은 폴더를 문서와 따로 폴더 화면 링크로 보이고 뺄 수 있다", async () => {
+    const withFolder = { ...partner, documents: [], folders: [{ id: "f-1", name: "RFP" }] };
+    const fetchMock = routedFetch([[withFolder], [{ ...withFolder, folders: [] }]]);
+    vi.stubGlobal("fetch", fetchMock);
+    render(<SharesSection />);
+    const link = await screen.findByRole("link", { name: "RFP" });
+    expect(link).toHaveAttribute("href", "/?folder=f-1");
+    expect(screen.getByText("포함 폴더")).toBeInTheDocument();
+    expect(screen.queryByText("아직 넣은 문서가 없습니다.")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "RFP 빼기" }));
+    await waitFor(() => expect(calls(fetchMock, "DELETE", "/api/shares/s-1/folders/f-1")).toHaveLength(1));
+    expect(await screen.findByText("아직 넣은 문서가 없습니다.")).toBeInTheDocument();
   });
 });
