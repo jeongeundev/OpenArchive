@@ -215,8 +215,9 @@ def _pdf_page_text(document: pypdfium2.PdfDocument, index: int) -> str:
     오른쪽 여백까지 찼을 때만 생기므로, 공백 없이 끝난 줄이 판면 오른쪽 끝에서 글자 높이 하나 안쪽까지
     찼으면 다음 줄과 잇는다. 판면 오른쪽 끝은 좌우 여백이 같다고 보고 쪽 너비에서 가장 왼쪽 글자까지의
     거리를 뺀 자리다 — 가장 긴 줄을 기준으로 삼으면 판면을 채운 줄이 없는 쪽(표지·목차·목록)에서 그 줄이
-    다음 줄과 붙는다. 오른쪽 여백이 더 넓은 문서에서는 잇지 않는 쪽으로 틀린다. 판면에 못 미친 줄(제목·
-    목록·쪽 번호) 뒤는 줄바꿈을 지킨다.
+    다음 줄과 붙는다. 그 끝에 닿는 줄이 둘 이상인 쪽에서만 잇는다 — 가운데 정렬 쪽은 가장 넓은 줄 하나가
+    판면 양 끝을 정해 꽉 찬 줄처럼 보인다. 오른쪽 여백이 더 넓은 문서나 꽉 찬 줄이 하나뿐인 쪽에서는 잇지
+    않는 쪽으로 틀린다. 판면에 못 미친 줄(제목·목록·쪽 번호) 뒤는 줄바꿈을 지킨다.
     pypdf는 6.17부터 같은 자리에서 줄을 바꿔 판마다 결과가 달라 줄 판단에 쓰지 않는다.
     """
     page = document[index]
@@ -231,12 +232,13 @@ def _pdf_page_text(document: pypdfium2.PdfDocument, index: int) -> str:
         page.close()
     lefts = [left for _, left, _, _ in lines if left is not None]
     margin = width - min(lefts, default=0.0)
+    full = [right is not None and right >= margin - height for _, _, right, height in lines]
     parts = []
-    for position, (text, _, right, height) in enumerate(lines):
+    for position, (text, _, _, _) in enumerate(lines):
         parts.append(text)
         if position == len(lines) - 1:
             break
-        if right is not None and right >= margin - height and text and not text[-1].isspace():
+        if sum(full) >= 2 and full[position] and text and not text[-1].isspace():
             continue
         parts.append("\n")
     return "".join(parts)
