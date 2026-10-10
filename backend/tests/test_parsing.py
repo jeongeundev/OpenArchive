@@ -157,6 +157,15 @@ def test_extract_text_keeps_the_line_break_after_a_full_line_ending_with_a_space
     assert extract_text(data, "pdf").split() == ["The", "archive", "keeps", "every", "record", "safe"]
 
 
+def test_extract_text_keeps_a_separately_drawn_space_at_the_end_of_a_full_line() -> None:
+    """줄 끝 공백을 따로 그린 꽉 찬 줄도 낱말 경계다 — pdfium은 그 공백을 버리지만 원본에 있다(#176)."""
+    data = hwp_style_pdf(
+        (1000, 1800, "The archive keeps every"), (2370, 1800, " "), (1000, 1950, "record safe")
+    )
+
+    assert extract_text(data, "pdf").split() == ["The", "archive", "keeps", "every", "record", "safe"]
+
+
 def test_ocr_keeps_the_same_layer_text_as_extract_text_for_text_pages() -> None:
     """OCR 경로의 텍스트 쪽도 업로드 추출과 같은 셀 구분을 쓴다(#176)."""
     data = hwp_style_pdf((1000, 1800, "16,815"), (1500, 1800, "5,209"))
