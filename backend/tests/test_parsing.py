@@ -139,12 +139,16 @@ def test_extract_text_separates_pdf_table_cells_drawn_apart_on_one_line() -> Non
 def test_extract_text_joins_a_word_wrapped_at_the_right_margin() -> None:
     """오른쪽 여백까지 찬 줄이 낱말 중간에서 바뀌면 잇는다 — 한국어 규정 PDF에 흔하다(#176).
 
-    판면은 쪽 너비에서 왼쪽 여백을 양쪽으로 뺀 폭이다. x=2000(240pt)에서 시작한 첫 줄이 612pt 쪽의 오른쪽
-    여백(372pt)을 넘는다.
+    판면은 쪽 너비에서 왼쪽 여백을 양쪽으로 뺀 폭이다. x=2000(240pt)에서 시작한 앞 두 줄이 612pt 쪽의 오른쪽
+    여백(372pt)을 넘는다. 꽉 찬 줄이 둘 이상인 쪽에서만 여백을 믿는다.
     """
-    data = hwp_style_pdf((2000, 1800, "The archive keeps every infor"), (2000, 1950, "mation safe"))
+    data = hwp_style_pdf(
+        (2000, 1800, "The archive keeps every infor"),
+        (2000, 1950, "mation and every recorded ver"),
+        (2000, 2100, "sion safe"),
+    )
 
-    assert extract_text(data, "pdf") == "The archive keeps every information safe"
+    assert extract_text(data, "pdf") == "The archive keeps every information and every recorded version safe"
 
 
 def test_extract_text_keeps_the_line_break_after_a_line_short_of_the_margin() -> None:
@@ -170,10 +174,12 @@ def test_extract_text_keeps_the_line_break_after_a_full_line_ending_with_a_space
              (1000, 2250, "- item three")),
             "Title\n- item one\n- item two longer\n- item three",
         ),
+        # 가운데 정렬 표지 — 가장 넓은 줄이 판면 왼쪽 끝을 정해 오른쪽 끝에도 닿아 보인다
+        (((2100, 1800, "Annual Report 2026"), (2250, 1950, "Korea Agency")), "Annual Report 2026\nKorea Agency"),
     ],
 )
 def test_extract_text_keeps_line_breaks_on_a_page_without_a_full_line(runs, expected) -> None:
-    """판면을 채운 줄이 없는 쪽(표지·목차·목록)에서는 가장 긴 줄도 꽉 찬 줄이 아니다(#176)."""
+    """판면을 채운 줄이 없는 쪽(표지·목차·목록, 가운데 정렬)에서는 가장 긴 줄도 꽉 찬 줄이 아니다(#176)."""
     assert extract_text(hwp_style_pdf(*runs), "pdf") == expected
 
 
