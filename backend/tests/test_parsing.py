@@ -33,7 +33,12 @@ def minimal_pdf(text: str, font: bytes = b"<</Type/Font/Subtype/Type1/BaseFont/H
 
     `font`는 4번 객체, `extra_objs`는 6번부터 붙는다(글꼴이 참조하는 객체용).
     """
-    stream = f"BT /F1 24 Tf 72 700 Td ({text}) Tj ET".encode()
+    return pdf_from_stream(f"BT /F1 24 Tf 72 700 Td ({text}) Tj ET".encode(), font, *extra_objs)
+
+
+def pdf_from_stream(stream: bytes, font: bytes = b"<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>",
+                    *extra_objs: bytes) -> bytes:
+    """내용 스트림을 그대로 담은 한 쪽짜리 PDF. 글꼴은 `/F1`이다."""
     objs = [
         b"<</Type/Catalog/Pages 2 0 R>>",
         b"<</Type/Pages/Kids[3 0 R]/Count 1>>",
@@ -110,6 +115,92 @@ def test_extract_text_reads_docx_paragraphs_in_order() -> None:
 
 def test_extract_text_reads_pdf() -> None:
     assert extract_text(minimal_pdf("embedding job trigger"), "pdf") == "embedding job trigger"
+
+
+def hwp_style_pdf(*runs: tuple[int, int, str]) -> bytes:
+    """한글 오피스 출력 모양 — 글자 덩어리마다 `q · cm(축소·상하 반전) · BT · Tm · TJ · ET · Q`로 따로 그린다.
+
+    `runs`는 (x, y, 텍스트)이고 좌표는 축소 전 단위(1/0.12pt), y는 아래로 커진다.
+    """
+    return pdf_from_stream(b"".join(
+        b"q 0.12 0 0 -0.12 0 841 cm BT /F1 100 Tf 1 0 0 -1 %d %d Tm [(%s)] TJ ET Q\n"
+        % (x, y, text.encode())
+        for x, y, text in runs
+    ))
+
+
+def test_extract_text_separates_pdf_table_cells_drawn_apart_on_one_line() -> None:
+    """표 셀 사이에 공백 글자가 없어도 같은 줄에서 떨어져 그려졌으면 공백으로 가른다(#176)."""
+    data = hwp_style_pdf((1000, 1800, "16,815"), (1500, 1800, "5,209"), (2000, 1800, "11,320"))
+
+    assert extract_text(data, "pdf") == "16,815 5,209 11,320"
+
+
+def test_extract_text_joins_a_word_wrapped_at_the_right_margin() -> None:
+    """오른쪽 여백까지 찬 줄이 낱말 중간에서 바뀌면 잇는다 — 한국어 규정 PDF에 흔하다(#176).
+
+    판면은 쪽 너비에서 왼쪽 여백을 양쪽으로 뺀 폭이다. x=2000(240pt)에서 시작한 앞 두 줄이 612pt 쪽의 오른쪽
+    여백(372pt)을 넘는다. 꽉 찬 줄이 둘 이상인 쪽에서만 여백을 믿는다.
+    """
+    data = hwp_style_pdf(
+        (2000, 1800, "The archive keeps every infor"),
+        (2000, 1950, "mation and every recorded ver"),
+        (2000, 2100, "sion safe"),
+    )
+
+    assert extract_text(data, "pdf") == "The archive keeps every information and every recorded version safe"
+
+
+def test_extract_text_keeps_the_line_break_after_a_line_short_of_the_margin() -> None:
+    """여백에 못 미친 줄 뒤는 낱말이 끊긴 자리가 아니다 — 제목·목록·쪽 번호 뒤 줄바꿈을 지킨다(#176)."""
+    data = hwp_style_pdf((2000, 1800, "Article"), (2000, 1950, "The archive keeps every record"))
+
+    assert extract_text(data, "pdf") == "Article\nThe archive keeps every record"
+
+
+def test_extract_text_keeps_the_line_break_after_a_full_line_ending_with_a_space() -> None:
+    """꽉 찬 줄이라도 공백으로 끝났으면 낱말 경계다 — 잇지 않는다(#176)."""
+    data = hwp_style_pdf((2000, 1800, "The archive keeps every "), (2000, 1950, "record safe"))
+
+    assert extract_text(data, "pdf").split() == ["The", "archive", "keeps", "every", "record", "safe"]
+
+
+@pytest.mark.parametrize(
+    ("runs", "expected"),
+    [
+        (((1000, 1800, "Chapter One Overview"), (1000, 1950, "Scope")), "Chapter One Overview\nScope"),
+        (
+            ((1000, 1800, "Title"), (1000, 1950, "- item one"), (1000, 2100, "- item two longer"),
+             (1000, 2250, "- item three")),
+            "Title\n- item one\n- item two longer\n- item three",
+        ),
+        # 가운데 정렬 표지 — 가장 넓은 줄이 판면 왼쪽 끝을 정해 오른쪽 끝에도 닿아 보인다
+        (((2100, 1800, "Annual Report 2026"), (2250, 1950, "Korea Agency")), "Annual Report 2026\nKorea Agency"),
+    ],
+)
+def test_extract_text_keeps_line_breaks_on_a_page_without_a_full_line(runs, expected) -> None:
+    """판면을 채운 줄이 없는 쪽(표지·목차·목록, 가운데 정렬)에서는 가장 긴 줄도 꽉 찬 줄이 아니다(#176)."""
+    assert extract_text(hwp_style_pdf(*runs), "pdf") == expected
+
+
+def test_extract_text_keeps_a_separately_drawn_space_at_the_end_of_a_full_line() -> None:
+    """줄 끝 공백을 따로 그린 꽉 찬 줄도 낱말 경계다 — pdfium은 그 공백을 버리지만 원본에 있다(#176)."""
+    data = hwp_style_pdf(
+        (2000, 1800, "The archive keeps every"), (3370, 1800, " "), (2000, 1950, "record safe")
+    )
+
+    assert extract_text(data, "pdf").split() == ["The", "archive", "keeps", "every", "record", "safe"]
+
+
+def test_ocr_keeps_the_same_layer_text_as_extract_text_for_text_pages() -> None:
+    """OCR 경로의 텍스트 쪽도 업로드 추출과 같은 셀 구분을 쓴다(#176)."""
+    data = hwp_style_pdf((1000, 1800, "16,815"), (1500, 1800, "5,209"))
+    writer = PdfWriter(clone_from=PdfReader(io.BytesIO(data)))
+    writer.add_blank_page(612, 792)  # 텍스트 레이어가 빈 쪽 — OCR 대상
+    buffer = io.BytesIO()
+    writer.write(buffer)
+
+    assert ocr_text(buffer.getvalue(), "pdf").split("\n\n")[0] == "16,815 5,209"
 
 
 def test_extract_text_returns_empty_string_for_pdf_without_text() -> None:
@@ -575,6 +666,17 @@ def type3_pdf(glyph: str) -> bytes:
     return minimal_pdf("AAA", font, b"<</Length 8>>\nstream\n500 0 d0\nendstream")
 
 
+def page_of(data: bytes, keep: int) -> bytes:
+    """한 쪽만 남긴 PDF."""
+    writer = PdfWriter(clone_from=PdfReader(io.BytesIO(data)))
+    for index in range(len(writer.pages) - 1, -1, -1):
+        if index != keep:
+            writer.remove_page(index)
+    out = io.BytesIO()
+    writer.write(out)
+    return out.getvalue()
+
+
 def first_page_of(data: bytes, *, strip_to_unicode: bool = False) -> bytes:
     writer = PdfWriter(clone_from=PdfReader(io.BytesIO(data)))
     for index in range(len(writer.pages) - 1, 0, -1):
@@ -637,7 +739,8 @@ def test_ocr_keeps_text_layer_pages_and_reads_only_the_scanned_page(monkeypatch)
     text = ocr_text(data, "pdf")
 
     assert len(calls) == 1  # 텍스트 레이어가 있는 1·3쪽은 인식하지 않는다
-    pages = [page.extract_text() for page in PdfReader(io.BytesIO(data)).pages]
+    # 레이어 텍스트는 업로드 추출과 같은 것이다(#176 — pdfium 글자 위치로 만든 쪽 텍스트)
+    pages = [extract_text(page_of(data, index), "pdf") for index in range(3)]
     assert text.count(pages[0]) == 1 and text.count(pages[2]) == 1  # 레이어 그대로, 한 번씩
     normalized = normalize_ocr(text)
     ocr_page = normalized.index("하반기세무조사운영방향")  # 2쪽에만 있는 안건 제목

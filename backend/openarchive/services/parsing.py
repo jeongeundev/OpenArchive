@@ -22,6 +22,7 @@ from xml.etree import ElementTree
 
 import olefile
 import pypdfium2
+import pypdfium2.raw as pdfium_c
 import pytesseract
 from docx import Document
 from openpyxl import load_workbook
@@ -169,27 +170,121 @@ def needs_ocr(content_type: str, data: bytes) -> bool:
         ).strip()
     if content_type != "pdf":
         return False
-    return any(ocr for _, ocr in _pdf_ocr_pages(PdfReader(io.BytesIO(data))))
+    return any(ocr for _, ocr in _pdf_ocr_pages(PdfReader(io.BytesIO(data)), data))
 
 
-def _pdf_page_texts(data: bytes) -> list[str]:
-    return [page.extract_text() or "" for page in PdfReader(io.BytesIO(data)).pages]
+def _pdf_page_texts(data: bytes, reader: PdfReader | None = None) -> list[str]:
+    """쪽마다 텍스트 레이어 — pdfium 글자 위치로 줄을 잇고 pypdf가 본 공백 글자를 되살린다(#176)."""
+    reader = reader or PdfReader(io.BytesIO(data))
+    with pypdfium2.PdfDocument(data) as document:
+        return [
+            _restore_spaces(_pdf_page_text(document, index), page.extract_text() or "")
+            for index, page in enumerate(reader.pages)
+        ]
 
 
-def _pdf_ocr_pages(reader: PdfReader) -> list[tuple[str, bool]]:
+def _restore_spaces(text: str, reference: str) -> str:
+    """`text`가 붙여 쓴 글자 사이 중 `reference`(pypdf)에 공백 문자가 있는 자리에 공백을 넣는다.
+
+    pdfium은 따로 그린 줄 끝 공백을 버려, 꽉 찬 줄의 낱말 경계를 낱말 중간 줄바꿈처럼 잇는다
+    (「수사를⏎종료한」→「수사를종료한」). pypdf는 판마다 줄바꿈을 다르게 넣지만(6.17부터 줄마다)
+    공백 문자는 원본대로 내므로 줄바꿈이 아닌 공백만 빌린다. 공백 아닌 글자의 순서가 다르면(읽기
+    순서가 다른 쪽, 글자 정보가 깨진 쪽) 대응을 믿을 수 없어 `text`를 그대로 둔다.
+    """
+    chars = [match.start() for match in re.finditer(r"\S", text)]
+    references = list(re.finditer(r"\S", reference))
+    if [text[index] for index in chars] != [match[0] for match in references]:
+        return text
+    parts = []
+    start = 0
+    for position in range(len(chars) - 1):
+        end = chars[position] + 1
+        gap = reference[references[position].end() : references[position + 1].start()]
+        if end == chars[position + 1] and gap.strip("\r\n"):
+            parts.append(text[start:end])
+            start = end
+    parts.append(text[start:])
+    return " ".join(parts)
+
+
+def _pdf_page_text(document: pypdfium2.PdfDocument, index: int) -> str:
+    """한 쪽의 텍스트 레이어 — pdfium이 놓은 글자 위치로 줄을 다시 잇는다(#176).
+
+    pdfium은 같은 줄에서 떨어진 글자 사이(표 셀)에 공백을, 줄마다 줄바꿈을 넣는다. 한국어 규정 PDF는 줄
+    끝에서 낱말 중간에 줄을 바꾸므로 그대로 두면 「판⏎단하는」처럼 낱말이 끊긴다. 낱말 중간 줄바꿈은 줄이
+    오른쪽 여백까지 찼을 때만 생기므로, 공백 없이 끝난 줄이 판면 오른쪽 끝에서 글자 높이 하나 안쪽까지
+    찼으면 다음 줄과 잇는다. 판면 오른쪽 끝은 좌우 여백이 같다고 보고 쪽 너비에서 가장 왼쪽 글자까지의
+    거리를 뺀 자리다 — 가장 긴 줄을 기준으로 삼으면 판면을 채운 줄이 없는 쪽(표지·목차·목록)에서 그 줄이
+    다음 줄과 붙는다. 그 끝에 닿는 줄이 둘 이상인 쪽에서만 잇는다 — 가운데 정렬 쪽은 가장 넓은 줄 하나가
+    판면 양 끝을 정해 꽉 찬 줄처럼 보인다. 오른쪽 여백이 더 넓은 문서나 꽉 찬 줄이 하나뿐인 쪽에서는 잇지
+    않는 쪽으로 틀린다. 판면에 못 미친 줄(제목·목록·쪽 번호) 뒤는 줄바꿈을 지킨다. 폭이 거의 같은(글자 높이
+    둘 안쪽) 가운데 줄이 둘 이상인 쪽은 위치로 양쪽 정렬 본문과 구별되지 않아 그 줄들과 바로 다음 줄이 붙는다(한계).
+    pypdf는 6.17부터 같은 자리에서 줄을 바꿔 판마다 결과가 달라 줄 판단에 쓰지 않는다.
+    """
+    page = document[index]
+    try:
+        width = page.get_width()
+        textpage = page.get_textpage()
+        try:
+            lines = _pdf_page_lines(textpage)
+        finally:
+            textpage.close()
+    finally:
+        page.close()
+    lefts = [left for _, left, _, _ in lines if left is not None]
+    margin = width - min(lefts, default=0.0)
+    full = [right is not None and right >= margin - height for _, _, right, height in lines]
+    parts = []
+    for position, (text, _, _, _) in enumerate(lines):
+        parts.append(text)
+        if position == len(lines) - 1:
+            break
+        if sum(full) >= 2 and full[position] and text and not text[-1].isspace():
+            continue
+        parts.append("\n")
+    return "".join(parts)
+
+
+def _pdf_page_lines(
+    textpage: pypdfium2.PdfTextPage,
+) -> list[tuple[str, float | None, float | None, float]]:
+    """pdfium 줄바꿈으로 나눈 줄마다 (텍스트, 글자 왼쪽 끝, 오른쪽 끝, 글자 높이) — 공백뿐인 줄은 끝이 None이다."""
+    count = textpage.count_chars()
+    lines = []
+    start = 0
+    for position in range(count + 1):
+        code = pdfium_c.FPDFText_GetUnicode(textpage.raw, position) if position < count else 10
+        if code != 10:  # \n
+            continue
+        end = position - 1 if position > start and pdfium_c.FPDFText_GetUnicode(
+            textpage.raw, position - 1
+        ) == 13 else position  # \r\n
+        boxes = [
+            textpage.get_charbox(char)
+            for char in range(start, end)
+            if not chr(pdfium_c.FPDFText_GetUnicode(textpage.raw, char)).isspace()
+        ]
+        lines.append((
+            textpage.get_text_range(start, end - start) if end > start else "",
+            min((box[0] for box in boxes), default=None),
+            max((box[2] for box in boxes), default=None),
+            max((box[3] - box[1] for box in boxes), default=0.0),
+        ))
+        start = position + 1
+    return lines
+
+
+def _pdf_ocr_pages(reader: PdfReader, data: bytes) -> list[tuple[str, bool]]:
     """쪽마다 (레이어 텍스트, OCR할지) — 텍스트 레이어가 비었거나 글자 정보가 깨진 글꼴을 쓰면 OCR한다(#191).
 
     깨짐은 추출한 텍스트가 아니라 글꼴 구조로 판정한다. 깨진 글자는 글꼴마다 모양이 달라
     (부분 집합 글꼴은 제어 문자, 통 글꼴은 여러 문자 체계, Type3는 ASCII 글리프 이름) 문자 비율로는
     놓친다. 정상 PDF 4,705쪽에서 이 판정에 걸린 쪽은 없었다.
     """
-    pages = []
-    for page in reader.pages:
-        text = page.extract_text() or ""
-        pages.append(
-            (text, not text.strip() or _has_unmapped_font(page.get("/Resources"), set()))
-        )
-    return pages
+    return [
+        (text, not text.strip() or _has_unmapped_font(page.get("/Resources"), set()))
+        for page, text in zip(reader.pages, _pdf_page_texts(data, reader), strict=True)
+    ]
 
 
 def _has_unmapped_font(resources, seen: set[int]) -> bool:
@@ -247,7 +342,7 @@ def ocr_text(data: bytes, content_type: str) -> str:
                 _ocr_image(picture) for picture in _office_pictures(data, content_type)
             )
 
-        pages = _pdf_ocr_pages(PdfReader(io.BytesIO(data)))
+        pages = _pdf_ocr_pages(PdfReader(io.BytesIO(data)), data)
         texts = [text for text, _ in pages]
         ocr_pages = [ocr for _, ocr in pages]
         with pypdfium2.PdfDocument(data) as document:
