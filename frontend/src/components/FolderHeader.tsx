@@ -7,6 +7,7 @@ import { scopeLabel } from "@/lib/folders";
 import type { Folder } from "@/lib/types";
 import { OwnerTransferForm } from "./OwnerTransfer";
 import { FolderAccessPanel } from "./FolderAccessPanel";
+import { FolderShareToggles } from "./FolderShareToggles";
 import { FolderNameForm } from "./FolderTree";
 
 function folderPath(folder: Folder, folders: Folder[]): string {
@@ -35,6 +36,7 @@ export function FolderHeader({ folder, folders, onChanged, onDeleted, onAccessSa
 }): React.ReactElement {
   const [mode, setMode] = useState<"idle" | "child" | "rename" | "owner">("idle");
   const [accessOpen, setAccessOpen] = useState(false);
+  const [shareOpen, setShareOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const label = folder.parent_id === null ? scopeLabel(folder.scope) : `상위 폴더 범위 따름(${scopeLabel(folder.scope)})`;
 
@@ -64,6 +66,10 @@ export function FolderHeader({ folder, folders, onChanged, onDeleted, onAccessSa
           <button type="button" aria-expanded={accessOpen} onClick={() => setAccessOpen(open => !open)}
             className="text-neutral-500 hover:text-neutral-300">열람 범위</button>
         ) : null}
+        {folder.can_share ? (
+          <button type="button" aria-expanded={shareOpen} onClick={() => setShareOpen(open => !open)}
+            className="text-neutral-500 hover:text-neutral-300">외부 공유</button>
+        ) : null}
         {!folder.can_manage ? <span className="text-neutral-500">폴더를 만든 사람만 바꿀 수 있습니다</span> : null}
       </div>
       {mode === "child" ? (
@@ -82,6 +88,7 @@ export function FolderHeader({ folder, folders, onChanged, onDeleted, onAccessSa
       {accessOpen && folder.parent_id === null ? (
         <FolderAccessPanel folder={folder} onSaved={onAccessSaved ?? onChanged} />
       ) : null}
+      {shareOpen && folder.can_share ? <FolderShareToggles key={folder.id} folder={folder} /> : null}
     </div>
   );
 }

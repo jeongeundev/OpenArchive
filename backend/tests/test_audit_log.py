@@ -623,6 +623,48 @@ def test_share_grants_ignore_conflicts_and_document_delete(conn):
         ]
 
 
+def test_share_folder_added_removed_and_conflict_audit(conn):
+    with conn.transaction():
+        set_actor(conn, "admin")
+        user, _ = principals(conn)
+        share = create_share(conn, user)
+        folder = create_folder(conn)
+        before = audit_rows(conn)
+        sql = "INSERT INTO share_folders (share_id, folder_id) VALUES (%s, %s)"
+        conn.execute(sql, (share, folder))
+        detail = {"change": "folder_added", "share_id": str(share),
+                  "share_name": "외부 협업", "owner": "bob",
+                  "folder_id": str(folder), "folder_name": "사업 자료"}
+        assert audit_rows(conn)[len(before):] == [
+            ("share_changed", "admin", "session", None, None, detail),
+        ]
+        before = audit_rows(conn)
+        conn.execute(sql + " ON CONFLICT DO NOTHING", (share, folder))
+        assert audit_rows(conn) == before
+        conn.execute("DELETE FROM share_folders WHERE share_id=%s AND folder_id=%s", (share, folder))
+        assert audit_rows(conn)[len(before):] == [
+            ("share_changed", "admin", "session", None, None,
+             {**detail, "change": "folder_removed"}),
+        ]
+
+
+@pytest.mark.parametrize("parent", ["share", "folder"])
+def test_share_folder_cascade_skips_removal_audit(conn, parent):
+    with conn.transaction():
+        set_actor(conn)
+        user, _ = principals(conn)
+        share = create_share(conn, user)
+        folder = create_folder(conn)
+        conn.execute("INSERT INTO share_folders (share_id, folder_id) VALUES (%s, %s)", (share, folder))
+        before = audit_rows(conn)
+        table, target = ("shares", share) if parent == "share" else ("folders", folder)
+        conn.execute(f"DELETE FROM {table} WHERE id=%s", (target,))
+        assert audit_rows(conn)[len(before):] == (
+            [share_event(share, "deleted")] if parent == "share" else []
+        )
+        assert conn.execute("SELECT count(*) FROM share_folders").fetchone()[0] == 0
+
+
 def test_share_tokens_and_admin_revocation(conn):
     with conn.transaction():
         set_actor(conn)
@@ -677,6 +719,8 @@ def test_user_delete_skips_all_share_and_principal_cascades(conn):
                      (doc, user))
         conn.execute("INSERT INTO document_grants (document_id, share_id) VALUES (%s, %s)",
                      (doc, share))
+        folder = create_folder(conn)
+        conn.execute("INSERT INTO share_folders (share_id, folder_id) VALUES (%s, %s)", (share, folder))
         before = audit_rows(conn)
         conn.execute("DELETE FROM users WHERE id=%s", (user,))
         assert audit_rows(conn)[len(before):] == [

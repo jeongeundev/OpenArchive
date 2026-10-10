@@ -15,10 +15,12 @@ from openarchive.services.clusters import get_clusters
 from openarchive.services.diagnostics import get_diagnostics
 from openarchive.services.documents import (
     DocumentNotFound,
+    count_documents,
     document_progress,
     get_document,
     get_document_version,
     list_documents,
+    list_visible_tags,
 )
 from openarchive.services.links import find_backlinks, resolve_links
 from openarchive.services.related import find_related, suggest_tags
@@ -337,3 +339,173 @@ async def test_search_candidates_can_use_hnsw_with_the_share_predicate(
         plan = "\n".join(row[0] for row in await cur.fetchall())
 
     assert "idx_chunks_embedding" in plan, f"HNSW 인덱스를 타지 않았다:\n{plan}"
+
+
+@pytest.fixture
+async def folder_shared(worker_conn, shared):
+    provider, share_id, inside, outside, twin = shared
+    folders = []
+    for name, parent, owner in [
+        ("R", None, "alice"),
+        ("A", 0, "alice"),
+        ("B", 1, "bob"),
+        ("other", None, "alice"),
+    ]:
+        cur = await worker_conn.execute(
+            "INSERT INTO folders (name, parent_id, created_by, visibility) "
+            "VALUES (%s, %s, %s, %s) RETURNING id",
+            (
+                name,
+                folders[parent] if parent is not None else None,
+                owner,
+                "private" if parent is None else None,
+            ),
+        )
+        folders.append((await cur.fetchone())[0])
+    await worker_conn.execute("DELETE FROM document_grants WHERE share_id = %s", (share_id,))
+    await worker_conn.execute(
+        "INSERT INTO share_folders (share_id, folder_id) VALUES (%s, %s)",
+        (share_id, folders[1]),
+    )
+    for index, doc in enumerate(inside):
+        await worker_conn.execute(
+            "UPDATE documents SET folder_id = %s, follows_folder = true WHERE id = %s",
+            (folders[1 + index % 2], doc),
+        )
+    for doc, folder, follows in [
+        (outside[10], folders[0], True),
+        (outside[20], folders[3], True),
+        (outside[50], folders[1], False),
+    ]:
+        await worker_conn.execute(
+            "UPDATE documents SET folder_id = %s, follows_folder = %s WHERE id = %s",
+            (folder, follows, doc),
+        )
+    cur = await worker_conn.execute("SELECT id FROM users WHERE username = 'alice'")
+    other_share = await add_share(worker_conn, (await cur.fetchone())[0], "S2", [])
+    return provider, share_id, inside, outside, twin, folders, other_share
+
+
+async def test_folder_share_boundaries_and_live_changes(worker_conn, folder_shared):
+    from openarchive.services.visibility import FOLDER_VISIBLE_TO_USER
+
+    _, share_id, inside, outside, _, folders, other_share = folder_shared
+    principal = share_principal(share_id)
+
+    async def documents(user):
+        return {row["id"] for row in await list_documents(worker_conn, user_id=user)}
+
+    async def visible_folders(user):
+        cur = await worker_conn.execute(
+            f"SELECT f.id FROM folders f WHERE {FOLDER_VISIBLE_TO_USER}", {"user": user}
+        )
+        return {row[0] for row in await cur.fetchall()}
+
+    assert await documents(principal) == set(inside)
+    assert await visible_folders(principal) == set(folders[1:3])
+    assert await documents(share_principal(other_share)) == set()
+    assert await visible_folders(share_principal(other_share)) == set()
+    carol_before = await documents("carol")
+    assert not set(inside) & carol_before
+    await worker_conn.execute(
+        "INSERT INTO document_grants (document_id, share_id) VALUES (%s, %s)",
+        (outside[50], share_id),
+    )
+    assert await documents(principal) == set(inside) | {outside[50]}
+    new_doc = await insert_test_document(
+        worker_conn, title="새 문서", content="새 문서 텍스트", owner_id="bob"
+    )
+    await worker_conn.execute(
+        "UPDATE documents SET folder_id = %s, follows_folder = true WHERE id = %s",
+        (folders[2], new_doc),
+    )
+    assert new_doc in await documents(principal)
+    await worker_conn.execute("UPDATE documents SET deleted_at = now() WHERE id = %s", (inside[1],))
+    assert await documents(principal) == (set(inside) - {inside[1]}) | {outside[50], new_doc}
+    await worker_conn.execute("DELETE FROM share_folders WHERE share_id = %s", (share_id,))
+    assert await documents(principal) == {outside[50]}
+    assert await visible_folders(principal) == set()
+    assert await documents("carol") == carol_before
+
+
+async def test_folder_share_read_paths(visibility_conn, folder_shared):
+    provider, share_id, inside, _, _, _, _ = folder_shared
+    principal = share_principal(share_id)
+    hits = await search_documents(visibility_conn, provider, query=QUERY, user_id=principal)
+    assert {hit.document_id for hit in hits} == set(inside)
+    assert {row["id"] for row in await list_documents(visibility_conn, user_id=principal)} == set(
+        inside
+    )
+    assert sum((await document_progress(visibility_conn, user_id=principal)).values()) == 5
+    assert await count_documents(visibility_conn, user_id=principal) == 5
+    assert await list_visible_tags(visibility_conn, user_id=principal) == ["공유"]
+    related = await find_related(visibility_conn, document_id=inside[0], user_id=principal)
+    assert {item.document_id for item in related.items} == {inside[1]}
+    tags = await suggest_tags(visibility_conn, document_id=inside[0], user_id=principal)
+    assert "외부전용" not in {item.tag for item in tags.items}
+    diagnostics = await get_diagnostics(visibility_conn, user_id=principal)
+    assert diagnostics.orphans.count == 3
+    assert diagnostics.uncategorized.count == 2
+    assert diagnostics.broken_links.count == 2
+    assert diagnostics.duplicates.identical.count == 0
+    assert diagnostics.duplicates.overlaps.count == 0
+    clusters = await get_clusters(visibility_conn, user_id=principal)
+    assert sum(cluster.size for cluster in clusters.clusters) == 5
+    assert {doc.document_id for cluster in clusters.clusters for doc in cluster.documents} == set(
+        inside
+    )
+
+
+async def test_folder_share_narrow_search_fills_k_and_uses_hnsw(worker_conn, folder_shared):
+    from openarchive.services.search import apply_vector_search_settings
+
+    provider, share_id, _, _, _, folders, _ = folder_shared
+    base = provider.embed([QUERY])[0]
+    coordinate = next(index for index, value in enumerate(base) if value == 0)
+    eligible = set()
+    async with worker_conn.transaction():
+        await worker_conn.execute("DELETE FROM document_edges")
+        await worker_conn.execute("DELETE FROM document_chunks")
+        for index in range(1200):
+            doc = await insert_test_document(
+                worker_conn, title=f"후보 {index}", content=f"대목 {index}", owner_id="bob"
+            )
+            if index % 100 == 99:
+                eligible.add(doc)
+                await worker_conn.execute(
+                    "UPDATE documents SET folder_id = %s, follows_folder = true WHERE id = %s",
+                    (folders[2], doc),
+                )
+            vector = base.copy()
+            vector[coordinate] = (index + 1) / 1200
+            await worker_conn.execute(
+                "INSERT INTO document_chunks (document_id, version, chunk_index, content, embedding) "
+                "VALUES (%s, 1, 0, %s, %s::vector)",
+                (doc, f"대목 {index}", to_pgvector_literal(vector)),
+            )
+    cur = await worker_conn.execute("SELECT count(DISTINCT embedding::text) FROM document_chunks")
+    assert (await cur.fetchone())[0] == 1200
+    await worker_conn.execute("ANALYZE documents")
+    await worker_conn.execute("ANALYZE document_chunks")
+    principal = share_principal(share_id)
+    hits = await search_documents(worker_conn, provider, query=QUERY, user_id=principal, k=10)
+    assert len(hits) == 10
+    assert {hit.document_id for hit in hits} <= eligible
+    assert all(hit.via is None for hit in hits)
+    params = {
+        "query": QUERY,
+        "identifier": None,
+        "edition": None,
+        "qvec": to_pgvector_literal(base),
+        "tags": None,
+        "ctype": None,
+        "user": principal,
+        "folder": None,
+        "k": 10,
+    }
+    async with worker_conn.transaction():
+        await apply_vector_search_settings(worker_conn)
+        cur = await worker_conn.execute("EXPLAIN " + SEARCH_SQL, params)
+        plan = "\n".join(row[0] for row in await cur.fetchall())
+        candidate_plan = plan.split("  CTE candidates\n", 1)[1].split("  CTE walk_ids\n", 1)[0]
+        assert "Index Scan using idx_chunks_embedding" in candidate_plan, candidate_plan

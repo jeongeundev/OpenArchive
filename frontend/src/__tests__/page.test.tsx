@@ -173,7 +173,7 @@ describe("목록 찾기", () => {
 
 const publicScope = { visibility: "public" as const, users: [], groups: [] };
 const hr: Folder = { id: "folder-a", name: "인사", parent_id: null, created_by: "alice", document_count: 1,
-  scope: publicScope, inherited: false, can_manage: true, can_change_access: true };
+  scope: publicScope, inherited: false, can_manage: true, can_change_access: true, can_share: false };
 
 function requestedUrls(fetchMock: ReturnType<typeof vi.fn>): URL[] {
   return fetchMock.mock.calls.map(([input]) => new URL(String(input), "http://localhost"));

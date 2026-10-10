@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Response, status
 from openarchive.api.deps import (
     Connection,
     current_user,
+    require_reader,
     require_session_user,
     require_user_id,
     require_write_user_id,
@@ -16,10 +17,12 @@ from openarchive.api.schemas import (
     FolderOwnerTransferred,
     FolderScope,
     RenameFolderRequest,
+    SharedFolder,
     TransferOwnerRequest,
     UpdateFolderAccessRequest,
 )
 from openarchive.services import folders as service
+from openarchive.services.visibility import SHARE_PRINCIPAL_PREFIX
 
 router = APIRouter(prefix="/api/folders", tags=["folders"])
 
@@ -35,16 +38,17 @@ async def _folder_response(conn, folder_id, user_id, is_admin):
     return Folder.model_validate(next(row for row in rows if row["id"] == folder_id))
 
 
-@router.get("", response_model=list[Folder])
+# 공유 허용 목록의 읽기 경로다 (ADR-044 「공유」 결정 5, #206). 공유 주체에게는 공유에 넣은
+# 폴더와 그 하위만 SharedFolder로 준다 — 범위·만든 사람이 섞이지 않게 응답 모델을 가른다.
+@router.get("", response_model=list[Folder] | list[SharedFolder])
 async def list_folders(
     conn: Connection,
-    user_id: Annotated[str, Depends(require_user_id)],
+    principal: Annotated[str, Depends(require_reader)],
     is_admin: Annotated[bool, Depends(_is_admin)],
-) -> list[Folder]:
-    return [
-        Folder.model_validate(row)
-        for row in await service.list_folders(conn, user_id=user_id, is_admin=is_admin)
-    ]
+) -> list[Folder] | list[SharedFolder]:
+    rows = await service.list_folders(conn, user_id=principal, is_admin=is_admin)
+    model = SharedFolder if principal.startswith(SHARE_PRINCIPAL_PREFIX) else Folder
+    return [model.model_validate(row) for row in rows]
 
 
 @router.post("", response_model=Folder, status_code=status.HTTP_201_CREATED)

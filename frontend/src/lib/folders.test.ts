@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { folderChildren, folderOptions, sameScope, scopeLabel } from "./folders";
 import type { Folder } from "./types";
-const folder = (id: string, name: string, parent_id: string | null = null): Folder => ({id, name, parent_id, created_by: "kim", document_count: 0, scope: {visibility: "public", users: [], groups: []}, inherited: parent_id !== null, can_manage: true, can_change_access: parent_id === null});
+const folder = (id: string, name: string, parent_id: string | null = null): Folder => ({id, name, parent_id, created_by: "kim", document_count: 0, scope: {visibility: "public", users: [], groups: []}, inherited: parent_id !== null, can_manage: true, can_change_access: parent_id === null, can_share: false});
 export const folders = [folder("c", "채용", "b"), folder("a", "인사"), folder("d", "공고", "c"), folder("b", "업무", "a"), folder("e", "기획"), folder("orphan", "재무", "hidden")];
 describe("folder labels", () => {
   it("orders parents before name-sorted children with full paths and treats missing parents as roots", () => {

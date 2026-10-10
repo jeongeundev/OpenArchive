@@ -258,3 +258,61 @@ async def test_unknown_access_target_is_atomic_and_missing_folder_is_hidden(conn
     assert await f.get_folder_access(conn, r["id"], user_id="kim") == before
     with pytest.raises(f.FolderNotFound):
         await f.ensure_folder_visible(conn, uuid4(), user_id="kim")
+
+
+async def test_shared_folder_projection_and_user_can_share(conn):
+    import json
+
+    from openarchive.services import documents as d
+    from openarchive.services import shares as s
+    from openarchive.services.visibility import share_principal
+
+    await create_group(conn, "비밀조직")
+    r = await root(conn, visibility="private", grant_users=["lee"], grant_groups=["비밀조직"])
+    a = await f.create_folder(conn, user_id="lee", name="공유A", parent_id=r["id"])
+    b = await f.create_folder(conn, user_id="lee", name="공유B", parent_id=a["id"])
+    share = await s.create_share(conn, owner="kim", name="공유")
+    await s.add_folder(conn, share["id"], a["id"], owner="kim")
+    await d.create_text_document(conn, title="상속", content="내용", owner_id="lee", folder_id=b["id"])
+    individual = await d.create_text_document(conn, title="개별", content="내용", owner_id="lee")
+    await d.move_document(conn, individual["id"], user_id="lee", folder_id=b["id"])
+    await d.set_access(
+        conn, individual["id"], user_id="lee", follows_folder=False,
+        visibility="private", users=[], groups=[],
+    )
+    tree = await f.list_folders(conn, user_id=share_principal(share["id"]))
+    assert all(set(x) == {"id", "parent_id", "name", "document_count"} for x in tree)
+    by_id = {x["id"]: x for x in tree}
+    assert set(by_id) == {a["id"], b["id"]}
+    assert by_id[a["id"]]["parent_id"] is None
+    assert by_id[b["id"]]["parent_id"] == a["id"]
+    assert by_id[a["id"]]["document_count"] == 0
+    assert by_id[b["id"]]["document_count"] == 1
+    serialized = json.dumps(tree, default=str)
+    for secret in [r["name"], str(r["id"]), "kim", "lee", "비밀조직"]:
+        assert secret not in serialized
+    assert all(x["can_share"] for x in await f.list_folders(conn, user_id="kim"))
+    assert all(not x["can_share"] for x in await f.list_folders(conn, user_id="lee"))
+    await s.add_folder(conn, share["id"], r["id"], owner="kim")
+    by_id = {x["id"]: x for x in await f.list_folders(conn, user_id=share_principal(share["id"]))}
+    assert by_id[a["id"]]["parent_id"] == r["id"]
+
+
+async def test_root_transfer_removes_only_previous_owner_tree_shares(conn):
+    from openarchive.services import shares as s
+
+    r = await root(conn)
+    child = await f.create_folder(conn, user_id="kim", name="자식", parent_id=r["id"])
+    leaf = await f.create_folder(conn, user_id="lee", name="손자", parent_id=child["id"])
+    other = await f.create_folder(conn, user_id="kim", name="별도")
+    old = await s.create_share(conn, owner="kim", name="이전공유")
+    new = await s.create_share(conn, owner="lee", name="새공유")
+    for folder in [r, child, leaf, other]:
+        await s.add_folder(conn, old["id"], folder["id"], owner="kim")
+    await conn.execute("INSERT INTO share_folders(share_id,folder_id) VALUES (%s,%s)", (new["id"], leaf["id"]))
+    await f.transfer_folder_owner(conn, child["id"], user_id="kim", new_owner="lee")
+    assert (await (await conn.execute("SELECT count(*) FROM share_folders")).fetchone())[0] == 5
+    await f.transfer_folder_owner(conn, r["id"], user_id="kim", new_owner="lee")
+    assert set(await (await conn.execute("SELECT share_id,folder_id FROM share_folders")).fetchall()) == {
+        (old["id"], other["id"]), (new["id"], leaf["id"]),
+    }

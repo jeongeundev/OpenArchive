@@ -371,6 +371,19 @@ export function removeShareDocument(shareId: string, documentId: string): Promis
   );
 }
 
+function shareFolderPath(shareId: string, folderId: string): string {
+  return `${sharePath(shareId)}/folders/${encodeURIComponent(folderId)}`;
+}
+
+/** 폴더와 하위 폴더의 「폴더 범위 따름」 문서가 소유자와 관계없이 공유된다. 최상위 폴더를 만든 사람만 (#206). */
+export function addShareFolder(shareId: string, folderId: string): Promise<void> {
+  return request<void>(shareFolderPath(shareId, folderId), { method: "PUT" }, { parse: false });
+}
+
+export function removeShareFolder(shareId: string, folderId: string): Promise<void> {
+  return request<void>(shareFolderPath(shareId, folderId), { method: "DELETE" }, { parse: false });
+}
+
 /** 원문 토큰은 이 응답에서만 보인다 — 저장하지 않는다 (ADR-034). */
 export function createShareToken(
   shareId: string,

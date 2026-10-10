@@ -4,6 +4,10 @@
 기록이라 앱이 INSERT하며(026), 그 경로는 이 모듈 하나다 — 공유에 문서를 넣을 수
 있는 사람이 소유자뿐이라는 판정이 한 곳에 있어야 한다.
 
+폴더는 공유 소유자이자 최상위 폴더를 만든 사람만 넣고 뺀다(D1). 그 아래의
+「폴더 범위 따름」 문서는 소유자와 무관하게 조회 시점에 포함된다(D2) —
+ADR-044 결정 1의 자기 문서만 공유한다는 원칙의 명시적 예외다.
+
 - 남의 공유와 없는 공유는 구별하지 않는다(`ShareNotFound`). 공유의 존재가 새지 않는다.
 - 문서는 자기 것만 넣는다. 보이는 남의 문서(조직 공개 포함)를 넣을 수 있으면 조직 안
   열람 범위가 조직 밖으로 번진다. 관리자도 예외가 아니다.
@@ -71,6 +75,7 @@ async def create_share(conn: psycopg.AsyncConnection, *, owner: str, name: str) 
     except psycopg.errors.UniqueViolation as exc:
         raise ShareAlreadyExists("이미 존재하는 공유 이름입니다.") from exc
     share = await cur.fetchone()
+    share["folders"] = []
     share["documents"] = []
     share["tokens"] = []
     return share
@@ -110,7 +115,17 @@ async def list_shares(conn: psycopg.AsyncConnection, *, owner: str) -> list[dict
         (share_ids,),
     )
     tokens = await cur.fetchall()
+    await cur.execute(
+        """SELECT sf.share_id, f.id, f.name
+        FROM share_folders sf JOIN folders f ON f.id=sf.folder_id
+        WHERE sf.share_id=ANY(%s) ORDER BY f.name, f.id""",
+        (share_ids,),
+    )
+    folders = await cur.fetchall()
     for share in shares:
+        share["folders"] = [
+            {"id": f["id"], "name": f["name"]} for f in folders if f["share_id"] == share["id"]
+        ]
         share["documents"] = [
             {"id": d["id"], "title": d["title"]} for d in documents if d["share_id"] == share["id"]
         ]
@@ -191,7 +206,8 @@ async def list_all_shares(conn: psycopg.AsyncConnection) -> list[dict]:
         SELECT s.id, s.name, u.username AS owner, s.created_at,
                (SELECT count(*) FROM document_grants g
                 JOIN documents d ON d.id = g.document_id
-                WHERE g.share_id = s.id AND {NOT_TRASHED}) AS document_count
+                WHERE g.share_id = s.id AND {NOT_TRASHED}) AS document_count,
+               (SELECT count(*) FROM share_folders sf WHERE sf.share_id=s.id) AS folder_count
         FROM shares s JOIN users u ON u.id = s.owner_user_id
         ORDER BY u.username, s.name, s.id
         """
@@ -223,3 +239,34 @@ async def admin_revoke_share_token(
     )
     if cur.rowcount == 0:
         raise TokenNotFound("토큰을 찾을 수 없습니다.")
+
+
+async def _share_folder(conn, share_id: UUID, folder_id: UUID, owner: str) -> None:
+    from openarchive.services.folders import NotFolderCreator, ensure_folder_visible, folder_path
+
+    await _own_share(conn, share_id, owner)
+    await ensure_folder_visible(conn, folder_id, user_id=owner)
+    path = await folder_path(conn, folder_id)
+    root = await ensure_folder_visible(conn, path[0]["id"], user_id=owner)
+    if root["created_by"] != owner:
+        raise NotFolderCreator
+
+
+async def add_folder(
+    conn: psycopg.AsyncConnection, share_id: UUID, folder_id: UUID, *, owner: str
+) -> None:
+    """최상위 폴더를 만든 공유 소유자가 자기 트리의 폴더를 넣는다."""
+    await _share_folder(conn, share_id, folder_id, owner)
+    await conn.execute(
+        "INSERT INTO share_folders (share_id, folder_id) VALUES (%s, %s) ON CONFLICT DO NOTHING",
+        (share_id, folder_id),
+    )
+
+
+async def remove_folder(
+    conn: psycopg.AsyncConnection, share_id: UUID, folder_id: UUID, *, owner: str
+) -> None:
+    await _share_folder(conn, share_id, folder_id, owner)
+    await conn.execute(
+        "DELETE FROM share_folders WHERE share_id=%s AND folder_id=%s", (share_id, folder_id)
+    )

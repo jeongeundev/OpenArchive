@@ -7,6 +7,7 @@ import {
   listFolders, createFolder, renameFolder, deleteFolder, getFolderAccess, setFolderAccess, moveDocument,
   addGroupMember,
   addShareDocument,
+  addShareFolder,
   ask,
   changePassword,
   createGroup,
@@ -36,6 +37,7 @@ import {
   listTokens,
   removeGroupMember,
   removeShareDocument,
+  removeShareFolder,
   revokeShareToken,
   revokeToken,
   search,
@@ -843,6 +845,22 @@ describe("shares", () => {
     expect(fetchMock.mock.calls[0][0]).toBe("/api/shares/s%2F1/documents/d%201");
     expect(fetchMock.mock.calls[0][1]?.method).toBe("PUT");
     expect(fetchMock.mock.calls[1][0]).toBe("/api/shares/s%2F1/documents/d%201");
+    expect(fetchMock.mock.calls[1][1]?.method).toBe("DELETE");
+  });
+
+  it("adds and removes a folder with encoded path segments", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await addShareFolder("s/1", "f 1");
+    await removeShareFolder("s/1", "f 1");
+
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/shares/s%2F1/folders/f%201");
+    expect(fetchMock.mock.calls[0][1]?.method).toBe("PUT");
+    expect(fetchMock.mock.calls[1][0]).toBe("/api/shares/s%2F1/folders/f%201");
     expect(fetchMock.mock.calls[1][1]?.method).toBe("DELETE");
   });
 
