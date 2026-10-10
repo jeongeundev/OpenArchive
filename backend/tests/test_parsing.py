@@ -136,11 +136,25 @@ def test_extract_text_separates_pdf_table_cells_drawn_apart_on_one_line() -> Non
     assert extract_text(data, "pdf") == "16,815 5,209 11,320"
 
 
-def test_extract_text_keeps_a_word_wrapped_at_line_end_joined() -> None:
-    """줄 끝에서 낱말 중간에 바뀐 줄은 잇는다 — 한국어 규정 PDF에 흔하다(#176)."""
-    data = hwp_style_pdf((1000, 1800, "Infor"), (1000, 1950, "mation"))
+def test_extract_text_joins_a_word_wrapped_at_the_right_margin() -> None:
+    """오른쪽 여백까지 찬 줄이 낱말 중간에서 바뀌면 잇는다 — 한국어 규정 PDF에 흔하다(#176)."""
+    data = hwp_style_pdf((1000, 1800, "The archive keeps every infor"), (1000, 1950, "mation safe"))
 
-    assert extract_text(data, "pdf") == "Information"
+    assert extract_text(data, "pdf") == "The archive keeps every information safe"
+
+
+def test_extract_text_keeps_the_line_break_after_a_line_short_of_the_margin() -> None:
+    """여백에 못 미친 줄 뒤는 낱말이 끊긴 자리가 아니다 — 제목·목록·쪽 번호 뒤 줄바꿈을 지킨다(#176)."""
+    data = hwp_style_pdf((1000, 1800, "Article"), (1000, 1950, "The archive keeps every record"))
+
+    assert extract_text(data, "pdf") == "Article\nThe archive keeps every record"
+
+
+def test_extract_text_keeps_the_line_break_after_a_full_line_ending_with_a_space() -> None:
+    """꽉 찬 줄이라도 공백으로 끝났으면 낱말 경계다 — 잇지 않는다(#176)."""
+    data = hwp_style_pdf((1000, 1800, "The archive keeps every "), (1000, 1950, "record safe"))
+
+    assert extract_text(data, "pdf").split() == ["The", "archive", "keeps", "every", "record", "safe"]
 
 
 def test_ocr_keeps_the_same_layer_text_as_extract_text_for_text_pages() -> None:
