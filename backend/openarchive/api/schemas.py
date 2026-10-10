@@ -25,6 +25,20 @@ class Folder(BaseModel):
     inherited: bool
     can_manage: bool
     can_change_access: bool
+    # 이 폴더를 공유에 넣을 수 있는가 — 최상위 폴더를 만든 사람 (#206)
+    can_share: bool
+
+
+class SharedFolder(BaseModel):
+    """공유 주체에게 보이는 폴더. 범위·만든 사람·관리 정보는 싣지 않는다 (#206).
+
+    공유에 넣은 폴더(공유 루트)의 parent_id는 null이다 — 그 위 폴더는 존재하지 않는 것처럼.
+    """
+
+    id: UUID
+    parent_id: UUID | None
+    name: str
+    document_count: int
 
 
 class CreateFolderRequest(BaseModel):
@@ -334,11 +348,17 @@ class ShareDocument(BaseModel):
     title: str
 
 
+class ShareFolder(BaseModel):
+    id: UUID
+    name: str
+
+
 class ShareSummary(BaseModel):
     id: UUID
     name: str
     created_at: datetime
     documents: list[ShareDocument]
+    folders: list[ShareFolder]
     tokens: list[TokenSummary]
 
 
@@ -602,4 +622,6 @@ class AdminShareSummary(BaseModel):
     owner: str
     created_at: datetime
     document_count: int
+    # 폴더 이름·id는 싣지 않는다 (ADR-061 결정 3과 같은 이유, #206)
+    folder_count: int
     tokens: list[AdminShareTokenSummary]

@@ -323,3 +323,98 @@ def test_expired_share_token_is_401_and_listed_as_expired(db_client: TestClient,
     assert token["expired"] is True
     assert token["last_used_at"] is not None
     assert "token" not in token and "token_hash" not in token
+
+
+# --- 공유에 폴더 넣기·빼기 (#206) ---
+
+
+def create_folder(client: TestClient, name: str, parent_id: str | None = None) -> str:
+    response = client.post("/api/folders", json={"name": name, "parent_id": parent_id})
+    assert response.status_code == 201
+    return response.json()["id"]
+
+
+def share_folder_rows(dsn: str) -> int:
+    with psycopg.connect(dsn) as conn:
+        return conn.execute("SELECT count(*) FROM share_folders").fetchone()[0]
+
+
+def test_add_and_remove_folder_is_idempotent(db_client: TestClient, migrated_db: str):
+    login_as(db_client, "alice")
+    share = create_share(db_client)
+    root = create_folder(db_client, "제품")
+    child = create_folder(db_client, "설명서", root)
+    path = f"/api/shares/{share['id']}/folders/{child}"
+
+    assert db_client.put(path).status_code == 204
+    assert db_client.put(path).status_code == 204
+    listed = db_client.get("/api/shares").json()
+    assert listed[0]["folders"] == [{"id": child, "name": "설명서"}]
+    assert share_folder_rows(migrated_db) == 1
+
+    assert db_client.delete(path).status_code == 204
+    assert db_client.delete(path).status_code == 204
+    assert db_client.get("/api/shares").json()[0]["folders"] == []
+    assert share_folder_rows(migrated_db) == 0
+
+
+@pytest.mark.parametrize("method", ["put", "delete"])
+def test_folder_on_someone_elses_or_missing_share_is_404(
+    db_client: TestClient, migrated_db: str, method: str
+):
+    login_as(db_client, "bob")
+    bobs = create_share(db_client, "bob 공유")
+    login_as(db_client, "alice")
+    root = create_folder(db_client, "제품")
+
+    for share_id in (bobs["id"], MISSING_ID):
+        response = getattr(db_client, method)(f"/api/shares/{share_id}/folders/{root}")
+        assert response.status_code == 404
+        assert response.json()["detail"] == "공유를 찾을 수 없습니다."
+    assert share_folder_rows(migrated_db) == 0
+
+
+@pytest.mark.parametrize("method", ["put", "delete"])
+def test_invisible_folder_is_404_and_non_creator_is_403(
+    db_client: TestClient, migrated_db: str, method: str
+):
+    login_as(db_client, "bob")
+    bob_public = create_folder(db_client, "bob 공개")
+    bob_private = create_folder(db_client, "bob 비공개")
+    assert db_client.put(
+        f"/api/folders/{bob_private}/access",
+        json={"visibility": "private", "users": [], "groups": []},
+    ).status_code == 200
+    login_as(db_client, "alice")
+    share = create_share(db_client)
+    # 남의 최상위 폴더 아래에 alice가 만든 하위 폴더도 넣지 못한다 — 범위는 최상위 만든 사람이 정한다.
+    alices_child = create_folder(db_client, "alice 하위", bob_public)
+
+    for folder_id in (bob_private, MISSING_ID):
+        response = getattr(db_client, method)(f"/api/shares/{share['id']}/folders/{folder_id}")
+        assert response.status_code == 404
+        assert response.json()["detail"] == "폴더를 찾을 수 없습니다."
+    for folder_id in (bob_public, alices_child):
+        response = getattr(db_client, method)(f"/api/shares/{share['id']}/folders/{folder_id}")
+        assert response.status_code == 403
+        assert response.json()["detail"] == "폴더를 관리할 권한이 없습니다."
+    assert share_folder_rows(migrated_db) == 0
+
+
+def test_folder_share_endpoints_are_session_only(db_client: TestClient, migrated_db: str):
+    login_as(db_client, "alice")
+    share = create_share(db_client)
+    root = create_folder(db_client, "제품")
+    share_token = db_client.post(
+        f"/api/shares/{share['id']}/tokens", json={"name": "연동"}
+    ).json()["token"]
+    user_token = issue_user_token(migrated_db)
+    db_client.cookies.clear()
+    path = f"/api/shares/{share['id']}/folders/{root}"
+
+    for token in (user_token, share_token):
+        for method in ("put", "delete"):
+            response = db_client.request(method, path, headers={"Authorization": f"Bearer {token}"})
+            assert response.status_code == 403, (method, response.text)
+    assert db_client.put(path).status_code == 401
+    assert share_folder_rows(migrated_db) == 0

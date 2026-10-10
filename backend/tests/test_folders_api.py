@@ -31,9 +31,11 @@ def test_folder_lifecycle_and_inherited_scope(db_client):
         "inherited": False,
         "can_manage": True,
         "can_change_access": True,
+        "can_share": True,
     }
     child = folder(db_client, "하위", root["id"])
     assert child["inherited"] is True
+    assert child["can_share"] is True
     assert child["scope"] == root["scope"]
     assert child["can_change_access"] is False
     listed = db_client.get("/api/folders")
@@ -214,8 +216,10 @@ def test_share_rejects_every_folder_route_and_hides_metadata(db_client):
     token = issue_share_token(db_client, share["id"])["token"]
     db_client.cookies.clear()
     headers = bearer(token)
+    # 폴더 공유가 없는 공유 토큰에게 폴더 목록은 비어 있다 (#206)
+    listed = db_client.get("/api/folders", headers=headers)
+    assert listed.status_code == 200 and listed.json() == []
     for method, path, body in (
-        ("GET", "", None),
         ("POST", "", {"name": "공유"}),
         ("PATCH", f"/{root['id']}", {"name": "수정"}),
         ("DELETE", f"/{root['id']}", None),
@@ -334,3 +338,16 @@ def test_transfer_folder_owner_requires_session(db_client):
     assert response.json()["detail"] == "로그인 세션이 필요합니다."
     db_client.cookies.clear()
     assert db_client.put(path, json={"owner": "lee"}).status_code == 401
+
+
+def test_can_share_only_for_the_root_creator(db_client):
+    login_as(db_client, "bob")
+    root = folder(db_client, "bob 폴더")
+    login_as(db_client, "alice")
+    child = folder(db_client, "alice 하위", root["id"])
+    listed = {row["id"]: row for row in db_client.get("/api/folders").json()}
+    assert listed[root["id"]]["can_share"] is False
+    assert listed[child["id"]]["can_share"] is False
+    login_as(db_client, "bob")
+    listed = {row["id"]: row for row in db_client.get("/api/folders").json()}
+    assert listed[child["id"]]["can_share"] is True

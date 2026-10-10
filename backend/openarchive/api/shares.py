@@ -12,6 +12,7 @@ from openarchive.api.schemas import (
 )
 from openarchive.services import shares as service
 from openarchive.services.auth import InvalidTokenExpiry, TokenNotFound
+from openarchive.services.folders import FolderNotFound
 
 # 공유 관리는 세션 전용이다 — 토큰이 공유 토큰을 발급하면 폐기 뒤에도
 # 자격증명을 재생할 수 있다 (ADR-034 결정 6, ADR-044 「공유」)
@@ -22,6 +23,10 @@ SessionUser = Annotated[dict, Depends(require_session_user)]
 
 def _share_not_found() -> HTTPException:
     return HTTPException(status_code=404, detail="공유를 찾을 수 없습니다.")
+
+
+def _folder_not_found() -> HTTPException:
+    return HTTPException(status_code=404, detail="폴더를 찾을 수 없습니다.")
 
 
 @router.post("", response_model=ShareSummary, status_code=status.HTTP_201_CREATED)
@@ -73,6 +78,34 @@ async def remove_document(
         await service.remove_document(conn, share_id, document_id, owner=user["username"])
     except service.ShareNotFound as error:
         raise _share_not_found() from error
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+# 폴더 넣기·빼기 — 최상위 폴더를 만든 공유 소유자만 (#206). 폴더를 볼 수 없으면 404,
+# 최상위 폴더를 만든 사람이 아니면 403(NotFolderCreator는 main.py가 옮긴다).
+@router.put("/{share_id}/folders/{folder_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def add_folder(
+    share_id: UUID, folder_id: UUID, conn: Connection, user: SessionUser
+) -> Response:
+    try:
+        await service.add_folder(conn, share_id, folder_id, owner=user["username"])
+    except service.ShareNotFound as error:
+        raise _share_not_found() from error
+    except FolderNotFound as error:
+        raise _folder_not_found() from error
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.delete("/{share_id}/folders/{folder_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def remove_folder(
+    share_id: UUID, folder_id: UUID, conn: Connection, user: SessionUser
+) -> Response:
+    try:
+        await service.remove_folder(conn, share_id, folder_id, owner=user["username"])
+    except service.ShareNotFound as error:
+        raise _share_not_found() from error
+    except FolderNotFound as error:
+        raise _folder_not_found() from error
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
