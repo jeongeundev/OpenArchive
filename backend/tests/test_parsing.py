@@ -137,30 +137,50 @@ def test_extract_text_separates_pdf_table_cells_drawn_apart_on_one_line() -> Non
 
 
 def test_extract_text_joins_a_word_wrapped_at_the_right_margin() -> None:
-    """오른쪽 여백까지 찬 줄이 낱말 중간에서 바뀌면 잇는다 — 한국어 규정 PDF에 흔하다(#176)."""
-    data = hwp_style_pdf((1000, 1800, "The archive keeps every infor"), (1000, 1950, "mation safe"))
+    """오른쪽 여백까지 찬 줄이 낱말 중간에서 바뀌면 잇는다 — 한국어 규정 PDF에 흔하다(#176).
+
+    판면은 쪽 너비에서 왼쪽 여백을 양쪽으로 뺀 폭이다. x=2000(240pt)에서 시작한 첫 줄이 612pt 쪽의 오른쪽
+    여백(372pt)을 넘는다.
+    """
+    data = hwp_style_pdf((2000, 1800, "The archive keeps every infor"), (2000, 1950, "mation safe"))
 
     assert extract_text(data, "pdf") == "The archive keeps every information safe"
 
 
 def test_extract_text_keeps_the_line_break_after_a_line_short_of_the_margin() -> None:
     """여백에 못 미친 줄 뒤는 낱말이 끊긴 자리가 아니다 — 제목·목록·쪽 번호 뒤 줄바꿈을 지킨다(#176)."""
-    data = hwp_style_pdf((1000, 1800, "Article"), (1000, 1950, "The archive keeps every record"))
+    data = hwp_style_pdf((2000, 1800, "Article"), (2000, 1950, "The archive keeps every record"))
 
     assert extract_text(data, "pdf") == "Article\nThe archive keeps every record"
 
 
 def test_extract_text_keeps_the_line_break_after_a_full_line_ending_with_a_space() -> None:
     """꽉 찬 줄이라도 공백으로 끝났으면 낱말 경계다 — 잇지 않는다(#176)."""
-    data = hwp_style_pdf((1000, 1800, "The archive keeps every "), (1000, 1950, "record safe"))
+    data = hwp_style_pdf((2000, 1800, "The archive keeps every "), (2000, 1950, "record safe"))
 
     assert extract_text(data, "pdf").split() == ["The", "archive", "keeps", "every", "record", "safe"]
+
+
+@pytest.mark.parametrize(
+    ("runs", "expected"),
+    [
+        (((1000, 1800, "Chapter One Overview"), (1000, 1950, "Scope")), "Chapter One Overview\nScope"),
+        (
+            ((1000, 1800, "Title"), (1000, 1950, "- item one"), (1000, 2100, "- item two longer"),
+             (1000, 2250, "- item three")),
+            "Title\n- item one\n- item two longer\n- item three",
+        ),
+    ],
+)
+def test_extract_text_keeps_line_breaks_on_a_page_without_a_full_line(runs, expected) -> None:
+    """판면을 채운 줄이 없는 쪽(표지·목차·목록)에서는 가장 긴 줄도 꽉 찬 줄이 아니다(#176)."""
+    assert extract_text(hwp_style_pdf(*runs), "pdf") == expected
 
 
 def test_extract_text_keeps_a_separately_drawn_space_at_the_end_of_a_full_line() -> None:
     """줄 끝 공백을 따로 그린 꽉 찬 줄도 낱말 경계다 — pdfium은 그 공백을 버리지만 원본에 있다(#176)."""
     data = hwp_style_pdf(
-        (1000, 1800, "The archive keeps every"), (2370, 1800, " "), (1000, 1950, "record safe")
+        (2000, 1800, "The archive keeps every"), (3370, 1800, " "), (2000, 1950, "record safe")
     )
 
     assert extract_text(data, "pdf").split() == ["The", "archive", "keeps", "every", "record", "safe"]
@@ -713,7 +733,7 @@ def test_ocr_keeps_text_layer_pages_and_reads_only_the_scanned_page(monkeypatch)
     text = ocr_text(data, "pdf")
 
     assert len(calls) == 1  # 텍스트 레이어가 있는 1·3쪽은 인식하지 않는다
-    # 레이어 텍스트는 업로드 추출과 같은 것이다(#176 — pypdf 원시 텍스트에 셀 간격 공백을 더한 것)
+    # 레이어 텍스트는 업로드 추출과 같은 것이다(#176 — pdfium 글자 위치로 만든 쪽 텍스트)
     pages = [extract_text(page_of(data, index), "pdf") for index in range(3)]
     assert text.count(pages[0]) == 1 and text.count(pages[2]) == 1  # 레이어 그대로, 한 번씩
     normalized = normalize_ocr(text)
