@@ -22,6 +22,7 @@ from xml.etree import ElementTree
 
 import olefile
 import pypdfium2
+import pypdfium2.raw as pdfium_c
 import pytesseract
 from docx import Document
 from openpyxl import load_workbook
@@ -172,57 +173,95 @@ def needs_ocr(content_type: str, data: bytes) -> bool:
     return any(ocr for _, ocr in _pdf_ocr_pages(PdfReader(io.BytesIO(data)), data))
 
 
-def _pdf_page_texts(data: bytes) -> list[str]:
-    return _pdf_layer_texts(PdfReader(io.BytesIO(data)), data)
+def _pdf_page_texts(data: bytes, reader: PdfReader | None = None) -> list[str]:
+    """쪽마다 텍스트 레이어 — pdfium 글자 위치로 줄을 잇고 pypdf가 본 공백 글자를 되살린다(#176)."""
+    reader = reader or PdfReader(io.BytesIO(data))
+    with pypdfium2.PdfDocument(data) as document:
+        return [
+            _restore_spaces(_pdf_page_text(document, index), page.extract_text() or "")
+            for index, page in enumerate(reader.pages)
+        ]
 
 
-def _pdf_layer_texts(reader: PdfReader, data: bytes) -> list[str]:
-    """쪽마다 텍스트 레이어 — pypdf 텍스트에 pdfium이 본 같은 줄 간격을 공백으로 더한다(#176).
+def _restore_spaces(text: str, reference: str) -> str:
+    """`text`가 붙여 쓴 글자 사이 중 `reference`(pypdf)에 공백 문자가 있는 자리에 공백을 넣는다.
 
-    pypdf는 줄 끝에서 낱말 중간에 바뀐 줄을 바르게 잇지만, 덩어리마다 그래픽 상태를 따로 여닫는
-    PDF(한글 오피스 출력의 표 셀)에서는 셀 사이 간격을 버려 `16,8155,209`처럼 붙인다. pdfium은
-    반대로 셀 간격은 지키지만 줄마다 줄바꿈을 넣어 `판⏎단하는`처럼 낱말을 끊는다. 그래서 pypdf를
-    기준으로 두고 pdfium의 같은 줄 공백만 빌린다. pdfium이 열지 못하는 파일은 pypdf 텍스트 그대로다.
+    pdfium은 따로 그린 줄 끝 공백을 버려, 꽉 찬 줄의 낱말 경계를 낱말 중간 줄바꿈처럼 잇는다
+    (「수사를⏎종료한」→「수사를종료한」). pypdf는 판마다 줄바꿈을 다르게 넣지만(6.17부터 줄마다)
+    공백 문자는 원본대로 내므로 줄바꿈이 아닌 공백만 빌린다. 공백 아닌 글자의 순서가 다르면(읽기
+    순서가 다른 쪽, 글자 정보가 깨진 쪽) 대응을 믿을 수 없어 `text`를 그대로 둔다.
     """
-    texts = [page.extract_text() or "" for page in reader.pages]
-    try:
-        with pypdfium2.PdfDocument(data) as document:
-            for index in range(min(len(document), len(texts))):
-                page = document[index]
-                try:
-                    textpage = page.get_textpage()
-                    try:
-                        texts[index] = _add_gap_spaces(texts[index], textpage.get_text_range())
-                    finally:
-                        textpage.close()
-                finally:
-                    page.close()
-    except pypdfium2.PdfiumError:
-        pass
-    return texts
-
-
-def _add_gap_spaces(base: str, other: str) -> str:
-    """`base`가 붙여 쓴 글자 사이 중 `other`가 같은 줄에서 띄운 자리에만 공백을 넣는다.
-
-    공백을 빼거나 줄바꿈을 더하지 않는다 — `base`의 구분은 그대로 남는다. 공백이 아닌 글자의 순서가
-    다르면(읽기 순서가 다른 쪽, 글자 정보가 깨진 쪽) 대응을 믿을 수 없으므로 `base`를 그대로 돌려준다.
-    정상 PDF 4,661쪽 중 98%가 같은 순서였다.
-    """
-    base_chars = [match.start() for match in re.finditer(r"\S", base)]
-    other_chars = list(re.finditer(r"\S", other))
-    if [base[index] for index in base_chars] != [match[0] for match in other_chars]:
-        return base
+    chars = [match.start() for match in re.finditer(r"\S", text)]
+    references = list(re.finditer(r"\S", reference))
+    if [text[index] for index in chars] != [match[0] for match in references]:
+        return text
     parts = []
     start = 0
-    for position in range(len(base_chars) - 1):
-        end = base_chars[position] + 1
-        gap = other[other_chars[position].end() : other_chars[position + 1].start()]
-        if end == base_chars[position + 1] and gap and "\n" not in gap and "\r" not in gap:
-            parts.append(base[start:end])
+    for position in range(len(chars) - 1):
+        end = chars[position] + 1
+        gap = reference[references[position].end() : references[position + 1].start()]
+        if end == chars[position + 1] and gap.strip("\r\n"):
+            parts.append(text[start:end])
             start = end
-    parts.append(base[start:])
+    parts.append(text[start:])
     return " ".join(parts)
+
+
+def _pdf_page_text(document: pypdfium2.PdfDocument, index: int) -> str:
+    """한 쪽의 텍스트 레이어 — pdfium이 놓은 글자 위치로 줄을 다시 잇는다(#176).
+
+    pdfium은 같은 줄에서 떨어진 글자 사이(표 셀)에 공백을, 줄마다 줄바꿈을 넣는다. 한국어 규정 PDF는 줄
+    끝에서 낱말 중간에 줄을 바꾸므로 그대로 두면 「판⏎단하는」처럼 낱말이 끊긴다. 낱말 중간 줄바꿈은 줄이
+    오른쪽 여백까지 찼을 때만 생기므로, 공백 없이 끝난 줄이 쪽에서 가장 오른쪽까지 간 줄과 글자 높이
+    하나 안쪽까지 찼으면 다음 줄과 잇는다. 여백에 못 미친 줄(제목·목록·쪽 번호) 뒤는 줄바꿈을 지킨다.
+    pypdf는 6.17부터 같은 자리에서 줄을 바꿔 판마다 결과가 달라 줄 판단에 쓰지 않는다.
+    """
+    page = document[index]
+    try:
+        textpage = page.get_textpage()
+        try:
+            lines = _pdf_page_lines(textpage)
+        finally:
+            textpage.close()
+    finally:
+        page.close()
+    rights = [right for _, right, _ in lines if right is not None]
+    margin = max(rights, default=0.0)
+    parts = []
+    for position, (text, right, height) in enumerate(lines):
+        parts.append(text)
+        if position == len(lines) - 1:
+            break
+        if right is not None and right >= margin - height and text and not text[-1].isspace():
+            continue
+        parts.append("\n")
+    return "".join(parts)
+
+
+def _pdf_page_lines(textpage: pypdfium2.PdfTextPage) -> list[tuple[str, float | None, float]]:
+    """pdfium 줄바꿈으로 나눈 줄마다 (텍스트, 글자 오른쪽 끝, 글자 높이) — 공백뿐인 줄은 끝이 None이다."""
+    count = textpage.count_chars()
+    lines = []
+    start = 0
+    for position in range(count + 1):
+        code = pdfium_c.FPDFText_GetUnicode(textpage.raw, position) if position < count else 10
+        if code != 10:  # \n
+            continue
+        end = position - 1 if position > start and pdfium_c.FPDFText_GetUnicode(
+            textpage.raw, position - 1
+        ) == 13 else position  # \r\n
+        boxes = [
+            textpage.get_charbox(char)
+            for char in range(start, end)
+            if not chr(pdfium_c.FPDFText_GetUnicode(textpage.raw, char)).isspace()
+        ]
+        lines.append((
+            textpage.get_text_range(start, end - start) if end > start else "",
+            max((box[2] for box in boxes), default=None),
+            max((box[3] - box[1] for box in boxes), default=0.0),
+        ))
+        start = position + 1
+    return lines
 
 
 def _pdf_ocr_pages(reader: PdfReader, data: bytes) -> list[tuple[str, bool]]:
@@ -234,7 +273,7 @@ def _pdf_ocr_pages(reader: PdfReader, data: bytes) -> list[tuple[str, bool]]:
     """
     return [
         (text, not text.strip() or _has_unmapped_font(page.get("/Resources"), set()))
-        for page, text in zip(reader.pages, _pdf_layer_texts(reader, data), strict=True)
+        for page, text in zip(reader.pages, _pdf_page_texts(data, reader), strict=True)
     ]
 
 
