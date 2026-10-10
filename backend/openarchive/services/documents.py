@@ -1474,8 +1474,24 @@ async def _folder_info(conn, folder_id, user_id):
         folder = await ensure_folder_visible(conn, folder_id, user_id=user_id)
     except FolderNotFound:
         return None, None
-    path = await folder_path(conn, folder_id)
-    scope = await read_folder_access(conn, path[0]["id"])
+    from openarchive.services.visibility import FOLDER_VISIBLE_TO_USER, SHARE_PRINCIPAL_PREFIX
+
+    if user_id is not None and user_id.startswith(SHARE_PRINCIPAL_PREFIX):
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(
+            f"""WITH RECURSIVE path AS (
+            SELECT id,parent_id,0 AS depth FROM folders WHERE id=%(id)s
+            UNION ALL SELECT p.id,p.parent_id,c.depth+1
+            FROM folders p JOIN path c ON p.id=c.parent_id)
+            SELECT f.id,f.name FROM path p JOIN folders f ON f.id=p.id
+            WHERE {FOLDER_VISIBLE_TO_USER} ORDER BY p.depth DESC""",
+            {"id": folder_id, "user": user_id},
+        )
+        path = await cur.fetchall()
+        scope = None
+    else:
+        path = await folder_path(conn, folder_id)
+        scope = await read_folder_access(conn, path[0]["id"])
     return {"id": folder_id, "name": folder["name"], "path": path}, scope
 
 

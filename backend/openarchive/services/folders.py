@@ -10,6 +10,7 @@ from openarchive.services.documents import InvalidVisibility, _check_grantees
 from openarchive.services.grants import resolve_grantees
 from openarchive.services.visibility import (
     FOLDER_VISIBLE_TO_USER,
+    SHARE_PRINCIPAL_PREFIX,
     VISIBILITY_VALUES,
     VISIBLE_TO_USER,
 )
@@ -153,20 +154,36 @@ async def find_folder(
 
 async def list_folders(conn, *, user_id: str | None, is_admin: bool = False) -> list[dict]:
     cur = conn.cursor(row_factory=dict_row)
+    if user_id is not None and user_id.startswith(SHARE_PRINCIPAL_PREFIX):
+        # 공유 주체에게는 id·부모·이름·문서 수만 준다 — 범위의 사용자·그룹 이름은 조직 디렉터리다.
+        # 부모는 그 주체에게 보일 때만 싣는다(공유 루트는 NULL). 열람 조각이 별칭 f를 요구해
+        # 바깥 행을 child로, 부모 후보를 f로 다시 묶는다.
+        await cur.execute(
+            f"""SELECT f.id,
+            (SELECT f.id FROM folders f WHERE f.id=child.parent_id
+             AND {FOLDER_VISIBLE_TO_USER}) AS parent_id,
+            f.name,
+            (SELECT count(*) FROM documents d WHERE d.folder_id=f.id AND {VISIBLE_TO_USER}) AS document_count
+            FROM folders f JOIN folders child ON child.id=f.id
+            WHERE {FOLDER_VISIBLE_TO_USER} ORDER BY f.created_at, f.id""",
+            {"user": user_id},
+        )
+        return await cur.fetchall()
     await cur.execute(
         f"""SELECT f.id, f.parent_id, f.name, f.created_by,
         (SELECT count(*) FROM documents d WHERE d.folder_id=f.id AND {VISIBLE_TO_USER}) AS document_count,
         jsonb_build_object('visibility', scope.visibility, 'users', scope.users, 'groups', scope.groups) AS scope,
         (f.parent_id IS NOT NULL) AS inherited,
         COALESCE(f.created_by=%(user)s OR %(admin)s, false) AS can_manage,
-        COALESCE(f.parent_id IS NULL AND f.created_by=%(user)s, false) AS can_change_access
+        COALESCE(f.parent_id IS NULL AND f.created_by=%(user)s, false) AS can_change_access,
+        COALESCE(scope.created_by=%(user)s, false) AS can_share
         FROM folders f
         CROSS JOIN LATERAL (
             WITH RECURSIVE ancestors AS (
-                SELECT id,parent_id,visibility FROM folders WHERE id=f.id
-                UNION ALL SELECT p.id,p.parent_id,p.visibility FROM folders p
+                SELECT id,parent_id,visibility,created_by FROM folders WHERE id=f.id
+                UNION ALL SELECT p.id,p.parent_id,p.visibility,p.created_by FROM folders p
                 JOIN ancestors a ON p.id=a.parent_id)
-            SELECT {_SCOPE} FROM ancestors r WHERE r.parent_id IS NULL
+            SELECT {_SCOPE}, r.created_by FROM ancestors r WHERE r.parent_id IS NULL
         ) scope
         WHERE {FOLDER_VISIBLE_TO_USER} ORDER BY f.created_at, f.id""",
         {"user": user_id, "admin": is_admin},
@@ -287,6 +304,16 @@ async def transfer_folder_owner(
         if row["created_by"] != user_id:
             raise NotFolderCreator
         target_id = await resolve_new_owner(conn, current_owner=user_id, new_owner=new_owner)
+        if row["parent_id"] is None:
+            await conn.execute(
+                """WITH RECURSIVE tree AS (
+                SELECT id FROM folders WHERE id=%s
+                UNION ALL SELECT f.id FROM folders f JOIN tree t ON f.parent_id=t.id)
+                DELETE FROM share_folders sf USING tree t, shares s, users u
+                WHERE sf.folder_id=t.id AND sf.share_id=s.id
+                  AND s.owner_user_id=u.id AND u.username=%s""",
+                (folder_id, user_id),
+            )
         await conn.execute(
             "UPDATE folders SET created_by=%s, updated_at=now() WHERE id=%s", (new_owner, folder_id)
         )
