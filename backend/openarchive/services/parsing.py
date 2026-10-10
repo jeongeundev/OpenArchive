@@ -212,12 +212,16 @@ def _pdf_page_text(document: pypdfium2.PdfDocument, index: int) -> str:
 
     pdfium은 같은 줄에서 떨어진 글자 사이(표 셀)에 공백을, 줄마다 줄바꿈을 넣는다. 한국어 규정 PDF는 줄
     끝에서 낱말 중간에 줄을 바꾸므로 그대로 두면 「판⏎단하는」처럼 낱말이 끊긴다. 낱말 중간 줄바꿈은 줄이
-    오른쪽 여백까지 찼을 때만 생기므로, 공백 없이 끝난 줄이 쪽에서 가장 오른쪽까지 간 줄과 글자 높이
-    하나 안쪽까지 찼으면 다음 줄과 잇는다. 여백에 못 미친 줄(제목·목록·쪽 번호) 뒤는 줄바꿈을 지킨다.
+    오른쪽 여백까지 찼을 때만 생기므로, 공백 없이 끝난 줄이 판면 오른쪽 끝에서 글자 높이 하나 안쪽까지
+    찼으면 다음 줄과 잇는다. 판면 오른쪽 끝은 좌우 여백이 같다고 보고 쪽 너비에서 가장 왼쪽 글자까지의
+    거리를 뺀 자리다 — 가장 긴 줄을 기준으로 삼으면 판면을 채운 줄이 없는 쪽(표지·목차·목록)에서 그 줄이
+    다음 줄과 붙는다. 오른쪽 여백이 더 넓은 문서에서는 잇지 않는 쪽으로 틀린다. 판면에 못 미친 줄(제목·
+    목록·쪽 번호) 뒤는 줄바꿈을 지킨다.
     pypdf는 6.17부터 같은 자리에서 줄을 바꿔 판마다 결과가 달라 줄 판단에 쓰지 않는다.
     """
     page = document[index]
     try:
+        width = page.get_width()
         textpage = page.get_textpage()
         try:
             lines = _pdf_page_lines(textpage)
@@ -225,10 +229,10 @@ def _pdf_page_text(document: pypdfium2.PdfDocument, index: int) -> str:
             textpage.close()
     finally:
         page.close()
-    rights = [right for _, right, _ in lines if right is not None]
-    margin = max(rights, default=0.0)
+    lefts = [left for _, left, _, _ in lines if left is not None]
+    margin = width - min(lefts, default=0.0)
     parts = []
-    for position, (text, right, height) in enumerate(lines):
+    for position, (text, _, right, height) in enumerate(lines):
         parts.append(text)
         if position == len(lines) - 1:
             break
@@ -238,8 +242,10 @@ def _pdf_page_text(document: pypdfium2.PdfDocument, index: int) -> str:
     return "".join(parts)
 
 
-def _pdf_page_lines(textpage: pypdfium2.PdfTextPage) -> list[tuple[str, float | None, float]]:
-    """pdfium 줄바꿈으로 나눈 줄마다 (텍스트, 글자 오른쪽 끝, 글자 높이) — 공백뿐인 줄은 끝이 None이다."""
+def _pdf_page_lines(
+    textpage: pypdfium2.PdfTextPage,
+) -> list[tuple[str, float | None, float | None, float]]:
+    """pdfium 줄바꿈으로 나눈 줄마다 (텍스트, 글자 왼쪽 끝, 오른쪽 끝, 글자 높이) — 공백뿐인 줄은 끝이 None이다."""
     count = textpage.count_chars()
     lines = []
     start = 0
@@ -257,6 +263,7 @@ def _pdf_page_lines(textpage: pypdfium2.PdfTextPage) -> list[tuple[str, float | 
         ]
         lines.append((
             textpage.get_text_range(start, end - start) if end > start else "",
+            min((box[0] for box in boxes), default=None),
             max((box[2] for box in boxes), default=None),
             max((box[3] - box[1] for box in boxes), default=0.0),
         ))
