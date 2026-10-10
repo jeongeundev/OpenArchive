@@ -27,7 +27,7 @@ dependencies = [
     "pypdf>=6,<7",
     # 로컬 OCR(ADR-052). 시스템 tesseract·한국어 모델이 별도로 필요하다.
     "pytesseract",  # Apache-2.0
-    "pypdfium2",  # BSD-3/Apache-2.0 — PDF 래스터화, poppler 불필요
+    "pypdfium2",  # BSD-3/Apache-2.0 — PDF 래스터화·텍스트 레이어(#176, ADR-059 결정 5), poppler 불필요
     # 이미지 디코드·EXIF 회전(services/parsing.py). MIT-CMU. pytesseract·python-pptx가 끌고
     # 오던 것을 직접 import하므로 명시한다 — 그쪽이 의존을 끊으면 파서 import가 깨진다.
     "pillow",
