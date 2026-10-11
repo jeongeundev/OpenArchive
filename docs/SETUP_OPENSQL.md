@@ -892,7 +892,7 @@ python3 opensql_remote_installer.py --mode 3node
    - `[general]`에 `worker_threads = 2` — HA 템플릿 권고(DB와 같은 노드면 코어 수의 절반, VM 4코어). 반영은 재시작
    - `auth_type`을 지정하지 않으면 OpenProxy 기본 `md5`다. HA 템플릿은 `scram-sha-256`이다(2026-09-30 맞춤, #150)
    - 먼저 뜬 노드가 자기 파일을 etcd `/service/opensql/openproxy/config/current`에 **초기 설정으로 올리고**, 이후 노드는 etcd 판을 읽는다. 그래서 두 파일은 `virtual_router`의 `priority`·`unicast_peers`만 다르게 둔다
-   - ⚠️ **로컬 파일은 폴백 판이다 — 공유 설정의 `[pools.*]`와 늘 같게 둔다(`600`).** OpenProxy는 키의 `servers`로 Patroni를 물어 역할을 푸는데, 아무도 응답하지 않으면 로컬 파일로 대체해 뜨고, 기동 뒤 첫 역할 변화 때 **메모리의 설정을 키에 저장한다.** 로컬 파일에 풀이 빠져 있으면 그 판이 공유돼 앱 접속이 끊긴다(#231, OPENSQL_RESEARCH §20). 공유 설정을 바꾸면(`openproxy edit`) 두 파일도 같이 고친다. 노드 전용 절(`[general]`·`[general.etcd]`·`[general.virtual_router]`)은 남기고 `[pools.*]`를 etcd 판에서 가져오되 서버 역할은 `Auto`로 둔다
+   - ⚠️ **로컬 파일은 폴백 판이다 — 공유 설정의 `[pools.*]`와 늘 같게 둔다(`600`).** OpenProxy는 Patroni가 응답하지 않으면 로컬 파일로 대체해 뜨고, 그 판을 공유 설정에 저장할 수 있다 — 로컬 파일에 풀이 빠져 있으면 앱 접속이 끊긴다(#231, 원리는 OPENSQL_RESEARCH §20). 공유 설정을 바꾸면(`openproxy edit`) 두 파일도 같이 고친다. 노드 전용 절(`[general]`·`[general.etcd]`·`[general.virtual_router]`)은 남기고 `[pools.*]`를 etcd 판에서 가져오되 서버 역할은 `Auto`로 둔다
    - etcd 모드에서는 **파일 autoreload가 꺼진다.** 공유 설정 변경은 `openproxy edit` 또는 etcd 키로 한다
    - 역할 감지가 30초 폴링(`Patroni role refresh … 30 second interval`)에서 **etcd leader·members watch**로 바뀐다
    - 되돌리기: 백업 파일 복원 + 위 etcd 키 삭제 + 재시작
@@ -911,13 +911,12 @@ python3 opensql_remote_installer.py --mode 3node
    [Service]
    ExecStartPre=/bin/sh -c "for i in $(seq 30); do /home/opensql/bin/etcdctl --endpoints=http://127.0.0.1:2379 --dial-timeout=1s endpoint health >/dev/null 2>&1 && exit 0; sleep 1; done; exit 0"
    ```
-   - ⚠️ **Patroni도 기다린다(#231).** etcd만 기다리면 OpenProxy가 Patroni보다 먼저 떠 ① 로컬 파일로 대체하거나 ② 구성원이 덜 모인 순간의 `servers`(10/7엔 `servers = []`)를 공유 설정에 저장한다. 콜드 부팅 직후 `/cluster`는 꺼지기 전 lease의 구성원을 보여 주므로, **구성원마다 그 노드의 REST에 직접** 묻는다. 120초 안에 못 모이면 그대로 띄운다 — 노드 하나가 죽어 있어도 프록시는 떠야 하고, 그때의 폴백 판이 위의 완전한 로컬 파일이다. 동시 기동 3회·순차 기동 1회에서 공유 설정 불변·대체 기동 0(OPENSQL_RESEARCH §20)
+   - ⚠️ **Patroni도 기다린다(#231).** etcd만 기다리면 OpenProxy가 Patroni보다 먼저 떠 불완전한 판(10/7 `servers = []`, 10/9 앱 풀 소실)을 공유 설정에 저장한다(원리는 OPENSQL_RESEARCH §20). 콜드 부팅 직후 `/cluster`는 꺼지기 전 lease의 구성원을 보여 주므로, **구성원마다 그 노드의 REST에 직접** 묻는다. 120초 안에 못 모이면 그대로 띄운다 — 노드 하나가 죽어 있어도 프록시는 떠야 하고, 그때의 폴백 판이 위의 완전한 로컬 파일이다. 동시 기동 3회·순차 기동 1회에서 공유 설정 불변·대체 기동 0(OPENSQL_RESEARCH §20)
 
    ```ini
    # /etc/systemd/system/openproxy.service.d/20-after-patroni.conf
    [Unit]
-   # #231: OpenProxy는 Patroni REST로 역할을 풀고, 기동 뒤 첫 역할 변화 때 그 순간의 구성원 목록을 etcd 공유 설정에
-   # 저장한다. Patroni가 덜 모인 채 뜨면 줄어든 servers(또는 servers = [], 로컬 파일로 대체한 판)가 공유된다.
+   # #231: Patroni보다 먼저 뜬 OpenProxy가 불완전한 판을 etcd 공유 설정에 저장하지 않게 한다(OPENSQL_RESEARCH §20).
    After=patroni.service
 
    [Service]
@@ -934,7 +933,6 @@ python3 opensql_remote_installer.py --mode 3node
    #!/usr/bin/python3
    # OpenProxy ExecStartPre (#231): Patroni 클러스터가 실제로 모일 때까지 기다린다. 늘 0으로 끝난다.
    # 콜드 부팅 직후 /cluster는 etcd에 남은 꺼지기 전 lease를 보여 주므로, 구성원마다 그 노드의 REST에 직접 묻는다.
-   # OpenProxy는 기동 뒤 첫 역할 변화 때 그 순간의 구성원 목록을 etcd 공유 설정(servers)에 저장한다.
    import json, sys, time, urllib.request
 
    limit = int(sys.argv[1]) if len(sys.argv) > 1 else 120

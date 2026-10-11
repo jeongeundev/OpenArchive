@@ -2166,7 +2166,7 @@ configuration` → `Saving config to etcd`. 그 뒤의 역할 변화는 저장�
 #150에서 공유 설정으로만 넣은 `openarchive` 풀·`worker_threads`·`auth_type`이 없었다. 11초 뒤 구성원 합류가 첫 역할 변화였다.
 10/7은 ②+③이다 — node3는 etcd에서 정상으로 읽었으나 4초 뒤 Patroni 조회가 전부 실패한 상태에서 역할을 갱신해 저장했다.
 
-**대응**(`SETUP_OPENSQL.md` §16 교정 4, `OPENSQL_DEVIATIONS.md` 1절):
+**대응**(`SETUP_OPENSQL.md` §16 교정 3·4, `OPENSQL_DEVIATIONS.md` 1절):
 
 1. OpenProxy `ExecStartPre`가 **구성원마다 그 노드의 Patroni REST에 직접** `state=running`을 받을 때까지 최대 120초 기다린다
    (③ 때문에 `/cluster`만 보면 안 된다). 시간이 넘으면 그대로 띄운다.
