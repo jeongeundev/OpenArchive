@@ -64,19 +64,25 @@ def get_pool() -> AsyncConnectionPool:
 
 
 async def connect(dsn: str, **kwargs) -> psycopg.AsyncConnection:
-    """풀 밖 연결(운영자 CLI·마이그레이션·워커 LISTEN)을 풀과 같은 바인딩으로 연다 (#212).
+    """풀 밖 연결(운영자 CLI·마이그레이션·워커 LISTEN)을 풀과 같은 바인딩·keepalive로 연다 (#212).
 
     psycopg 기본값이면 같은 문장을 다섯 번 넘게 실행한 연결에 이름 붙인 prepare가 생긴다 —
     연결 하나로 폴더 전체를 적재하는 `import`가 그렇다. 이진 파라미터는 풀과 같이 호출부가
-    서버 바인딩 커서를 명시한다.
+    서버 바인딩 커서를 명시한다. 오래 도는 연결이 죽은 상대를 알아채는 것도 풀과 같아야 한다.
     """
-    return await psycopg.AsyncConnection.connect(dsn, **CLIENT_BINDING, **kwargs)
+    return await psycopg.AsyncConnection.connect(
+        dsn, **keepalive_kwargs(dsn), **CLIENT_BINDING, **kwargs
+    )
 
 
 def connect_sync(dsn: str, **kwargs) -> psycopg.Connection:
     """`connect`의 동기판 — `init`이 쓴다."""
     return psycopg.connect(
-        dsn, prepare_threshold=None, cursor_factory=psycopg.ClientCursor, **kwargs
+        dsn,
+        **keepalive_kwargs(dsn),
+        prepare_threshold=None,
+        cursor_factory=psycopg.ClientCursor,
+        **kwargs,
     )
 
 

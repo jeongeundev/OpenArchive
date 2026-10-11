@@ -5049,7 +5049,7 @@ ROADMAP 다음 단계 후보) · 열람·검색·로그인 미기록(ADR-055 결
    > 비슷한 크기다(실측 17쪽 2.1MB). 판 하나에 명령문 1개가 남는 대가도 같다. 위치는 `test_architecture.py`가 두 파일로 고정한다.
 3. 운영자 CLI(`--dsn`)·LISTEN 전용 연결은 풀 밖이라 이 결정의 범위가 아니다 — CLI·마이그레이션 연결은 #212에서 정한다.
    > → **2026-10-11 개정(#212): 풀 밖 연결도 같은 바인딩을 쓴다.** 운영자 CLI·마이그레이션·`init`의 동기 연결·워커 LISTEN
-   > 연결은 `db.connect`·`db.connect_sync`로만 연다(`prepare_threshold=None` + 클라이언트 바인딩 커서). psycopg 기본값이면 같은
+   > 연결은 `db.connect`·`db.connect_sync`로만 연다(`prepare_threshold=None` + 클라이언트 바인딩 커서, keepalive도 풀과 같다 — ADR-048 결정 1). psycopg 기본값이면 같은
    > 문장을 다섯 번 넘게 실행한 연결에 이름 붙인 prepare가 생겨, 연결 하나로 폴더 전체를 적재하는 `import`·오래 도는
    > `rebuild-edges`가 §17의 26000 경로를 밟는다. 이진 쓰기 예외(결정 2)는 커서를 명시하므로 그대로다. 앱 패키지에서 직접
    > 연결을 여는 곳이 `db.py`뿐인지 `test_architecture.py`가 고정한다.

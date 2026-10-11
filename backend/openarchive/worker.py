@@ -43,7 +43,7 @@ from uuid import UUID
 import psycopg
 
 from openarchive.config import get_settings
-from openarchive.db import close_pool, connect, connection, get_pool, keepalive_kwargs
+from openarchive.db import close_pool, connect, connection, get_pool
 from openarchive.embeddings import EmbeddingProvider, get_provider, warm_up
 from openarchive.services import trash
 from openarchive.services.audit import set_actor
@@ -1012,11 +1012,9 @@ async def _listen_for_jobs(dsn: str, wake: asyncio.Event) -> None:
     delay = 1.0
     while True:
         try:
-            # 풀과 같은 keepalive — 유휴로 알림을 기다리는 연결이라 죽은 상대를 스스로
-            # 알아챌 방법이 이것뿐이다 (ADR-048 결정 1).
-            async with await connect(
-                dsn, autocommit=True, **keepalive_kwargs(dsn)
-            ) as conn:
+            # `connect`가 풀과 같은 keepalive를 건다 — 유휴로 알림을 기다리는 연결이라 죽은
+            # 상대를 스스로 알아챌 방법이 이것뿐이다 (ADR-048 결정 1).
+            async with await connect(dsn, autocommit=True) as conn:
                 await conn.execute(f"LISTEN {CHANNEL}")
                 logger.info("LISTEN 등록 — 알림이 오면 폴링을 앞당긴다")
                 delay = 1.0
