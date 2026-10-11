@@ -163,8 +163,8 @@ def test_connections_outside_the_pool_go_through_db_helpers():
     root = APPLICATION_SOURCE_ROOTS[0]
     # 직접 연결, `from psycopg import connect` 우회, `db.py` 밖의 새 풀까지 잡는다.
     pattern = re.compile(
-        r"\b(?:Async)?Connection\.connect\(|\bpsycopg\.connect\(|^from psycopg import [^\n]*\bconnect\b"
-        r"|\b(?:Async)?ConnectionPool\(",
+        r"\b(?:Async)?Connection\.connect\(|\bpsycopg\.connect\(|^from psycopg import [^)\n]*(?:\([^)]*)?\bconnect\b"
+        r"|\b\w*ConnectionPool\(",
         re.MULTILINE,
     )
     uses = {path.relative_to(root).as_posix() for path in root.rglob("*.py")
