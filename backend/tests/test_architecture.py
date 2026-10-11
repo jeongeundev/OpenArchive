@@ -152,3 +152,16 @@ def test_server_side_binding_is_confined_to_binary_writes():
     assert uses <= {"services/documents.py", "worker.py"}, uses
     for binary_writer in ("services/documents.py", "worker.py"):
         assert len(pattern.findall((root / binary_writer).read_text())) == 1, binary_writer
+
+
+def test_connections_outside_the_pool_go_through_db_helpers():
+    """풀 밖에서 여는 연결도 `db.connect`·`db.connect_sync`로만 연다 (#212, ADR-062 결정 3 개정).
+
+    직접 열면 psycopg 기본값(`prepare_threshold=5`·서버 바인딩)이 되어 이름 붙인 prepare(26000)와
+    OpenProxy 서버 명령문 누적을 다시 밟는다.
+    """
+    root = APPLICATION_SOURCE_ROOTS[0]
+    pattern = re.compile(r"\bAsyncConnection\.connect\(|\bpsycopg\.connect\(|\bConnection\.connect\(")
+    uses = {path.relative_to(root).as_posix() for path in root.rglob("*.py")
+            if pattern.search(path.read_text())}
+    assert uses <= {"db.py"}, uses

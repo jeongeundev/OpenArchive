@@ -349,6 +349,42 @@ async def test_pool_binds_parameters_on_the_client(monkeypatch, migrated_db):
     assert "표식-210" in received
 
 
+async def test_standalone_connection_binds_on_the_client_and_never_prepares(migrated_db):
+    """풀 밖 연결(운영자 CLI·마이그레이션·워커 LISTEN)도 풀과 같은 바인딩을 쓴다 (#212).
+
+    psycopg 기본값(`prepare_threshold=5`)이면 같은 문장을 다섯 번 넘게 실행한 연결에 이름 붙인
+    prepare가 생긴다 — §17의 26000 사고 경로다. 연결 하나로 폴더 전체를 적재하는 `import`가 그렇다.
+    """
+    async with await openarchive.db.connect(migrated_db) as conn:
+        for _ in range(10):
+            received = (
+                await (
+                    await conn.execute("SELECT current_query(), %s::text", ("표식-212",))
+                ).fetchone()
+            )[0]
+        prepared = (
+            await (await conn.execute("SELECT count(*) FROM pg_prepared_statements")).fetchone()
+        )[0]
+
+    assert "$1" not in received
+    assert "표식-212" in received
+    assert prepared == 0
+
+
+def test_standalone_sync_connection_binds_on_the_client_and_never_prepares(migrated_db):
+    """`init`이 쓰는 동기 연결도 같다 (#212)."""
+    with openarchive.db.connect_sync(migrated_db) as conn:
+        for _ in range(10):
+            received = conn.execute(
+                "SELECT current_query(), %s::text", ("표식-212",)
+            ).fetchone()[0]
+        prepared = conn.execute("SELECT count(*) FROM pg_prepared_statements").fetchone()[0]
+
+    assert "$1" not in received
+    assert "표식-212" in received
+    assert prepared == 0
+
+
 @pytest.mark.parametrize(
     "value",
     [
