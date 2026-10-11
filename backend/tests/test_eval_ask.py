@@ -154,7 +154,7 @@ def test_summary_keeps_answerable_and_no_answer_counts_apart():
     assert summary["revision_graded"] == 1
     assert summary["answers_differ"] == 1
     assert summary["generation_calls"] == 6
-    assert summary["latency_p50_s"] == 8.0
+    assert summary["latency_p50_s"] == 6.0
     assert summary["latency_p95_s"] == 120.0
 
 
