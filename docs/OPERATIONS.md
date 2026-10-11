@@ -942,6 +942,34 @@ psql에 붙어도 「감사 로그는 고치거나 지울 수 없습니다.」�
 마이그레이션과 문서가 `postgres`에 쌓입니다. 교정 절차는 [OpenSQL 환경 구축](SETUP_OPENSQL.md)의
 §10 「풀이 바라보는 데이터베이스를 교정한다」에 있습니다.
 
+### HA 기동 후 점검 — OpenProxy 공유 설정
+
+HA 클러스터를 켠 뒤(콜드 부팅·노드 재부팅·OpenProxy 재시작) 앱을 붙이기 전에 확인합니다. OpenProxy는 기동 뒤 첫 역할
+변화 때 자기 설정을 etcd 공유 설정 키 `/service/opensql/openproxy/config/current`에 저장하므로, Patroni보다 먼저 뜨면
+불완전한 판(앱 풀 소실·`servers = []`)이 모든 노드에 퍼질 수 있습니다. 기동 순서 보장과 로컬 파일 동기화로 막아 두었지만
+(`SETUP_OPENSQL.md` §16 교정 3·4, #231), 결과는 아래로 확인합니다. Patroni·etcd가 정상이어도 이 문제는 보이지 않습니다.
+
+```bash
+# node2에서 — 키의 풀과 서버 수 (둘 다 openarchive·opensql, 각 3대여야 합니다. 비밀번호는 출력하지 않습니다)
+sudo /home/opensql/bin/etcdctl --endpoints=http://127.0.0.1:2379 get /service/opensql/openproxy/config/current \
+  --print-value-only | grep -E '^\[pools\.[a-z]+\]$|^\[\[pools\..*servers\]\]$' | sort | uniq -c
+# 앱 롤로 VIP 경유 — 성공해야 합니다
+psql "$DATABASE_URL" -Atc 'BEGIN; SELECT 1; COMMIT;'
+# 각 OpenProxy 노드 — 이번 기동의 대기 결과와 로컬 파일 대체 여부
+sudo journalctl -b -u openproxy -o cat | grep -E 'patroni (ready|not ready)|falling back'
+```
+
+- `falling back to local file`이 있어도 로컬 파일이 공유 설정과 같은 판이면 서비스는 정상입니다. 다만 그 노드가 첫 역할
+  변화 때 로컬 판을 키에 저장하므로, 풀을 바꾼 뒤 로컬 파일을 고치지 않았다면 여기서 드러납니다.
+- **키가 깨졌을 때의 복구** — OpenProxy 재시작만으로는 키가 고쳐지지 않습니다(깨진 판을 다시 읽거나, 로컬 파일로 대체해
+  서비스하더라도 역할 변화가 없으면 키를 다시 쓰지 않습니다).
+  1. `etcdctl get <키> -w fields`로 현재 `ModRevision`을 보고, `get <키> --rev=<N> --print-value-only`로 거슬러 올라가며
+     3노드 `servers`와 `[pools.openarchive]`가 모두 있는 판을 찾습니다.
+  2. 깨진 판과 정상 판을 `umask 077`로 파일에 남깁니다 — 비밀번호가 들어 있습니다.
+  3. 정상 판을 `etcdctl put <키> < <정상 판 파일>`로 되돌리고, OpenProxy를 대기 노드(node3) → VIP 노드(node2) 순으로 재시작합니다.
+  4. 위 점검을 다시 합니다.
+- 비밀번호를 가리려고 `sed`의 `\s`를 쓰지 마세요. macOS sed는 이를 모르므로 가려지지 않은 채 출력됩니다.
+
 ## 복구 데모
 
 DB 프로세스 장애에서의 자동 복구를 단일 타임라인으로 확인합니다. 마이그레이션이 적용된
