@@ -44,7 +44,7 @@ from uuid import UUID
 import psycopg
 import yaml
 
-from openarchive import user_cli
+from openarchive import db, user_cli
 from openarchive.answers import AnswerProvider, get_answer_provider
 from openarchive.config import ENV_FILE, get_settings
 from openarchive.demo import EdgeJobsTimeout, converge, load_seed_documents, seed_documents
@@ -343,7 +343,7 @@ def _pending_migrations(conn: psycopg.Connection, schema: str) -> list[str]:
 
 async def _read_status(dsn: str):
     settings = get_settings()
-    async with await psycopg.AsyncConnection.connect(dsn) as conn:
+    async with await db.connect(dsn) as conn:
         return await get_system_status(
             conn,
             job_lease_seconds=settings.job_lease_seconds,
@@ -581,7 +581,7 @@ def _account_password(prompt: str) -> str:
 
 
 async def _has_admin(dsn: str) -> bool:
-    async with await psycopg.AsyncConnection.connect(dsn) as conn:
+    async with await db.connect(dsn) as conn:
         return await admin_exists(conn)
 
 
@@ -637,7 +637,7 @@ def run_init(
         print()
 
     try:
-        connection = psycopg.connect(dsn, connect_timeout=5)
+        connection = db.connect_sync(dsn, connect_timeout=5)
     except psycopg.Error as error:
         # 연결 실패만 여기서 잡는다. 더 넓게 감싸면 조회·판정 단계의 실패까지
         # "연결하지 못했습니다"로 보고되어 원인을 가린다.
@@ -660,7 +660,7 @@ def run_init(
         if own_schema:
             # 이름을 생략하면 롤 이름이 스키마 이름이 된다. 만든 순간부터 그 롤의 모든 연결이
             # 기본 search_path의 "$user"로 이곳을 본다 — 풀에 떠 있던 백엔드까지 (§12-25).
-            with psycopg.connect(dsn) as schema_conn:
+            with db.connect_sync(dsn) as schema_conn:
                 schema_conn.execute("CREATE SCHEMA IF NOT EXISTS AUTHORIZATION CURRENT_USER")
         applied = asyncio.run(run_migrations(dsn))
         print(f"  {len(applied)}개 적용 완료")
@@ -704,7 +704,7 @@ async def _connect(dsn: str, **kwargs) -> psycopg.AsyncConnection:
     연결 뒤 UPDATE·DELETE·재계산의 실패까지 "연결하지 못했습니다"로 보고되어 원인을 가린다.
     """
     try:
-        return await psycopg.AsyncConnection.connect(dsn, connect_timeout=5, **kwargs)
+        return await db.connect(dsn, connect_timeout=5, **kwargs)
     except psycopg.Error as error:
         raise _ConnectionFailed(str(error).strip()) from error
 

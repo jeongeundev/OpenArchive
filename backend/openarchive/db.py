@@ -26,6 +26,9 @@ KEEPALIVE_DEFAULTS = {
 
 _pool: AsyncConnectionPool | None = None
 
+# 자동 준비를 끄고 파라미터를 클라이언트에서 문장에 넣는다 — 이유는 `get_pool`의 주석 (ADR-062).
+CLIENT_BINDING = {"prepare_threshold": None, "cursor_factory": psycopg.AsyncClientCursor}
+
 
 def keepalive_kwargs(dsn: str) -> dict:
     """DSN에 없는 keepalive 설정만 돌려준다 — DSN에 적힌 값이 기본값을 이긴다.
@@ -52,13 +55,35 @@ def get_pool() -> AsyncConnectionPool:
             # 모든 문장이 느려진다. 이진 파라미터(`%b`)는 서버 바인딩 커서를 명시한다.
             kwargs={
                 **keepalive_kwargs(dsn),
-                "prepare_threshold": None,
-                "cursor_factory": psycopg.AsyncClientCursor,
+                **CLIENT_BINDING,
             },
             open=False,
             check=AsyncConnectionPool.check_connection,
         )
     return _pool
+
+
+async def connect(dsn: str, **kwargs) -> psycopg.AsyncConnection:
+    """풀 밖 연결(운영자 CLI·마이그레이션·워커 LISTEN)을 풀과 같은 바인딩·keepalive로 연다 (#212).
+
+    psycopg 기본값이면 같은 문장을 다섯 번 넘게 실행한 연결에 이름 붙인 prepare가 생긴다 —
+    연결 하나로 폴더 전체를 적재하는 `import`가 그렇다. 이진 파라미터는 풀과 같이 호출부가
+    서버 바인딩 커서를 명시한다. 오래 도는 연결이 죽은 상대를 알아채는 것도 풀과 같아야 한다.
+    """
+    return await psycopg.AsyncConnection.connect(
+        dsn, **keepalive_kwargs(dsn), **CLIENT_BINDING, **kwargs
+    )
+
+
+def connect_sync(dsn: str, **kwargs) -> psycopg.Connection:
+    """`connect`의 동기판 — `init`이 쓴다."""
+    return psycopg.connect(
+        dsn,
+        **keepalive_kwargs(dsn),
+        prepare_threshold=None,
+        cursor_factory=psycopg.ClientCursor,
+        **kwargs,
+    )
 
 
 @asynccontextmanager

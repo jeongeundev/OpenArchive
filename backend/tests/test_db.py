@@ -349,6 +349,96 @@ async def test_pool_binds_parameters_on_the_client(monkeypatch, migrated_db):
     assert "표식-210" in received
 
 
+async def test_standalone_connection_binds_on_the_client_and_never_prepares(migrated_db):
+    """풀 밖 연결(운영자 CLI·마이그레이션·워커 LISTEN)도 풀과 같은 바인딩을 쓴다 (#212).
+
+    psycopg 기본값(`prepare_threshold=5`)이면 같은 문장을 다섯 번 넘게 실행한 연결에 이름 붙인
+    prepare가 생긴다 — §17의 26000 사고 경로다. 연결 하나로 폴더 전체를 적재하는 `import`가 그렇다.
+    """
+    async with await openarchive.db.connect(migrated_db) as conn:
+        for _ in range(10):
+            received = (
+                await (
+                    await conn.execute("SELECT current_query(), %s::text", ("표식-212",))
+                ).fetchone()
+            )[0]
+        prepared = (
+            await (await conn.execute("SELECT count(*) FROM pg_prepared_statements")).fetchone()
+        )[0]
+
+    assert "$1" not in received
+    assert "표식-212" in received
+    assert prepared == 0
+
+
+def test_standalone_sync_connection_binds_on_the_client_and_never_prepares(migrated_db):
+    """`init`이 쓰는 동기 연결도 같다 (#212)."""
+    with openarchive.db.connect_sync(migrated_db) as conn:
+        for _ in range(10):
+            received = conn.execute(
+                "SELECT current_query(), %s::text", ("표식-212",)
+            ).fetchone()[0]
+        prepared = conn.execute("SELECT count(*) FROM pg_prepared_statements").fetchone()[0]
+
+    assert "$1" not in received
+    assert "표식-212" in received
+    assert prepared == 0
+
+
+async def test_standalone_connections_detect_a_dead_peer_within_a_minute(test_dsn):
+    """풀 밖 연결도 풀과 같은 keepalive를 건다 (#212, ADR-048 결정 1).
+
+    연결 하나로 오래 도는 `import`·`rebuild-edges`가 failover 중 VIP 복귀로 반쯤 열린 연결에 걸리면
+    OS 기본값으로는 약 2시간 뒤에야 끊김을 안다(#110 B-1).
+    """
+    async with await openarchive.db.connect(test_dsn) as conn:
+        params = conninfo_to_dict(conn.info.dsn)
+    with openarchive.db.connect_sync(test_dsn) as conn:
+        sync_params = conninfo_to_dict(conn.info.dsn)
+
+    for given in (params, sync_params):
+        assert given["keepalives_idle"] == "30"
+        assert given["keepalives_interval"] == "10"
+        assert given["keepalives_count"] == "3"
+
+
+async def test_standalone_connection_keeps_keepalive_written_in_the_dsn(test_dsn):
+    dsn = make_conninfo(test_dsn, keepalives_idle=5)
+    async with await openarchive.db.connect(dsn) as conn:
+        params = conninfo_to_dict(conn.info.dsn)
+    with openarchive.db.connect_sync(dsn) as conn:
+        sync_params = conninfo_to_dict(conn.info.dsn)
+
+    for given in (params, sync_params):
+        assert given["keepalives_idle"] == "5"
+        assert given["keepalives_count"] == "3"
+
+
+async def test_standalone_connection_never_prepares_even_with_a_server_cursor(migrated_db):
+    """이진 쓰기처럼 서버 바인딩 커서를 명시해도 이름 붙인 prepare는 생기지 않는다 (#212).
+
+    `import`는 연결 하나로 원본 파일 `%b` INSERT(`psycopg.AsyncCursor`)를 파일 수만큼 반복한다.
+    그 경로를 26000에서 떼어 놓는 것은 커서 팩토리가 아니라 `prepare_threshold=None`이다.
+    """
+    async with await openarchive.db.connect(migrated_db) as conn:
+        for _ in range(10):
+            await psycopg.AsyncCursor(conn).execute("SELECT %b::bytea", (b"\x00",))
+        prepared = (
+            await (await conn.execute("SELECT count(*) FROM pg_prepared_statements")).fetchone()
+        )[0]
+
+    assert prepared == 0
+
+
+def test_standalone_sync_connection_never_prepares_even_with_a_server_cursor(migrated_db):
+    with openarchive.db.connect_sync(migrated_db) as conn:
+        for _ in range(10):
+            psycopg.Cursor(conn).execute("SELECT %b::bytea", (b"\x00",))
+        prepared = conn.execute("SELECT count(*) FROM pg_prepared_statements").fetchone()[0]
+
+    assert prepared == 0
+
+
 @pytest.mark.parametrize(
     "value",
     [
