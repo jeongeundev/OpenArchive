@@ -955,8 +955,8 @@ HA 클러스터를 켠 뒤(콜드 부팅·노드 재부팅·OpenProxy 재시작)
 # servers = [] 로 깨진 판은 그 풀의 서버 줄이 0개로 나옵니다.
 sudo /home/opensql/bin/etcdctl --endpoints=http://127.0.0.1:2379 get /service/opensql/openproxy/config/current \
   --print-value-only | grep -E '^\[pools\.[a-z]+\]$|^\[\[pools\..*servers\]\]$' | sort | uniq -c
-# 맥(앱 호스트)에서 앱 롤로 VIP 경유 — 성공해야 합니다
-psql "$DATABASE_URL" -Atc 'BEGIN; SELECT 1; COMMIT;'
+# 맥(앱 호스트)에서 앱 롤로 VIP 경유 — COMMIT이 나와야 합니다
+psql "postgresql://openarchive:<비밀번호>@<vip>:6432/openarchive" -Atc 'BEGIN; SELECT 1; COMMIT;'
 # 각 OpenProxy 노드 — 이번 기동의 대기 결과와 로컬 파일 대체 여부
 sudo journalctl -b -u openproxy -o cat | grep -E 'patroni (ready|not ready)|falling back'
 ```
