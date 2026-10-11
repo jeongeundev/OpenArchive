@@ -8,12 +8,14 @@
 
 커넥션은 여기서 직접 열고 닫는다. `openarchive.db`의 풀을 쓰지 않는 이유는 마이그레이션이
 기동 시 1회성 작업이라 풀의 수명주기와 얽힐 이유가 없고, 얽히면 `db.py`의
-"import 부작용 없음" 성질이 흐려지기 때문이다.
+"import 부작용 없음" 성질이 흐려지기 때문이다. 연결 옵션만은 풀과 같게 `db.connect`로 연다(#212).
 """
 
 from pathlib import Path
 
 import psycopg
+
+from openarchive.db import connect
 
 # SQL 파일은 이 패키지 안에 함께 둔다. 패키지 밖(`backend/migrations/`)에 두면 편집 설치에서만
 # 보이고, `pip install`로 깐 설치본(site-packages)에서는 init과 API startup이 스키마를 찾지
@@ -77,7 +79,7 @@ async def run_migrations(dsn: str, migrations_dir: Path = MIGRATIONS_DIR) -> lis
     files = migration_files(migrations_dir)
     applied: list[str] = []
 
-    async with await psycopg.AsyncConnection.connect(dsn) as conn:
+    async with await connect(dsn) as conn:
         await conn.execute(_CREATE_HISTORY)
         await conn.commit()
 
