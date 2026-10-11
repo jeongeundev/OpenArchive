@@ -385,6 +385,32 @@ def test_standalone_sync_connection_binds_on_the_client_and_never_prepares(migra
     assert prepared == 0
 
 
+async def test_standalone_connections_detect_a_dead_peer_within_a_minute(test_dsn):
+    """풀 밖 연결도 풀과 같은 keepalive를 건다 (#212, ADR-048 결정 1).
+
+    연결 하나로 오래 도는 `import`·`rebuild-edges`가 failover 중 VIP 복귀로 반쯤 열린 연결에 걸리면
+    OS 기본값으로는 약 2시간 뒤에야 끊김을 안다(#110 B-1).
+    """
+    async with await openarchive.db.connect(test_dsn) as conn:
+        params = conninfo_to_dict(conn.info.dsn)
+    with openarchive.db.connect_sync(test_dsn) as conn:
+        sync_params = conninfo_to_dict(conn.info.dsn)
+
+    for given in (params, sync_params):
+        assert given["keepalives_idle"] == "30"
+        assert given["keepalives_interval"] == "10"
+        assert given["keepalives_count"] == "3"
+
+
+async def test_standalone_connection_keeps_keepalive_written_in_the_dsn(test_dsn):
+    dsn = make_conninfo(test_dsn, keepalives_idle=5)
+    async with await openarchive.db.connect(dsn) as conn:
+        params = conninfo_to_dict(conn.info.dsn)
+
+    assert params["keepalives_idle"] == "5"
+    assert params["keepalives_count"] == "3"
+
+
 async def test_standalone_connection_never_prepares_even_with_a_server_cursor(migrated_db):
     """이진 쓰기처럼 서버 바인딩 커서를 명시해도 이름 붙인 prepare는 생기지 않는다 (#212).
 
