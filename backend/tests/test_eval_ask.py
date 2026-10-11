@@ -55,6 +55,20 @@ def test_key_hit_is_none_without_keys_or_answer():
     assert grade_answer({"answer_keys": ["1"]}, "failed", None, [_source(1)], {D1})["key_hit"] is False
 
 
+def test_keys_in_sources_separates_missing_evidence_from_model_misses():
+    """답이 근거에 없었으면(추출·검색·예산) 모델 탓이 아니다. 근거에 있는데 못 맞히면 모델의 실패다."""
+    item = {"answer_keys": ["30.82", ["4천만 달러", "40 million"]]}
+    given = [_source(1, content="제주(30.82㎡) … over USD 40 million", cited=False)]
+    cut = [_source(1, content="제주(30.", cited=False)]
+
+    missed = grade_answer(item, "answered", f"{REFUSAL}.", given, {D1})
+    absent = grade_answer(item, "answered", f"{REFUSAL}.", cut, {D1})
+
+    assert missed["keys_in_sources"] is True and missed["key_hit"] is False
+    assert absent["keys_in_sources"] is False
+    assert grade_answer({}, "answered", "답 [1]", given, {D1})["keys_in_sources"] is None
+
+
 def test_citation_separates_given_from_cited_and_reports_wrong_citations():
     """정답 문서를 근거로 받았는데 다른 문서만 인용하면 검색이 아니라 모델의 실패다."""
     sources = [_source(1, D1, title="정답", cited=False), _source(2, D2, title="엉뚱", cited=True)]
@@ -118,19 +132,19 @@ def test_percentile_uses_nearest_rank():
 
 def test_summary_keeps_answerable_and_no_answer_counts_apart():
     graded = [
-        {"status": "answered", "relevant": True, "key_hit": True, "given_relevant": True,
+        {"status": "answered", "relevant": True, "key_hit": True, "keys_in_sources": True, "given_relevant": True,
          "cited_relevant": True, "refused": False, "leaks": [], "revision_cited": None,
          "latencies": [2.0, 4.0], "answers_differ": False},
-        {"status": "answered", "relevant": True, "key_hit": False, "given_relevant": True,
+        {"status": "answered", "relevant": True, "key_hit": False, "keys_in_sources": True, "given_relevant": True,
          "cited_relevant": False, "refused": True, "leaks": [], "revision_cited": True,
          "latencies": [6.0, 8.0], "answers_differ": True},
-        {"status": "no_evidence", "relevant": False, "key_hit": None, "given_relevant": None,
+        {"status": "no_evidence", "relevant": False, "key_hit": None, "keys_in_sources": None, "given_relevant": None,
          "cited_relevant": None, "refused": True, "leaks": [], "revision_cited": None,
          "latencies": [], "answers_differ": False},
-        {"status": "answered", "relevant": False, "key_hit": None, "given_relevant": None,
+        {"status": "answered", "relevant": False, "key_hit": None, "keys_in_sources": None, "given_relevant": None,
          "cited_relevant": None, "refused": False, "leaks": ["비밀"], "revision_cited": None,
          "latencies": [10.0], "answers_differ": False},
-        {"status": "failed", "relevant": True, "key_hit": False, "given_relevant": True,
+        {"status": "failed", "relevant": True, "key_hit": False, "keys_in_sources": False, "given_relevant": True,
          "cited_relevant": False, "refused": False, "leaks": [], "revision_cited": None,
          "latencies": [120.0], "answers_differ": False},
     ]
@@ -144,6 +158,8 @@ def test_summary_keeps_answerable_and_no_answer_counts_apart():
     assert summary["answerable"] == 3
     assert summary["key_hits"] == 1
     assert summary["key_graded"] == 3
+    assert summary["keys_in_sources"] == 2
+    assert summary["model_misses"] == 1  # 근거에 있었는데 못 맞힘. 실패(타임아웃)는 근거에 없어 빠진다
     assert summary["given_relevant"] == 3
     assert summary["cited_relevant"] == 1
     assert summary["false_refusals"] == 1
