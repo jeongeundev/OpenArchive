@@ -14,7 +14,7 @@ from PIL import Image
 from pptx import Presentation
 from pptx.util import Inches
 from pypdf import PdfReader, PdfWriter
-from pypdf.generic import NameObject
+from pypdf.generic import DictionaryObject, NameObject, StreamObject
 
 from openarchive.services.parsing import (
     TextDecodeError,
@@ -721,6 +721,103 @@ def test_ocr_reads_a_garbled_text_layer_page_as_korean() -> None:
     assert "출장비정산규정" in text
     expected = normalize_ocr(fixture("garbled_travel_rule.txt").decode())
     assert SequenceMatcher(None, expected, text, autojunk=False).ratio() >= 0.85
+
+
+def shared_resources_pdf() -> bytes:
+    """`mixed_tax_pages`의 1·3쪽이 자원 사전 하나를 함께 쓰는 PDF — 1쪽에서만 쓰는 F2·F4의 ToUnicode를 지웠다.
+
+    1쪽은 글자 정보가 깨진 쪽이고, 3쪽은 깨진 글꼴이 등록부에만 있고 쓰이지 않는 정상 쪽이다.
+    """
+    writer = PdfWriter(clone_from=PdfReader(io.BytesIO(fixture("mixed_tax_pages.pdf"))))
+    writer.remove_page(1)  # 스캔 쪽
+    first, third = writer.pages
+    fonts = first["/Resources"]["/Font"]
+    for name in ("/F2", "/F4"):
+        del fonts[name].get_object()[NameObject("/ToUnicode")]
+    for name, font in third["/Resources"]["/Font"].items():
+        fonts[NameObject(name)] = font
+    shared = writer._add_object(first["/Resources"])  # 간접 객체여야 두 쪽이 한 사전을 가리킨다
+    first[NameObject("/Resources")] = shared
+    third[NameObject("/Resources")] = shared
+    out = io.BytesIO()
+    writer.write(out)
+    return out.getvalue()
+
+
+def test_shared_resources_fixture_shares_one_font_dictionary() -> None:
+    first, third = PdfReader(io.BytesIO(shared_resources_pdf())).pages
+
+    assert first.raw_get("/Resources") == third.raw_get("/Resources")  # 같은 간접 참조
+    assert set(first["/Resources"]["/Font"]) >= {"/F2", "/F4", "/F7", "/F8"}
+
+
+def test_needs_ocr_ignores_a_garbled_font_the_page_does_not_use() -> None:
+    """등록부(`/Resources`)에만 있고 쪽이 `Tf`로 쓰지 않는 깨진 글꼴로는 OCR하지 않는다(#235)."""
+    data = page_of(shared_resources_pdf(), 1)
+
+    assert "/F2" in PdfReader(io.BytesIO(data)).pages[0]["/Resources"]["/Font"]
+    assert needs_ocr("pdf", data) is False
+
+
+def test_ocr_reads_only_the_page_that_uses_a_garbled_font_of_shared_resources(monkeypatch) -> None:
+    """자원 사전을 공유해도 깨진 글꼴을 실제로 쓰는 쪽만 인식한다 — 나머지 쪽은 레이어 그대로다(#235)."""
+    import pytesseract
+
+    calls = []
+    real = pytesseract.image_to_string
+
+    def counting(*args, **kwargs):
+        calls.append(1)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(pytesseract, "image_to_string", counting)
+    data = shared_resources_pdf()
+
+    assert needs_ocr("pdf", data) is True
+    text = ocr_text(data, "pdf")
+
+    assert len(calls) == 1
+    assert text.count(extract_text(page_of(data, 1), "pdf")) == 1
+
+
+def form_pdf(*, form_resources: bool) -> bytes:
+    """`mixed_tax_pages` 1쪽(ToUnicode 지움)의 내용을 폼 XObject로 옮기고 쪽은 그 폼을 `Do`로 그리기만 한다.
+
+    `form_resources=False`면 폼에 `/Resources`가 없어 쪽의 자원을 이어받는다(PDF 1.1 관례).
+    """
+    writer = PdfWriter(clone_from=PdfReader(io.BytesIO(
+        first_page_of(fixture("mixed_tax_pages.pdf"), strip_to_unicode=True)
+    )))
+    page = writer.pages[0]
+    form = StreamObject()
+    form.set_data(page.get_contents().get_data())
+    form.update({
+        NameObject("/Type"): NameObject("/XObject"),
+        NameObject("/Subtype"): NameObject("/Form"),
+        NameObject("/BBox"): page.mediabox,
+    })
+    resources = page["/Resources"]
+    xobjects = DictionaryObject({NameObject("/Fm0"): writer._add_object(form)})
+    if form_resources:
+        form[NameObject("/Resources")] = resources
+        page[NameObject("/Resources")] = DictionaryObject({NameObject("/XObject"): xobjects})
+    else:
+        resources.get_object()[NameObject("/XObject")] = xobjects
+    content = StreamObject()
+    content.set_data(b"q /Fm0 Do Q")
+    page[NameObject("/Contents")] = writer._add_object(content)
+    out = io.BytesIO()
+    writer.write(out)
+    return out.getvalue()
+
+
+@pytest.mark.parametrize("form_resources", [True, False], ids=["own-resources", "inherited"])
+def test_needs_ocr_follows_garbled_fonts_into_drawn_forms(form_resources: bool) -> None:
+    """폼 XObject 안에서 쓰는 깨진 글꼴도 그 폼을 그리는 쪽의 글꼴이다(#191·#235)."""
+    data = form_pdf(form_resources=form_resources)
+
+    assert extract_text(data, "pdf").strip()
+    assert needs_ocr("pdf", data) is True
 
 
 def test_ocr_keeps_text_layer_pages_and_reads_only_the_scanned_page(monkeypatch) -> None:
