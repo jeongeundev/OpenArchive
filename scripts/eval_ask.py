@@ -7,7 +7,9 @@
 
 질문마다 `/api/ask`와 같은 서비스 경로(`gather_evidence` → `generate_answer`)를 부른다. 근거는 한 번
 모으고 생성만 `--repeats`번 되풀이해 지연 분포를 얻는다 — 온도 0이라 답은 같아야 하며, 다르면
-`answers_differ`로 남긴다. 측정 전에 예열 생성을 한 번 해 모델 적재 시간을 집계에서 뺀다.
+`answers_differ`로 남긴다. Ollama는 같은 프롬프트 앞부분의 KV 캐시를 재사용해 반복이 10배 빨라지고
+(실측 16초 → 1.5초), 같은 문서를 근거로 받는 바로 앞 질문도 캐시를 남긴다. 다른 프롬프트로는 밀려나지
+않아, 생성마다 모델을 내렸다(`keep_alive: 0`) 짧은 요청으로 다시 올린 뒤 생성만 잰다 — 처음 받는 질문의 지연이다.
 
 자동 채점은 공백·천 단위 쉼표를 무시한 문자열 포함이며 의미 정확도가 아니다.
 - `answer_keys`: 답에 모두 있어야 하는 핵심값. 원소가 목록이면 그중 하나(같은 값의 다른 표기).
@@ -30,6 +32,8 @@ import json
 import math
 import sys
 import time
+import urllib.request
+from collections.abc import Callable
 from pathlib import Path
 from uuid import UUID
 
@@ -50,7 +54,6 @@ from openarchive.services.answer import AnswerSource, gather_evidence, generate_
 from openarchive.services.visibility import VISIBLE_TO_USER
 
 REFUSAL = "근거 문서에서 찾을 수 없습니다"
-WARMUP = ("한 단어로 답하세요.", "안녕")
 
 
 def _normalize(text: str) -> str:
@@ -141,11 +144,28 @@ def _source_payload(source: AnswerSource) -> dict:
     }
 
 
+def ollama_cache_reset(url: str, model: str) -> Callable[[], None]:
+    """모델을 내리고 짧은 요청으로 다시 올린다 — 앞선 프롬프트의 KV 캐시가 남지 않고, 적재 시간도 재지 않는다."""
+    def post(path: str, body: dict) -> None:
+        request = urllib.request.Request(
+            url.rstrip("/") + path, data=json.dumps(body).encode(),
+            headers={"Content-Type": "application/json"}, method="POST",
+        )
+        with urllib.request.urlopen(request, timeout=300) as response:
+            response.read()
+
+    def reset() -> None:
+        post("/api/generate", {"model": model, "keep_alive": 0})
+        post("/api/chat", {"model": model, "stream": False, "think": False,
+                           "messages": [{"role": "user", "content": "안녕"}]})
+    return reset
+
+
 async def evaluate(
     evalset: dict, dsn: str, *, embedding_provider: EmbeddingProvider, answer_provider: AnswerProvider,
-    user_id: str | None, tags: list[str] | None, context_chars: int, repeats: int,
+    reset_cache: Callable[[], None], user_id: str | None, tags: list[str] | None,
+    context_chars: int, repeats: int,
 ) -> list[dict]:
-    await asyncio.to_thread(answer_provider.generate, *WARMUP)
     results = []
     async with await connect(dsn) as conn:
         rows = await (await conn.execute(
@@ -166,6 +186,8 @@ async def evaluate(
             await conn.rollback()  # 생성 동안 트랜잭션을 열어 두지 않는다(API와 같은 조건)
             answers, latencies = [], []
             for _ in range(repeats):
+                if evidence.sources:  # 근거가 없으면 서비스가 모델을 부르지 않는다
+                    await asyncio.to_thread(reset_cache)
                 started = time.perf_counter()
                 result = await generate_answer(evidence, answer_provider)
                 if result.status in ("answered", "failed"):
@@ -222,6 +244,7 @@ def main() -> None:
     results = asyncio.run(evaluate(
         json.loads(evalset_bytes), settings.database_url,
         embedding_provider=get_provider(), answer_provider=get_answer_provider(),
+        reset_cache=ollama_cache_reset(settings.ollama_url, settings.answer_model),
         user_id=args.user, tags=args.tag, context_chars=settings.answer_context_chars,
         repeats=args.repeats,
     ))
