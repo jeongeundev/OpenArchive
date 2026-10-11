@@ -145,7 +145,7 @@
      "evidence": [{"source": "공동의장 성명", "text": "more than 40 million USD from 2013 to 2025"}]},
     {"id": "docx-areas", "category": "조항", "query": "메콩-한국 협력사업의 7대 중점 분야",
      "expected": "(1) 문화·관광 (2) 인적자원개발 … (7) 비전통 안보",
-     "answer_keys": ["문화", "인적자원", "비전통"],
+     "answer_keys": [["문화", "Culture"], ["인적자원", "인력", "Human Resource"], ["비전통", "Non-traditional"]],
      "relevant": ["공동의장 성명"],
      "evidence": [{"source": "공동의장 성명", "text": "(1) Culture and Tourism, (2) Human Resources Development"},
                   {"source": "공동의장 성명", "text": "(7) Non-traditional Security Challenges"}]},

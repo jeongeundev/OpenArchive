@@ -13,6 +13,8 @@
 
 자동 채점은 공백·천 단위 쉼표를 무시한 문자열 포함이며 의미 정확도가 아니다.
 - `answer_keys`: 답에 모두 있어야 하는 핵심값. 원소가 목록이면 그중 하나(같은 값의 다른 표기).
+- `keys_in_sources`: 핵심값이 모델에 준 근거에 있었는지. 없으면 추출·검색·글자 예산의 몫이고, 있는데 답에
+  없으면 모델의 몫이다(`model_misses`).
 - `relevant`의 문서를 근거로 받았는지(`given_relevant`, 검색 몫)와 인용했는지(`cited_relevant`, 모델 몫).
 - 거절: 근거 0건(`no_evidence`)이거나 답에 거절 문구가 있으면. 정답 근거가 있는 질문의 거절은 실패로 센다.
 - `answer_absent`: 답에 나오면 안 되는 문장(권한 누출).
@@ -71,6 +73,7 @@ def grade_answer(
     text = _normalize(answer or "")
     keys = item.get("answer_keys") or []
     missing = [key for key in keys if not _contains(key, text)]
+    given = _normalize(" ".join(source.content for source in sources))
     cited = [source for source in sources if source.cited]
     from_revision = None
     if item.get("answer_from_revision"):
@@ -82,6 +85,7 @@ def grade_answer(
         "status": status,
         "key_hit": (not missing) if keys else None,
         "missing_keys": missing,
+        "keys_in_sources": all(_contains(key, given) for key in keys) if keys else None,
         "given_relevant": any(s.document_id in relevant for s in sources) if relevant else None,
         "cited_relevant": any(s.document_id in relevant for s in cited) if relevant else None,
         "cited_outside": [s.title for s in cited if s.document_id not in relevant] if relevant else [],
@@ -110,6 +114,8 @@ def summarize(graded: list[dict]) -> dict:
         "answerable": len(answerable),
         "key_graded": sum(1 for g in answerable if g["key_hit"] is not None),
         "key_hits": sum(1 for g in answerable if g["key_hit"]),
+        "keys_in_sources": sum(1 for g in answerable if g["keys_in_sources"]),
+        "model_misses": sum(1 for g in answerable if g["keys_in_sources"] and not g["key_hit"]),
         "given_relevant": sum(1 for g in answerable if g["given_relevant"]),
         "cited_relevant": sum(1 for g in answerable if g["cited_relevant"]),
         "false_refusals": sum(1 for g in answerable if g["refused"]),
@@ -210,7 +216,7 @@ def render(results: list[dict], summary: dict) -> str:
     for r in results:
         marks = [r["status"]]
         if r["key_hit"] is not None:
-            marks.append(f"값={int(r['key_hit'])}")
+            marks.append(f"값={int(r['key_hit'])}/근거에있음={int(r['keys_in_sources'])}")
         if r["cited_relevant"] is not None:
             marks.append(f"인용={int(r['cited_relevant'])}/근거={int(r['given_relevant'])}")
         if r["refused"]:
