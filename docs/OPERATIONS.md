@@ -33,9 +33,9 @@ mkdir -p ~/.openarchive && cp backend/.env.example ~/.openarchive/.env   # 예�
 | `SESSION_LIFETIME_HOURS` | `24` | 서버 세션과 로그인 쿠키의 수명 |
 | `SESSION_COOKIE_SECURE` | `false` | 로컬 HTTP에서는 `false`. HTTPS 상시 배포에서는 반드시 `true` |
 | `MAX_UPLOAD_MB` | `50` | 업로드·원본 교체 한 건의 상한(십진 MB). 원본 한 판이 DB에 차지하는 크기의 상한이기도 하다 — 아래 「원본 파일 보관」 |
-| `ANSWER_PROVIDER` | `off` | 기본 `off` — 검색은 그대로, 답변만 미설정. `ollama`는 로컬 Ollama 서버가 필요(설치 절차는 #96 c), `fake`는 테스트용 |
+| `ANSWER_PROVIDER` | `off` | 기본 `off` — 검색은 그대로, 답변만 미설정. `ollama`는 로컬 Ollama 서버가 필요(아래 「답변 생성 (Ollama, 선택)」), `fake`는 테스트용 |
 | `OLLAMA_URL` | `http://localhost:11434` | 로컬 Ollama 서버 주소 |
-| `ANSWER_MODEL` | `qwen3:8b` | 임시 모델 태그 — #96 c의 한국어 실측으로 확정 |
+| `ANSWER_MODEL` | `qwen3:8b` | Ollama 모델 태그. 한국어 실측으로 확정한 값이다(ADR-043 「모델 확정」). 다른 모델로 바꾸면 품질은 재지 않은 상태다 |
 | `ANSWER_TIMEOUT_SECONDS` | `120` | 생성 호출 한 번의 HTTP 타임아웃(초). 0보다 큰 실수 |
 | `ANSWER_CONTEXT_CHARS` | `6000` | 프롬프트에 넣는 근거 본문의 글자 예산. 0보다 큰 정수 |
 | `PREVIEW_RHWP_BIN` | `rhwp` | HWP·HWPX 미리보기 변환기. 이름이면 PATH에서 찾고, 경로를 줘도 된다. 없으면 그 형식은 「변환기 없음」. 아래 「원본 미리보기 변환기」 |
@@ -92,6 +92,33 @@ brew install tesseract tesseract-lang                    # macOS
 - 인식은 쪽당 수 초(맥 M2 Pro · tesseract 5.5 실측 약 3.3초)이고, 워커는 잡을 하나씩 처리하므로 긴
   스캔 문서를 인식하는 동안 다른 문서의 임베딩이 밀립니다. Rocky 9 패키지(tesseract 4.1.1)는 컨테이너
   실측에서 문자 오류율 3~5%, 쪽당 3.4~5.5초였습니다(arm64 — x86 호스트 시간은 다를 수 있습니다).
+
+## 답변 생성 (Ollama, 선택)
+
+근거 기반 답변(웹 답변 패널·`POST /api/ask`·`openarchive ask`)은 **기본 꺼짐**이고, 켜려면 로컬 Ollama와 모델이 필요합니다.
+검색·업로드·MCP는 Ollama 없이 그대로 동작합니다. 상용 API는 쓸 수 없습니다(대회 규정, ADR-043 결정 2).
+
+```bash
+brew install ollama && brew services start ollama          # macOS
+curl -fsSL https://ollama.com/install.sh | sh              # Linux (systemd 서비스로 설치됨)
+ollama pull qwen3:8b                                       # 약 5.2GB — 최초 1회 인터넷 필요
+ANSWER_PROVIDER=ollama openarchive serve                   # API 프로세스에만 주면 된다
+```
+
+- **켜는 값은 API 프로세스에만 필요합니다.** 워커는 답변을 만들지 않습니다. 운영자 CLI `ask`는 같은 값을 따로 줍니다.
+- **확인은 API로 합니다.** `ollama run qwen3:8b`는 추론 출력(thinking)이 켜져 대화창이 오래 끝나지 않습니다. 서버는
+  `think:false`로 부르므로, 직접 확인할 때도 API를 씁니다:
+  `curl -s localhost:11434/api/chat -d '{"model":"qwen3:8b","stream":false,"think":false,"messages":[{"role":"user","content":"안녕"}]}'`
+- **메모리는 약 7.7GB를 씁니다**(Q4_K_M, 문맥 32K, Ollama 0.35.1 `size_vram`). 맥 M2 Pro(Metal)에서 처음 받는 질문 기준
+  p50 16.6초·p95 22.8초였고, 시간 대부분은 근거(약 4,500토큰)를 읽는 데 쓰입니다. GPU 없는 호스트는 몇 배 느리므로
+  거기서 재고 `ANSWER_TIMEOUT_SECONDS`(기본 120)를 맞춥니다. 측정은 `docs/SEARCH_QUALITY_VALIDATION.md`
+  「근거 기반 답변 기준선 (#96 c)」에 있습니다.
+- **오프라인 설치가 가능합니다.** 받은 모델은 `~/.ollama/models`(Linux 서비스는 `/usr/share/ollama/.ollama/models`)에 있어
+  그 폴더를 옮기면 됩니다. 생성할 때는 외부 접속이 없습니다.
+- **Ollama를 다른 호스트에 두면** `OLLAMA_URL`로 가리킵니다. Ollama API에는 인증이 없으므로 그 포트(11434)는 앱 호스트에서만
+  닿게 막습니다.
+- 서버가 꺼져 있거나 시간을 넘기면 답변만 「실패」로 표시되고 검색 결과는 그대로 나옵니다.
+- 라이선스: 모델 Qwen3 Apache-2.0, Ollama MIT.
 
 ## 원본 미리보기 변환기 (rhwp·LibreOffice)
 
