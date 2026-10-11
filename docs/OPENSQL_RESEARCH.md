@@ -2138,3 +2138,52 @@ OpenSQL에서 무시된다. 주체 전달에 쓰는 [SYS_CONTEXT](https://docs.t
 **`USERENV` 네임스페이스만** 지원한다(host·current_schema·current_user·session_user·server_host·ip_address). 풀 경유에서는
 DB 사용자가 앱 롤 하나이므로 문서 사용자 구분은 GUC로 돌아가고 Q3이 그대로다. 내부 구현(표준 RLS 위인지), `ENABLE_POLICY` 권한,
 HNSW 영향은 문서에 없고 실측하지 않았다. 영문 문서 색인에는 이 페이지가 없고 한국어 문서에만 있다.
+
+## 20. OpenProxy 콜드 부팅 — 공유 설정 덮어쓰기 [실측 2026-10-11]
+
+HA 3노드를 꺼진 상태에서 켜면 OpenProxy가 etcd 공유 설정 키 `/service/opensql/openproxy/config/current`를 불완전한 판으로
+덮어써 VIP 앱 접속이 끊겼다(#231). 10/7은 3노드 동시 기동에서 `servers = []`(VIP `AllServersDown`), 10/9는 순차 기동에서
+`[pools.openarchive]`가 사라진 판(`no cleartext password set for username: openarchive`)이었다. Patroni·etcd는 정상이라
+원인이 보이지 않았고, OpenProxy 재시작은 오염된 판을 다시 읽을 뿐이었다. node2·3 저널로 확인한 동작은 셋이다.
+
+**① 키의 `servers`는 Patroni를 물어볼 대상 목록이다.** etcd에서 설정을 불러올 때 `use_patroni` 풀은 그 목록의 `:8008/cluster`로
+역할을 푼다. 목록의 Patroni가 하나도 응답하지 않으면 `Querying all Patroni endpoint failed` → `Failed to load config from etcd:
+ServerError, falling back to local file`로 **로컬 파일로 대체**해 뜬다(`servers = []`면 물어볼 곳이 없어 늘 대체한다). 실제
+라우팅 대상은 응답한 Patroni의 구성원 전체라, 목록이 1대로 줄어도 그 1대가 응답하면 3노드로 라우팅한다.
+
+**② 프로세스마다 기동 뒤 첫 역할 변화 때 한 번, 그 순간의 설정을 키에 저장한다.** `Patroni roles changed, updating
+configuration` → `Saving config to etcd`. 그 뒤의 역할 변화는 저장하지 않았다(10/7·10/9·10/11 모든 기동에서 프로세스당
+저장 1회 이하). 저장되는 것은 **메모리의 설정**이다 — 로컬 파일로 대체해 떴으면 로컬 파일의 풀이, 그 순간 살아 있는 구성원이
+3개 중 1개면 `servers` 1대가 공유된다. 쓰기를 끄는 설정은 공식 문서에 없다(`[general.etcd]` 항목은 `enabled`·`endpoints`·
+`patroni_scope`·`patroni_namespace`·`username`·`password` 여섯뿐).
+
+**③ 콜드 부팅 직후 Patroni `/cluster`는 꺼지기 전의 구성원을 보여 준다.** etcd가 lease를 영속하므로 Patroni가 아직 안 뜬
+노드의 구성원·리더 키가 TTL까지 남는다. 그 lease가 만료되는 순간(`active -> inactive`)이 ②의 첫 역할 변화가 되면, 그때
+살아 있는 구성원만 저장된다. 「로컬 Patroni의 `/cluster`에 리더가 보이면 띄운다」는 대기 조건이 이 때문에 통과했고, 동시 기동
+1회차에서 `servers`가 풀마다 1대(203)로 줄었다.
+
+10/9 원인은 ①+②다 — node2가 로컬 Patroni(`202:8008` connection refused)보다 먼저 떠 로컬 파일로 대체했고, 로컬 파일에는
+#150에서 공유 설정으로만 넣은 `openarchive` 풀·`worker_threads`·`auth_type`이 없었다. 11초 뒤 구성원 합류가 첫 역할 변화였다.
+10/7은 ②+③이다 — node3는 etcd에서 정상으로 읽었으나 4초 뒤 Patroni 조회가 전부 실패한 상태에서 역할을 갱신해 저장했다.
+
+**대응**(`SETUP_OPENSQL.md` §16 교정 3·4, `OPENSQL_DEVIATIONS.md` 1절):
+
+1. OpenProxy `ExecStartPre`가 **구성원마다 그 노드의 Patroni REST에 직접** `state=running`을 받을 때까지 최대 120초 기다린다
+   (③ 때문에 `/cluster`만 보면 안 된다). 시간이 넘으면 그대로 띄운다.
+2. node2·3의 로컬 파일을 공유 설정의 `[pools.*]`와 같은 판으로 둔다(역할은 `Auto`). 대체해 떠도, 그 판이 저장돼도 완전하다.
+   비밀번호가 들어가므로 `600`.
+
+| 회차 (10/11) | 기동 | 대기 결과 | 키 저장 | 대체 기동 | 키 `servers` · 풀 | VIP 앱 `BEGIN; SELECT 1` |
+|---|---|---|---|---|---|---|
+| 대응 전 대기 조건(로컬 `/cluster` 리더) | 3노드 동시 | node3 기동까지 약 10초 | 2회(노드당 1) | 0 | **1·1** · 둘 다 | 성공(라우팅은 3노드) |
+| 1 | 3노드 동시 | 3 members 10·11초 | 0 | 0 | 3·3 · 둘 다 | 성공 |
+| 2 | 3노드 동시 | 11·11초 | 0 | 0 | 3·3 · 둘 다 | 성공 |
+| 3 | 3노드 동시 | 12·11초 | 0 | 0 | 3·3 · 둘 다 | 성공 |
+| 4 | node1→node3→node2 30초 간격 | node3 2 members 31초(node2 lease 만료 대기), node2 3 members 10초 | 1(node2 합류 때, 3노드) | 0 | 3·3 · 둘 다 | 성공 |
+| 안전망 | 키에 10/7의 `servers = []` 판을 넣고 OpenProxy 재시작 | 즉시 | 0 | **2** | 키는 0·0 그대로 | 성공 — `BEGIN` 안 Primary(201), 밖 Replica |
+
+- 안전망 회차처럼 **오염된 키는 저절로 고쳐지지 않는다** — 재시작한 프로세스는 로컬 파일로 서비스하지만, 역할 변화가 없으면 키를
+  다시 쓰지 않는다. 다음 역할 변화에서 그 노드의 완전한 판이 저장되거나, 운영자가 정상 판을 `put`한다(`OPERATIONS.md` 「HA 기동 후 점검」).
+- 남는 경로: 운영 중 Patroni REST가 전부 동시에 응답하지 않는 순간 OpenProxy가 막 재시작해 첫 역할 변화를 맞으면 ②가 다시
+  일어날 수 있다. 1·2로 그 판도 대체 기동하면 복구되지만, 키를 확인하는 것은 기동 후 점검이다.
+- 노드 하나가 꺼진 채 나머지만 켜는 경우는 대기 120초 상한 안에서 lease 만료(약 30초) 뒤 통과할 것으로 보나 재지 않았다.

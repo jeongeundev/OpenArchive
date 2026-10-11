@@ -891,7 +891,8 @@ python3 opensql_remote_installer.py --mode 3node
    ```
    - `[general]`에 `worker_threads = 2` — HA 템플릿 권고(DB와 같은 노드면 코어 수의 절반, VM 4코어). 반영은 재시작
    - `auth_type`을 지정하지 않으면 OpenProxy 기본 `md5`다. HA 템플릿은 `scram-sha-256`이다(2026-09-30 맞춤, #150)
-   - 먼저 뜬 노드가 자기 파일을 etcd `/service/opensql/openproxy/config/current`에 **초기 설정으로 올리고**, 이후 노드는 로컬 파일을 무시한다. 그래서 두 파일은 `virtual_router`의 `priority`·`unicast_peers`만 다르게 둔다
+   - 먼저 뜬 노드가 자기 파일을 etcd `/service/opensql/openproxy/config/current`에 **초기 설정으로 올리고**, 이후 노드는 etcd 판을 읽는다. 그래서 두 파일은 `virtual_router`의 `priority`·`unicast_peers`만 다르게 둔다
+   - ⚠️ **로컬 파일은 폴백 판이다 — 공유 설정의 `[pools.*]`와 늘 같게 둔다(`600`).** OpenProxy는 Patroni가 응답하지 않으면 로컬 파일로 대체해 뜨고, 그 판을 공유 설정에 저장할 수 있다 — 로컬 파일에 풀이 빠져 있으면 앱 접속이 끊긴다(#231, 원리는 OPENSQL_RESEARCH §20). 공유 설정을 바꾸면(`openproxy edit`) 두 파일도 같이 고친다. 노드 전용 절(`[general]`·`[general.etcd]`·`[general.virtual_router]`)은 남기고 `[pools.*]`를 etcd 판에서 가져오되 서버 역할은 `Auto`로 둔다
    - etcd 모드에서는 **파일 autoreload가 꺼진다.** 공유 설정 변경은 `openproxy edit` 또는 etcd 키로 한다
    - 역할 감지가 30초 폴링(`Patroni role refresh … 30 second interval`)에서 **etcd leader·members watch**로 바뀐다
    - 되돌리기: 백업 파일 복원 + 위 etcd 키 삭제 + 재시작
@@ -909,6 +910,51 @@ python3 opensql_remote_installer.py --mode 3node
 
    [Service]
    ExecStartPre=/bin/sh -c "for i in $(seq 30); do /home/opensql/bin/etcdctl --endpoints=http://127.0.0.1:2379 --dial-timeout=1s endpoint health >/dev/null 2>&1 && exit 0; sleep 1; done; exit 0"
+   ```
+   - ⚠️ **Patroni도 기다린다(#231).** etcd만 기다리면 OpenProxy가 Patroni보다 먼저 떠 불완전한 판(10/7 `servers = []`, 10/9 앱 풀 소실)을 공유 설정에 저장한다(원리는 OPENSQL_RESEARCH §20). 콜드 부팅 직후 `/cluster`는 꺼지기 전 lease의 구성원을 보여 주므로, **구성원마다 그 노드의 REST에 직접** 묻는다. 120초 안에 못 모이면 그대로 띄운다 — 노드 하나가 죽어 있어도 프록시는 떠야 하고, 그때의 폴백 판이 위의 완전한 로컬 파일이다. 동시 기동 3회·순차 기동 1회에서 공유 설정 불변·대체 기동 0(OPENSQL_RESEARCH §20)
+
+   ```ini
+   # /etc/systemd/system/openproxy.service.d/20-after-patroni.conf
+   [Unit]
+   # #231: Patroni보다 먼저 뜬 OpenProxy가 불완전한 판을 etcd 공유 설정에 저장하지 않게 한다(OPENSQL_RESEARCH §20).
+   After=patroni.service
+
+   [Service]
+   # 기본 90초로는 etcd 대기(30)+Patroni 대기(120)가 끊긴다
+   TimeoutStartSec=180
+   # 구성원 전부의 Patroni REST가 응답할 때까지 최대 120초. 못 받으면 그대로 띄운다 — 노드 하나가 죽어 있어도
+   # 프록시는 떠야 한다. 그 경우의 폴백 판은 공유 설정과 맞춘 로컬 파일이다.
+   ExecStartPre=/usr/local/libexec/openproxy-wait-patroni 120
+   ```
+
+   `/usr/local/libexec/openproxy-wait-patroni` (root, `755`):
+
+   ```python
+   #!/usr/bin/python3
+   # OpenProxy ExecStartPre (#231): Patroni 클러스터가 실제로 모일 때까지 기다린다. 늘 0으로 끝난다.
+   # 콜드 부팅 직후 /cluster는 etcd에 남은 꺼지기 전 lease를 보여 주므로, 구성원마다 그 노드의 REST에 직접 묻는다.
+   import json, sys, time, urllib.request
+
+   limit = int(sys.argv[1]) if len(sys.argv) > 1 else 120
+   start = time.time()
+
+
+   def get(url):
+       with urllib.request.urlopen(url, timeout=1) as r:
+           return json.load(r)
+
+
+   while time.time() - start < limit:
+       try:
+           members = get("http://127.0.0.1:8008/cluster")["members"]
+           if any(m["role"] == "leader" for m in members) and all(
+                   get(m["api_url"]).get("state") == "running" for m in members):
+               print(f"patroni ready: {len(members)} members after {time.time() - start:.0f}s")
+               sys.exit(0)
+       except Exception:
+           pass
+       time.sleep(1)
+   print(f"patroni not ready after {limit}s, starting anyway")
    ```
    - 로그: OpenProxy는 journald와 `/home/opensql/logs/<날짜>.openproxy.log`, Patroni는 `/home/opensql/logs/patroni.log`
 5. **복제는 비동기 그대로 둔다 (ADR-049 개정)** — 설치기 기본이자 공식 문서 예시가 비동기다. failover 때
@@ -935,7 +981,7 @@ python3 opensql_remote_installer.py --mode 3node
    ```
    - 재시작 없이 세 노드에 반영되고, 이미 열린 OpenProxy 풀 연결에도 적용된다(`ss -tno`의 keepalive 타이머가 30초 이하로 바뀐다)
    - `idle_in_transaction_session_timeout`은 걸지 않는다. 9/28~9/30에 60s를 클러스터 전체에 걸었으나, 같은 DB의 다른 앱 세션까지 끊고 위 keepalive로 충분해 걷었다(#150, ADR-051 개정). 켜져 있다면 `-s postgresql.parameters.idle_in_transaction_session_timeout=null`
-7. **앱 전용 롤·DB·풀** — 설치기 풀 사용자는 `postgres` 슈퍼유저 하나다. 앱은 HA 템플릿처럼 전용 롤로 붙는다. 롤·DB·`vector`는 §10 「새 DB와 새 풀」 ①과 같고, 풀은 HA 형태로 공유 설정에 더한다(`openproxy edit`, 편집 뒤 두 노드 재시작)
+7. **앱 전용 롤·DB·풀** — 설치기 풀 사용자는 `postgres` 슈퍼유저 하나다. 앱은 HA 템플릿처럼 전용 롤로 붙는다. 롤·DB·`vector`는 §10 「새 DB와 새 풀」 ①과 같고, 풀은 HA 형태로 공유 설정에 더하고(`openproxy edit`) **node2·3의 로컬 파일에도 같은 블록을 넣은 뒤**(교정 3 — 폴백 판, #231) 두 노드를 재시작한다
 
    ```toml
    [pools.openarchive]
