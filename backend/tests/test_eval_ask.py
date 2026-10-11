@@ -180,7 +180,10 @@ def test_committed_formats_evalset_keys_are_well_formed():
     assert all(item.get("answer_absent") for item in queries if "absent" in item)
 
 
-async def test_evaluator_runs_the_api_pipeline_and_repeats_generation_only(migrated_db):
+async def test_evaluator_runs_the_api_pipeline_and_resets_the_model_cache_before_each_generation(migrated_db):
+    """Ollama는 같은 프롬프트 앞부분의 KV 캐시를 재사용해 반복 생성이 10배 빨라진다(실측 16초 → 1.5초).
+    같은 문서를 근거로 받는 바로 앞 질문도 캐시를 남긴다. 그래서 측정마다 초기화하고 그 뒤 생성만 잰다.
+    """
     import psycopg
     from conftest import insert_test_document, process_all_embedding_jobs
     from scripts.eval_ask import evaluate
@@ -188,11 +191,11 @@ async def test_evaluator_runs_the_api_pipeline_and_repeats_generation_only(migra
     from openarchive.answers import FakeAnswerProvider
     from openarchive.embeddings import FakeProvider
 
-    class CountingProvider(FakeAnswerProvider):
-        calls = 0
+    events = []
 
+    class RecordingProvider(FakeAnswerProvider):
         def generate(self, system, prompt):
-            CountingProvider.calls += 1
+            events.append("generate")
             return super().generate(system, prompt)
 
     provider = FakeProvider()
@@ -211,7 +214,8 @@ async def test_evaluator_runs_the_api_pipeline_and_repeats_generation_only(migra
     ]}
 
     results = await evaluate(
-        evalset, migrated_db, embedding_provider=provider, answer_provider=CountingProvider(),
+        evalset, migrated_db, embedding_provider=provider, answer_provider=RecordingProvider(),
+        reset_cache=lambda: events.append("reset"),
         user_id="alice", tags=["evaluation"], context_chars=6000, repeats=3,
     )
 
@@ -222,5 +226,6 @@ async def test_evaluator_runs_the_api_pipeline_and_repeats_generation_only(migra
     assert len(ok["latencies"]) == 3 and ok["answers_differ"] is False
     assert ok["manual"] == {"verdict": None, "note": None}
     assert secret["leaks"] == []
-    # 예열 1회 + 근거 있는 질문 3회. 근거 0건이면 모델을 부르지 않는다(서비스 계약).
-    assert CountingProvider.calls == 1 + len(ok["latencies"]) + len(secret["latencies"])
+    # 생성마다 바로 앞에 초기화가 한 번. 근거 0건이면 모델을 부르지 않는다(서비스 계약).
+    generations = len(ok["latencies"]) + len(secret["latencies"])
+    assert events == ["reset", "generate"] * generations
