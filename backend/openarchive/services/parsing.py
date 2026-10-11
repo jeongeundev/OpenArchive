@@ -33,8 +33,9 @@ from pptx.shapes.base import BaseShape
 from pptx.shapes.picture import Picture
 from pptx.slide import Slide
 from pptx.text.text import TextFrame
-from pypdf import PdfReader
+from pypdf import PageObject, PdfReader
 from pypdf._codecs.adobe_glyphs import adobe_glyphs
+from pypdf.generic import ContentStream
 
 SUPPORTED_CONTENT_TYPES: tuple[str, ...] = (
     "pdf", "docx", "txt", "md", "hwp", "hwpx", "xlsx", "pptx", "png", "jpg", "jpeg"
@@ -282,41 +283,83 @@ def _pdf_ocr_pages(reader: PdfReader, data: bytes) -> list[tuple[str, bool]]:
     놓친다. 정상 PDF 4,705쪽에서 이 판정에 걸린 쪽은 없었다.
     """
     return [
-        (text, not text.strip() or _has_unmapped_font(page.get("/Resources"), set()))
+        (text, not text.strip() or _uses_unmapped_font(page, reader))
         for page, text in zip(reader.pages, _pdf_page_texts(data, reader), strict=True)
     ]
 
 
-def _has_unmapped_font(resources, seen: set[int]) -> bool:
-    """ToUnicode가 없고 pypdf가 글자로 옮길 수 없는 글꼴이 이 자원(폼 XObject 포함)에 있는가.
+def _uses_unmapped_font(page: PageObject, reader: PdfReader) -> bool:
+    """쪽이 `Tf`로 실제로 쓰는 글꼴(그리는 폼 XObject 포함) 가운데 글자로 옮길 수 없는 것이 있는가(#235).
 
-    - Type0·`Identity-H`/`Identity-V`: 글리프 번호가 그대로 글자로 나온다.
-    - `/Differences`에 Adobe 글리프 목록에 없는 이름: pypdf가 `/HFT1` 같은 이름을 그대로 낸다.
-    그 밖의 ToUnicode 없는 글꼴(WinAnsi·MacRoman 단순 글꼴 등)은 인코딩으로 정상 추출된다.
+    등록부(`/Resources`)만 보면 여러 쪽이 자원 사전을 공유하거나 상속하는 PDF에서 한 쪽이 쓰는 깨진 글꼴 때문에
+    모든 쪽이 OCR된다. 콘텐츠 스트림 해석은 `extract_text`의 7할쯤 드는 비용이라, 등록부에 후보가 있는
+    쪽만 해석한다 — 정상 쪽은 등록부에서 끝난다.
     """
+    resources = page.get("/Resources")
+    if not _has_unmapped_font(resources, set()):
+        return False
+    return _draws_unmapped_font(page.get_contents().operations, resources, reader, set())
+
+
+def _draws_unmapped_font(operations, resources, reader: PdfReader, seen: set) -> bool:
+    """콘텐츠 연산 중 `Tf`로 고른 글꼴이나 `Do`로 그린 폼 XObject가 깨진 글꼴을 쓰는가.
+
+    `/Resources`가 없는 폼은 그리는 쪽의 자원을 이어받는다(PDF 1.1 관례).
+    """
+    resources = resources.get_object() if resources is not None else {}
+    fonts = resources.get("/Font") or {}
+    xobjects = resources.get("/XObject") or {}
+    for operands, operator in operations:
+        if operator == b"Tf" and operands and operands[0] in fonts:
+            if _is_unmapped_font(fonts[operands[0]].get_object()):
+                return True
+        elif operator == b"Do" and operands and operands[0] in xobjects:
+            xobject = xobjects[operands[0]].get_object()
+            form_resources = xobject.get("/Resources", resources)
+            key = (id(xobject), id(form_resources.get_object()))
+            if xobject.get("/Subtype") != "/Form" or key in seen:
+                continue
+            seen.add(key)
+            if _draws_unmapped_font(
+                ContentStream(xobject, reader).operations, form_resources, reader, seen
+            ):
+                return True
+    return False
+
+
+def _has_unmapped_font(resources, seen: set[int]) -> bool:
+    """이 자원(폼 XObject 포함)에 글자로 옮길 수 없는 글꼴이 등록돼 있는가 — 쓰이는지는 보지 않는다."""
     if resources is None:
         return False
     resources = resources.get_object()
     if id(resources) in seen:
         return False
     seen.add(id(resources))
-    for font in (resources.get("/Font") or {}).values():
-        font = font.get_object()
-        if "/ToUnicode" in font:
-            continue
-        encoding = font.get("/Encoding")
-        encoding = encoding.get_object() if encoding is not None else None
-        if font.get("/Subtype") == "/Type0" and encoding in ("/Identity-H", "/Identity-V"):
-            return True
-        if isinstance(encoding, dict) and any(
-            isinstance(name, str) and name not in adobe_glyphs
-            for name in encoding.get("/Differences", [])
-        ):
-            return True
+    if any(_is_unmapped_font(font.get_object()) for font in (resources.get("/Font") or {}).values()):
+        return True
     return any(
         xobject.get_object().get("/Subtype") == "/Form"
         and _has_unmapped_font(xobject.get_object().get("/Resources"), seen)
         for xobject in (resources.get("/XObject") or {}).values()
+    )
+
+
+def _is_unmapped_font(font) -> bool:
+    """ToUnicode가 없고 pypdf가 글자로 옮길 수 없는 글꼴인가.
+
+    - Type0·`Identity-H`/`Identity-V`: 글리프 번호가 그대로 글자로 나온다.
+    - `/Differences`에 Adobe 글리프 목록에 없는 이름: pypdf가 `/HFT1` 같은 이름을 그대로 낸다.
+    그 밖의 ToUnicode 없는 글꼴(WinAnsi·MacRoman 단순 글꼴 등)은 인코딩으로 정상 추출된다.
+    """
+    if "/ToUnicode" in font:
+        return False
+    encoding = font.get("/Encoding")
+    encoding = encoding.get_object() if encoding is not None else None
+    if font.get("/Subtype") == "/Type0" and encoding in ("/Identity-H", "/Identity-V"):
+        return True
+    return isinstance(encoding, dict) and any(
+        isinstance(name, str) and name not in adobe_glyphs
+        for name in encoding.get("/Differences", [])
     )
 
 
