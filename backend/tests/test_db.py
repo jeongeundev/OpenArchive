@@ -406,9 +406,12 @@ async def test_standalone_connection_keeps_keepalive_written_in_the_dsn(test_dsn
     dsn = make_conninfo(test_dsn, keepalives_idle=5)
     async with await openarchive.db.connect(dsn) as conn:
         params = conninfo_to_dict(conn.info.dsn)
+    with openarchive.db.connect_sync(dsn) as conn:
+        sync_params = conninfo_to_dict(conn.info.dsn)
 
-    assert params["keepalives_idle"] == "5"
-    assert params["keepalives_count"] == "3"
+    for given in (params, sync_params):
+        assert given["keepalives_idle"] == "5"
+        assert given["keepalives_count"] == "3"
 
 
 async def test_standalone_connection_never_prepares_even_with_a_server_cursor(migrated_db):

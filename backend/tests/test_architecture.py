@@ -3,6 +3,8 @@ import re
 import sys
 from pathlib import Path
 
+import pytest
+
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 DERIVED_TABLE_INSERT = re.compile(
     r"\binsert\s+into\s+(embedding_jobs|document_versions|document_edges|document_links)\b",
@@ -154,6 +156,39 @@ def test_server_side_binding_is_confined_to_binary_writes():
         assert len(pattern.findall((root / binary_writer).read_text())) == 1, binary_writer
 
 
+# 직접 연결, `from psycopg import connect` 우회, `db.py` 밖의 새 풀까지 잡는다 (#212).
+DIRECT_CONNECTION = re.compile(
+    r"\b(?:Async)?Connection\.connect\(|\bpsycopg\.connect\(|^from psycopg import [^)\n]*(?:\([^)]*)?\bconnect\b"
+    r"|\b\w*ConnectionPool\(",
+    re.MULTILINE,
+)
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "psycopg.connect(dsn)",
+        "await psycopg.AsyncConnection.connect(dsn)",
+        "psycopg.Connection.connect(dsn)",
+        "from psycopg import connect",
+        "from psycopg import sql, connect",
+        "from psycopg import (\n    sql,\n    connect,\n)",
+        "pool = AsyncConnectionPool(dsn)",
+        "pool = AsyncNullConnectionPool(dsn)",
+    ],
+)
+def test_direct_connection_pattern_catches_each_form(source):
+    assert DIRECT_CONNECTION.search(source)
+
+
+@pytest.mark.parametrize(
+    "source",
+    ["await db.connect(dsn)", "from psycopg import sql", "from openarchive.db import connect"],
+)
+def test_direct_connection_pattern_allows_the_helpers(source):
+    assert not DIRECT_CONNECTION.search(source)
+
+
 def test_connections_outside_the_pool_go_through_db_helpers():
     """풀 밖에서 여는 연결도 `db.connect`·`db.connect_sync`로만 연다 (#212, ADR-062 결정 3 개정).
 
@@ -161,12 +196,6 @@ def test_connections_outside_the_pool_go_through_db_helpers():
     OpenProxy 서버 명령문 누적을 다시 밟는다.
     """
     root = APPLICATION_SOURCE_ROOTS[0]
-    # 직접 연결, `from psycopg import connect` 우회, `db.py` 밖의 새 풀까지 잡는다.
-    pattern = re.compile(
-        r"\b(?:Async)?Connection\.connect\(|\bpsycopg\.connect\(|^from psycopg import [^)\n]*(?:\([^)]*)?\bconnect\b"
-        r"|\b\w*ConnectionPool\(",
-        re.MULTILINE,
-    )
     uses = {path.relative_to(root).as_posix() for path in root.rglob("*.py")
-            if pattern.search(path.read_text())}
+            if DIRECT_CONNECTION.search(path.read_text())}
     assert uses <= {"db.py"}, uses
