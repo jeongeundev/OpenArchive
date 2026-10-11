@@ -250,6 +250,15 @@ it("소유자 변경 동작과 문서·폴더 설명을 표시한다", async () 
 });
 
 
+it("공유의 폴더 추가·제거를 폴더 이름과 함께 표시한다", async () => {
+  const items = ["folder_added", "folder_removed"].map(change => entry({ action: "share_changed", actor: "kim", document_title: null, detail: { change, share_name: "협업", owner: "kim", folder_name: "RFP" } }));
+  vi.stubGlobal("fetch", routedFetch(admin, [{ items, next_before_id: null }]).fetchMock);
+  render(<AuthProvider><AuditPage /></AuthProvider>);
+  const table = await screen.findByRole("table");
+  expect(within(table).getByText("「협업」에 폴더 「RFP」 추가")).toBeInTheDocument();
+  expect(within(table).getByText("「협업」에서 폴더 「RFP」 제거")).toBeInTheDocument();
+});
+
 it("공유·그룹·사용자 변경의 종류와 공유 주인을 표시한다", async () => {
   const changes = ["created", "deleted", "document_added", "document_removed", "token_issued", "token_revoked"];
   const items = changes.map(change => entry({ action: "share_changed", actor: "admin", document_title: null, detail: { change, share_name: "협업", owner: "kim", token_name: "외부봇" } }));

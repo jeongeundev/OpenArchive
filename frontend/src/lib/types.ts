@@ -27,6 +27,8 @@ export interface Folder {
   inherited: boolean;
   can_manage: boolean;
   can_change_access: boolean;
+  /** 요청자가 이 폴더의 최상위 폴더를 만든 사람인가 — 그 사람만 공유에 넣고 뺀다. */
+  can_share: boolean;
 }
 
 export interface FolderPathItem { id: string; name: string }
@@ -57,6 +59,11 @@ export interface ShareDocument {
   title: string;
 }
 
+export interface ShareFolder {
+  id: string;
+  name: string;
+}
+
 /** 공유 토큰은 읽기 전용이다 (ADR-044 결정 3). */
 export interface ShareTokenSummary {
   id: string;
@@ -77,6 +84,8 @@ export interface ShareSummary {
   name: string;
   created_at: string;
   documents: ShareDocument[];
+  /** 공유에 넣은 폴더. 하위 폴더의 「폴더 범위 따름」 문서가 함께 공유된다. */
+  folders: ShareFolder[];
   tokens: ShareTokenSummary[];
 }
 
@@ -456,5 +465,6 @@ export interface AdminShareSummary {
   owner: string;
   created_at: string;
   document_count: number;
+  folder_count: number;
   tokens: Omit<TokenSummary, "scope">[];
 }

@@ -35,9 +35,12 @@ SHARE_READABLE_ROUTES = {
     ("GET", "/api/documents/{document_id}/versions/{version}"),
     ("GET", "/api/clusters"),
     ("GET", "/api/diagnostics"),
+    # 공유에 넣은 폴더와 그 하위만, id·부모·이름·문서 수로 (#206)
+    ("GET", "/api/folders"),
 }
 
 FORBIDDEN_DETAIL = "공유 토큰으로는 열 수 없는 경로입니다."
+MISSING_FOLDER = "00000000-0000-0000-0000-000000000000"
 
 
 def bearer(token: str) -> dict[str, str]:
@@ -284,7 +287,9 @@ def db_snapshot(dsn: str):
                    (SELECT count(*) FROM document_grants),
                    (SELECT count(*) FROM api_tokens),
                    (SELECT count(*) FROM users),
-                   (SELECT count(*) FROM groups)
+                   (SELECT count(*) FROM groups),
+                   (SELECT count(*) FROM share_folders),
+                   (SELECT count(*) FROM folders)
             """
         ).fetchone()
 
@@ -313,6 +318,14 @@ def forbidden_requests(scenario):
         ("POST", "/api/shares", {"name": "공유가 만든 공유"}),
         ("DELETE", f"/api/shares/{share_id}", None),
         ("POST", f"/api/shares/{share_id}/tokens", {"name": "재생"}),
+        ("PUT", f"/api/shares/{share_id}/folders/{MISSING_FOLDER}", None),
+        ("DELETE", f"/api/shares/{share_id}/folders/{MISSING_FOLDER}", None),
+        ("POST", "/api/folders", {"name": "침입"}),
+        ("PATCH", f"/api/folders/{MISSING_FOLDER}", {"name": "침입"}),
+        ("DELETE", f"/api/folders/{MISSING_FOLDER}", None),
+        ("GET", f"/api/folders/{MISSING_FOLDER}/access", None),
+        ("PUT", f"/api/folders/{MISSING_FOLDER}/access",
+         {"visibility": "public", "users": [], "groups": []}),
         ("GET", "/api/auth/tokens", None),
         ("POST", "/api/auth/tokens", {"name": "재생", "scope": "read"}),
         ("GET", "/api/admin/users", None),
@@ -447,3 +460,184 @@ def test_owner_transfer_rejects_share_token(db_client, resource):
     )
     assert response.status_code == 403
     assert response.json()["detail"] == FORBIDDEN_DETAIL
+
+
+# --- 폴더 단위 공유 (#206) ---
+
+
+def insert_folder(conn, name, *, parent=None, owner="alice", visibility=None):
+    return str(conn.execute(
+        "INSERT INTO folders (parent_id, name, created_by, visibility) "
+        "VALUES (%s, %s, %s, %s) RETURNING id",
+        (parent, name, owner, visibility),
+    ).fetchone()[0])
+
+
+def insert_folder_document(conn, title, *, folder, owner, follows=True, tags=("폴더",)):
+    content = f"{QUERY} {title}"
+    return str(conn.execute(
+        """
+        INSERT INTO documents (title, content_type, content, content_hash, owner_id, visibility,
+                               tags, folder_id, follows_folder)
+        VALUES (%s, 'md', %s, %s, %s, 'private', %s, %s, %s) RETURNING id
+        """,
+        (title, content, hashlib.sha256(content.encode()).hexdigest(), owner, list(tags),
+         folder, follows),
+    ).fetchone()[0])
+
+
+@pytest.fixture
+def folder_scenario(db_client: TestClient, migrated_db: str, scenario):
+    """alice의 제한 최상위 폴더(carol·인사팀 부여) 아래 「공유 폴더」를 새 공유에 넣는다.
+
+    공유 폴더 안의 bob 문서(폴더 범위 따름)와 손자 폴더 문서는 보이고, 공유 폴더 안의 「개별
+    지정」 문서와 형제 폴더 문서는 안 보인다. 형제 폴더 문서 하나는 문서 단위로 따로 공유한다.
+    """
+    with psycopg.connect(migrated_db, autocommit=True) as conn:
+        conn.execute(
+            "INSERT INTO users (username, password_hash) VALUES ('carol', 'x') "
+            "ON CONFLICT DO NOTHING"
+        )
+        group = conn.execute("INSERT INTO groups (name) VALUES ('인사팀') RETURNING id").fetchone()[0]
+        top = insert_folder(conn, "A사 최상위 비밀", visibility="private")
+        conn.execute(
+            "INSERT INTO folder_grants (folder_id, user_id) "
+            "SELECT %s, id FROM users WHERE username='carol'",
+            (top,),
+        )
+        conn.execute(
+            "INSERT INTO folder_grants (folder_id, group_id) VALUES (%s, %s)", (top, group)
+        )
+        child = insert_folder(conn, "공유 폴더", parent=top)
+        grand = insert_folder(conn, "손자 폴더", parent=child)
+        sibling = insert_folder(conn, "비공유 형제", parent=top)
+        docs = {
+            "child": insert_folder_document(conn, "공유 폴더의 bob 문서", folder=child, owner="bob"),
+            "grand": insert_folder_document(conn, "손자 폴더 문서", folder=grand, owner="alice"),
+            "own": insert_folder_document(
+                conn, "개별 지정 문서", folder=child, owner="alice", follows=False, tags=("개별",)
+            ),
+            "sibling": insert_folder_document(conn, "형제 폴더 문서", folder=sibling, owner="alice"),
+            "hidden": insert_folder_document(
+                conn, "형제 폴더 비공유 문서", folder=sibling, owner="alice", tags=("개별",)
+            ),
+        }
+    run_embedding_worker(migrated_db)
+    with psycopg.connect(migrated_db, autocommit=True) as conn:
+        conn.execute("DELETE FROM document_edges")
+
+    login_as(db_client, "alice")
+    share = db_client.post("/api/shares", json={"name": "폴더 공유"}).json()
+    assert db_client.put(f"/api/shares/{share['id']}/folders/{child}").status_code == 204
+    assert db_client.put(
+        f"/api/shares/{share['id']}/documents/{docs['sibling']}"
+    ).status_code == 204
+    token = issue_share_token(db_client, share["id"], name="폴더 연동")
+    visible = {docs["child"], docs["grand"], docs["sibling"]}
+    return {
+        "headers": bearer(token["token"]),
+        "folders": {"top": top, "child": child, "grand": grand, "sibling": sibling},
+        "docs": docs,
+        "visible": visible,
+        "all_ids": scenario["all_ids"] | set(docs.values()),
+        "secrets": ["A사 최상위 비밀", "비공유 형제", top, sibling, "carol", "인사팀"],
+    }
+
+
+def test_folder_share_token_sees_only_the_shared_tree(db_client: TestClient, folder_scenario):
+    folders = folder_scenario["folders"]
+
+    response = db_client.get("/api/folders", headers=folder_scenario["headers"])
+
+    assert response.status_code == 200
+    rows = response.json()
+    assert all(set(row) == {"id", "parent_id", "name", "document_count"} for row in rows)
+    assert {row["id"]: row["parent_id"] for row in rows} == {
+        folders["child"]: None,
+        folders["grand"]: folders["child"],
+    }
+    assert {row["id"]: row["document_count"] for row in rows} == {
+        folders["child"]: 1,
+        folders["grand"]: 1,
+    }
+    for secret in folder_scenario["secrets"] + ["alice", "bob"]:
+        assert secret not in response.text
+
+
+def test_document_folder_path_starts_at_the_share_root(db_client: TestClient, folder_scenario):
+    headers, folders, docs = (
+        folder_scenario["headers"], folder_scenario["folders"], folder_scenario["docs"]
+    )
+
+    grand = db_client.get(f"/api/documents/{docs['grand']}", headers=headers)
+    sibling = db_client.get(f"/api/documents/{docs['sibling']}", headers=headers)
+
+    assert grand.status_code == 200
+    assert [item["id"] for item in grand.json()["folder"]["path"]] == [
+        folders["child"], folders["grand"]
+    ]
+    # 문서 단위로 공유된 문서의 폴더가 공유 범위 밖이면 폴더 정보가 없다
+    assert sibling.status_code == 200 and sibling.json()["folder"] is None
+    for response in (grand, sibling):
+        for secret in folder_scenario["secrets"]:
+            assert secret not in response.text
+
+
+@pytest.mark.parametrize("which", ["own", "hidden"])
+def test_documents_outside_the_folder_share_do_not_exist(
+    db_client: TestClient, folder_scenario, which
+):
+    response = db_client.get(
+        f"/api/documents/{folder_scenario['docs'][which]}", headers=folder_scenario["headers"]
+    )
+    assert response.status_code == 404
+
+
+def test_folder_share_reads_stay_inside(db_client: TestClient, folder_scenario):
+    headers, folders, docs = (
+        folder_scenario["headers"], folder_scenario["folders"], folder_scenario["docs"]
+    )
+    visible, all_ids = folder_scenario["visible"], folder_scenario["all_ids"]
+
+    listed = db_client.get("/api/documents", headers=headers)
+    in_child = db_client.get("/api/documents", params={"folder_id": folders["child"]},
+                             headers=headers)
+    in_top = db_client.get("/api/documents", params={"folder_id": folders["top"]},
+                           headers=headers)
+
+    assert {row["id"] for row in listed.json()} == visible
+    assert [row["id"] for row in in_child.json()] == [docs["child"]]
+    assert in_top.json() == []
+    assert db_client.get("/api/documents/count", headers=headers).json() == {"total": 3}
+    assert db_client.get(
+        "/api/documents/count", params={"folder_id": folders["child"]}, headers=headers
+    ).json() == {"total": 1}
+    assert db_client.get("/api/documents/tags", headers=headers).json() == ["폴더"]
+
+    searched = db_client.post("/api/search", json={"query": QUERY}, headers=headers)
+    in_tree = db_client.post(
+        "/api/search", json={"query": QUERY, "folder_id": folders["child"]}, headers=headers
+    )
+    assert searched.status_code == 200 and in_tree.status_code == 200
+    assert collect_document_ids(searched.json(), all_ids) <= visible
+    tree_hits = collect_document_ids(in_tree.json(), all_ids)
+    assert tree_hits and tree_hits <= {docs["child"], docs["grand"]}
+
+    clusters = db_client.get("/api/clusters", headers=headers)
+    diagnostics = db_client.get("/api/diagnostics", headers=headers)
+    assert collect_document_ids(clusters.json(), all_ids) <= visible
+    assert sum(cluster["size"] for cluster in clusters.json()["clusters"]) == 3
+    assert collect_document_ids(diagnostics.json(), all_ids) <= visible
+    for document_id in visible:
+        for path in ("links", "backlinks", "related"):
+            response = db_client.get(f"/api/documents/{document_id}/{path}", headers=headers)
+            assert response.status_code == 200
+            assert collect_document_ids(response.json(), all_ids) <= visible
+    for response in (listed, searched, clusters, diagnostics):
+        for secret in folder_scenario["secrets"]:
+            assert secret not in response.text
+
+
+def test_the_document_share_token_sees_no_folders(db_client: TestClient, scenario):
+    response = db_client.get("/api/folders", headers=bearer(scenario["token"]["token"]))
+    assert response.status_code == 200 and response.json() == []

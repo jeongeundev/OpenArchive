@@ -77,6 +77,7 @@ OpenArchive/
 │   │   │                         #   휴지통(032·033 — ADR-060), 토큰 만료(034 — ADR-061), 미리보기 감사(035),
 │   │   │                         #   미리보기 변환본(036 — document_file_previews / 037 — 변환 잡 트리거, ADR-058)
 │   │   │                         #   외부 공유·그룹·사용자 감사(041_share_principal_audit_triggers.sql, #201)
+│   │   │                         #   폴더 단위 공유(042 — share_folders / 043 — 폴더 공유 감사 트리거, #206)
 │   │   ├── cli.py                # `openarchive init`(첫 관리자 포함)·`serve`·`create-user`·`reset-password`·`rebuild-edges`·`rebuild-previews`·`reextract`
 │   │   │                         #   ·`import`·`export`·`search`·`ask`·`demo` — 운영자 CLI, DB에 직접 붙는다 (ADR-039·040·046)
 │   │   ├── api/                  # 라우터: documents, search, ask, system, auth, admin, groups(+principals),
@@ -101,9 +102,9 @@ OpenArchive/
         └── lib/                  # API 클라이언트 (fetch 래퍼)
 ```
 
-`services/visibility.py`의 `VISIBLE_TO_USER`는 **모든 조회 경로가 공유하는 단일 열람 술어**다. 검색·관련 문서·그래프 순회·집계·위키링크 해석이 각자 조건을 쓰면 한 곳만 빠져도 비공개 문서가 새어 나간다 (ADR-018, ADR-027). 규칙은 사용자에게 "public이거나, 소유자이거나, 본인·본인 그룹에 부여가 있다"이고, `share:<공유 uuid>` 주체에게는 "그 공유에 부여가 있다"뿐이며(ADR-044), 테이블과 주체 값 하나만 참조하는 순수 SQL이라 바인딩을 `current_setting('app.principal')`로 바꾸면 그대로 RLS 정책이 된다. 쓰기 경로의 존재 판정(`_load_for_write`)도 이 술어를 쓴다 — 보이는 사람의 쓰기는 403, 안 보이는 사람은 404.
+`services/visibility.py`의 `VISIBLE_TO_USER`는 **모든 조회 경로가 공유하는 단일 열람 술어**다. 검색·관련 문서·그래프 순회·집계·위키링크 해석이 각자 조건을 쓰면 한 곳만 빠져도 비공개 문서가 새어 나간다 (ADR-018, ADR-027). 규칙은 사용자에게 "public이거나, 소유자이거나, 본인·본인 그룹에 부여가 있다"이고, `share:<공유 uuid>` 주체에게는 "그 공유에 부여가 있거나, 공유에 넣은 폴더와 그 하위 폴더 안의 「폴더 범위 따름」 문서다"뿐이며(ADR-044, 폴더 판정은 아래 폴더 분기와 같은 상관 재귀 조각 — #206), 테이블과 주체 값 하나만 참조하는 순수 SQL이라 바인딩을 `current_setting('app.principal')`로 바꾸면 그대로 RLS 정책이 된다. 쓰기 경로의 존재 판정(`_load_for_write`)도 이 술어를 쓴다 — 보이는 사람의 쓰기는 403, 안 보이는 사람은 404.
 
-**폴더 범위도 이 술어 안에서 판정한다** (ADR-054). 폴더에 들었고 「폴더 범위 따름」(`folder_id IS NOT NULL AND follows_folder`)인 문서는 문서 자신의 `visibility`·부여 대신 **최상위 폴더**의 범위(조직 공개 · 폴더를 만든 사람 · `folder_grants`의 사용자·그룹)로 판정하고, 「개별 지정」 문서는 지금처럼 문서 자신의 범위로 판정한다. 소유자는 어느 쪽이든 자기 문서를 본다. 최상위 폴더 판정은 문서의 폴더에서 `parent_id`를 따라 올라가는 **상관 재귀 `EXISTS (WITH RECURSIVE …)`** 조각 하나이고, 폴더 술어 `FOLDER_VISIBLE_TO_USER`(트리·폴더 목록·검색 폴더 필터)가 시작 폴더만 바꿔 같은 조각을 쓴다. 실효 범위는 저장하지 않으므로 폴더 범위·그룹 구성원 변경은 다음 조회부터 반영된다. 같은 판정을 비상관 `IN (서브쿼리)`로 쓰면 3천 청크에서 HNSW를 버리고 generic plan에서 15배 느려졌다 — 형태를 바꾸지 않는다(`db.py`의 `prepare_threshold=None`도 그 전제다). 공유 주체는 폴더를 보지 않는다(`FOLDER_VISIBLE_TO_USER`가 거짓). 볼 수 없는 폴더 안의 「개별 지정」 문서는 보이되 폴더 정보는 응답 어디에도 싣지 않는다. 소유자는 폴더 범위가 좁혀져 자기 문서의 폴더를 못 보게 될 수 있다 — 소유자에게만 상세·열람 범위 응답에 `hidden_folder: true`를 싣고(폴더 id·이름·경로는 여전히 없다) 화면이 이름 없이 알린다.
+**폴더 범위도 이 술어 안에서 판정한다** (ADR-054). 폴더에 들었고 「폴더 범위 따름」(`folder_id IS NOT NULL AND follows_folder`)인 문서는 문서 자신의 `visibility`·부여 대신 **최상위 폴더**의 범위(조직 공개 · 폴더를 만든 사람 · `folder_grants`의 사용자·그룹)로 판정하고, 「개별 지정」 문서는 지금처럼 문서 자신의 범위로 판정한다. 소유자는 어느 쪽이든 자기 문서를 본다. 최상위 폴더 판정은 문서의 폴더에서 `parent_id`를 따라 올라가는 **상관 재귀 `EXISTS (WITH RECURSIVE …)`** 조각 하나이고, 폴더 술어 `FOLDER_VISIBLE_TO_USER`(트리·폴더 목록·검색 폴더 필터)가 시작 폴더만 바꿔 같은 조각을 쓴다. 실효 범위는 저장하지 않으므로 폴더 범위·그룹 구성원 변경은 다음 조회부터 반영된다. 같은 판정을 비상관 `IN (서브쿼리)`로 쓰면 3천 청크에서 HNSW를 버리고 generic plan에서 15배 느려졌다 — 형태를 바꾸지 않는다(`db.py`의 `prepare_threshold=None`도 그 전제다). 공유 주체는 공유에 넣은 폴더(`share_folders`)와 그 하위 폴더만 본다 — 같은 상관 재귀 조각으로 「올라가다 공유 폴더에 닿는가」를 본다(#206, ADR-044 「2026-10-11 보강」). 공유 주체의 폴더 경로(`folder.path`)는 가장 위의 보이는 폴더부터 시작해, 공유 루트보다 위의 폴더는 드러나지 않는다. 볼 수 없는 폴더 안의 「개별 지정」 문서는 보이되 폴더 정보는 응답 어디에도 싣지 않는다. 소유자는 폴더 범위가 좁혀져 자기 문서의 폴더를 못 보게 될 수 있다 — 소유자에게만 상세·열람 범위 응답에 `hidden_folder: true`를 싣고(폴더 id·이름·경로는 여전히 없다) 화면이 이름 없이 알린다.
 
 `services/grants.py`는 그룹·구성원 관리와 부여 대상 이름 해석을 맡는다(#97 b). 문서 열람 범위 조회·교체는 문서 서비스가 소유자 경계를 지키며 이 서비스를 재사용한다(ADR-044 「관리 경로」).
 
@@ -260,6 +261,16 @@ CREATE TABLE folder_grants (     -- 최상위 폴더 → 사용자·그룹의 �
   group_id  uuid REFERENCES groups(id) ON DELETE CASCADE,
   CHECK (num_nonnulls(user_id, group_id) = 1)
 );
+
+-- share_folders: 외부 공유에 넣은 폴더 (042, #206). 넣은 폴더와 그 하위 폴더 안의 「폴더 범위 따름」 문서가
+-- 공유 주체에게 보인다 — 조회 시점에 상관 재귀로 판정하고 포함 문서를 저장하지 않는다
+CREATE TABLE share_folders (
+  share_id   uuid NOT NULL REFERENCES shares(id) ON DELETE CASCADE,
+  folder_id  uuid NOT NULL REFERENCES folders(id) ON DELETE CASCADE,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (share_id, folder_id)
+);
+CREATE INDEX idx_share_folders_folder ON share_folders (folder_id);
 
 -- document_chunks: 현재 버전의 청크만 유지 (인덱스 소형화 + 정합성 단순화)
 CREATE TABLE document_chunks (
@@ -497,6 +508,7 @@ CREATE TRIGGER trg_documents_content_changed
 | `trg_audit_document_owner_changed` / `trg_audit_folder_owner_changed` | `documents` UPDATE OF `owner_id` / `folders` UPDATE OF `created_by`, 실제 값 변경만 (040) | `owner_changed`(소유자 변경) · 문서 `{kind: document, before, after}`, 폴더 `{kind: folder, folder_id, folder_name, before, after}`. 폴더는 대상 문서 id·제목 NULL |
 | `trg_audit_share_changed` | `shares` INSERT / DELETE — 연쇄 삭제 제외 (041) | `share_changed` · `{change: created/deleted, share_id, share_name, owner}` |
 | `trg_audit_share_grant_changed` | `document_grants` INSERT / DELETE — `share_id IS NOT NULL`, 연쇄 삭제 제외 (041) | `share_changed` · `{change: document_added/document_removed, share_id, share_name, owner}` · 대상 문서 id·제목 |
+| `trg_audit_share_folder_changed` | `share_folders` INSERT / DELETE — 공유·공유 소유자·폴더가 이미 없으면 제외 (043, #206) | `share_changed` · `{change: folder_added/folder_removed, share_id, share_name, owner, folder_id, folder_name}` · 대상 문서 NULL |
 | `trg_audit_share_token_changed` | `api_tokens` INSERT / DELETE — `share_id IS NOT NULL`, 연쇄 삭제 제외 (041) | `share_changed` · `{change: token_issued/token_revoked, share_id, share_name, owner, token_name}` |
 | `trg_audit_group_changed` / `trg_audit_user_changed` | `groups` / `users` INSERT / DELETE (041) | `group_changed` · `{change: created/deleted, group}` / `user_changed` · `{change: created/deleted, user}` |
 | `trg_audit_log_reject_change` / `trg_audit_log_reject_truncate` | `audit_log` UPDATE·DELETE(행) / TRUNCATE(문) | 예외 — 거부 |
@@ -936,18 +948,20 @@ OpenSQL `patroni.yml`의 PostgreSQL 파라미터는 `max_connections: 100`이다
 | `DELETE /api/admin/users/{id}?transfer_to=<username>` | **관리자·세션 전용**. 휴지통 포함 모든 소유 문서·폴더를 이전한 뒤 같은 트랜잭션에서 계정 삭제(204). 공유·토큰은 CASCADE로 삭제. 대상 미지정이면 소유물 있는 사용자는 기존 409, 잘못된 이전 대상은 400. 관리자 열람 부여 없음 (#200) |
 | `PUT /api/documents/{id}/owner` `{owner}` | **소유자·세션 전용**. 응답 `{owner_id, still_visible}`. 이전 소유자의 공유에서 제거·새 소유자의 직접 사용자 부여 정리. 보이는 비소유자 403, 안 보이면 404, 본인·없는 대상 400 (#200) |
 | `PUT /api/folders/{id}/owner` `{owner}` | **만든 사람·세션 전용**, 관리자 우회 없음. 한 폴더 행만 이전(하위 폴더·문서 그대로), 새 소유자의 사용자 부여 정리. 응답 `{created_by, still_visible}`. 비소유자 403, 안 보이면 404, 본인·없는 대상 400 (#200) |
+| `GET /api/admin/shares` · `DELETE /api/admin/shares/{share_id}/tokens/{token_id}` | **관리자·세션 전용** 외부 공유 전수 조회(이름·소유자·생성일·문서 수·폴더 수 `folder_count`·토큰 메타 — 문서·폴더 이름 없음)와 토큰 비상 폐기 (ADR-061 결정 3, #201·#206) |
 | `GET /api/admin/audit` | **관리자·세션 전용** 감사 로그 조회. 쿼리 `actor`·`action`(12종, 그 밖은 422)·`limit`(기본 50, 1~200)·`before_id`(id 커서). 응답 `{items, next_before_id}`, id 내림차순. 열람 술어를 걸지 않고 대상 문서 **제목**까지만 보인다(ADR-055 결정 8). 조회 자체는 기록하지 않는다 |
 | `POST /api/admin/groups` · `GET /api/admin/groups` · `DELETE /api/admin/groups/{id}` | **관리자·세션 전용**. 그룹 생성·목록·삭제. 이름 변경 없음 (#97 b) |
 | `PUT /api/admin/groups/{id}/members/{username}` · `DELETE /api/admin/groups/{id}/members/{username}` | **관리자·세션 전용**. 구성원 추가·제거 (#97 b) |
 | `GET /api/principals` | **로그인**. 부여 대상 사용자명·그룹명 목록. 익명은 401 (#97 b) |
 | `GET /api/documents/{id}/access` | **로그인·소유자 전용**. 열람 범위 설정 조회. 보이는 비소유자는 403, 안 보이면 404 (#97 b) |
 | `PUT /api/documents/{id}/access` | **소유자·세션 전용**. `{visibility, users, groups, follows_folder}` — 폴더 안 문서는 `follows_folder`로 「폴더 범위 따름」↔「개별 지정」을 바꾼다(개별 지정에는 `visibility` 필수, 「폴더 범위 따름」에는 `visibility`·`users`·`groups`를 함께 보내면 400. 지금 「폴더 범위 따름」인 문서에 `follows_folder` 없이 범위만 보내도 400 — 받으면 `visibility` 컬럼만 바뀌고 실효 범위는 폴더 그대로라 저장이 조용히 무시된다). `{visibility, users, groups}`로 전체 교체(저장은 바뀐 부여만 DELETE·INSERT — 감사 기록이 실제 변경만 남도록, ADR-055). 보이는 비소유자는 403, 안 보이면 404. 조직 공개로 바꾸면 사용자·그룹 부여만 삭제하고 공유 부여는 유지 (#97 b·c) |
-| `GET /api/folders` | **로그인**. 볼 수 있는 폴더 전체(평평한 목록, `parent_id`로 트리를 만든다). 각 폴더에 최상위 범위 요약 `scope`, 직접 든·볼 수 있는 문서 수 `document_count`, `inherited`(하위 폴더), `can_manage`·`can_change_access` (ADR-054) |
+| `GET /api/folders` | **로그인**. 볼 수 있는 폴더 전체(평평한 목록, `parent_id`로 트리를 만든다). 각 폴더에 최상위 범위 요약 `scope`, 직접 든·볼 수 있는 문서 수 `document_count`, `inherited`(하위 폴더), `can_manage`·`can_change_access`, `can_share`(최상위 폴더를 만든 사람인가) (ADR-054). **공유 토큰**에는 공유에 넣은 폴더와 그 하위만 `{id, parent_id, name, document_count}`로 준다 — 공유 루트의 `parent_id`는 null, `scope`·`created_by`·`can_*` 없음 (#206) |
 | `POST /api/folders` `{name, parent_id?}` | 폴더 만들기. 쓰기 토큰 허용. 하위 폴더는 볼 수 있는 폴더 아래에 누구나 만든다. 새 최상위 폴더는 조직 공개 |
 | `PATCH /api/folders/{id}` `{name}` · `DELETE /api/folders/{id}` | 이름 변경·삭제 — 폴더를 만든 사람 또는 관리자(볼 수 있는 폴더에 한함). 쓰기 토큰 허용. 삭제는 빈 폴더만(하위 폴더나 문서가 있으면 「폴더가 비어 있지 않습니다.」) |
 | `GET /api/folders/{id}/access` · `PUT /api/folders/{id}/access` `{visibility, users, groups}` | 최상위 폴더의 열람 범위 조회·교체. **최상위 폴더를 만든 사람만 — 관리자도 불가.** `PUT`은 **세션 전용**, 저장은 바뀐 부여만 반영(감사). 하위 폴더는 범위가 없어 거부 |
-| `POST /api/shares` `{name}` · `GET /api/shares` · `DELETE /api/shares/{id}` | 내 공유 생성·목록(포함 문서 id·제목, 토큰 메타)·삭제. 세션 전용 |
+| `POST /api/shares` `{name}` · `GET /api/shares` · `DELETE /api/shares/{id}` | 내 공유 생성·목록(포함 문서 id·제목, 포함 폴더 `folders: [{id, name}]`, 토큰 메타)·삭제. 세션 전용 |
 | `PUT /api/shares/{id}/documents/{document_id}` · `DELETE /api/shares/{id}/documents/{document_id}` | 공유에 내 문서 넣기·빼기(멱등 204). 세션 전용 |
+| `PUT /api/shares/{id}/folders/{folder_id}` · `DELETE /api/shares/{id}/folders/{folder_id}` | 공유에 폴더 넣기·빼기(멱등 204). 세션 전용. **그 폴더의 최상위 폴더를 만든 사람만**(관리자 예외 없음) — 아니면 403, 폴더가 안 보이면 404. 하위의 「폴더 범위 따름」 문서가 소유자와 무관하게 포함된다 (#206) |
 | `POST /api/shares/{id}/tokens` `{name}` · `DELETE /api/shares/{id}/tokens/{token_id}` | 공유 토큰 발급(원문 1회)·폐기. 세션 전용 |
 | `GET /api/system/status` | **로그인 필요 · 운영/데모 전용**: `inet_server_addr()`(현재 접속 노드), pending/processing/error **임베딩** 잡 수(`kind='embed'`), 임베딩 프로바이더명, **정합성 검증 쿼리 결과**(`c.version <> d.version` 건수), **관계 미반영 문서 수**(`kind='edges'` 잡이 `done`이 아닌 문서), **텍스트 인식 대기·실패 문서 수**(`extraction_status`가 `pending`·`failed`), **미리보기 변환 판 수**(`preview_pending`·`preview_failed`·`preview_unavailable` — `document_file_previews.status`별). `/admin/status`가 소비하며 사용자 화면은 호출하지 않는다. SQL과 결과 모델은 `services/system.py`에 있고 라우터는 인증과 응답 변환만 맡는다 |
 

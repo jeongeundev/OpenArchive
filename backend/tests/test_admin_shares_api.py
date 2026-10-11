@@ -27,9 +27,12 @@ def test_admin_metadata_without_documents(db_client, migrated_db):
     rows = response.json()
     assert {row["owner"] for row in rows} == {"kim", "lee"}
     for row in rows:
-        assert set(row) == {"id", "name", "owner", "created_at", "document_count", "tokens"}
+        assert set(row) == {
+            "id", "name", "owner", "created_at", "document_count", "folder_count", "tokens"
+        }
         assert row["name"] == row["owner"] + " 공유"
         assert row["document_count"] == 1
+        assert row["folder_count"] == 0
         assert set(row["tokens"][0]) == {
             "id", "name", "created_at", "expires_at", "last_used_at", "expired"
         }
@@ -86,3 +89,22 @@ def test_wrong_share_missing_token_and_regular_denial(db_client, migrated_db):
         assert response.json()["detail"] == "토큰을 찾을 수 없습니다."
     db_client.cookies.clear()
     assert db_client.get("/api/documents", headers=bearer(token["token"])).status_code == 200
+
+
+def test_admin_sees_folder_count_but_not_folder_names(db_client, migrated_db):
+    login_as(db_client, "kim")
+    share = create_share(db_client, "kim 공유")
+    root = db_client.post("/api/folders", json={"name": "kim 비밀 폴더"}).json()["id"]
+    child = db_client.post(
+        "/api/folders", json={"name": "kim 비밀 하위", "parent_id": root}
+    ).json()["id"]
+    for folder_id in (root, child):
+        assert db_client.put(f"/api/shares/{share['id']}/folders/{folder_id}").status_code == 204
+    login_admin(db_client, migrated_db)
+
+    response = db_client.get("/api/admin/shares")
+
+    assert response.status_code == 200
+    assert [row["folder_count"] for row in response.json()] == [2]
+    assert "비밀" not in response.text
+    assert root not in response.text and child not in response.text

@@ -8,7 +8,7 @@ import { FolderTree } from "./FolderTree";
 const scope = { visibility: "public" as const, users: [], groups: [] };
 function folder(id: string, name: string, parentId: string | null, documentCount = 0): Folder {
   return { id, name, parent_id: parentId, created_by: "kim", document_count: documentCount, scope,
-    inherited: parentId !== null, can_manage: true, can_change_access: parentId === null };
+    inherited: parentId !== null, can_manage: true, can_change_access: parentId === null, can_share: false };
 }
 
 describe("FolderTree", () => {

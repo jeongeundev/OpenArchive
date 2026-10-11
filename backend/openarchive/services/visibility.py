@@ -4,13 +4,14 @@ public은 조직(이 설치에 로그인한 사용자) 전체, private는 소유
 부여 대상은 사용자 본인이거나 사용자가 속한 그룹이다 (ADR-044).
 
 공유 주체(share:<uuid>)는 외부 협업용 주체라 조직의 일원이 아니다. 그 공유에 부여된
-문서만 보며, 조직 공개 문서라도 부여가 없으면 보지 못한다 (ADR-044 「공유」 결정 2).
+문서와 공유에 넣은 폴더 아래의 「폴더 범위 따름」 문서를 본다. 조직 공개만으로는 보지
+못한다 (ADR-044 「공유」 결정 2, #206).
 
 폴더 (ADR-054): 열람 범위는 최상위 폴더만 갖고 하위 폴더는 그것을 따른다. 폴더 안의 「폴더
 범위 따름」 문서는 최상위 폴더의 범위(조직 공개 · 만든 사람 · 사용자·그룹 부여)로, 「개별
 지정」 문서는 문서 자신의 visibility·부여로 판정한다. 소유자는 어느 쪽이든 자기 문서를 본다.
 실효 범위를 저장하지 않으므로 폴더 부여·그룹 구성원 변경은 다음 조회부터 반영된다. 공유 주체는
-폴더를 보지 않는다 — 공유에 부여된 문서만 본다.
+공유에 넣은 폴더와 그 하위 폴더를 보며, 그 안의 「개별 지정」 문서는 별도 문서 부여가 있어야 본다.
 
 휴지통 (ADR-060 결정 1): 휴지통 문서는 소유자·공유 주체에게도 존재하지 않는다.
 휴지통 조건은 모든 열람 분기 바깥에 두고, 복원 때 기존 청크·관계를 그대로 다시 읽는다.
@@ -60,6 +61,15 @@ _ROOT_FOLDER_OPEN = """EXISTS (
 )"""
 
 
+_SHARED_FOLDER_OPEN = """EXISTS (
+    """ + _FOLDER_UP + """
+    SELECT 1 FROM folder_up r
+    JOIN share_folders sf ON sf.folder_id = r.id
+    JOIN shares s ON s.id = sf.share_id
+    WHERE 'share:' || s.id::text = %(user)s
+)"""
+
+
 def root_folder_visibility(start: str) -> str:
     """시작 폴더의 최상위 폴더 공개범위를 내는 스칼라 서브쿼리. 열람 판정과 같은 거슬러 오르기 조각이다."""
     return "(" + _FOLDER_UP.format(start=start) + """
@@ -72,7 +82,7 @@ def root_folder_visibility(start: str) -> str:
 # 테이블과 주체 값 하나만 참조한다 — %(user)s를 current_setting('app.principal')로
 # 바꾸면 그대로 RLS 정책의 USING 절이 되는 형태다 (ADR-044 결정 4, 전환은 #98).
 #
-# 공유 분기: 조직 공개·소유자·사용자·그룹·폴더 분기를 타지 않는다. 공유 id를 uuid로
+# 공유 분기: 조직 공개·소유자·사용자·그룹 분기를 타지 않는다. 공유 id를 uuid로
 # 캐스팅하지 않고 'share:' || s.id로 맞춘다 — 접두사를 뗀 값을 ::uuid로 바꾸면 사용자명이
 # 들어온 커스텀 플랜에서 상수 접기가 그 캐스트를 미리 평가해 에러가 날 수 있다. 형식이 틀린
 # 공유 값은 에러 없이 아무것도 보지 못한다.
@@ -85,11 +95,13 @@ def root_folder_visibility(start: str) -> str:
 # NOT_TRASHED와 VISIBLE_TO_USER는 documents의 별칭이 d라고 전제한다 — 쓰는 쿼리는 FROM documents d로 쓴다.
 NOT_TRASHED = "d.deleted_at IS NULL"
 
-VISIBLE_TO_USER = NOT_TRASHED + """ AND (CASE WHEN %(user)s LIKE 'share:%%' THEN EXISTS (
+VISIBLE_TO_USER = NOT_TRASHED + """ AND (CASE WHEN %(user)s LIKE 'share:%%' THEN (EXISTS (
     SELECT 1 FROM document_grants g JOIN shares s ON s.id = g.share_id
     WHERE g.document_id = d.id
       AND 'share:' || s.id::text = %(user)s
-) ELSE (d.owner_id = %(user)s OR CASE
+) OR (d.folder_id IS NOT NULL AND d.follows_folder AND """ + _SHARED_FOLDER_OPEN.format(
+    start="d.folder_id"
+) + """)) ELSE (d.owner_id = %(user)s OR CASE
     WHEN d.folder_id IS NOT NULL AND d.follows_folder THEN """ + _ROOT_FOLDER_OPEN.format(
     start="d.folder_id"
 ) + """
@@ -102,6 +114,8 @@ VISIBLE_TO_USER = NOT_TRASHED + """ AND (CASE WHEN %(user)s LIKE 'share:%%' THEN
     )) END) END)"""
 
 # 폴더 열람 술어(별칭 f). 볼 수 없는 폴더는 트리·목록·필터 어디에도 나오지 않는다 (ADR-027).
-# 판정은 문서 술어의 폴더 분기와 같은 조각이다. 공유 주체는 폴더를 보지 않는다.
-FOLDER_VISIBLE_TO_USER = """(CASE WHEN %(user)s LIKE 'share:%%' THEN false
+# 판정은 문서 술어의 폴더 분기와 같은 조각이다. 공유 주체는 공유에 넣은 폴더와 하위를 본다.
+FOLDER_VISIBLE_TO_USER = """(CASE WHEN %(user)s LIKE 'share:%%' THEN """ + _SHARED_FOLDER_OPEN.format(
+    start="f.id"
+) + """
 ELSE """ + _ROOT_FOLDER_OPEN.format(start="f.id") + """ END)"""

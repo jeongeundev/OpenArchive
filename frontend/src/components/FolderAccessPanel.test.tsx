@@ -6,7 +6,7 @@ import { FolderAccessPanel } from "./FolderAccessPanel";
 
 const publicScope: FolderScope = { visibility: "public", users: [], groups: [] };
 const root: Folder = { id: "f1", name: "RFP", parent_id: null, created_by: "kim", document_count: 0,
-  scope: publicScope, inherited: false, can_manage: true, can_change_access: true };
+  scope: publicScope, inherited: false, can_manage: true, can_change_access: true, can_share: false };
 const principals = { users: ["kim", "lee"], groups: ["사업팀", "개발팀"] };
 
 function json(body: unknown, status = 200): Response {
@@ -82,7 +82,7 @@ describe("FolderAccessPanel", () => {
   });
 
   it("만들지 않은 사용자에게도 패널이 보이고, 저장하면 서버 거부 문구를 보인다", async () => {
-    const other: Folder = { ...root, can_manage: false, can_change_access: false,
+    const other: Folder = { ...root, can_manage: false, can_change_access: false, can_share: false,
       scope: { visibility: "private", users: [], groups: ["사업팀"] } };
     const fetchMock = stubFetch(publicScope, () => json({ detail: "폴더를 관리할 권한이 없습니다." }, 403));
     await renderPanel(other);

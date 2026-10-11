@@ -68,6 +68,8 @@ function actionDescription(entry: AuditEntry): string | null {
       deleted: `공유 ${share} 삭제`,
       document_added: `${share}에 문서 추가`,
       document_removed: `${share}에서 문서 제거`,
+      folder_added: `${share}에 폴더 「${text(detail.folder_name)}」 추가`,
+      folder_removed: `${share}에서 폴더 「${text(detail.folder_name)}」 제거`,
       token_issued: `${share} 토큰 「${text(detail.token_name)}」 발급`,
       token_revoked: `${share} 토큰 「${text(detail.token_name)}」 폐기`,
     };

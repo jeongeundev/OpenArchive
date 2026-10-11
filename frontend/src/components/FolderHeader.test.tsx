@@ -6,9 +6,9 @@ import { FolderHeader } from "./FolderHeader";
 
 const scope = { visibility: "public" as const, users: [], groups: [] };
 const root: Folder = { id: "a", name: "인사", parent_id: null, created_by: "kim", document_count: 0, scope,
-  inherited: false, can_manage: true, can_change_access: true };
+  inherited: false, can_manage: true, can_change_access: true, can_share: false };
 const child: Folder = { id: "b", name: "채용", parent_id: "a", created_by: "kim", document_count: 0, scope,
-  inherited: true, can_manage: true, can_change_access: false };
+  inherited: true, can_manage: true, can_change_access: false, can_share: false };
 
 function respond(status: number, body?: unknown) {
   return Promise.resolve(body === undefined ? new Response(null, { status })
@@ -110,7 +110,7 @@ describe("FolderHeader", () => {
   it("다른 사용자가 만든 폴더도 버튼은 보이고, 시도하면 서버의 거부 문구를 보인다", async () => {
     vi.spyOn(window, "confirm").mockReturnValue(true);
     vi.stubGlobal("fetch", vi.fn(() => respond(403, { detail: "폴더를 관리할 권한이 없습니다." })));
-    const others = { ...root, created_by: "park", can_manage: false, can_change_access: false };
+    const others = { ...root, created_by: "park", can_manage: false, can_change_access: false, can_share: false };
     render(<FolderHeader folder={others} folders={[others]} onChanged={vi.fn()} onDeleted={vi.fn()} />);
     expect(screen.getByText("폴더를 만든 사람만 바꿀 수 있습니다")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "이름 변경" })).toBeEnabled();
@@ -176,4 +176,20 @@ it.each([403, 200])("폴더 이전 결과 %s는 거부 또는 선택 해제를 �
   if (status === 403) expect(await screen.findByRole("alert")).toHaveTextContent("폴더를 관리할 권한이 없습니다.");
   else await waitFor(() => expect(onDeleted).toHaveBeenCalled());
   vi.unstubAllGlobals(); vi.restoreAllMocks();
+});
+
+describe("FolderHeader 외부 공유", () => {
+  afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+  it("can_share가 아니면 「외부 공유」를 띄우지 않는다", () => {
+    render(<FolderHeader folder={child} folders={[root, child]} onChanged={vi.fn()} onDeleted={vi.fn()} />);
+    expect(screen.queryByRole("button", { name: "외부 공유" })).not.toBeInTheDocument();
+  });
+
+  it("can_share인 하위 폴더에서 「외부 공유」로 공유 토글을 펼친다", async () => {
+    vi.stubGlobal("fetch", vi.fn(() => respond(200, [{ id: "s-1", name: "B사 협업", created_at: "2026-10-02T00:00:00Z", documents: [], folders: [], tokens: [] }])));
+    const shareable = { ...child, can_share: true };
+    render(<FolderHeader folder={shareable} folders={[root, shareable]} onChanged={vi.fn()} onDeleted={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "외부 공유" }));
+    expect(await screen.findByRole("checkbox", { name: "B사 협업" })).toBeInTheDocument();
+  });
 });

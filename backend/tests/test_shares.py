@@ -51,7 +51,7 @@ async def test_create_share_trims_name_and_starts_empty(conn):
     assert share["name"] == "B사 협업"
     assert share["documents"] == []
     assert share["tokens"] == []
-    assert set(share) == {"id", "name", "created_at", "documents", "tokens"}
+    assert set(share) == {"id", "name", "created_at", "documents", "tokens", "folders"}
 
 
 async def test_create_share_rejects_blank_name(conn):
@@ -284,7 +284,7 @@ async def test_list_all_shares_metadata_and_trash(conn):
     )
     result = await list_all_shares(conn)
     assert [s["id"] for s in result] == [alpha["id"], zeta["id"], bob["id"]]
-    assert all(set(s) == {"id", "name", "owner", "created_at", "document_count", "tokens"} for s in result)
+    assert all(set(s) == {"id", "name", "owner", "created_at", "document_count", "tokens", "folder_count"} for s in result)
     assert [s["owner"] for s in result] == ["alice", "alice", "bob"]
     assert [s["document_count"] for s in result] == [1, 0, 0]
     assert result[1]["tokens"] == result[2]["tokens"] == []
@@ -322,3 +322,56 @@ async def test_admin_revoke_share_token_boundaries(conn):
     [event] = await list_audit(conn, actor="root", action="share_changed")
     assert event["detail"]["owner"] == "bob"
     assert event["detail"]["change"] == "token_revoked"
+
+
+@pytest.mark.parametrize("operation", ["add_folder", "remove_folder"])
+async def test_folder_share_authorization_and_idempotence(conn, operation):
+    from openarchive.services import folders as f
+    from openarchive.services import shares as s
+
+    root = await f.create_folder(conn, user_id="alice", name="상위")
+    child = await f.create_folder(conn, user_id="bob", name="하위", parent_id=root["id"])
+    leaf = await f.create_folder(conn, user_id="bob", name="깊이2", parent_id=child["id"])
+    share = await create_share(conn, owner="alice", name="공유")
+    call = getattr(s, operation)
+    if operation == "remove_folder":
+        for folder in [root, child, leaf]:
+            await s.add_folder(conn, share["id"], folder["id"], owner="alice")
+    for folder in [root, child, leaf]:
+        await call(conn, share["id"], folder["id"], owner="alice")
+        await call(conn, share["id"], folder["id"], owner="alice")
+    rows = await (await conn.execute("SELECT folder_id FROM share_folders WHERE share_id=%s", (share["id"],))).fetchall()
+    assert {r[0] for r in rows} == ({root["id"], child["id"], leaf["id"]} if operation == "add_folder" else set())
+    for owner in ["bob", "root"]:
+        own = await create_share(conn, owner=owner, name="자기 공유")
+        with pytest.raises(f.NotFolderCreator):
+            await call(conn, own["id"], child["id"], owner=owner)
+        with pytest.raises(ShareNotFound):
+            await call(conn, share["id"], child["id"], owner=owner)
+    with pytest.raises(ShareNotFound):
+        await call(conn, uuid4(), uuid4(), owner="alice")
+    hidden = await f.create_folder(conn, user_id="bob", name="숨김", visibility="private")
+    for folder_id in [hidden["id"], uuid4()]:
+        with pytest.raises(f.FolderNotFound):
+            await call(conn, share["id"], folder_id, owner="alice")
+
+
+async def test_share_folder_lists_and_admin_count(conn):
+    import json
+
+    from openarchive.services import folders as f
+    from openarchive.services import shares as s
+
+    share = await create_share(conn, owner="alice", name="공유")
+    assert share["folders"] == []
+    folders = [await f.create_folder(conn, user_id="alice", name=name) for name in ["비밀Z", "비밀A", "비밀A"]]
+    for folder in folders:
+        await s.add_folder(conn, share["id"], folder["id"], owner="alice")
+    expected = sorted([{"id": x["id"], "name": x["name"]} for x in folders], key=lambda x: (x["name"], x["id"]))
+    assert (await list_shares(conn, owner="alice"))[0]["folders"] == expected
+    result = await s.list_all_shares(conn)
+    assert result[0]["folder_count"] == 3
+    serialized = json.dumps(result, default=str)
+    for folder in folders:
+        assert folder["name"] not in serialized
+        assert str(folder["id"]) not in serialized

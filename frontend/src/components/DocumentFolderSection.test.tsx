@@ -7,11 +7,11 @@ import { DocumentFolderSection } from "./DocumentFolderSection";
 const publicScope: FolderScope = { visibility: "public", users: [], groups: [] };
 const bizScope: FolderScope = { visibility: "private", users: [], groups: ["사업팀"] };
 const insa: Folder = { id: "a", name: "인사", parent_id: null, created_by: "alice", document_count: 1, scope: publicScope,
-  inherited: false, can_manage: true, can_change_access: true };
+  inherited: false, can_manage: true, can_change_access: true, can_share: false };
 const hire: Folder = { id: "b", name: "채용", parent_id: "a", created_by: "alice", document_count: 0, scope: publicScope,
-  inherited: true, can_manage: true, can_change_access: false };
+  inherited: true, can_manage: true, can_change_access: false, can_share: false };
 const rfp: Folder = { id: "c", name: "RFP", parent_id: null, created_by: "kim", document_count: 0, scope: bizScope,
-  inherited: false, can_manage: false, can_change_access: false };
+  inherited: false, can_manage: false, can_change_access: false, can_share: false };
 const inInsa: DocumentFolder = { id: "a", name: "인사", path: [{ id: "a", name: "인사" }] };
 
 function json(body: unknown, status = 200) {

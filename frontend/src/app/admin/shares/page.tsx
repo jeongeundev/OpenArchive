@@ -50,12 +50,13 @@ export default function SharesPage(): React.ReactElement {
     {loaded && shares.length === 0 ? <p className="text-sm text-neutral-500">외부 공유가 없습니다.</p> : null}
     {loaded && shares.length > 0 ? <div className="overflow-x-auto rounded-lg border border-neutral-800 bg-[#141414]">
       <table className="w-full text-left text-sm">
-        <thead className="border-b border-neutral-800 text-neutral-400"><tr>{["공유 이름", "소유자", "생성일", "문서 수", "토큰"].map(label => <th className="px-4 py-3 font-medium" key={label}>{label}</th>)}</tr></thead>
+        <thead className="border-b border-neutral-800 text-neutral-400"><tr>{["공유 이름", "소유자", "생성일", "문서 수", "폴더 수", "토큰"].map(label => <th className="px-4 py-3 font-medium" key={label}>{label}</th>)}</tr></thead>
         <tbody>{shares.map(share => <tr className="border-b border-neutral-800 last:border-0" key={share.id}>
           <td className="px-4 py-3 text-white">{share.name}</td>
           <td className="px-4 py-3 text-neutral-300">{share.owner}</td>
           <td className="px-4 py-3 text-neutral-400"><time dateTime={share.created_at}>{DATE_FORMATTER.format(new Date(share.created_at))}</time></td>
           <td className="px-4 py-3 text-neutral-300">{share.document_count}</td>
+          <td className="px-4 py-3 text-neutral-300">{share.folder_count}</td>
           <td className="px-4 py-3 text-neutral-400">{share.tokens.length === 0 ? "토큰 없음" : <ul className="space-y-3">{share.tokens.map(token => <li className="space-y-1" key={token.id}>
             <span className="text-neutral-300">{token.name}</span>
             {token.expired ? <span className="ml-2 rounded bg-[#ef4444]/10 px-2 py-0.5 text-xs font-medium text-[#ef4444]">만료</span> : null}

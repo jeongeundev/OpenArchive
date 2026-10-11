@@ -1228,6 +1228,30 @@ def test_deleting_document_or_share_removes_share_grant(conn: psycopg.Connection
     assert grant_count(conn) == 0
 
 
+def test_the_same_share_folder_cannot_be_stored_twice(conn: psycopg.Connection):
+    share = insert_share(conn, insert_user(conn, "owner"))
+    folder = insert_folder(conn)
+    sql = "INSERT INTO share_folders (share_id, folder_id) VALUES (%s, %s)"
+    conn.execute(sql, (share, folder))
+    assert conn.execute("SELECT count(*) FROM share_folders").fetchone()[0] == 1
+    with pytest.raises(psycopg.errors.UniqueViolation):
+        conn.execute(sql, (share, folder))
+
+
+@pytest.mark.parametrize("deleted", ["share", "folder", "owner"])
+def test_deleting_share_folder_or_owner_removes_share_folder(conn: psycopg.Connection, deleted: str):
+    owner = insert_user(conn, "owner")
+    share = insert_share(conn, owner)
+    folder = insert_folder(conn)
+    conn.execute("INSERT INTO share_folders (share_id, folder_id) VALUES (%s, %s)", (share, folder))
+    table, target = {"share": ("shares", share), "folder": ("folders", folder),
+                     "owner": ("users", owner)}[deleted]
+    conn.execute(f"DELETE FROM {table} WHERE id = %s", (target,))
+    assert conn.execute("SELECT count(*) FROM share_folders").fetchone()[0] == 0
+    if deleted == "owner":
+        assert conn.execute("SELECT count(*) FROM shares").fetchone()[0] == 0
+
+
 def test_share_read_token_is_removed_with_the_share(conn: psycopg.Connection):
     share = insert_share(conn, insert_user(conn, "owner"))
     conn.execute("INSERT INTO api_tokens (share_id, name, token_hash, scope) "

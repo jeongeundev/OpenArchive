@@ -393,3 +393,27 @@ async def test_scope_without_switch_allowed_outside_folder_and_for_individual(co
     )
     saved = await d.set_access(conn, doc["id"], user_id="owner", visibility="public", users=[], groups=[])
     assert (saved["follows_folder"], saved["visibility"]) == (False, "public")
+
+
+async def test_shared_document_folder_path_clips_hidden_ancestors(conn):
+    from openarchive.services.shares import add_folder
+    from openarchive.services.visibility import share_principal
+
+    r = await f.create_folder(conn, user_id="kim", name="숨은상위")
+    a = await f.create_folder(conn, user_id="lee", name="공유", parent_id=r["id"])
+    b = await f.create_folder(conn, user_id="lee", name="하위", parent_id=a["id"])
+    share = await create_share(conn, owner="kim", name="공유")
+    await add_folder(conn, share["id"], a["id"], owner="kim")
+    doc = await make(conn, b["id"])
+    principal = share_principal(share["id"])
+    detail = await d.get_document(conn, doc["id"], user_id=principal)
+    assert detail["folder"]["path"] == [{"id": a["id"], "name": a["name"]}, {"id": b["id"], "name": b["name"]}]
+    assert str(r["id"]) not in json.dumps(detail, default=str)
+    assert r["name"] not in json.dumps(detail, default=str)
+    assert (await d._folder_info(conn, b["id"], principal))[1] is None
+    assert (await d.get_document(conn, doc["id"], user_id="owner"))["folder"]["path"] == await f.folder_path(conn, b["id"])
+    direct = await make(conn, r["id"])
+    own_share = await create_share(conn, owner="owner", name="단독")
+    await add_document(conn, own_share["id"], direct["id"], owner="owner")
+    detail = await d.get_document(conn, direct["id"], user_id=share_principal(own_share["id"]))
+    assert (detail["folder"], detail["hidden_folder"]) == (None, False)

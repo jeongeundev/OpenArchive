@@ -45,7 +45,7 @@ describe("SearchForm", () => {
   const hr: Folder = {
     id: "f-hr", parent_id: null, name: "인사", created_by: "lee", document_count: 1,
     scope: { visibility: "public", users: [], groups: [] },
-    inherited: false, can_manage: false, can_change_access: false,
+    inherited: false, can_manage: false, can_change_access: false, can_share: false,
   };
   const hiring: Folder = { ...hr, id: "f-hiring", parent_id: "f-hr", name: "채용", inherited: true };
 

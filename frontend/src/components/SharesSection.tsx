@@ -10,6 +10,7 @@ import {
   deleteShare,
   listShares,
   removeShareDocument,
+  removeShareFolder,
   revokeShareToken,
 } from "@/lib/api";
 import { expiresAtFromDate, formatExpiry, todayInputValue } from "@/lib/tokenExpiry";
@@ -118,8 +119,8 @@ export function SharesSection(): React.ReactElement {
           합니다.
         </p>
         <p className="mt-2 text-sm text-neutral-400">
-          조직 공개 문서도 공유에 넣으면 외부에 열립니다. 문서는 문서 상세의 「열람 범위」 패널에서
-          공유에 넣습니다.
+          조직 공개 문서도 공유에 넣으면 외부에 열립니다. 문서는 문서 상세의 「열람 범위」 패널에서,
+          폴더는 폴더 화면의 「외부 공유」에서 공유에 넣습니다.
         </p>
       </div>
 
@@ -172,6 +173,36 @@ export function SharesSection(): React.ReactElement {
               </button>
             </div>
 
+            {share.folders.length > 0 ? (
+              <div>
+                <p className="text-xs text-neutral-500">포함 폴더</p>
+                <ul className="mt-2 space-y-1">
+                  {share.folders.map((folder) => (
+                    <li className="flex items-center justify-between gap-4 text-sm" key={folder.id}>
+                      <Link className="text-[#0ea5e9] hover:underline" href={`/?folder=${encodeURIComponent(folder.id)}`}>
+                        {folder.name}
+                      </Link>
+                      <button
+                        aria-label={`${folder.name} 빼기`}
+                        className="text-neutral-500 hover:text-neutral-300 disabled:text-neutral-600"
+                        disabled={working}
+                        onClick={() =>
+                          void run(
+                            () => removeShareFolder(share.id, folder.id),
+                            "폴더를 공유에서 빼지 못했습니다.",
+                          )
+                        }
+                        type="button"
+                      >
+                        빼기
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+
+            {share.documents.length > 0 || share.folders.length === 0 ? (
             <div>
               <p className="text-xs text-neutral-500">포함 문서</p>
               {share.documents.length === 0 ? (
@@ -202,6 +233,7 @@ export function SharesSection(): React.ReactElement {
                 </ul>
               )}
             </div>
+            ) : null}
 
             <div>
               <p className="text-xs text-neutral-500">공유 토큰</p>
