@@ -135,7 +135,7 @@ sudo install -m 755 target/release/rhwp /usr/local/bin/rhwp
 sudo apt install bubblewrap fontconfig fonts-noto-cjk \
                  libreoffice-writer-nogui libreoffice-calc-nogui libreoffice-impress-nogui
 curl -fL https://github.com/edwardkim/rhwp/releases/download/v0.8.7/rhwp-v0.8.7-linux-x86_64.tar.gz -o rhwp.tar.gz
-echo "24de2bdaa0b69f86302a27e7fdfb570ad3c53b0ab3a4eac06446adc651dfb988  rhwp.tar.gz" | sha256sum -c -
+echo "f1e541a25cfe76b6bc1daf18bf9c1f9a5ac5e03e2c01b188daaf54107214f631  rhwp.tar.gz" | sha256sum -c -
 tar -xzf rhwp.tar.gz && sudo install -m 755 rhwp/rhwp /usr/local/bin/rhwp
 ```
 
