@@ -385,6 +385,31 @@ def test_standalone_sync_connection_binds_on_the_client_and_never_prepares(migra
     assert prepared == 0
 
 
+async def test_standalone_connection_never_prepares_even_with_a_server_cursor(migrated_db):
+    """이진 쓰기처럼 서버 바인딩 커서를 명시해도 이름 붙인 prepare는 생기지 않는다 (#212).
+
+    `import`는 연결 하나로 원본 파일 `%b` INSERT(`psycopg.AsyncCursor`)를 파일 수만큼 반복한다.
+    그 경로를 26000에서 떼어 놓는 것은 커서 팩토리가 아니라 `prepare_threshold=None`이다.
+    """
+    async with await openarchive.db.connect(migrated_db) as conn:
+        for _ in range(10):
+            await psycopg.AsyncCursor(conn).execute("SELECT %b::bytea", (b"\x00",))
+        prepared = (
+            await (await conn.execute("SELECT count(*) FROM pg_prepared_statements")).fetchone()
+        )[0]
+
+    assert prepared == 0
+
+
+def test_standalone_sync_connection_never_prepares_even_with_a_server_cursor(migrated_db):
+    with openarchive.db.connect_sync(migrated_db) as conn:
+        for _ in range(10):
+            psycopg.Cursor(conn).execute("SELECT %b::bytea", (b"\x00",))
+        prepared = conn.execute("SELECT count(*) FROM pg_prepared_statements").fetchone()[0]
+
+    assert prepared == 0
+
+
 @pytest.mark.parametrize(
     "value",
     [

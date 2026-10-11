@@ -161,7 +161,12 @@ def test_connections_outside_the_pool_go_through_db_helpers():
     OpenProxy 서버 명령문 누적을 다시 밟는다.
     """
     root = APPLICATION_SOURCE_ROOTS[0]
-    pattern = re.compile(r"\bAsyncConnection\.connect\(|\bpsycopg\.connect\(|\bConnection\.connect\(")
+    # 직접 연결, `from psycopg import connect` 우회, `db.py` 밖의 새 풀까지 잡는다.
+    pattern = re.compile(
+        r"\b(?:Async)?Connection\.connect\(|\bpsycopg\.connect\(|^from psycopg import [^\n]*\bconnect\b"
+        r"|\b(?:Async)?ConnectionPool\(",
+        re.MULTILINE,
+    )
     uses = {path.relative_to(root).as_posix() for path in root.rglob("*.py")
             if pattern.search(path.read_text())}
     assert uses <= {"db.py"}, uses
