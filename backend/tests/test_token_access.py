@@ -203,7 +203,7 @@ def test_admin_read_write_token_cannot_cross_session_only_management_boundaries(
     ).json()
     created_user = db_client.post(
         "/api/admin/users",
-        json={"username": "managed-user", "password": "secret"},
+        json={"username": "managed-user", "password": "secret-pw"},
     ).json()
 
     headers = bearer(token["token"])
@@ -214,7 +214,7 @@ def test_admin_read_write_token_cannot_cross_session_only_management_boundaries(
         db_client.post(
             "/api/admin/users",
             headers=headers,
-            json={"username": "blocked-user", "password": "secret"},
+            json={"username": "blocked-user", "password": "secret-pw"},
         ),
         db_client.get("/api/admin/users", headers=headers),
         db_client.delete(f"/api/admin/users/{created_user['id']}", headers=headers),
@@ -225,7 +225,7 @@ def test_admin_read_write_token_cannot_cross_session_only_management_boundaries(
     assert db_client.get("/api/auth/tokens").status_code == 200
     assert db_client.delete(f"/api/auth/tokens/{session_token['id']}").status_code == 204
     second_user = db_client.post(
-        "/api/admin/users", json={"username": "second-user", "password": "secret"}
+        "/api/admin/users", json={"username": "second-user", "password": "secret-pw"}
     )
     assert second_user.status_code == 201
     assert db_client.get("/api/admin/users").status_code == 200

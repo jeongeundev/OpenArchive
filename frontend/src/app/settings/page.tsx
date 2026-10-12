@@ -283,15 +283,20 @@ export default function SettingsPage(): React.ReactElement {
               value={currentPassword}
             />
           </label>
-          <label className="text-sm text-neutral-400">새 비밀번호
-            <input
-              className="mt-2 w-full rounded-lg border border-neutral-800 bg-neutral-900 px-4 py-3 text-neutral-300"
-              onChange={(event) => setNewPassword(event.target.value)}
-              required
-              type="password"
-              value={newPassword}
-            />
-          </label>
+          <div>
+            <label className="text-sm text-neutral-400">새 비밀번호
+              <input
+                aria-describedby="new-password-hint"
+                className="mt-2 w-full rounded-lg border border-neutral-800 bg-neutral-900 px-4 py-3 text-neutral-300"
+                minLength={8}
+                onChange={(event) => setNewPassword(event.target.value)}
+                required
+                type="password"
+                value={newPassword}
+              />
+            </label>
+            <p className="mt-2 text-xs text-neutral-500" id="new-password-hint">8자 이상</p>
+          </div>
           <div className="sm:col-span-2">
             <button
               className="rounded-lg bg-white px-4 py-2 text-sm text-black hover:bg-neutral-200 disabled:bg-neutral-700 disabled:text-neutral-400"

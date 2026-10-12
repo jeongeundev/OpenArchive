@@ -38,7 +38,15 @@ def _clear_session_cookie(response: Response) -> None:
 async def login(body: LoginRequest, response: Response, conn: Connection) -> AuthStatus:
     try:
         user = await service.authenticate_user(conn, body.username, body.password)
+    except service.LoginLocked as error:
+        raise HTTPException(
+            status_code=429,
+            detail=str(error),
+            headers={"Retry-After": str(error.retry_after)},
+        ) from error
     except service.AuthenticationFailed as error:
+        # 거부 응답의 예외가 요청 트랜잭션을 롤백한다 — 실패 기록이 함께 사라지지 않게 먼저 커밋한다.
+        await conn.commit()
         raise HTTPException(status_code=401, detail=str(error)) from error
     token = await service.create_session(conn, user["id"])
     response.set_cookie(
@@ -92,6 +100,8 @@ async def change_password(
             current_password=body.current_password,
             new_password=body.new_password,
         )
+    except service.PasswordTooShort as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
     except service.AuthenticationFailed as error:
         # 세션은 유효하므로 401이 아니다. 401이면 클라이언트가 "세션 만료"로 읽는다.
         raise HTTPException(

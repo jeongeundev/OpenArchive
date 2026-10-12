@@ -22,6 +22,8 @@ async def create_user(body: CreateUserRequest, conn: Connection) -> UserSummary:
         )
     except service.UserAlreadyExists as error:
         raise HTTPException(status_code=409, detail="이미 존재하는 사용자명입니다.") from error
+    except (service.PasswordTooShort, service.InvalidUsername) as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
     return UserSummary.model_validate(user)
 
 
@@ -41,6 +43,8 @@ async def delete_user(
         await service.delete_user(
             conn, user_id, transfer_to=transfer_to, actor=admin["username"]
         )
+    except service.CannotDeleteSelf as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
     except service.UserOwnsDocuments as error:
         raise HTTPException(
             status_code=409,
