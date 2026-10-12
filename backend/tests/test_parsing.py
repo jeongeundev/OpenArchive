@@ -187,11 +187,11 @@ def test_extract_text_reads_docx_text_box_inside_table_cell() -> None:
     assert extract_text(buf.getvalue(), "docx") == "단계\t셀 안 상자"
 
 
-def wrap_in_content_control(element) -> None:
+def wrap_in_content_control(element, properties: str = "") -> None:
     """요소를 Word 콘텐츠 컨트롤(`w:sdt/w:sdtContent`)로 감싼다 — 양식 문서의 표·셀·문단에 흔하다."""
     sdt = parse_xml(
         '<w:sdt xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
-        "<w:sdtPr/><w:sdtContent/></w:sdt>"
+        f"<w:sdtPr>{properties}</w:sdtPr><w:sdtContent/></w:sdt>"
     )
     element.addprevious(sdt)
     sdt[1].append(element)
@@ -208,10 +208,32 @@ def test_extract_text_reads_docx_content_controls_in_body_and_tables() -> None:
     table.cell(1, 1).text = "김하나"
     wrap_in_content_control(table.rows[1]._tr)
     wrap_in_content_control(table.cell(0, 1)._tc)
-    wrap_in_content_control(table.cell(0, 0).paragraphs[0]._p)
+    cell_paragraph = table.cell(0, 0).paragraphs[0]._p
+    wrap_in_content_control(cell_paragraph)
+    wrap_in_content_control(cell_paragraph.getparent().getparent())  # 컨트롤 안의 컨트롤
     document.save(buf)
 
     assert extract_text(buf.getvalue(), "docx") == "양식 머리\n\n항목\t값\n성명\t김하나"
+
+
+def test_extract_text_skips_docx_placeholder_and_table_of_contents_controls() -> None:
+    # 값을 넣지 않은 컨트롤의 안내 문구는 내용이 아니고, 자동 목차는 제목을 한 번 더 쓴 것이다.
+    buf = io.BytesIO()
+    document = Document()
+    wrap_in_content_control(
+        document.add_paragraph("1. 개요\t3")._p,
+        '<w:docPartObj><w:docPartGallery w:val="Table of Contents"/></w:docPartObj>',
+    )
+    document.add_paragraph("1. 개요")
+    wrap_in_content_control(
+        document.add_paragraph("텍스트를 입력하려면 여기를 클릭하거나 탭하세요.")._p,
+        "<w:showingPlcHdr/>",
+    )
+    wrap_in_content_control(document.add_paragraph("표지 제목")._p,
+                            '<w:docPartObj><w:docPartGallery w:val="Cover Pages"/></w:docPartObj>')
+    document.save(buf)
+
+    assert extract_text(buf.getvalue(), "docx") == "1. 개요\n\n표지 제목"
 
 
 def test_extract_text_skips_docx_text_box_deleted_by_tracked_changes() -> None:
@@ -225,6 +247,12 @@ def test_extract_text_skips_docx_text_box_deleted_by_tracked_changes() -> None:
     )
     deleted.append(parse_xml(docx_text_box_run("지운 상자")))
     anchor._p.append(deleted)
+    moved = parse_xml(
+        '<w:moveFrom xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
+        ' w:id="2" w:author="a"/>'
+    )
+    moved.append(parse_xml(docx_text_box_run("옮기기 전 상자")))
+    anchor._p.append(moved)
     document.save(buf)
 
     assert extract_text(buf.getvalue(), "docx") == "본문"
