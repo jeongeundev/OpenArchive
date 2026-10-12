@@ -187,6 +187,49 @@ def test_extract_text_reads_docx_text_box_inside_table_cell() -> None:
     assert extract_text(buf.getvalue(), "docx") == "단계\t셀 안 상자"
 
 
+def wrap_in_content_control(element) -> None:
+    """요소를 Word 콘텐츠 컨트롤(`w:sdt/w:sdtContent`)로 감싼다 — 양식 문서의 표·셀·문단에 흔하다."""
+    sdt = parse_xml(
+        '<w:sdt xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        "<w:sdtPr/><w:sdtContent/></w:sdt>"
+    )
+    element.addprevious(sdt)
+    sdt[1].append(element)
+
+
+def test_extract_text_reads_docx_content_controls_in_body_and_tables() -> None:
+    buf = io.BytesIO()
+    document = Document()
+    wrap_in_content_control(document.add_paragraph("양식 머리")._p)
+    table = document.add_table(rows=2, cols=2)
+    table.cell(0, 0).text = "항목"
+    table.cell(0, 1).text = "값"
+    table.cell(1, 0).text = "성명"
+    table.cell(1, 1).text = "김하나"
+    wrap_in_content_control(table.rows[1]._tr)
+    wrap_in_content_control(table.cell(0, 1)._tc)
+    wrap_in_content_control(table.cell(0, 0).paragraphs[0]._p)
+    document.save(buf)
+
+    assert extract_text(buf.getvalue(), "docx") == "양식 머리\n\n항목\t값\n성명\t김하나"
+
+
+def test_extract_text_skips_docx_text_box_deleted_by_tracked_changes() -> None:
+    # 변경 추적으로 지운 글자(`w:delText`)를 읽지 않듯 지운 런에 든 상자도 읽지 않는다.
+    buf = io.BytesIO()
+    document = Document()
+    anchor = document.add_paragraph("본문")
+    deleted = parse_xml(
+        '<w:del xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
+        ' w:id="1" w:author="a"/>'
+    )
+    deleted.append(parse_xml(docx_text_box_run("지운 상자")))
+    anchor._p.append(deleted)
+    document.save(buf)
+
+    assert extract_text(buf.getvalue(), "docx") == "본문"
+
+
 def test_extract_text_reads_pdf() -> None:
     assert extract_text(minimal_pdf("embedding job trigger"), "pdf") == "embedding job trigger"
 
