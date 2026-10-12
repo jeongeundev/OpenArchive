@@ -225,15 +225,16 @@ def test_extract_text_skips_docx_placeholder_and_table_of_contents_controls() ->
         '<w:docPartObj><w:docPartGallery w:val="Table of Contents"/></w:docPartObj>',
     )
     document.add_paragraph("1. 개요")
-    wrap_in_content_control(
-        document.add_paragraph("텍스트를 입력하려면 여기를 클릭하거나 탭하세요.")._p,
-        "<w:showingPlcHdr/>",
-    )
+    filled = document.add_paragraph("채운 칸")._p
+    empty = document.add_paragraph("텍스트를 입력하려면 여기를 클릭하거나 탭하세요.")._p
+    wrap_in_content_control(empty, "<w:showingPlcHdr/>")
+    wrap_in_content_control(filled)
+    filled.getparent().append(empty.getparent().getparent())  # 채운 컨트롤 안의 빈 컨트롤
     wrap_in_content_control(document.add_paragraph("표지 제목")._p,
                             '<w:docPartObj><w:docPartGallery w:val="Cover Pages"/></w:docPartObj>')
     document.save(buf)
 
-    assert extract_text(buf.getvalue(), "docx") == "1. 개요\n\n표지 제목"
+    assert extract_text(buf.getvalue(), "docx") == "1. 개요\n\n채운 칸\n\n표지 제목"
 
 
 def test_extract_text_skips_docx_text_box_deleted_by_tracked_changes() -> None:
