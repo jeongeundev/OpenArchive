@@ -26,6 +26,7 @@ export function DocumentTable({
             <th className="px-4 py-3 font-medium" scope="col">제목</th>
             <th className="px-4 py-3 font-medium" scope="col">유형</th>
             <th className="px-4 py-3 font-medium" scope="col">태그</th>
+            <th className="px-4 py-3 font-medium" scope="col">소유자</th>
             <th className="px-4 py-3 font-medium" scope="col">열람 범위</th>
             <th className="px-4 py-3 font-medium" scope="col">상태</th>
             <th className="px-4 py-3 font-medium" scope="col">수정일</th>
@@ -34,7 +35,7 @@ export function DocumentTable({
         <tbody className="divide-y divide-neutral-800">
           {documents.length === 0 ? (
             <tr>
-              <td className="px-4 py-8 text-neutral-500" colSpan={6}>
+              <td className="px-4 py-8 text-neutral-500" colSpan={7}>
                 {emptyMessage}
               </td>
             </tr>
@@ -55,6 +56,7 @@ export function DocumentTable({
                 <td className="px-4 py-3 text-neutral-400">
                   {document.tags.length > 0 ? document.tags.join(", ") : "—"}
                 </td>
+                <td className="px-4 py-3 text-neutral-400">{document.owner_id}</td>
                 <td className="px-4 py-3">
                   {VISIBILITY_LABEL[document.effective_visibility]}
                 </td>

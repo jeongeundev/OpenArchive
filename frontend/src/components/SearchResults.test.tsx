@@ -74,7 +74,7 @@ describe("SearchResults", () => {
     );
 
     expect(screen.getByText(/이어짐/)).toHaveTextContent(
-      "OpenSQL 운영 가이드에서 「관련 있음」로 이어짐",
+      "「OpenSQL 운영 가이드」에서 「관련 있음」로 이어짐",
     );
     expect(screen.getAllByText(/이어짐/)).toHaveLength(1);
   });
