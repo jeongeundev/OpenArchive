@@ -70,6 +70,26 @@ def _matching_passage(hit: SearchHit, current: str) -> SearchPassage:
     return SearchPassage(index, chunks[index], hit.based_on_version, hit.score)
 
 
+def _strip_span(content: str, start: int, end: int) -> tuple[int, int]:
+    """앞뒤 공백을 뺀 자리. 예산을 공백에 쓰지 않는다."""
+    while start < end and content[start].isspace():
+        start += 1
+    while end > start and content[end - 1].isspace():
+        end -= 1
+    return start, end
+
+
+def _window(length: int, focus: tuple[int, int], limit: int) -> tuple[int, int]:
+    """맞은 청크(focus)를 가운데 둔 길이 limit 이하의 창. 청크가 limit보다 길면 청크 앞부분이다."""
+    focus_start, focus_end = focus
+    if focus_end - focus_start >= limit:
+        return focus_start, focus_start + limit
+    size = min(limit, length)
+    start = max(0, focus_start - (size - (focus_end - focus_start)) // 2)
+    start = min(start, length - size)
+    return start, start + size
+
+
 async def gather_evidence(
     conn: psycopg.AsyncConnection,
     embedding_provider: EmbeddingProvider,
@@ -110,7 +130,10 @@ async def gather_evidence(
                     },
                 )
                 current_chunks = {(row[0], row[1]): row[2] for row in await cursor.fetchall()}
-    selected = []
+    # 두 단계로 담는다 (#246). 먼저 순위대로 각 근거의 맞은 청크만 — 남은 예산에 안 들어가면 건너뛰되
+    # 첫 근거는 잘라서라도 넣는다. 그다음 남은 예산으로 맞은 청크 주변 문맥을 순위대로 넓힌다.
+    # 문맥을 먼저 채우면 앞 근거의 문맥이 뒤 근거의 맞은 청크 자리를 먹는다.
+    windows = []
     seen = set()
     remaining = context_chars
     for hit in hits:
@@ -120,16 +143,26 @@ async def gather_evidence(
         else:
             passages = hit.passages or (hit,)
         for passage in passages:
-            content = passage.content.strip()
-            if not content or content in seen:
+            whole = passage.content.strip()
+            if not whole or whole in seen or remaining <= 0:
                 continue
-            if len(content) > remaining:
-                if selected:
-                    continue
-                content = content[:remaining]
-            selected.append((hit, passage, content))
-            seen.add(passage.content.strip())
-            remaining -= len(content)
+            focus = _strip_span(passage.content, *(getattr(passage, "focus", None) or (0, len(passage.content))))
+            if focus[1] - focus[0] > remaining and windows:
+                continue
+            seen.add(whole)
+            window = (focus[0], min(focus[1], focus[0] + remaining))
+            windows.append([hit, passage, focus, window])
+            remaining -= window[1] - window[0]
+    for entry in windows:
+        if remaining <= 0:
+            break
+        _, passage, focus, (start, end) = entry
+        entry[3] = _window(len(passage.content), focus, (end - start) + remaining)
+        remaining -= (entry[3][1] - entry[3][0]) - (end - start)
+    selected = [
+        (hit, passage, passage.content[start:end].strip())
+        for hit, passage, _, (start, end) in windows
+    ]
     sources = []
     for hit, passage, content in selected:
         if hit.document_id not in versions:

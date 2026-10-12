@@ -1242,6 +1242,11 @@ def test_merge_candidate_contexts_preserves_each_source_chunk_once():
     assert passages[0].content == "소개\n\n첫 근거\n\n중심\n\n두 번째 근거\n\n결론"
     assert passages[1].content == "별도 소개\n\n별도 근거"
     assert all(p.based_on_version == 7 for p in passages)
+    # 맞은 청크의 자리 — 답변 근거가 긴 대목을 이 자리 중심으로 줄인다 (#246)
+    start, end = passages[0].focus
+    assert passages[0].content[start:end] == "중심"
+    start, end = passages[1].focus
+    assert passages[1].content[start:end] == "별도 근거"
     assert _merge_passages([]) == ()
 
 

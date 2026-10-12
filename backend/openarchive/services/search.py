@@ -298,6 +298,9 @@ class SearchPassage:
     content: str
     based_on_version: int
     score: float
+    # content 안에서 chunk_index 청크가 차지하는 자리. None이면 content 전체다.
+    # 답변 근거 조립이 긴 대목을 맞은 청크 중심으로 줄일 때 쓴다 (#246).
+    focus: tuple[int, int] | None = None
 
 
 @dataclass(frozen=True)
@@ -327,9 +330,12 @@ def _merge_passages(items: list) -> tuple[SearchPassage, ...]:
     for group in groups:
         center, _, version, score = min(group, key=lambda item: (-float(item[3]), item[0]))
         chunks = {index: content for _, context, _, _ in group for index, content in context}
+        ordered = sorted(chunks)
+        start = sum(len(chunks[index]) + 2 for index in ordered[:ordered.index(center)])
         passages.append(SearchPassage(
-            chunk_index=center, content="\n\n".join(chunks[index] for index in sorted(chunks)),
+            chunk_index=center, content="\n\n".join(chunks[index] for index in ordered),
             based_on_version=version, score=float(score),
+            focus=(start, start + len(chunks[center])),
         ))
     return tuple(sorted(passages, key=lambda passage: (-passage.score, passage.chunk_index)))
 

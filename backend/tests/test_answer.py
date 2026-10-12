@@ -168,7 +168,7 @@ async def test_invalid_k(conn, k):
         await gather(conn, k=k)
 
 
-async def test_passage_order_and_skipping_oversized_following_passage(conn, monkeypatch):
+async def test_passage_order_and_skipping_following_passage_whose_matched_chunk_does_not_fit(conn, monkeypatch):
     from dataclasses import replace
 
     from openarchive.services.search import SearchPassage
@@ -187,10 +187,97 @@ async def test_passage_order_and_skipping_oversized_following_passage(conn, monk
     evidence = await answer.gather_evidence(
         conn, FakeProvider(), query="정합성 근거", user_id="alice", context_chars=6,
     )
+    # 맞은 청크 자체가 남은 예산보다 긴 뒤 근거는 건너뛴다 — 잘라 넣으면 뒤에 오는 근거의 자리를 먹는다 (#246).
     assert [(source.label, source.chunk_index, source.content) for source in evidence.sources] == [
         (1, 2, "첫 대목"), (2, 4, "끝"),
     ]
     assert sum(len(source.content) for source in evidence.sources) <= 6
+
+
+async def test_matched_chunks_of_every_source_come_before_surrounding_context(conn, monkeypatch):
+    # #246 수정 1차에서 inflation-past가 회귀했다: 앞 근거의 문맥이 예산을 다 써 뒤 근거(과거 판 청크)가 빠졌다.
+    from dataclasses import replace
+
+    from openarchive.services.search import SearchPassage
+
+    await seed(conn, title="대목", content="정합성 근거")
+
+    async def with_passages(*args, **kwargs):
+        hits = await search_documents(*args, **kwargs)
+        return [replace(hits[0], passages=(
+            SearchPassage(1, "가" * 40 + "첫째맞은청크" + "가" * 54, 1, 0.9, focus=(40, 46)),
+            SearchPassage(5, "나둘째맞은청크" + "나" * 93, 1, 0.8, focus=(1, 7)),
+            SearchPassage(9, "셋째맞은청크", 1, 0.7),
+        ))]
+
+    monkeypatch.setattr(answer, "search_documents", with_passages)
+    evidence = await answer.gather_evidence(
+        conn, FakeProvider(), query="정합성 근거", user_id="alice", context_chars=40,
+    )
+    contents = [source.content for source in evidence.sources]
+    assert [source.chunk_index for source in evidence.sources] == [1, 5, 9]
+    assert "첫째맞은청크" in contents[0] and "둘째맞은청크" in contents[1]
+    assert contents[2] == "셋째맞은청크"
+    # 남은 예산은 1순위 근거의 문맥부터 넓힌다
+    assert len(contents[0]) > len("첫째맞은청크")
+    assert sum(len(content) for content in contents) <= 40
+
+
+async def test_first_matched_chunk_longer_than_budget_keeps_its_own_start(conn, monkeypatch):
+    # 맞은 청크 자체가 예산보다 길면 대목 앞이 아니라 그 청크의 앞부분부터 담는다 (#246)
+    from dataclasses import replace
+
+    from openarchive.services.search import SearchPassage
+
+    await seed(conn, title="대목", content="정합성 근거")
+
+    async def with_passages(*args, **kwargs):
+        hits = await search_documents(*args, **kwargs)
+        return [replace(hits[0], passages=(
+            SearchPassage(3, "앞" * 30 + "맞은청크시작" + "뒤" * 30, 1, 0.9, focus=(30, 66)),
+        ))]
+
+    monkeypatch.setattr(answer, "search_documents", with_passages)
+    evidence = await answer.gather_evidence(
+        conn, FakeProvider(), query="정합성 근거", user_id="alice", context_chars=10,
+    )
+    assert [source.content for source in evidence.sources] == ["맞은청크시작뒤뒤뒤뒤"]
+
+
+def _filler(prefix: str, count: int) -> list[str]:
+    """질의와 어절이 겹치지 않는 문단들. 문단마다 어절이 달라 FakeProvider 벡터가 갈린다."""
+    return [
+        " ".join(f"{prefix}{index}채움{word}" for word in range(40))
+        for index in range(count)
+    ]
+
+
+async def test_oversized_first_passage_keeps_the_matched_chunk(conn):
+    # #246 ① pdf-region: 첫 대목(맞은 청크 ±2)이 예산보다 길면 앞에서 잘라 뒤쪽의 맞은 청크를 잃었다.
+    paragraphs = _filler("앞", 14) + ["정합성 근거 목표대목 마지막에 있다"]
+    document_id = await seed(conn, title="긴 문서", content="\n\n".join(paragraphs))
+    evidence = await answer.gather_evidence(
+        conn, FakeProvider(), query="정합성 근거", user_id="alice", context_chars=1500,
+    )
+    source = evidence.sources[0]
+    assert source.document_id == document_id
+    assert "정합성 근거 목표대목" in source.content
+    assert len(source.content) <= 1500
+
+
+async def test_oversized_following_passage_is_trimmed_around_the_matched_chunk(conn):
+    # #246 ② csat-synthesis: 남은 예산보다 긴 둘째 문서 대목을 통째로 건너뛰었다.
+    await seed(conn, title="짧은 문서", content="정합성 근거")
+    paragraphs = _filler("뒤", 14) + ["정합성 근거 둘째대목 마지막에 있다"]
+    long_id = await seed(conn, title="긴 둘째 문서", content="\n\n".join(paragraphs))
+    evidence = await answer.gather_evidence(
+        conn, FakeProvider(), query="정합성 근거", user_id="alice", context_chars=1500,
+    )
+    assert [source.title for source in evidence.sources][:2] == ["짧은 문서", "긴 둘째 문서"]
+    second = evidence.sources[1]
+    assert second.document_id == long_id
+    assert "정합성 근거 둘째대목" in second.content
+    assert sum(len(source.content) for source in evidence.sources) <= 1500
 
 
 async def test_gather_evidence_forwards_folder_filter(conn, monkeypatch):
