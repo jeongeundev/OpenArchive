@@ -9,6 +9,7 @@ import psycopg
 import pytest
 from conftest import insert_test_document, login_as
 
+from openarchive.services import organize
 from openarchive.services.documents import DocumentNotFound
 from openarchive.services.organize import (
     SUGGESTION_MIN_SHARE,
@@ -207,6 +208,23 @@ async def test_a_visible_neighbour_in_an_invisible_folder_never_names_that_folde
     assert (bob.votes, bob.total) == (2, 4)
 
 
+async def test_an_individually_private_document_in_a_visible_folder_is_not_counted(conn):
+    # 보이는 폴더 안이라도 「개별 지정」 비공개인 남의 문서는 표도 분모도 아니다 — 수가 새면 존재가 샌다.
+    hr = await add_folder(conn, "인사")
+    finance = await add_folder(conn, "재무")
+    new = await add_doc(conn, "새 문서")
+    for index in range(2):
+        await link(conn, new, await add_doc(conn, f"인사 {index}", folder=hr))
+    for index in range(3):
+        await link(conn, new, await add_doc(
+            conn, f"남의 비공개 {index}", folder=finance, owner="bob", visibility="private", follows=False
+        ))
+
+    alice = await suggest_folder(conn, document_id=new, user_id="alice")
+
+    assert (alice.folder_id, alice.votes, alice.total) == (hr, 2, 2)
+
+
 async def test_the_subject_document_must_be_visible(conn):
     private = await add_doc(conn, "남의 문서", owner="bob", visibility="private")
 
@@ -234,6 +252,17 @@ async def test_unfiled_lists_only_my_documents_without_a_folder(conn):
     assert by_title["내 새 문서"].document_id == mine
     assert by_title["내 외톨이"].suggestion is None
     assert by_title["내 외톨이"].document_id == lonely
+
+
+async def test_unfiled_counts_every_unfiled_document_beyond_the_page(conn, monkeypatch):
+    monkeypatch.setattr(organize, "UNFILED_LIMIT", 1)
+    await add_doc(conn, "오래된 문서")
+    await add_doc(conn, "새 문서")
+
+    result = await list_unfiled(conn, user_id="alice")
+
+    assert result.count == 2
+    assert len(result.items) == 1
 
 
 def _seed_api(dsn):

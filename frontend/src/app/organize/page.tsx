@@ -9,12 +9,12 @@ import { useFolders } from "@/lib/useFolders";
 import type { UnfiledDocument, UnfiledResponse } from "@/lib/types";
 
 /**
- * 정리할 문서 (ADR-064) — 폴더 밖에 있는 내 문서를 관계 이웃의 과반이 든 폴더와 함께 보인다.
+ * 정리할 문서 (ADR-064) — 폴더 밖에 있는 내 문서를, 폴더에 든 관계 이웃의 절반 이상이 모인 폴더와 함께 보인다.
  * 옮기는 것은 사람이 누를 때뿐이고, 열람 범위가 바뀌면 폴더 칸과 같은 확인을 받는다.
  */
 export default function OrganizePage(): React.ReactElement {
   // 폴더 범위를 알아야 범위 변경 확인을 할 수 있다 — 폴더를 불러오기 전에는 옮기기를 막는다.
-  const { folders, loading: foldersLoading, refresh: refreshFolders } = useFolders(true);
+  const { folders, loading: foldersLoading, error: foldersError, refresh: refreshFolders } = useFolders(true);
   const [result, setResult] = useState<UnfiledResponse | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -58,6 +58,9 @@ export default function OrganizePage(): React.ReactElement {
       </div>
 
       {actionError !== null ? <p className="text-sm text-[#ef4444]" role="alert">{actionError}</p> : null}
+      {foldersError !== null ? (
+        <p className="text-sm text-neutral-500" role="status">폴더 목록을 불러오지 못해 옮길 수 없습니다.</p>
+      ) : null}
 
       {loadError !== null ? (
         <p className="text-sm text-neutral-500" role="status">{loadError}</p>
@@ -104,7 +107,7 @@ export default function OrganizePage(): React.ReactElement {
                             <div className="flex justify-end">
                               <button
                                 className="text-sm text-[#0ea5e9] hover:underline disabled:cursor-not-allowed disabled:text-neutral-600"
-                                disabled={workingId !== null || foldersLoading}
+                                disabled={workingId !== null || foldersLoading || foldersError !== null}
                                 onClick={() => void apply(item, item.suggestion!.folder_id)}
                                 type="button"
                               >

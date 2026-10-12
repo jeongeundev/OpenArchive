@@ -122,7 +122,7 @@ async def _suggestion(conn, row) -> FolderSuggestion | None:
 async def suggest_folder(
     conn: psycopg.AsyncConnection, *, document_id: UUID, user_id: str | None
 ) -> FolderSuggestion | None:
-    """폴더에 든 관계 이웃의 과반이 든 폴더를 제안한다. 지금 폴더와 같거나 과반이 없으면 None."""
+    """폴더에 든 관계 이웃의 절반 이상이 모인 폴더를 제안한다. 지금 폴더와 같거나 그런 폴더가 없으면 None."""
     params = {"id": document_id, "user": user_id}
     async with conn.transaction():
         await ensure_visible(conn, document_id, user_id=user_id)

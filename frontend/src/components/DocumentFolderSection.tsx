@@ -15,7 +15,7 @@ import { FolderSelect } from "./FolderSelect";
  * 고른 값은 현재 폴더에서 시작한다 — 폴더가 바뀌면 부모가 key로 다시 그린다.
  * 이동은 소유자만 하며, 「폴더 범위 따름」 문서의 실효 범위가 바뀔 때만 확인을 받는다.
  * 볼 수 없게 된 폴더 안 자기 문서(hiddenFolder)는 이름 없이 그 사실만 보이고, 어디로든 옮길 수 있다.
- * 소유자에게는 관계 이웃의 과반이 든 폴더를 추천한다(ADR-064) — 고르면 선택칸만 바뀌고 옮기기는 사람이 누른다.
+ * 소유자에게는 폴더에 든 관계 이웃의 절반 이상이 모인 폴더를 추천한다(ADR-064) — 고르면 선택칸만 바뀌고 옮기기는 사람이 누른다.
  */
 export function DocumentFolderSection({ documentId, folder, hiddenFolder = false, isOwner, disabled = false, onMoved }: {
   documentId: string;
@@ -25,7 +25,7 @@ export function DocumentFolderSection({ documentId, folder, hiddenFolder = false
   disabled?: boolean;
   onMoved: () => void;
 }): React.ReactElement | null {
-  const { folders, refresh: refreshFolders } = useFolders(isOwner);
+  const { folders, loading: foldersLoading, refresh: refreshFolders } = useFolders(isOwner);
   const currentId = folder?.id ?? null;
   const [target, setTarget] = useState<string | null>(currentId);
   const [moving, setMoving] = useState(false);
@@ -99,7 +99,7 @@ export function DocumentFolderSection({ documentId, folder, hiddenFolder = false
         <p className="text-sm text-neutral-400">
           <span className="mr-2 text-neutral-500">추천 폴더</span>
           <button type="button" aria-label={`추천 폴더 ${suggestionLabel} 고르기`}
-            onClick={() => setTarget(suggestion.folder_id)} disabled={disabled || moving}
+            onClick={() => setTarget(suggestion.folder_id)} disabled={disabled || moving || foldersLoading}
             className="text-[#0ea5e9] hover:underline disabled:text-neutral-600">
             {suggestionLabel}
           </button>

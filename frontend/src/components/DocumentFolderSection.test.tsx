@@ -186,4 +186,18 @@ describe("DocumentFolderSection", () => {
     await screen.findByRole("option", { name: "인사/채용" });
     expect(screen.queryByText(/추천 폴더/)).not.toBeInTheDocument();
   });
+
+  it("폴더 목록이 오기 전에는 추천 폴더를 고를 수 없다", async () => {
+    let releaseFolders: (value: Response) => void = () => undefined;
+    vi.stubGlobal("fetch", vi.fn((url: string) => {
+      if (url === "/api/folders") return new Promise<Response>(resolve => { releaseFolders = resolve; });
+      if (url.endsWith("/folder-suggestion")) return json({ suggestion: toHire });
+      return json({});
+    }));
+    render(<DocumentFolderSection documentId="d1" folder={inInsa} isOwner onMoved={vi.fn()} />);
+    const pick = await screen.findByRole("button", { name: "추천 폴더 인사/채용 고르기" });
+    expect(pick).toBeDisabled();
+    releaseFolders(new Response(JSON.stringify([insa, hire, rfp]), { headers: { "Content-Type": "application/json" } }));
+    await waitFor(() => expect(pick).toBeEnabled());
+  });
 });

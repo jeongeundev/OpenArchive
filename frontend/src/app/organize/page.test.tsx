@@ -120,4 +120,16 @@ describe("정리할 문서 화면", () => {
 
     expect(await screen.findByText("폴더 밖에 있는 내 문서가 없습니다.")).toBeInTheDocument();
   });
+
+  it("폴더 목록을 못 받으면 옮기기를 막는다 — 범위 변경을 확인할 수 없다", async () => {
+    routedFetch();
+    const base = globalThis.fetch;
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) =>
+      String(input) === "/api/folders" ? response({ detail: "실패" }, 500) : base(input, init)));
+    render(<OrganizePage />);
+
+    await screen.findByText("연차 규정");
+    expect(await screen.findByText("폴더 목록을 불러오지 못해 옮길 수 없습니다.")).toBeInTheDocument();
+    expect(within(rowOf("연차 규정")).getByRole("button", { name: "인사 폴더로 옮기기" })).toBeDisabled();
+  });
 });
