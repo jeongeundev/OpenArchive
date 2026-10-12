@@ -8,12 +8,24 @@ OpenArchive는 MIT 라이선스(`LICENSE`)로 배포된다. 이 문서는 OpenAr
 `backend/openarchive/static/`(정적 빌드한 웹 화면, ADR-041)에 번들되어 저장소·wheel과 함께 배포된다. 라이선스 본문은
 `backend/licenses/`에 있고 wheel에도 함께 실린다.
 
-| 구성 요소 | 버전 | 라이선스 | 본문 |
+| 구성 요소 | 버전 | 라이선스 | 본문(`backend/licenses/`) |
 |---|---|---|---|
-| Next.js | 16.3.0 | MIT | `backend/licenses/next-license.txt` |
-| React · React DOM | 19.2.8 | MIT | `backend/licenses/react-license.txt` · `backend/licenses/react-dom-license.txt` |
-| JSZip | 3.10.1 | MIT 또는 GPL-3.0-or-later 중 선택 — **OpenArchive는 MIT를 택한다** | `backend/licenses/jszip-license.txt` |
-| Geist · Geist Mono 글꼴(`geist` 패키지) | 1.7.2 | SIL Open Font License 1.1 | `backend/licenses/geist-OFL-1.1.txt` |
+| Next.js(클라이언트 런타임) | 16.3.0 | MIT | `next-license.txt` |
+| React · React DOM · scheduler | 19.2.8 · 19.2.8 · 0.27.0 | MIT | `react-license.txt` · `react-dom-license.txt` · `scheduler-license.txt` |
+| JSZip | 3.10.1 | MIT 또는 GPL-3.0-or-later 중 선택 — **OpenArchive는 MIT를 택한다** | `jszip-license.txt` |
+| pako (JSZip 의존) | 1.0.11 | MIT AND Zlib | `pako-license.txt` |
+| readable-stream (JSZip 의존) | 2.3.8 | MIT | `readable-stream-license.txt` |
+| lie · immediate · setimmediate (JSZip 의존) | 3.3.0 · 3.0.6 · 1.0.5 | MIT | `lie-license.txt` · `immediate-license.txt` · `setimmediate-license.txt` |
+| inherits (readable-stream 의존) | 2.0.4 | ISC | `inherits-license.txt` |
+| safe-buffer · string_decoder · core-util-is · util-deprecate · process-nextick-args · isarray (readable-stream 의존) | 5.1.2 · 1.1.1 · 1.0.3 · 1.0.2 · 2.0.1 · 1.0.0 | MIT | `safe-buffer-license.txt` · `string_decoder-license.txt` · `core-util-is-license.txt` · `util-deprecate-license.txt` · `process-nextick-args-license.txt` · `isarray-1.0.0-readme-license.txt`(패키지에 LICENSE 파일이 없어 README의 라이선스 절) |
+| Next.js가 넣는 브라우저 폴리필 `buffer` (+ base64-js · ieee754) | Next 16.3.0 동봉판 | MIT (+ MIT · BSD-3-Clause) | `next-compiled-buffer-license.txt` · `next-compiled-buffer-base64-js-license.txt` · `next-compiled-buffer-ieee754-license.txt` |
+| Next.js가 넣는 폴리필 `events` · `process` · `stream-browserify` | Next 16.3.0 동봉판 | MIT | `next-compiled-events-license.txt` · `next-compiled-process-license.txt` · `next-compiled-stream-browserify-license.txt` |
+| Geist · Geist Mono 글꼴(`geist` 패키지) | 1.7.2 | SIL Open Font License 1.1 | `geist-OFL-1.1.txt` |
+
+**확인 방법** — 목록은 `frontend/package-lock.json`의 비개발 의존성 트리(`npm ls --omit=dev --all`)와 정적 청크
+(`backend/openarchive/static/_next/static/chunks/*.js`)에 남은 식별 문자열을 대조해 정했다(예: `pako deflate`,
+`_readableState`, `kMaxLength`, `unstable_scheduleCallback`). 빌드 도구(PostCSS·SWC·sharp·caniuse-lite 등)는 번들에 들어가지
+않는다. 프론트 의존성을 바꾸면 같은 방법으로 이 표를 갱신한다.
 
 ## 2. 설치 시 받는 Python 패키지 (`backend/pyproject.toml`)
 
@@ -27,14 +39,14 @@ OpenArchive는 MIT 라이선스(`LICENSE`)로 배포된다. 이 문서는 OpenAr
 | mcp (Python SDK) | MIT | |
 | httpx | BSD-3-Clause | |
 | pypdf | BSD-3-Clause | |
-| pypdfium2 | BSD-3-Clause, Apache-2.0 (+ 번들한 PDFium과 그 의존성의 라이선스) | PDFium은 BSD-3-Clause 계열 |
+| pypdfium2 | BSD-3-Clause, Apache-2.0 (+ 번들한 PDFium과 그 의존성의 라이선스) | PDFium 바이너리에는 FreeType·libjpeg-turbo·OpenJPEG·lcms2·ICU 등이 함께 들어 있다 — pypdfium2 배포물의 라이선스 고지를 따른다 |
 | pytesseract | Apache-2.0 | |
 | Pillow | MIT-CMU | |
 | python-docx · openpyxl · python-pptx · PyYAML | MIT | |
-| olefile | BSD | HWP 5.0 읽기. AGPL-3.0인 pyhwp는 쓰지 않는다 |
+| olefile | BSD-2-Clause | HWP 5.0 읽기. AGPL-3.0인 pyhwp는 쓰지 않는다 |
 | python-multipart | Apache-2.0 | |
 | networkx | BSD-3-Clause | |
-| sentence-transformers (`[local]` 선택 설치) | Apache-2.0 | PyTorch(BSD-3-Clause 계열)·Transformers(Apache-2.0)를 함께 설치한다 |
+| sentence-transformers (`[local]` 선택 설치) | Apache-2.0 | PyTorch(`Apache-2.0 AND … AND BSD-3-Clause AND MIT` 복합 — 패키지 메타데이터 참조)·Transformers(Apache-2.0)를 함께 설치한다 |
 
 ## 3. 프로그램 밖에서 호출하는 도구 (별도 설치, 저장소에 포함하지 않음)
 

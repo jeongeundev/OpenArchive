@@ -284,10 +284,7 @@ def test_the_built_wheel_carries_the_licenses_of_bundled_frontend_components(bui
         names = {name.rsplit(".dist-info/licenses/", 1)[1] for name in archive.namelist()
                  if ".dist-info/licenses/" in name}
 
-    assert names >= {
-        "licenses/next-license.txt",
-        "licenses/react-license.txt",
-        "licenses/react-dom-license.txt",
-        "licenses/jszip-license.txt",
-        "licenses/geist-OFL-1.1.txt",
-    }
+    licenses_dir = Path(openarchive.__file__).resolve().parent.parent / "licenses"
+    expected = {f"licenses/{path.name}" for path in licenses_dir.iterdir()}
+    assert "licenses/geist-OFL-1.1.txt" in expected and "licenses/jszip-license.txt" in expected
+    assert names >= expected
