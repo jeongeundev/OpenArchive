@@ -5,7 +5,7 @@
   "tag": "eval167",
   "users": {"evaluator": "eval167", "other": "eval167-other"},
   "sources": [
-    {"path": "backend/tests/fixtures/committee_result.hwp", "sha256": "59d23b6632584c94a53bc5b17e8c794dc8ecda395545bf7d1abf6ea7cb7b2e36",
+    {"path": "backend/tests/fixtures/committee_result.hwp", "sha256": "4b942608916ea755bde3dd015ea05ac05f72c0948136818c0eec9b6861bbe273",
      "title": "2026년 제38차 위원회 결과", "format": "hwp", "owner": "evaluator"},
     {"path": "scripts/eval/formats/csat_applications.hwpx", "fetch": {"news_id": "156780646", "file_id": "198547824"}, "sha256": "a3c7269dadb10e7e7761bbc7715bd83f0997a7dcecb188584274caa736ca6ddf",
      "title": "2027학년도 대학수학능력시험 응시원서 접수 결과", "format": "hwpx", "owner": "evaluator"},
@@ -17,7 +17,7 @@
      "note": "9월판을 올린 뒤 10월판으로 원본을 교체한다 — 현재 텍스트 버전은 10월판"},
     {"path": "scripts/eval/formats/building_stock.pdf", "fetch": {"news_id": "156783582", "file_id": "198561933"}, "sha256": "b31f34371a4bde6fafb29318e6676fe1b10675007129bd5f8e193479377ae4ef",
      "title": "전국 건축물 총 7,438,642동, 43억 75백만m2", "format": "pdf", "owner": "evaluator"},
-    {"path": "backend/tests/fixtures/mixed_tax_pages.pdf", "sha256": "c1d54423e5e3021e46500239b69fc83f985bd96eeae183aaa00b0a53c18b757c",
+    {"path": "backend/tests/fixtures/mixed_tax_pages.pdf", "sha256": "0d6616a03e12fa32f8d77d139d4f5a9064b67d634ddcdf6f07b0a9afc8846f12",
      "title": "국민의 목소리를 담아 새롭게 도약하는 국세행정", "format": "pdf", "owner": "evaluator",
      "ground_truth": "backend/tests/fixtures/mixed_tax_pages.txt", "note": "1·3쪽 텍스트 레이어, 2쪽 스캔 — 2쪽만 OCR"},
     {"path": "scripts/eval/formats/customs_check_scan.jpg", "sha256": "5ab442824562a4ba25431cce01964b7d5490211865949bceb657b4df433a3e75",
