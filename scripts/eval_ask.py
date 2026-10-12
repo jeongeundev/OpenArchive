@@ -7,16 +7,18 @@
 
 질문마다 `/api/ask`와 같은 서비스 경로(`gather_evidence` → `generate_answer`)를 부른다. 근거는 한 번
 모으고 생성만 `--repeats`번 되풀이해 지연 분포를 얻는다 — 온도 0이라 답은 같아야 하며, 다르면
-`answers_differ`로 남긴다. Ollama는 같은 프롬프트 앞부분의 KV 캐시를 재사용해 반복이 10배 빨라지고
+`answers_differ`로 남기고 첫 생성의 답을 채점한다. Ollama는 같은 프롬프트 앞부분의 KV 캐시를 재사용해 반복이 10배 빨라지고
 (실측 16초 → 1.5초), 같은 문서를 근거로 받는 바로 앞 질문도 캐시를 남긴다. 다른 프롬프트로는 밀려나지
 않아, 생성마다 모델을 내렸다(`keep_alive: 0`) 짧은 요청으로 다시 올린 뒤 생성만 잰다 — 처음 받는 질문의 지연이다.
 
-자동 채점은 공백·천 단위 쉼표를 무시한 문자열 포함이며 의미 정확도가 아니다.
+자동 채점은 공백·천 단위 쉼표를 무시한 문자열 포함이며 의미 정확도가 아니다. 숫자로 시작하거나 끝나는 핵심값은
+더 긴 수의 일부로는 맞지 않는다(`8.6%`는 `18.6%` 안에서 안 맞는다).
 - `answer_keys`: 답에 모두 있어야 하는 핵심값. 원소가 목록이면 그중 하나(같은 값의 다른 표기).
 - `keys_in_sources`: 핵심값이 모델에 준 근거에 있었는지. 없으면 추출·검색·글자 예산의 몫이고, 있는데 답에
   없으면 모델의 몫이다(`model_misses`).
 - `relevant`의 문서를 근거로 받았는지(`given_relevant`, 검색 몫)와 인용했는지(`cited_relevant`, 모델 몫).
-- 거절: 근거 0건(`no_evidence`)이거나 답에 거절 문구가 있으면. 정답 근거가 있는 질문의 거절은 실패로 센다.
+- 거절: 근거 0건(`no_evidence`)이거나 답에 거절 문구가 있으면. 정답 근거가 있는 질문의 거절은 실패로 센다 —
+  핵심값을 모두 답하고 나머지에만 거절 문구를 쓴 답은 맞은 답이지 거절 실패가 아니다.
 - `answer_absent`: 답에 나오면 안 되는 문장(권한 누출).
 - `answer_from_revision`: 핵심값을 「이전 버전」 근거(revised)로 인용해야 한다 — 과거 값을 현재 판 근거로
   말하면 과거를 현재로 말한 것이다.
@@ -32,10 +34,12 @@ import asyncio
 import hashlib
 import json
 import math
+import re
 import sys
 import time
 import urllib.request
 from collections.abc import Callable
+from itertools import pairwise
 from pathlib import Path
 from uuid import UUID
 
@@ -58,27 +62,41 @@ from openarchive.services.visibility import VISIBLE_TO_USER
 REFUSAL = "근거 문서에서 찾을 수 없습니다"
 
 
-def _normalize(text: str) -> str:
-    return "".join(text.split()).replace(",", "")
+def _compact(text: str) -> str:
+    """공백을 하나로 접고 수 안의 천 단위 쉼표를 지운다. 공백은 남긴다 — 표 셀을 가르는 유일한 경계다."""
+    return re.sub(r"(?<=\d),(?=\d)", "", " ".join(text.split()))
 
 
 def _contains(key: str | list[str], text: str) -> bool:
-    """`text`는 이미 정규화된 문자열이다. 목록 키는 그중 하나만 있으면 된다."""
-    return any(_normalize(option) in text for option in (key if isinstance(key, list) else [key]))
+    """`text`는 이미 `_compact`한 문자열이다. 목록 키는 그중 하나만 있으면 된다."""
+    return any(_key_pattern(option).search(text) for option in (key if isinstance(key, list) else [key]))
+
+
+def _key_pattern(key: str) -> re.Pattern:
+    """공백을 무시하되 숫자와 숫자 사이에는 공백을 허용하지 않는다. 숫자로 시작하거나 끝나는 키는 더 긴 수
+    (`18.6%`의 `8.6%`, `1.213925`의 `1.21392`) 안에서 맞지 않는다."""
+    chars = "".join(_compact(key).split())
+    body = "".join(
+        re.escape(char) + ("" if char.isdigit() and following.isdigit() else r"\s?")
+        for char, following in pairwise(chars)
+    ) + re.escape(chars[-1])
+    head = r"(?<![\d.])" if chars[0].isdigit() else ""
+    tail = r"(?!\.?\d)" if chars[-1].isdigit() else ""
+    return re.compile(head + body + tail)
 
 
 def grade_answer(
     item: dict, status: str, answer: str | None, sources: list[AnswerSource], relevant: set[UUID],
 ) -> dict:
-    text = _normalize(answer or "")
+    text = _compact(answer or "")
     keys = item.get("answer_keys") or []
     missing = [key for key in keys if not _contains(key, text)]
-    given = _normalize(" ".join(source.content for source in sources))
+    given = _compact(" ".join(source.content for source in sources))
     cited = [source for source in sources if source.cited]
     from_revision = None
     if item.get("answer_from_revision"):
         from_revision = not missing and any(
-            source.revised and all(_contains(key, _normalize(source.content)) for key in keys)
+            source.revised and all(_contains(key, _compact(source.content)) for key in keys)
             for source in cited
         )
     return {
@@ -89,8 +107,8 @@ def grade_answer(
         "given_relevant": any(s.document_id in relevant for s in sources) if relevant else None,
         "cited_relevant": any(s.document_id in relevant for s in cited) if relevant else None,
         "cited_outside": [s.title for s in cited if s.document_id not in relevant] if relevant else [],
-        "refused": status == "no_evidence" or _normalize(REFUSAL) in text,
-        "leaks": [sentence for sentence in item.get("answer_absent", []) if _normalize(sentence) in text],
+        "refused": status == "no_evidence" or _contains(REFUSAL, text),
+        "leaks": [sentence for sentence in item.get("answer_absent", []) if _contains(sentence, text)],
         "revision_cited": from_revision,
     }
 
@@ -102,8 +120,8 @@ def percentile(values: list[float], p: float) -> float:
 
 
 def summarize(graded: list[dict]) -> dict:
-    answerable = [g for g in graded if g["relevant"]]
-    no_answer = [g for g in graded if not g["relevant"]]
+    answerable = [g for g in graded if g["answerable"]]
+    no_answer = [g for g in graded if not g["answerable"]]
     latencies = [value for g in graded for value in g["latencies"]]
     summary: dict = {"queries": len(graded)}
     for status in ("answered", "no_evidence", "failed", "disabled"):
@@ -118,7 +136,7 @@ def summarize(graded: list[dict]) -> dict:
         "model_misses": sum(1 for g in answerable if g["keys_in_sources"] and not g["key_hit"]),
         "given_relevant": sum(1 for g in answerable if g["given_relevant"]),
         "cited_relevant": sum(1 for g in answerable if g["cited_relevant"]),
-        "false_refusals": sum(1 for g in answerable if g["refused"]),
+        "false_refusals": sum(1 for g in answerable if g["refused"] and not g["key_hit"]),
         "no_answer": len(no_answer),
         "correct_refusals": sum(1 for g in no_answer if g["refused"]),
         "leaks": sum(1 for g in graded if g["leaks"]),
@@ -190,7 +208,7 @@ async def evaluate(
                 context_chars=context_chars,
             )
             await conn.rollback()  # 생성 동안 트랜잭션을 열어 두지 않는다(API와 같은 조건)
-            answers, latencies = [], []
+            generations, latencies = [], []
             for _ in range(repeats):
                 if evidence.sources:  # 근거가 없으면 서비스가 모델을 부르지 않는다
                     await asyncio.to_thread(reset_cache)
@@ -198,13 +216,14 @@ async def evaluate(
                 result = await generate_answer(evidence, answer_provider)
                 if result.status in ("answered", "failed"):
                     latencies.append(round(time.perf_counter() - started, 3))
-                answers.append(result.answer)
+                generations.append(result)
+            result = generations[0]  # 캐시 없이 처음 받은 답을 채점한다
             graded = grade_answer(item, result.status, result.answer, result.sources, relevant)
             results.append({
                 "id": item.get("id"), "category": item.get("category"), "query": item["query"],
                 "expected": item.get("expected"), "answer": result.answer, **graded,
-                "relevant": bool(relevant) or bool(item.get("answer_keys")),
-                "latencies": latencies, "answers_differ": len(set(answers)) > 1,
+                "answerable": bool(relevant) or bool(item.get("answer_keys")),
+                "latencies": latencies, "answers_differ": len({g.answer for g in generations}) > 1,
                 "sources": [_source_payload(source) for source in result.sources],
                 "manual": {"verdict": None, "note": None},
             })
@@ -243,6 +262,8 @@ def main() -> None:
     parser.add_argument("--repeats", type=int, default=3, help="질문마다 생성을 되풀이할 횟수 (기본 3)")
     parser.add_argument("--out", type=Path, help="질문별 답·근거·채점과 요약을 JSON으로 저장할 경로")
     args = parser.parse_args()
+    if args.repeats < 1:
+        parser.error("--repeats는 1 이상이어야 한다")
 
     settings = get_settings()
     check_providers(settings.embedding_provider, settings.answer_provider)
