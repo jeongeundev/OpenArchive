@@ -1564,3 +1564,40 @@ async def test_version_authors_backfill_only_matching_audit_transactions(clean_d
             " WHERE document_id = %s", (doc_b,)
         ).fetchall() == [(1, None, None)]
         assert c.execute("SELECT count(*) FROM audit_log").fetchone()[0] == before
+
+
+# --- documents.visibility 값 제약 (046, #193) -------------------------------------------
+
+
+@pytest.mark.parametrize("bad", ["privat", "Public", ""])
+def test_document_visibility_rejects_unknown_values_on_direct_sql(conn, bad):
+    """psql 직접 경로(명세서 336·337)의 오타 값이 조용히 저장되면 열람 술어 어디에도 맞지 않는다."""
+    with pytest.raises(psycopg.errors.CheckViolation):
+        conn.execute(
+            "INSERT INTO documents (title, content_type, content, content_hash, owner_id, visibility)"
+            " VALUES ('오타', 'md', '본문', 'sha256:typo', 'alice', %s)",
+            (bad,),
+        )
+    doc = insert_document(conn)
+    with pytest.raises(psycopg.errors.CheckViolation):
+        conn.execute("UPDATE documents SET visibility = %s WHERE id = %s", (bad, doc))
+    assert conn.execute("SELECT visibility FROM documents WHERE id = %s", (doc,)).fetchone() == (
+        "public",
+    )
+
+
+async def test_document_visibility_check_fails_on_existing_bad_rows(clean_db, tmp_path):
+    """기존 행에 다른 값이 있으면 마이그레이션이 실패한다 — 조용히 고치지 않는다."""
+    for path in MIGRATIONS_DIR.glob("*.sql"):
+        if path.name < "046":
+            shutil.copy(path, tmp_path)
+    await run_migrations(clean_db, tmp_path)
+    with psycopg.connect(clean_db, autocommit=True) as c:
+        doc = insert_document(c)
+        c.execute("UPDATE documents SET visibility = 'privat' WHERE id = %s", (doc,))
+    with pytest.raises(psycopg.errors.CheckViolation):
+        await run_migrations(clean_db)
+    with psycopg.connect(clean_db, autocommit=True) as c:
+        assert c.execute("SELECT visibility FROM documents WHERE id = %s", (doc,)).fetchone() == (
+            "privat",
+        )
