@@ -273,6 +273,29 @@ export interface TagSuggestionsResponse {
   reason: string | null;
 }
 
+/** 정리 추천 (ADR-064): 관계 이웃 total개 중 votes개가 든 폴더. */
+export interface FolderSuggestion {
+  folder_id: string;
+  path: FolderPathItem[];
+  votes: number;
+  total: number;
+}
+
+export interface FolderSuggestionResponse {
+  suggestion: FolderSuggestion | null;
+}
+
+export interface UnfiledDocument {
+  document_id: string;
+  title: string;
+  suggestion: FolderSuggestion | null;
+}
+
+export interface UnfiledResponse {
+  count: number;
+  items: UnfiledDocument[];
+}
+
 export interface JobCounts {
   pending: number;
   processing: number;

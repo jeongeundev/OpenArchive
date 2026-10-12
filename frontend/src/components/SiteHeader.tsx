@@ -29,6 +29,9 @@ export function SiteHeader(): React.ReactElement {
             <Link className="text-neutral-400 hover:text-[#0ea5e9]" href="/">문서</Link>
             <Link className="text-neutral-400 hover:text-[#0ea5e9]" href="/search">검색</Link>
             <Link className="text-neutral-400 hover:text-[#0ea5e9]" href="/clusters">관계 지도</Link>
+            {auth.authenticated ? (
+              <Link className="text-neutral-400 hover:text-[#0ea5e9]" href="/organize">정리할 문서</Link>
+            ) : null}
             <Link className="text-neutral-400 hover:text-[#0ea5e9]" href="/diagnostics">문서 진단</Link>
             {auth.is_admin ? (
               <>

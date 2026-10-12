@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { folderChildren, folderOptions, sameScope, scopeLabel } from "./folders";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { folderChildren, folderOptions, moveWithScopeConfirm, sameScope, scopeLabel } from "./folders";
 import type { Folder } from "./types";
 const folder = (id: string, name: string, parent_id: string | null = null): Folder => ({id, name, parent_id, created_by: "kim", document_count: 0, scope: {visibility: "public", users: [], groups: []}, inherited: parent_id !== null, can_manage: true, can_change_access: parent_id === null, can_share: false});
 export const folders = [folder("c", "채용", "b"), folder("a", "인사"), folder("d", "공고", "c"), folder("b", "업무", "a"), folder("e", "기획"), folder("orphan", "재무", "hidden")];
@@ -20,5 +20,22 @@ describe("folder labels", () => {
     expect(sameScope(a, {...a, visibility: "public"})).toBe(false);
     expect(sameScope(a, {...a, users: ["a"]})).toBe(false);
     expect(sameScope(a, {...a, groups: ["x", "z"]})).toBe(false);
+  });
+});
+
+describe("moveWithScopeConfirm", () => {
+  afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+
+  it("목록에 없는 폴더로는 범위를 알 수 없으니 옮기지 않는다 — 확인 없이 범위가 바뀌는 것을 막는다", async () => {
+    const fetchMock = vi.fn(async (url: string, _init?: RequestInit) => new Response(JSON.stringify(url.endsWith("/access")
+      ? { follows_folder: true, folder: null, folder_scope: null, hidden_folder: false,
+        visibility: "private", users: [], groups: [] }
+      : {}), { headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    const confirm = vi.spyOn(window, "confirm");
+
+    await expect(moveWithScopeConfirm("d1", "not-loaded", [])).rejects.toThrow("폴더 목록을 불러오지 못했습니다.");
+    expect(confirm).not.toHaveBeenCalled();
+    expect(fetchMock.mock.calls.filter(([, init]) => (init as RequestInit | undefined)?.method === "PUT")).toEqual([]);
   });
 });

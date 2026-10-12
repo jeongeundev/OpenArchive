@@ -941,6 +941,7 @@ OpenSQL `patroni.yml`의 PostgreSQL 파라미터는 `max_connections: 100`이다
 | `POST /api/documents/{id}/reembed` | **임베딩 실패 복구.** 아래 참조 |
 | `GET /api/documents/{id}/related` | **관련 문서.** 저장된 관계(`document_edges`)를 읽는다 (ADR-018 개정 · ADR-029). 청크가 없으면 `not_indexed`, edge가 없으면 `no_edges` |
 | `GET /api/documents/{id}/tag-suggestions` | **태그 추천.** 관계 이웃의 태그 빈도 (ADR-019). 청크가 없으면 `not_indexed` |
+| `GET /api/documents/{id}/folder-suggestion` · `GET /api/documents/unfiled` | **정리 추천.** 볼 수 있는 폴더에 든 관계 이웃의 절반 이상(2표 이상)이 든 폴더 `{folder_id, path, votes, total}`, 없거나 지금 폴더면 `null` · 폴더 밖 내 문서 최근 50건과 각 제안 `{count, items}`. 공유 토큰 불가 (ADR-064) |
 | `GET /api/documents/{id}/links` | **본문이 가리키는 위키링크.** 조회자의 열람 범위에서 해석하며, 대상이 없거나 보이지 않으면 `document_id: null` (ADR-030) |
 | `GET /api/documents/{id}/backlinks` | **이 문서를 가리키는 문서.** 열람 가능한 출발 문서만 |
 | `POST /api/search` | 하이브리드 검색 + 관계 순회 (아래). 선택 `folder_id`는 그 폴더와 **하위 폴더**의 문서로 직접 결과를 좁힌다 |
@@ -1457,9 +1458,17 @@ class EmbeddingProvider(Protocol):
 문장 부호·헤딩으로 끝나는 혼합 문단)는 등급과 무관하게 제외해 헤딩이 앞 청크 꼬리에 고립되지
 않게 한다 (ADR-045). 외부 의존성 없이 단위 테스트 가능해야 한다.
 
+### 정리 추천 (폴더)
+
+태그 추천과 같은 이웃(src ∪ dst, 열람 술어 통과)을 쓰되 **폴더별로 표를 센다** (ADR-064). 후보 폴더에는 `FOLDER_VISIBLE_TO_USER`를
+건다 — 보이는 「개별 지정」 문서가 보이지 않는 폴더에 있을 수 있다. 문서 하나(`suggest_folder`)와 폴더 밖 내 문서 목록(`list_unfiled`)이
+같은 SQL을 쓰고 대상 집합(`targets` CTE)만 다르다. 표와 분모는 볼 수 있는 폴더에 든 이웃뿐이다 — 폴더 없는 이웃(함께 올린 새 문서
+포함)은 어느 쪽 근거도 아니다. 그 절반 이상(`SUGGESTION_MIN_SHARE`)이자 2표 이상(`SUGGESTION_MIN_VOTES`)이 한 폴더에 있고 그 폴더가
+지금 폴더와 다를 때만 제안한다. 벡터를 읽지 않으므로 `SET LOCAL`이 없다.
+
 ## 프론트엔드 패턴
 
-- 사용자 화면: `/`(목록 + 업로드 드롭존), `/documents/[id]`(메타데이터·텍스트 버전 이력·청크 수와 기준 버전 요약·**문서 텍스트 편집**·관련 문서·태그 추천), `/search`(질의 + 태그/유형 필터 + 결과. "실행된 SQL 보기" 토글. 로그인 사용자에게는 마지막 검색 입력으로 `POST /api/ask`를 부르는 **근거 기반 답변 패널** — `AnswerPanel`), `/clusters`(관계 군집 덩어리와 연결), `/diagnostics`(고아·중복 후보·미분류·깨진 링크), `/login`, `/settings`(자기 비밀번호 변경·API 토큰·외부 공유)
+- 사용자 화면: `/`(목록 + 업로드 드롭존), `/documents/[id]`(메타데이터·텍스트 버전 이력·청크 수와 기준 버전 요약·**문서 텍스트 편집**·관련 문서·태그 추천), `/search`(질의 + 태그/유형 필터 + 결과. "실행된 SQL 보기" 토글. 로그인 사용자에게는 마지막 검색 입력으로 `POST /api/ask`를 부르는 **근거 기반 답변 패널** — `AnswerPanel`), `/clusters`(관계 군집 덩어리와 연결), `/organize`(정리할 문서 — 폴더 밖 내 문서와 추천 폴더, ADR-064), `/diagnostics`(고아·중복 후보·미분류·깨진 링크), `/login`, `/settings`(자기 비밀번호 변경·API 토큰·외부 공유)
 - **편집은 Client Component**다. 보기 ↔ 편집 토글, 저장 시 `version`을 함께 전송하고 409를 처리한다. 저장 직후 상태 배지가 `pending → processing → ready`로 바뀌는 것을 2초 폴링으로 보여준다
 - **사용자 화면은 인프라 상태를 노출하지 않는다.** 페일오버가 나도 화면 구성이 달라지지 않으며, 사용자는 업로드·검색이 계속 성공하는 것만 본다 (UI_GUIDE 디자인 원칙 3).
 - **읽기 요청은 503·네트워크 오류를 백오프로 기다린다**(`lib/api.ts`). 읽기 함수는 `signal`을 받고, 훅과 화면 진입 시 조회는 마운트 동안 `AbortController` 하나로 묶어 **화면을 떠나면 진행 중인 요청과 백오프 대기를 함께 취소한다** — 쓸 곳 없는 재시도가 서버에 부하를 더하거나 재시도 안내가 다른 화면에 남지 않게 한다. 새 검색은 이전 검색을 취소한다. 사용자 동작으로 시작한 읽기(버전 본문 열기, 발급·생성 뒤 목록 다시 받기)도 `useUnmountSignal`로 같은 규칙을 따른다 — 앞선 쓰기 요청은 이미 커밋됐을 수 있어 취소하지 않는다. 기다리는 동안에만 `RetryNotice`가 「연결이 원활하지 않아 다시 시도하는 중입니다.」를 보이고 성공하면 사라진다. 무엇이 멈췄는지는 말하지 않는다. `/admin/status`의 `GET /api/system/status`만은 백오프하지 않는다 — 장애를 바로 드러내야 하는 관측 채널이고, 2초 폴링 자체가 재시도다 (ADR-048 결정 4, UI_GUIDE 원칙 3).

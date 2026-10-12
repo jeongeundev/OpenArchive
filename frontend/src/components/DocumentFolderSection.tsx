@@ -1,12 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import { Fragment, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 
-import { ApiError, getDocumentAccess, moveDocument } from "@/lib/api";
-import { sameScope, scopeLabel } from "@/lib/folders";
+import { ApiError, getFolderSuggestion } from "@/lib/api";
+import { moveWithScopeConfirm } from "@/lib/folders";
 import { useFolders } from "@/lib/useFolders";
-import type { DocumentFolder, FolderScope } from "@/lib/types";
+import type { DocumentFolder, FolderSuggestion } from "@/lib/types";
 import { FolderSelect } from "./FolderSelect";
 
 /**
@@ -15,6 +15,7 @@ import { FolderSelect } from "./FolderSelect";
  * 고른 값은 현재 폴더에서 시작한다 — 폴더가 바뀌면 부모가 key로 다시 그린다.
  * 이동은 소유자만 하며, 「폴더 범위 따름」 문서의 실효 범위가 바뀔 때만 확인을 받는다.
  * 볼 수 없게 된 폴더 안 자기 문서(hiddenFolder)는 이름 없이 그 사실만 보이고, 어디로든 옮길 수 있다.
+ * 소유자에게는 폴더에 든 관계 이웃의 절반 이상이 모인 폴더를 추천한다(ADR-064) — 고르면 선택칸만 바뀌고 옮기기는 사람이 누른다.
  */
 export function DocumentFolderSection({ documentId, folder, hiddenFolder = false, isOwner, disabled = false, onMoved }: {
   documentId: string;
@@ -24,35 +25,34 @@ export function DocumentFolderSection({ documentId, folder, hiddenFolder = false
   disabled?: boolean;
   onMoved: () => void;
 }): React.ReactElement | null {
-  const { folders, refresh: refreshFolders } = useFolders(isOwner);
+  const { folders, loading: foldersLoading, refresh: refreshFolders } = useFolders(isOwner);
   const currentId = folder?.id ?? null;
   const [target, setTarget] = useState<string | null>(currentId);
   const [moving, setMoving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [suggestion, setSuggestion] = useState<FolderSuggestion | null>(null);
   // 숨은 폴더는 고를 수 있는 값이 아니라 「폴더 없음」도 이동이다.
   const unchanged = !hiddenFolder && target === currentId;
 
+  useEffect(() => {
+    if (!isOwner) return;
+    const controller = new AbortController();
+    // 추천은 곁들이는 정보다 — 실패하면 자리 없이 넘어간다.
+    getFolderSuggestion(documentId, controller.signal)
+      .then(result => { if (!controller.signal.aborted) setSuggestion(result.suggestion ?? null); })
+      .catch(() => undefined);
+    return () => controller.abort();
+  }, [documentId, isOwner]);
+
   if (folder === null && !isOwner) return null;
+  const suggestionLabel = suggestion?.path.map(item => item.name).join("/");
 
   async function move(): Promise<void> {
     if (moving || unchanged) return;
     setMoving(true);
     setError(null);
     try {
-      const access = await getDocumentAccess(documentId);
-      const own: FolderScope = { visibility: access.visibility, users: access.users, groups: access.groups };
-      const before = access.folder !== null && access.follows_folder && access.folder_scope !== null
-        ? access.folder_scope : own;
-      const destination = folders.find(item => item.id === target) ?? null;
-      const after = destination !== null && access.follows_folder ? destination.scope : own;
-      // 숨은 폴더의 범위는 알 수 없다 — 따르는 중이면 늘 바뀌는 것으로 보고 확인을 받는다.
-      const hiddenBefore = access.hidden_folder && access.follows_folder;
-      const beforeLabel = hiddenBefore ? "볼 수 없는 폴더의 범위" : scopeLabel(before);
-      if (access.follows_folder && (hiddenBefore || !sameScope(before, after))
-        && !window.confirm(`열람 범위가 바뀝니다: 「${beforeLabel}」 → 「${scopeLabel(after)}」. 옮기시겠습니까?`)) {
-        return;
-      }
-      await moveDocument(documentId, target);
+      if (!await moveWithScopeConfirm(documentId, target, folders)) return;
       refreshFolders();
       onMoved();
     } catch (reason: unknown) {
@@ -94,6 +94,19 @@ export function DocumentFolderSection({ documentId, folder, hiddenFolder = false
             옮기기
           </button>
         </div>
+      ) : null}
+      {isOwner && suggestion !== null ? (
+        <p className="text-sm text-neutral-400">
+          <span className="mr-2 text-neutral-500">추천 폴더</span>
+          <button type="button" aria-label={`추천 폴더 ${suggestionLabel} 고르기`}
+            onClick={() => setTarget(suggestion.folder_id)} disabled={disabled || moving || foldersLoading}
+            className="text-[#0ea5e9] hover:underline disabled:text-neutral-600">
+            {suggestionLabel}
+          </button>
+          <span className="ml-2 text-neutral-500">
+            {`폴더에 있는 관련 문서 ${suggestion.total}개 중 ${suggestion.votes}개가 이 폴더에 있습니다.`}
+          </span>
+        </p>
       ) : null}
       {error !== null ? <p className="text-sm text-[#ef4444]" role="alert">{error}</p> : null}
     </section>

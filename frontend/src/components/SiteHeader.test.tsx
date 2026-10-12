@@ -30,6 +30,20 @@ describe("SiteHeader", () => {
     );
     expect(screen.queryByRole("link", { name: "외부 공유" })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "사용자 관리" })).not.toBeInTheDocument();
+    // 정리할 문서는 「내 문서」 목록이라 익명에게는 없다.
+    expect(screen.queryByRole("link", { name: "정리할 문서" })).not.toBeInTheDocument();
+  });
+
+  it("로그인한 사용자에게 정리할 문서 화면을 제공한다", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response({
+      authenticated: true,
+      username: "alice",
+      is_admin: false,
+    })));
+
+    render(<AuthProvider><SiteHeader /></AuthProvider>);
+
+    expect(await screen.findByRole("link", { name: "정리할 문서" })).toHaveAttribute("href", "/organize");
   });
 
   it("관리자 메뉴에 시스템 상태를 제공한다", async () => {
