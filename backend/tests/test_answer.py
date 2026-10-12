@@ -168,7 +168,7 @@ async def test_invalid_k(conn, k):
         await gather(conn, k=k)
 
 
-async def test_passage_order_and_skipping_oversized_following_passage(conn, monkeypatch):
+async def test_passage_order_and_trimming_oversized_following_passage(conn, monkeypatch):
     from dataclasses import replace
 
     from openarchive.services.search import SearchPassage
@@ -187,10 +187,47 @@ async def test_passage_order_and_skipping_oversized_following_passage(conn, monk
     evidence = await answer.gather_evidence(
         conn, FakeProvider(), query="정합성 근거", user_id="alice", context_chars=6,
     )
+    # 남은 예산보다 긴 대목도 건너뛰지 않고 줄여 담는다 (#246). 예산이 다 차면 멈춘다.
     assert [(source.label, source.chunk_index, source.content) for source in evidence.sources] == [
-        (1, 2, "첫 대목"), (2, 4, "끝"),
+        (1, 2, "첫 대목"), (2, 3, "예산"),
     ]
     assert sum(len(source.content) for source in evidence.sources) <= 6
+
+
+def _filler(prefix: str, count: int) -> list[str]:
+    """질의와 어절이 겹치지 않는 문단들. 문단마다 어절이 달라 FakeProvider 벡터가 갈린다."""
+    return [
+        " ".join(f"{prefix}{index}채움{word}" for word in range(40))
+        for index in range(count)
+    ]
+
+
+async def test_oversized_first_passage_keeps_the_matched_chunk(conn):
+    # #246 ① pdf-region: 첫 대목(맞은 청크 ±2)이 예산보다 길면 앞에서 잘라 뒤쪽의 맞은 청크를 잃었다.
+    paragraphs = _filler("앞", 14) + ["정합성 근거 목표대목 마지막에 있다"]
+    document_id = await seed(conn, title="긴 문서", content="\n\n".join(paragraphs))
+    evidence = await answer.gather_evidence(
+        conn, FakeProvider(), query="정합성 근거", user_id="alice", context_chars=1500,
+    )
+    source = evidence.sources[0]
+    assert source.document_id == document_id
+    assert "정합성 근거 목표대목" in source.content
+    assert len(source.content) <= 1500
+
+
+async def test_oversized_following_passage_is_trimmed_around_the_matched_chunk(conn):
+    # #246 ② csat-synthesis: 남은 예산보다 긴 둘째 문서 대목을 통째로 건너뛰었다.
+    await seed(conn, title="짧은 문서", content="정합성 근거")
+    paragraphs = _filler("뒤", 14) + ["정합성 근거 둘째대목 마지막에 있다"]
+    long_id = await seed(conn, title="긴 둘째 문서", content="\n\n".join(paragraphs))
+    evidence = await answer.gather_evidence(
+        conn, FakeProvider(), query="정합성 근거", user_id="alice", context_chars=1500,
+    )
+    assert [source.title for source in evidence.sources][:2] == ["짧은 문서", "긴 둘째 문서"]
+    second = evidence.sources[1]
+    assert second.document_id == long_id
+    assert "정합성 근거 둘째대목" in second.content
+    assert sum(len(source.content) for source in evidence.sources) <= 1500
 
 
 async def test_gather_evidence_forwards_folder_filter(conn, monkeypatch):

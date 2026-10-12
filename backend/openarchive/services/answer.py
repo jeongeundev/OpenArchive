@@ -70,6 +70,22 @@ def _matching_passage(hit: SearchHit, current: str) -> SearchPassage:
     return SearchPassage(index, chunks[index], hit.based_on_version, hit.score)
 
 
+def _fit(passage: SearchPassage | SearchHit, limit: int) -> str:
+    """예산보다 긴 대목을 맞은 청크 중심의 창으로 줄인다 (#246).
+
+    맞은 청크가 창보다 길면 그 청크의 앞부분부터 담는다. 자리 정보가 없으면 대목 전체가 맞은 자리다.
+    """
+    content = passage.content
+    if len(content.strip()) <= limit:
+        return content.strip()
+    focus_start, focus_end = getattr(passage, "focus", None) or (0, len(content))
+    if focus_end - focus_start >= limit:
+        return content[focus_start:focus_start + limit].strip()
+    start = max(0, focus_start - (limit - (focus_end - focus_start)) // 2)
+    start = min(start, len(content) - limit)
+    return content[start:start + limit].strip()
+
+
 async def gather_evidence(
     conn: psycopg.AsyncConnection,
     embedding_provider: EmbeddingProvider,
@@ -120,15 +136,14 @@ async def gather_evidence(
         else:
             passages = hit.passages or (hit,)
         for passage in passages:
-            content = passage.content.strip()
-            if not content or content in seen:
+            whole = passage.content.strip()
+            if not whole or whole in seen or remaining <= 0:
                 continue
-            if len(content) > remaining:
-                if selected:
-                    continue
-                content = content[:remaining]
+            content = _fit(passage, remaining)
+            if not content:
+                continue
             selected.append((hit, passage, content))
-            seen.add(passage.content.strip())
+            seen.add(whole)
             remaining -= len(content)
     sources = []
     for hit, passage, content in selected:
