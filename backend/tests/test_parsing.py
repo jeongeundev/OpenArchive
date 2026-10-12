@@ -261,6 +261,56 @@ def test_extract_text_skips_docx_text_box_deleted_by_tracked_changes() -> None:
     assert extract_text(buf.getvalue(), "docx") == "본문"
 
 
+def docx_with_paragraph(inner: str) -> bytes:
+    """문단 하나에 `inner`(w: 접두사 XML)를 그대로 넣은 DOCX."""
+    buf = io.BytesIO()
+    document = Document()
+    paragraph = document.add_paragraph()._p
+    for element in parse_xml(
+        f'<w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">{inner}</w:p>'
+    ):
+        paragraph.append(element)
+    document.save(buf)
+    return buf.getvalue()
+
+
+def test_extract_text_reads_docx_simple_field_and_smart_tag_results() -> None:
+    # Word는 문서 속성(제목·표준 번호)을 필드로 끼워 넣는다 — 화면에 보이는 것은 필드 결과 런이다.
+    data = docx_with_paragraph(
+        "<w:r><w:t xml:space=\"preserve\">표준 번호: </w:t></w:r>"
+        '<w:fldSimple w:instr=" TITLE "><w:r><w:t>KS X 3255</w:t></w:r></w:fldSimple>'
+        '<w:smartTag w:uri="urn:x" w:element="place"><w:r><w:t xml:space="preserve"> 서울</w:t></w:r></w:smartTag>'
+    )
+
+    assert extract_text(data, "docx") == "표준 번호: KS X 3255 서울"
+
+
+def test_extract_text_reads_docx_inline_content_control_but_not_its_placeholder() -> None:
+    data = docx_with_paragraph(
+        "<w:r><w:t xml:space=\"preserve\">성명: </w:t></w:r>"
+        "<w:sdt><w:sdtPr/><w:sdtContent><w:r><w:t>김하나</w:t></w:r></w:sdtContent></w:sdt>"
+        "<w:r><w:t xml:space=\"preserve\"> 부서: </w:t></w:r>"
+        "<w:sdt><w:sdtPr><w:showingPlcHdr/></w:sdtPr>"
+        "<w:sdtContent><w:r><w:t>텍스트를 입력하세요.</w:t></w:r></w:sdtContent></w:sdt>"
+    )
+
+    assert extract_text(data, "docx") == "성명: 김하나 부서: "
+
+
+def test_extract_text_reads_docx_tracked_insertions_but_not_deletions() -> None:
+    # 변경 추적을 받아들이지 않은 문서는 화면처럼 넣은 글자는 있고 지운 글자는 없다.
+    data = docx_with_paragraph(
+        "<w:r><w:t xml:space=\"preserve\">계약 </w:t></w:r>"
+        '<w:ins w:id="1" w:author="a"><w:r><w:t xml:space="preserve">변경 </w:t></w:r></w:ins>'
+        '<w:del w:id="2" w:author="a"><w:r><w:delText>삭제 </w:delText></w:r></w:del>'
+        '<w:moveTo w:id="3" w:author="a"><w:r><w:t xml:space="preserve">옮긴 </w:t></w:r></w:moveTo>'
+        '<w:moveFrom w:id="4" w:author="a"><w:r><w:t xml:space="preserve">원래 자리 </w:t></w:r></w:moveFrom>'
+        "<w:r><w:t>끝</w:t></w:r>"
+    )
+
+    assert extract_text(data, "docx") == "계약 변경 옮긴 끝"
+
+
 def test_extract_text_reads_pdf() -> None:
     assert extract_text(minimal_pdf("embedding job trigger"), "pdf") == "embedding job trigger"
 
