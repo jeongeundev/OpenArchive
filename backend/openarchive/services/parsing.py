@@ -594,10 +594,12 @@ def _docx_children(
     # 값을 넣지 않은 컨트롤의 안내 문구와 제목을 한 번 더 쓴 자동 목차는 내용이 아니라 건너뛴다.
     for child in element.iterchildren():
         if child.tag == f"{_W}sdt":
-            if child.xpath(
-                "w:sdtPr/w:showingPlcHdr"
-                " | w:sdtPr/w:docPartObj/w:docPartGallery[@w:val='Table of Contents']",
-                namespaces={"w": _W[1:-1]},
+            properties = child.find(f"{_W}sdtPr")
+            if properties is not None and (
+                properties.find(f"{_W}showingPlcHdr") is not None
+                or properties.find(
+                    f"{_W}docPartObj/{_W}docPartGallery[@{_W}val='Table of Contents']"
+                ) is not None
             ):
                 continue
             for content in child.iterchildren(f"{_W}sdtContent"):
