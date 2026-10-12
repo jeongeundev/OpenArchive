@@ -206,7 +206,7 @@ export default function AuditPage(): React.ReactElement {
         <h1 className="text-4xl font-semibold text-white">감사 로그</h1>
         <p className="mt-3 text-sm text-neutral-400">
           문서와 열람 범위·폴더·외부 공유·그룹·사용자·비밀번호·API 토큰의 변경, 원본 내려받기·미리보기 기록입니다. 기록은 고치거나 지울 수 없습니다.
-          대상 문서는 제목만 보입니다.
+          대상 문서의 제목과 폴더 이름만 보이고 본문은 보이지 않습니다.
         </p>
       </div>
 

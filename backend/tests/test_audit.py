@@ -270,7 +270,7 @@ def test_password_change_api_records_self(db_client, migrated_db):
     before = rows(migrated_db)
     response = db_client.put(
         "/api/auth/password",
-        json={"current_password": "test-password", "new_password": "새 비밀번호"},
+        json={"current_password": "test-password", "new_password": "새 비밀번호 여덟자"},
     )
     assert response.status_code == 200
     assert rows(migrated_db)[len(before):] == [

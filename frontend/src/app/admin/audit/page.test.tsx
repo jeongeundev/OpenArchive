@@ -80,6 +80,8 @@ describe("감사 로그 화면", () => {
     expect(within(second).getByText("alice")).toBeInTheDocument();
     expect(within(second).getByText("인사 규정")).toBeInTheDocument();
     expect(first.querySelector("time")).not.toBeNull();
+    // 관리자에게 보이는 것은 대상 문서 제목과 폴더 이름뿐이다 (ADR-055 결정 8, 2026-10-12)
+    expect(screen.getByText(/대상 문서의 제목과 폴더 이름만 보이고 본문은 보이지 않습니다\./)).toBeInTheDocument();
   });
 
   it("동작을 표기 규칙대로 보여 준다", async () => {

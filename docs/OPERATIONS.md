@@ -923,7 +923,7 @@ Bearer 필수·CORS 없음과 주소·토큰만 등록하는 계약에 따라 Ho
 | `document_created` | 문서 생성 | 문서 생성 |
 | `text_updated` | 텍스트 수정 | 텍스트 버전 추가 |
 | `document_trashed` · `document_restored` | 휴지통 이동 · 복원 | 휴지통으로 보내기·되살리기 |
-| `document_deleted` | 영구 삭제 | 하드 삭제(휴지통 비우기·30일 자동 삭제 포함) |
+| `document_deleted` | 영구 삭제 | 하드 삭제(소유자의 영구 삭제·30일 뒤 워커의 자동 영구 삭제) |
 | `access_changed` | 열람 범위 변경 | 문서 공개범위·부여 대상 추가·제거, 폴더 범위 따름 전환·이동 |
 | `folder_access_changed` | 폴더 열람 범위 변경 | 최상위 폴더의 공개범위·부여 대상 |
 | `owner_changed` | 소유자 변경 | 문서·폴더 소유자 이전 |
@@ -933,7 +933,9 @@ Bearer 필수·CORS 없음과 주소·토큰만 등록하는 계약에 따라 Ho
 | `group_changed` · `user_changed` | 그룹 변경 · 사용자 변경 | 생성·삭제, 사용자의 관리자 권한 부여·회수 |
 | `password_changed` | 비밀번호 변경 | 본인 변경·운영자 `reset-password` |
 | `folder_changed` | 폴더 변경 | 폴더 생성·이름 변경·삭제 |
-| `token_changed` | 토큰 변경 | 사용자 API 토큰 발급·폐기 | 폴더 열람 범위 변경(최상위 폴더의
+| `token_changed` | 토큰 변경 | 사용자 API 토큰 발급·폐기 |
+
+폴더 열람 범위 변경(최상위 폴더의
 공개범위·부여 대상)은 `folder_access_changed`로, 문서의 「폴더 범위 따름」↔「개별 지정」 전환과 「폴더 범위 따름」 문서의
 폴더 이동은 `access_changed`(`detail.kind`가 `inherit`·`folder`)로 남는다 (#187, `031_folder_audit_triggers.sql`).
 원본 미리보기(PDF·PNG·JPG)는 내려받기와 별도 동작 `original_previewed`(판 번호)로 남는다 — 화면 라벨 「원본 미리보기」
