@@ -408,7 +408,7 @@ def test_extracted_text_over_service_limit_is_rejected(db_client: TestClient):
     response = upload(db_client, content=b"x" * 500_001)
 
     assert response.status_code == 400
-    assert "500KB" in response.json()["detail"]
+    assert "50만 자" in response.json()["detail"]
 
 
 def test_upload_near_file_limit_with_small_extracted_text_succeeds(
@@ -922,7 +922,7 @@ def test_edit_rejects_extracted_text_over_service_limit(db_client: TestClient):
     response = edit(db_client, document_id, content="x" * 500_001, version=1)
 
     assert response.status_code == 400
-    assert "500KB" in response.json()["detail"]
+    assert "50만 자" in response.json()["detail"]
 
 
 def test_edit_keeps_old_chunks_until_worker_replaces_them_and_exposes_convergence(

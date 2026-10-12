@@ -108,7 +108,7 @@ class EmptyExtractedText(Exception):
 
 
 class ExtractedTextTooLarge(Exception):
-    """추출 텍스트가 서비스와 DB가 허용하는 500KB 경계를 넘은 경우."""
+    """추출 텍스트가 서비스와 DB가 허용하는 50만 자 경계를 넘은 경우."""
 
 
 class InvalidVisibility(Exception):
@@ -600,7 +600,7 @@ async def _insert_document(
         raise EmptyExtractedText(empty_message)
     if len(content) > MAX_EXTRACTED_TEXT_LENGTH:
         raise ExtractedTextTooLarge(
-            f"{text_label(filename)}는 500KB를 넘을 수 없습니다."
+            f"{text_label(filename)}는 50만 자를 넘을 수 없습니다."
         )
     if visibility not in VISIBILITY_VALUES:
         raise InvalidVisibility("공개범위는 public, private 중 하나여야 합니다.")
@@ -1065,7 +1065,7 @@ async def _write_text(
     if not content.strip():
         raise EmptyExtractedText(f"{label}는 비어 있을 수 없습니다.")
     if len(content) > MAX_EXTRACTED_TEXT_LENGTH:
-        raise ExtractedTextTooLarge(f"{label}는 500KB를 넘을 수 없습니다.")
+        raise ExtractedTextTooLarge(f"{label}는 50만 자를 넘을 수 없습니다.")
     if current_version != client_version:
         raise VersionConflict(current_version)
 

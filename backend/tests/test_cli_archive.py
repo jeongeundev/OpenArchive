@@ -208,7 +208,7 @@ def test_import_refuses_a_file_over_the_upload_limit(
     """업로드와 같은 상한이다 — CLI가 웹보다 큰 파일을 받을 이유가 없다.
 
     경계 바로 위(1MB + 1바이트)로 잰다. 업로드의 MB는 10^6 바이트라, MiB로 재면 이 파일이 들어간다.
-    이미지라 텍스트 상한(500KB)에 먼저 걸리지 않는다.
+    이미지라 텍스트 상한(50만 자)에 먼저 걸리지 않는다.
     """
     monkeypatch.setenv("MAX_UPLOAD_MB", "1")
     scan = (Path(__file__).parent / "fixtures" / "scan_tax_page1.jpg").read_bytes()
