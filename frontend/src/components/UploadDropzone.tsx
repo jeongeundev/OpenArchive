@@ -222,7 +222,6 @@ export function UploadDropzone({
         </span>
         <input
           ref={inputRef}
-          accept={`${SUPPORTED_CONTENT_TYPES.map((type) => `.${type}`).join(",")},.zip`}
           aria-label="업로드할 파일"
           className="sr-only"
           disabled={disabled}

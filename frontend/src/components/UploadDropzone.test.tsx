@@ -445,11 +445,10 @@ describe("UploadDropzone", () => {
   });
 
 
-  it("이미지 파일을 선택할 수 있다", () => {
+  it("파일 선택 창은 형식을 거르지 않는다 — 미지원 형식도 골라야 거부 안내가 보인다 (명세서 186)", () => {
     render(<UploadDropzone onUploaded={vi.fn()} />);
 
-    const accept = document.querySelector('input[type="file"]')?.getAttribute("accept") ?? "";
-    expect(accept.split(",")).toEqual(expect.arrayContaining([".png", ".jpg", ".jpeg", ".zip"]));
+    expect(document.querySelector('input[type="file"]')).not.toHaveAttribute("accept");
   });
 
   describe("제한 문서의 부여 대상", () => {

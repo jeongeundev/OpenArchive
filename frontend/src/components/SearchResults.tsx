@@ -88,7 +88,9 @@ export function SearchResults({
             {group.items.map((item) => {
               const sourceTitle = item.via === null
                 ? null
-                : titlesById.get(item.via.from_document_id) ?? "연결된 문서";
+                : titlesById.has(item.via.from_document_id)
+                  ? `「${titlesById.get(item.via.from_document_id)}」`
+                  : "연결된 문서";
               return (
                 <article
                   key={`${item.document_id}:${item.based_on_version}:${item.chunk_index}`}

@@ -89,7 +89,9 @@ export function AnswerPanel({
         <>
           <AnswerText answer={response.answer} sources={response.sources} />
           {cited.length > 0 ? (
-            <ol aria-label="인용한 근거" className="space-y-3 border-t border-neutral-800 pt-4">
+            <div className="space-y-3 border-t border-neutral-800 pt-4">
+            <h3 id="answer-cited" className="text-sm font-medium text-white">인용한 근거</h3>
+            <ol aria-labelledby="answer-cited" className="space-y-3">
               {cited.map((source) => (
                 <li key={source.label} className="text-sm">
                   <div className="flex flex-wrap items-baseline gap-2">
@@ -105,6 +107,7 @@ export function AnswerPanel({
                 </li>
               ))}
             </ol>
+            </div>
           ) : null}
           {uncited.length > 0 ? (
             <details className="text-sm">

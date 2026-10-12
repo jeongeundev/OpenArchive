@@ -76,6 +76,13 @@ describe("AnswerPanel", () => {
     );
   });
 
+  it("인용한 근거 목록에 화면에 보이는 제목을 붙인다 (명세서 261)", () => {
+    renderPanel(answered("답 [1]", [source({ label: 1 })]));
+
+    expect(screen.getByRole("heading", { name: "인용한 근거" })).toBeInTheDocument();
+    expect(screen.getByRole("list", { name: "인용한 근거" })).toBeInTheDocument();
+  });
+
   it("모델에 줬지만 인용하지 않은 근거는 따로 접어 둔다", () => {
     renderPanel(
       answered("답 [1]", [

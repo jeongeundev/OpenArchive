@@ -49,6 +49,13 @@ describe("DocumentTable", () => {
     expect(screen.getByText("제한")).toBeInTheDocument();
   });
 
+  it("소유자 열에 문서마다 소유자를 표시한다 (명세서 187)", () => {
+    render(<DocumentTable documents={[{ ...documents[0], owner_id: "kim" }]} />);
+
+    expect(screen.getByRole("columnheader", { name: "소유자" })).toBeInTheDocument();
+    expect(screen.getByRole("cell", { name: "kim" })).toBeInTheDocument();
+  });
+
   it("문서마다 상태 배지를 하나씩 표시한다", () => {
     render(<DocumentTable documents={documents} />);
 
