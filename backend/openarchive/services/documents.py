@@ -722,7 +722,9 @@ async def apply_extracted_text(
 DocumentSort = Literal["updated", "title"]
 DOCUMENT_ORDER_BY = {
     "updated": "d.updated_at DESC, d.id",
-    "title": "d.title, d.id",
+    # 한글 음절은 코드값 순서가 가나다순이다. DB 기본 콜레이션(en_US.utf8 등)에 맡기면 한글 순서가 틀려
+    # 설치 환경마다 결과가 갈린다 — 「C」로 고정하고 영문은 대소문자를 무시한다 (명세서 192행).
+    "title": 'lower(d.title) COLLATE "C", d.title COLLATE "C", d.id',
 }
 DOCUMENT_FILTERS = f"""
 {VISIBLE_TO_USER}
