@@ -941,7 +941,7 @@ OpenSQL `patroni.yml`의 PostgreSQL 파라미터는 `max_connections: 100`이다
 | `POST /api/documents/{id}/reembed` | **임베딩 실패 복구.** 아래 참조 |
 | `GET /api/documents/{id}/related` | **관련 문서.** 저장된 관계(`document_edges`)를 읽는다 (ADR-018 개정 · ADR-029). 청크가 없으면 `not_indexed`, edge가 없으면 `no_edges` |
 | `GET /api/documents/{id}/tag-suggestions` | **태그 추천.** 관계 이웃의 태그 빈도 (ADR-019). 청크가 없으면 `not_indexed` |
-| `GET /api/documents/{id}/folder-suggestion` · `GET /api/documents/unfiled` | **정리 추천.** 볼 수 있는 관계 이웃의 절반 이상이 든 볼 수 있는 폴더 `{folder_id, path, votes, total}`, 없거나 지금 폴더면 `null` · 폴더 밖 내 문서 최근 50건과 각 제안 `{count, items}`. 공유 토큰 불가 (ADR-064) |
+| `GET /api/documents/{id}/folder-suggestion` · `GET /api/documents/unfiled` | **정리 추천.** 볼 수 있는 폴더에 든 관계 이웃의 절반 이상(2표 이상)이 든 폴더 `{folder_id, path, votes, total}`, 없거나 지금 폴더면 `null` · 폴더 밖 내 문서 최근 50건과 각 제안 `{count, items}`. 공유 토큰 불가 (ADR-064) |
 | `GET /api/documents/{id}/links` | **본문이 가리키는 위키링크.** 조회자의 열람 범위에서 해석하며, 대상이 없거나 보이지 않으면 `document_id: null` (ADR-030) |
 | `GET /api/documents/{id}/backlinks` | **이 문서를 가리키는 문서.** 열람 가능한 출발 문서만 |
 | `POST /api/search` | 하이브리드 검색 + 관계 순회 (아래). 선택 `folder_id`는 그 폴더와 **하위 폴더**의 문서로 직접 결과를 좁힌다 |
@@ -1462,7 +1462,8 @@ class EmbeddingProvider(Protocol):
 
 태그 추천과 같은 이웃(src ∪ dst, 열람 술어 통과)을 쓰되 **폴더별로 표를 센다** (ADR-064). 후보 폴더에는 `FOLDER_VISIBLE_TO_USER`를
 건다 — 보이는 「개별 지정」 문서가 보이지 않는 폴더에 있을 수 있다. 문서 하나(`suggest_folder`)와 폴더 밖 내 문서 목록(`list_unfiled`)이
-같은 SQL을 쓰고 대상 집합(`targets` CTE)만 다르다. 볼 수 있는 이웃의 절반 이상(`SUGGESTION_MIN_SHARE`)이 한 폴더에 있고 그 폴더가
+같은 SQL을 쓰고 대상 집합(`targets` CTE)만 다르다. 표와 분모는 볼 수 있는 폴더에 든 이웃뿐이다 — 폴더 없는 이웃(함께 올린 새 문서
+포함)은 어느 쪽 근거도 아니다. 그 절반 이상(`SUGGESTION_MIN_SHARE`)이자 2표 이상(`SUGGESTION_MIN_VOTES`)이 한 폴더에 있고 그 폴더가
 지금 폴더와 다를 때만 제안한다. 벡터를 읽지 않으므로 `SET LOCAL`이 없다.
 
 ## 프론트엔드 패턴
