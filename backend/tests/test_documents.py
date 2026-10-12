@@ -106,7 +106,7 @@ async def test_create_text_document_rejects_blank_content_without_saving(
 async def test_create_text_document_rejects_oversized_content_without_saving(
     documents_conn,
 ):
-    with pytest.raises(ExtractedTextTooLarge, match="500KB"):
+    with pytest.raises(ExtractedTextTooLarge, match="50만 자"):
         await create_text_document(
             documents_conn,
             title="초과 입력",
@@ -214,7 +214,7 @@ async def test_edit_rejection_calls_text_by_its_name_for_each_origin(documents_c
                 content="   ",
                 client_version=document["version"],
             )
-        with pytest.raises(ExtractedTextTooLarge, match=f"{expected}는 500KB"):
+        with pytest.raises(ExtractedTextTooLarge, match=f"{expected}는 50만 자"):
             await update_extracted_text(
                 documents_conn,
                 document["id"],
