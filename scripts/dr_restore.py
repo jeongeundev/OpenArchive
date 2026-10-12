@@ -424,6 +424,11 @@ def cmd_mark(a) -> int:
     return 0
 
 
+def break_delete_path(document_id: str) -> str:
+    """영구 삭제 경로. 휴지통 이동(ADR-060)은 복원 없이도 되살릴 수 있어 PITR 판정이 무의미하다 (명세서 354행)."""
+    return f"/documents/{document_id}?permanent=true"
+
+
 def cmd_break(a) -> int:
     dsn, state = app_dsn(), load(a)
     prefix = state["prefix"]
@@ -435,7 +440,7 @@ def cmd_break(a) -> int:
         + [t for t in titles if not t.startswith(f"{prefix}a-")]
     )[: a.delete]
     for t in victims:
-        c.delete(f"/documents/{state['s2']['docs'][t]['id']}").raise_for_status()
+        c.delete(break_delete_path(state['s2']['docs'][t]['id'])).raise_for_status()
     c.delete(f"/auth/tokens/{state['personal_token']}").raise_for_status()
     c.delete(f"/shares/{state['share']}").raise_for_status()
     after = [upload(c, f"{prefix}c-{i:03d}") for i in range(a.c)]
