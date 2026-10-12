@@ -1079,11 +1079,12 @@ async def test_finder_title_sort(documents_conn):
 
 async def test_finder_title_sort_is_ganada_order_regardless_of_db_collation(documents_conn):
     # 명세서 192행. en_US.utf8(glibc) 기본 콜레이션은 「가지급」을 한글 뒤로 보냈다 — DB 설정과 무관하게 가나다순
-    titles = ["육아휴직", "가지급", "그림", "나무", "beta", "Alpha"]
+    # 한국어 표준 정렬(CLDR ko, 브라우저 Intl.Collator("ko"))처럼 숫자 → 한글 → 영문 순 — ko_KR(glibc)은 영문을 앞에 둔다
+    titles = ["육아휴직", "가지급", "그림", "나무", "beta", "Alpha", "2026 계획"]
     for title in titles:
         await insert_test_document(documents_conn, title=title, content="본문")
     rows = await list_documents(documents_conn, sort="title")
-    assert [d["title"] for d in rows] == ["Alpha", "beta", "가지급", "그림", "나무", "육아휴직"]
+    assert [d["title"] for d in rows] == ["2026 계획", "가지급", "그림", "나무", "육아휴직", "Alpha", "beta"]
 
 
 async def test_finder_updated_sort(documents_conn):

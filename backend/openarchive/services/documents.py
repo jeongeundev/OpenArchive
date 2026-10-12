@@ -722,9 +722,12 @@ async def apply_extracted_text(
 DocumentSort = Literal["updated", "title"]
 DOCUMENT_ORDER_BY = {
     "updated": "d.updated_at DESC, d.id",
-    # 한글 음절은 코드값 순서가 가나다순이다. DB 기본 콜레이션(en_US.utf8 등)에 맡기면 한글 순서가 틀려
-    # 설치 환경마다 결과가 갈린다 — 「C」로 고정하고 영문은 대소문자를 무시한다 (명세서 192행).
-    "title": 'lower(d.title) COLLATE "C", d.title COLLATE "C", d.id',
+    # 한국어 표준 정렬(CLDR ko — 브라우저 Intl.Collator("ko")와 같다)처럼 숫자 → 한글 → 그 밖(영문 등) 순으로 묶고,
+    # 묶음 안은 코드값 순(한글 음절은 코드값 순이 곧 가나다순)·영문 대소문자 무시로 고정한다. DB 기본 콜레이션에
+    # 맡기면 en_US.utf8은 한글 순서가, ko_KR.UTF-8(glibc)은 영문·한글 앞뒤가 설치 환경마다 갈린다 (명세서 192행).
+    # ICU 콜레이션(ko-x-icu)은 ICU 없이 빌드한 PostgreSQL에서 실패해 쓰지 않는다.
+    "title": """CASE WHEN d.title ~ '^[0-9]' THEN 0 WHEN d.title ~ '^[ㄱ-ㅎㅏ-ㅣ가-힣]' THEN 1 ELSE 2 END,
+                lower(d.title) COLLATE "C", d.title COLLATE "C", d.id""",
 }
 DOCUMENT_FILTERS = f"""
 {VISIBLE_TO_USER}
