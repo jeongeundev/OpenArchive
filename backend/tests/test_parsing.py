@@ -9,6 +9,7 @@ from pathlib import Path
 import olefile
 import pytest
 from docx import Document
+from docx.oxml import parse_xml
 from openpyxl import Workbook
 from PIL import Image
 from pptx import Presentation
@@ -111,6 +112,79 @@ def test_extract_text_reads_docx_paragraphs_in_order() -> None:
     assert extract_text(buf.getvalue(), "docx") == (
         "임베딩 잡은 트리거가 만든다\n\n두 번째 문단"
     )
+
+
+def test_extract_text_keeps_docx_body_paragraphs_as_before() -> None:
+    # 본문 문단만 있는 DOCX는 표·텍스트 상자를 읽기 전과 같은 텍스트를 낸다 — 빈 문단도 그대로다.
+    buf = io.BytesIO()
+    document = Document()
+    for text in ("첫 문단", "", "셋째 문단"):
+        document.add_paragraph(text)
+    document.save(buf)
+
+    assert extract_text(buf.getvalue(), "docx") == "첫 문단\n\n\n\n셋째 문단"
+
+
+def test_extract_text_reads_docx_table_rows_once_per_merged_cell() -> None:
+    buf = io.BytesIO()
+    document = Document()
+    document.add_paragraph("앞 문단")
+    table = document.add_table(rows=3, cols=3)
+    table.cell(0, 0).merge(table.cell(0, 1)).text = "구분"
+    table.cell(0, 2).text = "기한"
+    table.cell(1, 0).merge(table.cell(2, 0)).text = "착수"
+    table.cell(1, 1).text = "계약"
+    table.cell(1, 2).text = "10월"
+    table.cell(1, 2).add_paragraph("중순")
+    table.cell(2, 1).text = "보고"
+    table.cell(2, 2).text = "11월"
+    document.add_paragraph("뒤 문단")
+    document.save(buf)
+
+    assert extract_text(buf.getvalue(), "docx") == (
+        "앞 문단\n\n구분\t기한\n착수\t계약\t10월\n중순\n\t보고\t11월\n\n뒤 문단"
+    )
+
+
+def docx_text_box_run(*lines: str) -> str:
+    """Word가 쓰는 모양대로 같은 텍스트 상자를 DrawingML(Choice)과 VML(Fallback)로 두 번 담은 런."""
+    paragraphs = "".join(f"<w:p><w:r><w:t>{line}</w:t></w:r></w:p>" for line in lines)
+    return (
+        '<w:r xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
+        ' xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"'
+        ' xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"'
+        ' xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"'
+        ' xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"'
+        ' xmlns:v="urn:schemas-microsoft-com:vml">'
+        '<mc:AlternateContent><mc:Choice Requires="wps"><w:drawing><wp:anchor><a:graphic>'
+        '<a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape">'
+        f"<wps:wsp><wps:txbx><w:txbxContent>{paragraphs}</w:txbxContent></wps:txbx></wps:wsp>"
+        "</a:graphicData></a:graphic></wp:anchor></w:drawing></mc:Choice>"
+        f"<mc:Fallback><w:pict><v:shape><v:textbox><w:txbxContent>{paragraphs}</w:txbxContent>"
+        "</v:textbox></v:shape></w:pict></mc:Fallback></mc:AlternateContent></w:r>"
+    )
+
+
+def test_extract_text_reads_docx_text_box_once_after_its_paragraph() -> None:
+    buf = io.BytesIO()
+    document = Document()
+    anchor = document.add_paragraph("본문")
+    anchor._p.append(parse_xml(docx_text_box_run("상자 첫 줄", "상자 둘째 줄")))
+    document.add_paragraph("다음 문단")
+    document.save(buf)
+
+    assert extract_text(buf.getvalue(), "docx") == "본문\n\n상자 첫 줄\n상자 둘째 줄\n\n다음 문단"
+
+
+def test_extract_text_reads_docx_text_box_inside_table_cell() -> None:
+    buf = io.BytesIO()
+    document = Document()
+    table = document.add_table(rows=1, cols=2)
+    table.cell(0, 0).text = "단계"
+    table.cell(0, 1).paragraphs[0]._p.append(parse_xml(docx_text_box_run("셀 안 상자")))
+    document.save(buf)
+
+    assert extract_text(buf.getvalue(), "docx") == "단계\t셀 안 상자"
 
 
 def test_extract_text_reads_pdf() -> None:
