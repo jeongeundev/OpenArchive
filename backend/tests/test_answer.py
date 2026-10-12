@@ -168,7 +168,7 @@ async def test_invalid_k(conn, k):
         await gather(conn, k=k)
 
 
-async def test_passage_order_and_trimming_oversized_following_passage(conn, monkeypatch):
+async def test_passage_order_and_skipping_following_passage_whose_matched_chunk_does_not_fit(conn, monkeypatch):
     from dataclasses import replace
 
     from openarchive.services.search import SearchPassage
@@ -187,11 +187,40 @@ async def test_passage_order_and_trimming_oversized_following_passage(conn, monk
     evidence = await answer.gather_evidence(
         conn, FakeProvider(), query="정합성 근거", user_id="alice", context_chars=6,
     )
-    # 남은 예산보다 긴 대목도 건너뛰지 않고 줄여 담는다 (#246). 예산이 다 차면 멈춘다.
+    # 맞은 청크 자체가 남은 예산보다 긴 뒤 근거는 건너뛴다 — 잘라 넣으면 뒤에 오는 근거의 자리를 먹는다 (#246).
     assert [(source.label, source.chunk_index, source.content) for source in evidence.sources] == [
-        (1, 2, "첫 대목"), (2, 3, "예산"),
+        (1, 2, "첫 대목"), (2, 4, "끝"),
     ]
     assert sum(len(source.content) for source in evidence.sources) <= 6
+
+
+async def test_matched_chunks_of_every_source_come_before_surrounding_context(conn, monkeypatch):
+    # #246 수정 1차에서 inflation-past가 회귀했다: 앞 근거의 문맥이 예산을 다 써 뒤 근거(과거 판 청크)가 빠졌다.
+    from dataclasses import replace
+
+    from openarchive.services.search import SearchPassage
+
+    await seed(conn, title="대목", content="정합성 근거")
+
+    async def with_passages(*args, **kwargs):
+        hits = await search_documents(*args, **kwargs)
+        return [replace(hits[0], passages=(
+            SearchPassage(1, "가" * 40 + "첫째맞은청크" + "가" * 54, 1, 0.9, focus=(40, 46)),
+            SearchPassage(5, "나둘째맞은청크" + "나" * 93, 1, 0.8, focus=(1, 7)),
+            SearchPassage(9, "셋째맞은청크", 1, 0.7),
+        ))]
+
+    monkeypatch.setattr(answer, "search_documents", with_passages)
+    evidence = await answer.gather_evidence(
+        conn, FakeProvider(), query="정합성 근거", user_id="alice", context_chars=40,
+    )
+    contents = [source.content for source in evidence.sources]
+    assert [source.chunk_index for source in evidence.sources] == [1, 5, 9]
+    assert "첫째맞은청크" in contents[0] and "둘째맞은청크" in contents[1]
+    assert contents[2] == "셋째맞은청크"
+    # 남은 예산은 1순위 근거의 문맥부터 넓힌다
+    assert len(contents[0]) > len("첫째맞은청크")
+    assert sum(len(content) for content in contents) <= 40
 
 
 def _filler(prefix: str, count: int) -> list[str]:
