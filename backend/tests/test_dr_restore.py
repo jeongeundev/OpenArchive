@@ -20,6 +20,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
 from scripts.dr_restore import (
+    break_delete_path,
     check_dest,
     isolation_conf,
     judge_pitr,
@@ -312,3 +313,9 @@ async def test_unfinished_counts_only_the_run_prefix(migrated_db: str):
     assert counts["jobs"] == 1 and counts["not_ready"] == 1
     # 다른 회차의 미완료 잡은 세지 않는다
     assert done == {"jobs": 0, "error": 0, "inconsistent": 0, "not_ready": 0}
+
+
+def test_break_deletes_permanently_so_the_restore_point_is_the_only_way_back():
+    # 명세서 354행 「복원 지점을 찍은 뒤 문서를 영구 삭제」. 휴지통(ADR-060) 뒤 기본 삭제는 휴지통 이동이라
+    # 복원 없이도 되살릴 수 있어 PITR 판정이 무의미해진다.
+    assert break_delete_path("abc") == "/documents/abc?permanent=true"
