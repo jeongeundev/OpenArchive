@@ -558,6 +558,9 @@ _W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
 _MC_FALLBACK = "{http://schemas.openxmlformats.org/markup-compatibility/2006}Fallback"
 # 텍스트 상자를 찾을 때 내려가지 않는 곳 — 대체본과 변경 추적으로 지운 런(`w:delText`처럼 읽지 않는다)
 _DOCX_SKIPPED = frozenset({_MC_FALLBACK, f"{_W}del", f"{_W}moveFrom"})
+_DOCX_INLINE_WRAPPERS = frozenset(
+    f"{_W}{name}" for name in ("hyperlink", "fldSimple", "smartTag", "customXml", "ins", "moveTo")
+)
 
 
 def _docx_blocks(container: BaseOxmlElement) -> Iterator[str]:
@@ -569,7 +572,7 @@ def _docx_blocks(container: BaseOxmlElement) -> Iterator[str]:
     """
     for child in _docx_children(container):
         if child.tag == f"{_W}p":
-            yield child.text
+            yield _docx_paragraph_text(child)
             for box in _docx_text_boxes(child):
                 text = "\n".join(block for block in _docx_blocks(box) if block.strip())
                 if text:
@@ -596,18 +599,38 @@ def _docx_children(
     # 값을 넣지 않은 컨트롤의 안내 문구와 제목을 한 번 더 쓴 자동 목차는 내용이 아니라 건너뛴다.
     for child in element.iterchildren():
         if child.tag == f"{_W}sdt":
-            properties = child.find(f"{_W}sdtPr")
-            if properties is not None and (
-                properties.find(f"{_W}showingPlcHdr") is not None
-                or properties.find(
-                    f"{_W}docPartObj/{_W}docPartGallery[@{_W}val='Table of Contents']"
-                ) is not None
-            ):
+            if _docx_control_is_hidden(child):
                 continue
             for content in child.iterchildren(f"{_W}sdtContent"):
                 yield from _docx_children(content, tag)
         elif tag is None or child.tag == tag:
             yield child
+
+
+def _docx_control_is_hidden(sdt: BaseOxmlElement) -> bool:
+    properties = sdt.find(f"{_W}sdtPr")
+    return properties is not None and (
+        properties.find(f"{_W}showingPlcHdr") is not None
+        or properties.find(
+            f"{_W}docPartObj/{_W}docPartGallery[@{_W}val='Table of Contents']"
+        ) is not None
+    )
+
+
+def _docx_paragraph_text(element: BaseOxmlElement) -> str:
+    # python-docx의 문단 텍스트는 직계 런과 하이퍼링크만 읽는다. 런을 감싸는 필드 결과·스마트 태그·
+    # 인라인 콘텐츠 컨트롤·변경 추적으로 넣은 글자도 화면에 보이므로 읽고, 지운 글자는 읽지 않는다.
+    parts = []
+    for child in element.iterchildren():
+        if child.tag == f"{_W}r":
+            parts.append(child.text)
+        elif child.tag in _DOCX_INLINE_WRAPPERS:
+            parts.append(_docx_paragraph_text(child))
+        elif child.tag == f"{_W}sdt" and not _docx_control_is_hidden(child):
+            parts.extend(
+                _docx_paragraph_text(content) for content in child.iterchildren(f"{_W}sdtContent")
+            )
+    return "".join(parts)
 
 
 def _docx_text_boxes(element: BaseOxmlElement) -> Iterator[BaseOxmlElement]:
