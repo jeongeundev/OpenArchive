@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { DocumentAccess, DocumentFolder, Folder, FolderScope } from "@/lib/types";
+import type { DocumentAccess, DocumentFolder, Folder, FolderScope, FolderSuggestion } from "@/lib/types";
 import { DocumentFolderSection } from "./DocumentFolderSection";
 
 const publicScope: FolderScope = { visibility: "public", users: [], groups: [] };
@@ -18,9 +18,10 @@ function json(body: unknown, status = 200) {
   return Promise.resolve(new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } }));
 }
 
-function stub(access: Partial<DocumentAccess> = {}) {
+function stub(access: Partial<DocumentAccess> = {}, suggestion: FolderSuggestion | null = null) {
   const fetchMock = vi.fn((url: string, init?: RequestInit) => {
     if (url === "/api/folders") return json([insa, hire, rfp]);
+    if (url.endsWith("/folder-suggestion")) return json({ suggestion });
     if (url.endsWith("/access")) {
       return json({ follows_folder: true, folder: inInsa, folder_scope: publicScope, visibility: "private",
         users: [], groups: [], ...access });
@@ -162,5 +163,27 @@ describe("DocumentFolderSection", () => {
     render(<DocumentFolderSection documentId="d1" folder={inInsa} isOwner onMoved={vi.fn()} />);
     await choose("b");
     expect(await screen.findByRole("alert")).toHaveTextContent("폴더를 찾을 수 없습니다.");
+  });
+
+  const toHire: FolderSuggestion = {
+    folder_id: "b", path: [{ id: "a", name: "인사" }, { id: "b", name: "채용" }], votes: 3, total: 4,
+  };
+
+  it("소유자에게 추천 폴더와 근거를 보이고, 고르면 선택칸만 바꾼다 — 옮기기는 사람이 누른다", async () => {
+    const fetchMock = stub({}, toHire);
+    render(<DocumentFolderSection documentId="d1" folder={inInsa} isOwner onMoved={vi.fn()} />);
+    await screen.findByRole("option", { name: "인사/채용" });
+    expect(await screen.findByText("관련 문서 4개 중 3개가 이 폴더에 있습니다.")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "추천 폴더 인사/채용 고르기" }));
+    expect(screen.getByLabelText("폴더")).toHaveValue("b");
+    expect(moves(fetchMock)).toEqual([]);
+    expect(fetchMock.mock.calls.map(([url]) => url)).toContain("/api/documents/d1/folder-suggestion");
+  });
+
+  it("추천이 없으면 추천 자리를 남기지 않는다", async () => {
+    stub();
+    render(<DocumentFolderSection documentId="d1" folder={inInsa} isOwner onMoved={vi.fn()} />);
+    await screen.findByRole("option", { name: "인사/채용" });
+    expect(screen.queryByText(/추천 폴더/)).not.toBeInTheDocument();
   });
 });
