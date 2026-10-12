@@ -283,9 +283,10 @@ def test_extract_text_reads_docx_simple_field_and_smart_tag_results() -> None:
         '<w:hyperlink w:anchor="a"><w:r><w:t xml:space="preserve"> 링크</w:t></w:r></w:hyperlink>'
         '<w:customXml w:element="x"><w:r><w:t xml:space="preserve"> 태그</w:t></w:r></w:customXml>'
         '<w:dir w:val="rtl"><w:r><w:t xml:space="preserve"> 방향</w:t></w:r></w:dir>'
+        '<w:bdo w:val="rtl"><w:r><w:t xml:space="preserve"> 고정</w:t></w:r></w:bdo>'
     )
 
-    assert extract_text(data, "docx") == "표준 번호: KS X 3255 서울 링크 태그 방향"
+    assert extract_text(data, "docx") == "표준 번호: KS X 3255 서울 링크 태그 방향 고정"
 
 
 def test_extract_text_reads_docx_ruby_base_without_its_guide() -> None:
