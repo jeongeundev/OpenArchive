@@ -223,6 +223,27 @@ async def test_matched_chunks_of_every_source_come_before_surrounding_context(co
     assert sum(len(content) for content in contents) <= 40
 
 
+async def test_first_matched_chunk_longer_than_budget_keeps_its_own_start(conn, monkeypatch):
+    # 맞은 청크 자체가 예산보다 길면 대목 앞이 아니라 그 청크의 앞부분부터 담는다 (#246)
+    from dataclasses import replace
+
+    from openarchive.services.search import SearchPassage
+
+    await seed(conn, title="대목", content="정합성 근거")
+
+    async def with_passages(*args, **kwargs):
+        hits = await search_documents(*args, **kwargs)
+        return [replace(hits[0], passages=(
+            SearchPassage(3, "앞" * 30 + "맞은청크시작" + "뒤" * 30, 1, 0.9, focus=(30, 66)),
+        ))]
+
+    monkeypatch.setattr(answer, "search_documents", with_passages)
+    evidence = await answer.gather_evidence(
+        conn, FakeProvider(), query="정합성 근거", user_id="alice", context_chars=10,
+    )
+    assert [source.content for source in evidence.sources] == ["맞은청크시작뒤뒤뒤뒤"]
+
+
 def _filler(prefix: str, count: int) -> list[str]:
     """질의와 어절이 겹치지 않는 문단들. 문단마다 어절이 달라 FakeProvider 벡터가 갈린다."""
     return [
