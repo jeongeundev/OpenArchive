@@ -214,6 +214,21 @@ DB가 잠시 응답할 수 없는 동안(페일오버·switchover 등) API는 **
 같은 키로 다시 보내도 문서는 한 번만 생기고 처음 문서가 돌아옵니다(`docs/ARCHITECTURE.md` 「멱등키」).
 웹 화면(읽기·업로드)과 MCP 도구는 최대 60초까지 알아서 기다립니다.
 
+### 근거 기반 답변 (선택)
+
+로그인한 상태로 검색하면 결과 위에 **이 검색어로 답변 받기**가 나옵니다. 누르면, 검색이 고른 근거만으로 로컬 모델이 답하고 `[1]` 같은 인용이 그 텍스트 버전의
+그 대목으로 이어집니다. 개정된 문서의 근거는 「v3 기준 · 현재 v4」로 표시됩니다. 답은 저장하지 않습니다.
+**기본 꺼짐**이라 켜려면 Ollama와 모델(`qwen3:8b`, 약 5.2GB)을 설치합니다.
+
+```bash
+brew install ollama && brew services start ollama   # Linux: curl -fsSL https://ollama.com/install.sh | sh
+ollama pull qwen3:8b
+ANSWER_PROVIDER=ollama openarchive serve
+```
+
+맥 M2 Pro에서 한 번에 15~25초가 걸립니다. 근거에 없는 내용은 답하지 않도록 지시하지만 보장은 아닙니다. 모델 선정 실측과
+설치 세부(메모리·오프라인·다른 호스트)는 [ADR-043](docs/ADR.md)과 [운영 가이드 「답변 생성」](docs/OPERATIONS.md#답변-생성-ollama-선택)에 있습니다.
+
 ### 문서 다듬기
 
 문서 상세(`/documents/[id]`)에서 **추출 텍스트를 직접 편집**하면 텍스트 버전이 하나 쌓이고
@@ -364,6 +379,7 @@ replica에 닿지 않은 커밋은 사라질 수 있고, 복구 구간에는 쓰
 | DB | [Tmax OpenSQL v3](https://docs.tibero.com/tmaxopensql/overview) — PostgreSQL 17 + pgvector 0.8.1 · OpenHA(Patroni) · OpenHA DCS(etcd) · OpenProxy |
 | 백엔드 | Python 3.12+ · FastAPI · psycopg3 · `openarchive` CLI |
 | 임베딩 | [`BAAI/bge-m3`](https://huggingface.co/BAAI/bge-m3) (MIT, 1024차원) — `sentence-transformers`로 로컬 구동 |
+| 답변 생성 (선택) | [Qwen3-8B](https://huggingface.co/Qwen/Qwen3-8B) (Apache-2.0) — [Ollama](https://github.com/ollama/ollama)(MIT)로 로컬 구동, 기본 꺼짐 |
 | 프론트엔드 | Next.js (App Router) · TypeScript · Tailwind CSS · JSZip — 정적 빌드를 백엔드에 동봉 |
 | 군집 | `networkx` Louvain |
 | MCP | Python `mcp` SDK (FastMCP, stdio·Streamable HTTP) |

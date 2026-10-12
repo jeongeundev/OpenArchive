@@ -45,7 +45,7 @@ class Settings(BaseSettings):
     # 로컬 Ollama 서버 주소. 모델 적재는 서버가 관리하며 앱 기동 시 접속하지 않는다.
     ollama_url: str = "http://localhost:11434"
 
-    # 임시 모델 태그 — #96 c의 한국어 실측으로 확정한다 (ADR-043).
+    # 답변 모델 태그 — #96 c 한국어 실측으로 확정했다 (ADR-043 「모델 확정」).
     answer_model: str = "qwen3:8b"
 
     # 생성 호출 한 번의 HTTP 타임아웃(초). 모델 실패와 DB 일시 불가용을 구분한다.
