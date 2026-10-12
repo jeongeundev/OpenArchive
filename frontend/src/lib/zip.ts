@@ -1,3 +1,5 @@
+// Copyright 2026 jeongeundev
+// SPDX-License-Identifier: MIT
 import JSZip from "jszip";
 
 import { SUPPORTED_CONTENT_TYPES } from "./types";

@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """앱 이미지 진입점 — `init --yes` 뒤 `serve` (#95-e2, ADR-039 개정).
 
 `docker run -e DATABASE_URL=… -e ADMIN_PASSWORD=…` 한 줄로 스키마·첫 관리자·기동까지

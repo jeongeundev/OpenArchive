@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """소유권 이전의 열람·부여·감사·일괄 삭제 계약."""
 from uuid import uuid4
 

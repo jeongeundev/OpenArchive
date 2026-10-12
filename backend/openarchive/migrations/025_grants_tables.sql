@@ -1,3 +1,5 @@
+-- Copyright 2026 jeongeundev
+-- SPDX-License-Identifier: MIT
 -- 025_grants_tables.sql — 그룹과 문서 열람 부여 (ADR-044, #97)
 --
 -- private 문서는 소유자와 부여 대상이 본다. public 문서는 지금처럼 조직(이 설치에

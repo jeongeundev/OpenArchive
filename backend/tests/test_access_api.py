@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """문서 열람 범위 API와 생성 시 부여 대상 인자 (ADR-044 관리 경로)."""
 
 import psycopg

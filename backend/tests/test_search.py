@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 from contextlib import asynccontextmanager
 from uuid import UUID
 

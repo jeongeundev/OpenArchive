@@ -1,3 +1,5 @@
+// Copyright 2026 jeongeundev
+// SPDX-License-Identifier: MIT
 "use client";
 
 import { createContext, useContext, useEffect, useState } from "react";

@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """검색 평가셋으로 문서 순위와 고정 근거 포함을 잰다.
 
     DATABASE_URL=… EMBEDDING_PROVIDER=local \\

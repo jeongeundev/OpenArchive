@@ -1,3 +1,5 @@
+-- Copyright 2026 jeongeundev
+-- SPDX-License-Identifier: MIT
 -- 019_idempotency_tables.sql — 문서 생성 요청의 멱등키 (ADR-047, #120)
 --
 -- failover 중에는 COMMIT이 서버에 닿아 커밋된 뒤 응답만 잃는 "모호한 커밋"이 생긴다

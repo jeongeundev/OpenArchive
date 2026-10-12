@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 import asyncio
 import hashlib
 from datetime import UTC, datetime, timedelta

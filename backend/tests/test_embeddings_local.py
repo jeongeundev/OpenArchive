@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """BGE-M3 프로바이더의 계약 (ADR-003).
 
 **실제 모델을 로드하는 테스트는 여기에 없다.** BGE-M3는 약 2GB이고 첫 로딩에 수십

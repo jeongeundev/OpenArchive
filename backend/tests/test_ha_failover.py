@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """HA 장애 주입 측정기(`scripts/ha_failover.py`)의 판정 로직 (#122).
 
 측정기는 부하를 건 채 장애를 주입하고, 끝난 뒤 "커밋 응답을 받은 쓰기가 전부 있는가·

@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """테스트용 결정론적 임베딩 (ADR-003).
 
 편의 장치가 아니라 **이 프로젝트 TDD의 핵심 인프라**다. BGE-M3는 약 2GB이고 첫

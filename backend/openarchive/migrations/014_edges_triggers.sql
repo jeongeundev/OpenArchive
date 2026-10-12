@@ -1,3 +1,5 @@
+-- Copyright 2026 jeongeundev
+-- SPDX-License-Identifier: MIT
 -- 014_edges_triggers.sql — 관계 판정을 rebuild_document_edges로 옮긴다 (ADR-029 개정, #94)
 --
 -- 계산한 문서의 src 행만 교체해 남의 발견을 지우지 않는다. 재실행 자카드는

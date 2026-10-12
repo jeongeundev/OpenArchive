@@ -1,3 +1,5 @@
+-- Copyright 2026 jeongeundev
+-- SPDX-License-Identifier: MIT
 -- 043_share_folders_audit_triggers.sql — 폴더 공유 감사 (#206)
 -- 부모가 이미 없는 연쇄 삭제는 건너뛴다 (041, ADR-055).
 CREATE FUNCTION audit_share_folder_changed() RETURNS trigger LANGUAGE plpgsql AS $$

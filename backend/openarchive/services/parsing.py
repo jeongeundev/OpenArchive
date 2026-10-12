@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """업로드 파일 바이트에서 추출 텍스트를 만드는 순수 함수.
 
 DB·네트워크를 건드리지 않는다. 일반 추출·래스터화는 메모리에서 처리하고,

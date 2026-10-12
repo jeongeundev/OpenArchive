@@ -1,3 +1,5 @@
+-- Copyright 2026 jeongeundev
+-- SPDX-License-Identifier: MIT
 -- 023_links_triggers.sql — 표 셀 이스케이프 `[[제목\|별칭]]`의 `\|`도 별칭 구분자로 본다 (#112)
 --
 -- Obsidian은 마크다운 표 셀 안에서 `|`가 열 구분자와 겹치므로 `[[제목\|별칭]]`으로 적는다.

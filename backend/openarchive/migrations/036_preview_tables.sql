@@ -1,3 +1,5 @@
+-- Copyright 2026 jeongeundev
+-- SPDX-License-Identifier: MIT
 -- 036_preview_tables.sql — 원본 판당 파생 PDF 하나를 보관한다 (ADR-058 개정 결정 3).
 -- 원본과 같은 DB에 두어 앱 호스트가 여럿이어도 한 곳에서 읽고 백업 하나로 보관한다
 -- (ADR-046). 변환본은 다시 만들 수 있는 파생물이라 편집·버전·감사 대상이 아니며,

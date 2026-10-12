@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """`openarchive.db`의 import 부작용 부재를 검증한다 (ADR-012).
 
 MCP 서버는 `openarchive.services`를 직접 import하고(ADR-008) 워커도 같은 패키지를 쓴다.

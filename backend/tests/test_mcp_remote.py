@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """제출 명세의 원격 MCP 계약을 실제 SDK 클라이언트로 검증한다."""
 
 import json

@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """휴지통 REST의 소유권·토큰 쓰기 경계·감사 계약."""
 from datetime import datetime, timedelta
 

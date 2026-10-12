@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """`openarchive import`·`export`·`search`·`ask` — 셸에서 문서를 넣고 빼고 찾고 묻는 CLI (#95-b, #96 b).
 
 세 명령 모두 코어(`openarchive.services`)를 그대로 부른다. 여기서 지키는 것은 CLI가 더하는

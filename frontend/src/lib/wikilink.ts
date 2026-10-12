@@ -1,3 +1,5 @@
+// Copyright 2026 jeongeundev
+// SPDX-License-Identifier: MIT
 // `023_links_triggers.sql`의 `wikilink_targets` 복제. 한쪽만 바뀌면 API가 해석한
 // 정상 링크를 화면이 깨진 링크로 그린다 (ADR-027). lookbehind 대신 앞 그룹으로
 // 임베드를 잡는다 — 오래된 Safari.

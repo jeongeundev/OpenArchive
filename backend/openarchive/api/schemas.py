@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 from datetime import datetime
 from typing import Literal
 from uuid import UUID

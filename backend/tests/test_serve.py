@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """`openarchive serve` — API와 워커를 한 명령으로 띄운다 (ADR-039 결정 2 개정).
 
 실제 프로세스를 띄운다. 이 명령이 지켜야 하는 것 — 두 프로세스가 함께 뜨고, Ctrl-C에

@@ -1,3 +1,5 @@
+// Copyright 2026 jeongeundev
+// SPDX-License-Identifier: MIT
 import Link from "next/link";
 
 import { VISIBILITY_LABEL, type DocumentSummary } from "@/lib/types";

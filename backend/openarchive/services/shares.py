@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """공유 관리 — 외부 협업용 공유 주체와 그 부여·읽기 전용 토큰 (ADR-044 「공유」).
 
 공유는 소유자가 지정한 문서 집합을 읽는 주체다. 공유 부여도 사람이 내린 결정의

@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 import pytest
 from conftest import login_as, run_embedding_worker, upload_document
 from fastapi.testclient import TestClient

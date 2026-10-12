@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """열람 가능한 문서를 관계 그래프의 덩어리로 묶고 덩어리 사이 연결을 집계한다.
 
 화면 이름은 「관계 지도」다. 묶는 축은 주제도 태그도 아니고 저장된 관계뿐이므로

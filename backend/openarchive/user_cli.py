@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """사용자 CLI 명령 — REST에 본인 API 토큰으로만 붙는다 (#189, ADR-057).
 
 운영자 CLI(`cli.py`의 `--dsn`·`--user`)와 달리 DB에 붙지 않고 DSN·`.env`를 읽지 않는다.

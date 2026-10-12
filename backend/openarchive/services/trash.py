@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """휴지통은 데이터를 보존하고, 소유자만 복원·영구 삭제한다 (ADR-060)."""
 
 from uuid import UUID

@@ -1,3 +1,5 @@
+// Copyright 2026 jeongeundev
+// SPDX-License-Identifier: MIT
 /**
  * 토큰 만료일 입력과 표시 (ADR-061 결정 1).
  *

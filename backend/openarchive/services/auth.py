@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """비밀번호 해시와 서버 측 세션을 관리하는 인증 서비스."""
 
 import base64

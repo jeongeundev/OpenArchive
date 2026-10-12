@@ -1,3 +1,5 @@
+-- Copyright 2026 jeongeundev
+-- SPDX-License-Identifier: MIT
 -- 005_trgm_extensions.sql — §14 측정을 재현하기 위해 남겨 두는 문자열 유사도 확장
 --
 -- 애초에 m7의 broader 방향 판정이 비대칭 word_similarity()에 의존해 관계 생성보다 먼저

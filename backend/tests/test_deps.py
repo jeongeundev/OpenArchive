@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 import pytest
 from fastapi import FastAPI, HTTPException, Request
 

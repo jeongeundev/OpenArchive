@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """Bearer API 토큰으로 인증하는 원격 Streamable HTTP MCP (ADR-056)."""
 
 from collections.abc import AsyncIterator

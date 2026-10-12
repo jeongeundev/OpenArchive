@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """시연·측정용으로 예제 코퍼스(`backend/openarchive/demo_corpus/`)를 적재한다.
 
 적재 로직은 `openarchive demo`와 같다(`openarchive.demo`). 이 스크립트가 더하는 것은 계정이 없어도

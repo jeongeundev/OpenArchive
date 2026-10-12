@@ -1,3 +1,5 @@
+-- Copyright 2026 jeongeundev
+-- SPDX-License-Identifier: MIT
 -- 027_edge_jobs_triggers.sql — 전량 재계산은 관계 잡을 거는 것으로 끝난다 (ADR-029 결정 6 개정, #156)
 --
 -- `openarchive rebuild-edges`와 demo는 워커 옆에서 rebuild_document_edges를 직접 불렀다. 관계를

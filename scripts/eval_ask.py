@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """근거 기반 답변(ADR-043)을 평가셋으로 잰다 — 모델 확정(#96 c)과 #168 전후 비교의 기준선.
 
     DATABASE_URL=… EMBEDDING_PROVIDER=local ANSWER_PROVIDER=ollama ANSWER_MODEL=qwen3:8b \\

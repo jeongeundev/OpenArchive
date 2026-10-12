@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """`scripts/seed_demo.py` — 측정·시연용 적재 스크립트. 적재 로직은 openarchive.demo와 같다.
 
 스크립트가 더하는 것은 소유자 고정(`seed`)과 `--reset`뿐이다. 코퍼스·적재 자체는 test_demo.py.

@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """정리 추천 — 기존 서가에 새 책을 꽂아 주는 사서 (ADR-064).
 
 저장된 관계 이웃(`document_edges` src ∪ dst)이 가장 많이 든 폴더를 제안만 한다. 옮기는

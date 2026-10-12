@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 # OpenArchive 임베딩 워커의 systemd **user 유닛** 템플릿.
 #
 # deploy_app_host.sh가 @APP_ROOT@를 치환해

@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """위키링크 해석이 화면에 내놓는 순서를 고정한다.
 
 열람 범위 계약은 `test_visibility.py`가 본다. 여기서는 그 위에 얹힌 정렬을 본다 —

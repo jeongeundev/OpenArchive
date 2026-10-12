@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """폴더 서비스의 열람·관리·범위·직접 문서 집계 계약."""
 
 from uuid import uuid4

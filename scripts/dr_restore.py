@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """Barman 백업 복원 재현 (#166, ADR-053).
 
 두 가지를 재현한다. 둘 다 운영 클러스터를 덮지 않고 노드 하나에 격리 인스턴스로 복원한다.

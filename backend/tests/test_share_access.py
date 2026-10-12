@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """공유 토큰으로 REST를 연다 — 허용 목록의 읽기 경로만 (ADR-044 「공유」 결정 3·5, #97 c).
 
 공유 토큰을 든 B사에게 A사의 DB는 공유 안 문서 5건만 있는 DB처럼 보여야 한다. 시나리오는

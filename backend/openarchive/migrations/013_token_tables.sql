@@ -1,3 +1,5 @@
+-- Copyright 2026 jeongeundev
+-- SPDX-License-Identifier: MIT
 -- 013_token_tables.sql — 프로그램용 위임 토큰
 --
 -- API 토큰은 사람 계정이 프로그램에 위임하는 장수명 자격증명이다. 원문은 CI·스크립트

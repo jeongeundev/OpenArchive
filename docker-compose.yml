@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 # 로컬 개발용 DB 한 대. 애플리케이션(API·워커·프론트)은 컨테이너로 감싸지 않고
 # 맥 네이티브로 실행한다 — 임베딩 모델 추론 속도와 개발 루프 때문이다 (ADR-007).
 #

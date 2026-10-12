@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """예제 코퍼스(`demo_corpus/`)를 적재한다 — `openarchive demo`와 `scripts/seed_demo.py`가 쓴다.
 
 1청크와 여러 청크 문서가 섞여 있어 다양한 길이의 사내 규정을 시연한다.

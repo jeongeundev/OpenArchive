@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 import os
 from functools import lru_cache
 from pathlib import Path

@@ -1,3 +1,5 @@
+-- Copyright 2026 jeongeundev
+-- SPDX-License-Identifier: MIT
 -- 028_audit_tables.sql — 사건 시점의 감사 기록 (ADR-055 결정 2·4·5)
 --
 -- 기록은 대상 테이블의 트리거·DB 함수가 원래 작업과 같은 트랜잭션에서 남긴다.

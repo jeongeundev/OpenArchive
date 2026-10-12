@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 set -euo pipefail
 
 OPENSQL_HOST="${OPENSQL_HOST:-192.168.64.4}"

@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """휴지통 서비스의 보존·소유자 경계·감사를 실제 DB로 검증한다."""
 
 from datetime import timedelta

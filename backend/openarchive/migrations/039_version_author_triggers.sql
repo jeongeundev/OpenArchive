@@ -1,3 +1,5 @@
+-- Copyright 2026 jeongeundev
+-- SPDX-License-Identifier: MIT
 -- 039_version_author_triggers.sql — 새 텍스트 버전의 작성자 (ADR-061 결정 6)
 -- 감사(029)와 같은 트랜잭션 범위 GUC 전달 경로를 쓴다. 빈 placeholder는 NULL로 읽는다.
 -- openarchive.text_source = 'extraction'은 추출이 텍스트를 썼다는 표시다.

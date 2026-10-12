@@ -1,3 +1,5 @@
+-- Copyright 2026 jeongeundev
+-- SPDX-License-Identifier: MIT
 -- 006_edges_tables.sql — 문서를 노드로 삼는 저장 관계 그래프 (ADR-029)
 --
 -- 노드는 항상 문서다. 위치가 의미 있는 points_to 계열 관계만 chunk_index를 채운다.

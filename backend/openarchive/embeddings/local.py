@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """BGE-M3 임베딩 프로바이더 — 운영 경로 (ADR-003).
 
 `BAAI/bge-m3`는 MIT 라이선스에 1024차원, 로컬에서 직접 구동된다. 대회 규정 [별표2]가

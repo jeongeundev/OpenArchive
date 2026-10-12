@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """DB 일시 불가용을 한 번 다시 태우고, 그래도 안 되면 503 + Retry-After로 알리는 미들웨어.
 
 일시 불가용의 기준은 `openarchive.db.is_unavailable` 하나다 (ADR-048 결정 3). 분류된 오류가

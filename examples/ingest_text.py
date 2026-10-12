@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """HTTP만으로 OpenArchive에 텍스트 문서를 공급하는 독립 클라이언트 예제.
 
 이 파일은 ``backend``를 import하지 않으며 Python 표준 라이브러리만 사용한다.

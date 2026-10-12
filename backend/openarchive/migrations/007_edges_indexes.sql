@@ -1,3 +1,5 @@
+-- Copyright 2026 jeongeundev
+-- SPDX-License-Identifier: MIT
 -- 007_edges_indexes.sql — 관계 그래프 순회와 재계산 삭제 경로
 --
 -- 정방향 순회는 src, 역방향 순회와 백링크는 dst에서 시작한다. 관계 재계산 트리거도

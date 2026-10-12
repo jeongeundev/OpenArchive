@@ -1,3 +1,5 @@
+-- Copyright 2026 jeongeundev
+-- SPDX-License-Identifier: MIT
 -- 022_extract_triggers.sql — 추출이 필요한 문서는 추출 잡을 남긴다 (ADR-052 결정 3·5·6, #135)
 -- 스키마 변경은 021_extract_tables.sql.
 --

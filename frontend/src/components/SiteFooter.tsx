@@ -1,3 +1,5 @@
+// Copyright 2026 jeongeundev
+// SPDX-License-Identifier: MIT
 /**
  * 한컴 HWP 형식 공개 조건이 UI에 적으라고 한 고지 (ADR-059 결정 1). 문구는 원문 그대로 둔다.
  */

@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """번호 붙은 raw SQL 파일을 순서대로 적용하는 소형 러너 (ADR-005).
 
 호출 주체는 둘이다 — 상시 프로세스 중에서는 API 서버 하나, 그리고 운영자가 명시적으로

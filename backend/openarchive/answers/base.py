@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """답변 생성 계약 (ADR-043).
 
 로컬 Ollama와 테스트용 fake만 둔다. 상용 API 프로바이더는 만들지 않는다

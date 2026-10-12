@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """폴더 열람·관리. 범위 요약의 부여 대상 이름은 폴더를 보는 사용자에게 공개한다."""
 
 from uuid import UUID

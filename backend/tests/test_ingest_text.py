@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """`examples/ingest_text.py`(외부 공급 클라이언트 예제)의 계약을 고정한다.
 
 예제가 실제 서버에 접속해 완주하는지는 CI가 확인하지 않는다 (ADR-035 트레이드오프 1).

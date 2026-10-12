@@ -1,3 +1,5 @@
+-- Copyright 2026 jeongeundev
+-- SPDX-License-Identifier: MIT
 -- 021_extract_tables.sql — 추출 상태와 「추출 중」 문서 행 (ADR-052 결정 4·5, #135)
 --
 -- 스캔 문서의 OCR은 쪽당 수 초라 업로드 요청 안에서 끝낼 수 없다. 추출은 워커 잡이 하고,

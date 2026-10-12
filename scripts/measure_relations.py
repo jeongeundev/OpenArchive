@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """실데이터에서 관계 edge 판정 신호와 HNSW 비용을 재현한다."""
 
 from __future__ import annotations

@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """공유 주체(share:<uuid>)의 열람 범위 (ADR-044 「공유」 결정 2·3, #97 c).
 
 공유 주체에게는 그 공유에 부여된 문서만 있다 — 조직 공개 문서라도 부여가 없으면 없다.

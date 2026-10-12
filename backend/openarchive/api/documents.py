@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 from typing import Annotated, Literal
 from urllib.parse import quote
 from uuid import UUID

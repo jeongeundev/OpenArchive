@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """형식별 평가셋(#167)의 실문서를 업로드와 같은 진입점으로 적재한다.
 
     DATABASE_URL=… python scripts/eval_formats_load.py scripts/eval/formats.json [--clean]

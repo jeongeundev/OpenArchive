@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """공유 관리 API — 세션 전용 (ADR-044 「공유」, ADR-034 결정 6)."""
 
 import hashlib

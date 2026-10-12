@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """사용자 CLI REST 클라이언트의 재시도·자격증명 (#189 D3·D4).
 
 문서·권한 동작은 test_user_cli.py가 실제 앱과 DB로 관통한다. 여기서 MockTransport를 쓰는

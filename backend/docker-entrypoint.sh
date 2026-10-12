@@ -1,4 +1,6 @@
 #!/bin/sh
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 # 앱 이미지 진입점 (#95-e2, ADR-039 개정).
 #
 # 인자가 없으면 init → serve. init은 다시 실행해도 되는 명령이라 기동마다 부른다 —

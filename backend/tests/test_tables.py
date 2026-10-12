@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """스키마 제약 (ARCHITECTURE.md "DB 스키마", ADR-001·ADR-003).
 
 여기서 검증하는 것은 테이블의 "존재"가 아니라 **제약이 실제로 막아주는가**다.

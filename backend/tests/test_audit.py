@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """행위자 전달과 REST 감사 기록을 실제 pgvector DB에서 검증한다."""
 
 import asyncio

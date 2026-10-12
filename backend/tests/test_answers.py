@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """답변 프로바이더 계약 — 모델 없이 실제 HTTP 경로를 검증한다."""
 
 import json

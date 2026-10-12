@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """임베딩 워커 (ARCHITECTURE.md "워커 처리 루프", ADR-004·ADR-009·ADR-015).
 
 이 파일이 검증하는 주장은 하나다 — **워커가 몇 개든, 어떤 순서로 죽고 겹치든,

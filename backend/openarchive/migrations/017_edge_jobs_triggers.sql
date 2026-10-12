@@ -1,3 +1,5 @@
+-- Copyright 2026 jeongeundev
+-- SPDX-License-Identifier: MIT
 -- 017_edge_jobs_triggers.sql — ready 전이는 관계를 계산하지 않고 관계 잡을 남긴다
 -- (ADR-029 결정 3 개정, #107). 큐에 종류를 들이는 스키마 변경은 016_edge_jobs_tables.sql.
 --

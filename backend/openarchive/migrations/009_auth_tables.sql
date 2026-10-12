@@ -1,3 +1,5 @@
+-- Copyright 2026 jeongeundev
+-- SPDX-License-Identifier: MIT
 -- 009_auth_tables.sql — 설치 단위 계정·세션과 추출 텍스트 크기 경계
 --
 -- 한 설치가 한 조직이며 자체 가입은 없다. 계정은 관리자만 만든다. 실무 ECM은 사내

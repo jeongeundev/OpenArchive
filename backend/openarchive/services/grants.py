@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """그룹·구성원 관리와 부여 대상 해석.
 
 부여는 사람이 내린 결정의 기록이라 앱이 INSERT한다(025 주석).

@@ -1,3 +1,5 @@
+-- Copyright 2026 jeongeundev
+-- SPDX-License-Identifier: MIT
 -- 034_token_expiry_tables.sql — 토큰 만료일·마지막 사용 시각 (ADR-061 결정 1, #199)
 --
 -- 사용자 토큰과 공유 토큰에 공통으로 적용한다. NULL 만료일은 만료 없음이며,

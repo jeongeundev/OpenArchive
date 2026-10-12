@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """백업 복원 재현 도구(`scripts/dr_restore.py`)의 판정·명령 생성 (#166, ADR-053).
 
 도구는 복원 지점 전후 스냅샷과 복원본을 대조하고(PITR), 수신을 끊은 시각 전후 업로드

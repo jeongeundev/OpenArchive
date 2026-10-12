@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """`openarchive init` — 설치 CLI (ADR-039).
 
 실제 pgvector 컨테이너에 붙는다. 이 CLI가 지켜야 하는 것 — 확장 가용성 판정,

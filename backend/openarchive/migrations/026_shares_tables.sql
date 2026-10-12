@@ -1,3 +1,5 @@
+-- Copyright 2026 jeongeundev
+-- SPDX-License-Identifier: MIT
 -- 026_shares_tables.sql — 외부 협업용 공유 주체와 읽기 전용 토큰 (ADR-044, #97 c)
 --
 -- 공유는 소유자가 지정한 문서 집합을 읽는 주체다. 공유를 지우면 부여와 토큰도

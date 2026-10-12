@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """임베딩 워커 — DB가 만들어 둔 잡을 집어가는 무상태 실행기 (ARCHITECTURE "워커 처리 루프").
 
 잡은 세 종류다 (`embedding_jobs.kind`). `embed`는 청킹·임베딩·청크 교체이고, `edges`는

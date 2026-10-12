@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """로컬 Ollama의 비스트리밍 답변 호출 (ADR-043 구현 형태).
 
 표준 라이브러리 HTTP만 사용한다. 추론 출력은 끄고 온도를 0으로 고정한다.

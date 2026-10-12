@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """청킹 규칙 (ARCHITECTURE.md "청킹 (services/chunking.py)", ADR-003).
 
 DB도 임베딩 모델도 필요 없다 — 순수 함수 하나를 밀리초 단위로 두들긴다. 워커

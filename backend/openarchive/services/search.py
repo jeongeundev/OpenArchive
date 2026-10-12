@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """정형 필터와 벡터 유사도를 한 SQL로 결합하는 검색 서비스."""
 
 import asyncio

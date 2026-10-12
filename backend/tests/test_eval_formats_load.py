@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """#167 형식별 평가 자료 적재기를 고정한다.
 
 평가 수치는 "어떤 파일을 어떤 경로로 넣었는가"에 묶인다. 해시가 다른 파일로 재면 같은

@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """사용자 CLI — login·whoami를 실제 앱과 DB로 관통한다 (#189, ADR-057).
 
 CLI 요청은 lifespan이 돈 앱의 트랜스포트로 간다(`openarchive.client.TRANSPORT`, D9).

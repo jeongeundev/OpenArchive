@@ -1,3 +1,5 @@
+-- Copyright 2026 jeongeundev
+-- SPDX-License-Identifier: MIT
 -- 041_share_principal_audit_triggers.sql — ADR-061 결정 4, #201
 -- 부모가 이미 없는 연쇄 삭제는 건너뛰어 원래 삭제 사건만 기록한다 (ADR-055).
 -- 공유는 조직 밖으로 여는 별개 축이라 부여도 access_changed 대신 share_changed다.

@@ -1,3 +1,5 @@
+-- Copyright 2026 jeongeundev
+-- SPDX-License-Identifier: MIT
 -- 040_owner_audit_triggers.sql — 소유권 이전 감사 (ADR-061 결정 2, #200)
 -- 문서·폴더 소유자 변경은 owner_changed 한 동작으로 기록한다 (D5).
 -- 직접 SQL 경로에서도 빠지지 않도록 앱이 아니라 DB 트리거가 같은 트랜잭션에서 쓴다 (ADR-055).

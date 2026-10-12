@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 # 통합 검증 — backend + frontend.
 # CI가 실행하는 전체 검증의 정본이다. 로컬에서도 돌릴 수 있다. 아직 생성되지 않은 쪽은 건너뛴다.
 #

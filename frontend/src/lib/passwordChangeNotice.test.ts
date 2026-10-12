@@ -1,3 +1,5 @@
+// Copyright 2026 jeongeundev
+// SPDX-License-Identifier: MIT
 import { beforeEach, describe, expect, it } from "vitest";
 
 import {

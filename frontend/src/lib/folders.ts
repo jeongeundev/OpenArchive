@@ -1,3 +1,5 @@
+// Copyright 2026 jeongeundev
+// SPDX-License-Identifier: MIT
 import { getDocumentAccess, moveDocument } from "./api";
 import { VISIBILITY_LABEL, type Folder, type FolderScope } from "./types";
 

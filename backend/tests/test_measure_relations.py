@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """§14의 판정을 떠받치는 EXPLAIN 해석을 고정한다.
 
 `OPENSQL_RESEARCH.md` §14는 "상관 LATERAL이 HNSW를 전혀 타지 않았다"를 근거로 176.1ms를

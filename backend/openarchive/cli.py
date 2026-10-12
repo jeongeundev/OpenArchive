@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """`openarchive` 명령 — 설치와 계정 복구를 담당하는 운영자 CLI (ADR-039·ADR-040).
 
 사용자 명령(`login`·`whoami`·`doc`, `--user` 없는 `search`·`ask`)은 REST 클라이언트이며

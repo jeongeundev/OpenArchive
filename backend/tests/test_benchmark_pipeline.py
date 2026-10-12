@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """부하 측정의 실패 집계·유입 예약·파일 크기 검증."""
 
 import importlib.util

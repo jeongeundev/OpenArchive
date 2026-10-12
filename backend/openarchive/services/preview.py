@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """원본 판의 PDF 변환. 변환기는 선택 설치하며 격리 없이 실행하지 않는다 (ADR-058)."""
 
 import io

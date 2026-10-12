@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """검색 평가셋 지표(Recall@k·MRR)의 계산 규칙을 고정한다 (#94).
 
 관계 판정·`ask`·sparse 채널을 바꿀 때마다 "좋아졌는가"를 이 수치로 말하므로,

@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """폴더 REST 계약과 세션·토큰·공유 경계."""
 
 import psycopg

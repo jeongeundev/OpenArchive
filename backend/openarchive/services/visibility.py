@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """볼 수 없는 문서는 존재하지 않는 것처럼 제외한다 (ADR-027).
 
 public은 조직(이 설치에 로그인한 사용자) 전체, private는 소유자와 부여 대상이 본다.

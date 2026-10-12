@@ -1,3 +1,5 @@
+-- Copyright 2026 jeongeundev
+-- SPDX-License-Identifier: MIT
 -- 037_preview_triggers.sql — 원본 판의 파생 미리보기와 변환 잡을 만든다 (ADR-058 결정 1·2).
 -- 018은 원본 등록이 공급 자체라 트리거를 두지 않는다. 여기서 만드는 변환본은 파생물이다.
 -- 원본 판은 바뀌지 않으므로 판마다 한 번 변환한다. 앱은 embedding_jobs와
