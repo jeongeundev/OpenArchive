@@ -12,7 +12,7 @@ readme = "README.md"
 # SPDX 표현식은 setuptools 77부터다. LICENSE는 루트 파일의 사본이다 — 이미지 빌드 컨텍스트(backend/)가
 # 루트를 보지 못해 심볼릭 링크는 이미지 안에서 끊긴다.
 license = "MIT"
-license-files = ["LICENSE"]
+license-files = ["LICENSE", "licenses/*"]
 dependencies = [
     "fastapi",
     "uvicorn[standard]",
