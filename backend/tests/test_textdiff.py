@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """텍스트 버전 비교의 순수 계산부 — Myers 줄 비교와 작업량 예산 (#190)."""
 
 import difflib

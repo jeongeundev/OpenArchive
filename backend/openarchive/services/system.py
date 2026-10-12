@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass

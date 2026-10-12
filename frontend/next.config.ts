@@ -1,3 +1,5 @@
+// Copyright 2026 jeongeundev
+// SPDX-License-Identifier: MIT
 import type { NextConfig } from "next";
 
 // 백엔드 주소는 환경변수로 덮어쓴다. 기본값은 로컬 uvicorn.

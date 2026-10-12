@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """문서 CRUD의 비즈니스 로직. REST 라우터와 MCP 서버가 이 모듈을 공유한다.
 
 HTTP를 알지 못한다 — 실패는 아래 예외로 표현하고, 상태 코드로 옮기는 일은 호출부가 한다.

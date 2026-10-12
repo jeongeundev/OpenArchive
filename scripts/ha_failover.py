@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """HA 장애 주입 측정 + 자동 정합성 검사 (#122, ADR-047~050).
 
 앱(API·워커)을 VIP에 붙여 띄운 채로 부하를 걸고, 정해진 시각에 장애 명령을 실행한 뒤

@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """원본 미리보기의 형식·열람·감사 경계를 실제 DB에서 검증한다."""
 
 from io import BytesIO

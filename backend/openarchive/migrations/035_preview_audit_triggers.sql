@@ -1,3 +1,5 @@
+-- Copyright 2026 jeongeundev
+-- SPDX-License-Identifier: MIT
 -- 035_preview_audit_triggers.sql — 원본 미리보기 감사 (ADR-061 결정 7, #190)
 ALTER TABLE audit_log DROP CONSTRAINT audit_log_action_valid;
 ALTER TABLE audit_log ADD CONSTRAINT audit_log_action_valid CHECK (action IN (

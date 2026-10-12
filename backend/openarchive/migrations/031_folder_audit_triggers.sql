@@ -1,3 +1,5 @@
+-- Copyright 2026 jeongeundev
+-- SPDX-License-Identifier: MIT
 -- 031_folder_audit_triggers.sql — 폴더 범위와 문서의 상속·이동 감사 (ADR-054·055)
 ALTER TABLE audit_log DROP CONSTRAINT audit_log_action_valid;
 ALTER TABLE audit_log ADD CONSTRAINT audit_log_action_valid CHECK (action IN (

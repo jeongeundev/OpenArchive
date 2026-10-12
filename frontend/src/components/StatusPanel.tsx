@@ -1,3 +1,5 @@
+// Copyright 2026 jeongeundev
+// SPDX-License-Identifier: MIT
 import type { SystemStatus } from "@/lib/types";
 
 export function StatusPanel({ status, error }: { status: SystemStatus | null; error: string | null }): React.ReactElement {

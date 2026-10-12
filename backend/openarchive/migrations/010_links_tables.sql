@@ -1,3 +1,5 @@
+-- Copyright 2026 jeongeundev
+-- SPDX-License-Identifier: MIT
 -- 010_links_tables.sql — 조회 시점에 해석하는 문서 위키링크 (ADR-027)
 --
 -- target_document_id를 저장하지 않는다. 링크 생성 트리거에는 사용자 컨텍스트가 없고,

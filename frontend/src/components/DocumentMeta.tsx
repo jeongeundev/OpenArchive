@@ -1,3 +1,5 @@
+// Copyright 2026 jeongeundev
+// SPDX-License-Identifier: MIT
 import { VISIBILITY_LABEL, type DocumentDetail } from "@/lib/types";
 import { DocumentStatusBadge } from "./StatusBadge";
 

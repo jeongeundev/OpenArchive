@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """커넥션 풀만 제공한다. import 시 부작용이 없어야 한다 (ADR-012).
 
 MCP 서버와 워커가 이 패키지를 함께 쓰므로, import가 곧 접속이 되면 세 프로세스가

@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """관리자 그룹 API와 부여 대상 목록 API (ADR-044 관리 경로)."""
 
 import asyncio

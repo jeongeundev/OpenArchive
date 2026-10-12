@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 from collections.abc import AsyncIterator
 from typing import Annotated
 

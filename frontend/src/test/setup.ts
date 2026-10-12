@@ -1,3 +1,5 @@
+// Copyright 2026 jeongeundev
+// SPDX-License-Identifier: MIT
 // jest-dom matcher(toBeInTheDocument 등)를 vitest의 expect에 등록한다.
 import "@testing-library/jest-dom/vitest";
 

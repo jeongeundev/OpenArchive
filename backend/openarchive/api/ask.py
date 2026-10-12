@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 from fastapi import APIRouter, HTTPException, Request
 
 from openarchive.api.deps import SESSION_COOKIE, current_user, require_user_id

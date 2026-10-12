@@ -1,3 +1,5 @@
+// Copyright 2026 jeongeundev
+// SPDX-License-Identifier: MIT
 /** 비밀번호 변경은 세션을 끊는다 — 화면이 곧바로 `/login`으로 밀리므로, 성공 사실을 그 화면까지 옮긴다. */
 const KEY = "openarchive:password-changed";
 

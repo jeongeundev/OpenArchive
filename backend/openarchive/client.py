@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """사용자 CLI의 REST 클라이언트 — 본인 API 토큰으로만 서버에 붙는다 (#189, ADR-057).
 
 DB에 붙지 않고 `DATABASE_URL`·`.env`를 읽지 않는다. DSN을 쥔 클라이언트는 열람 범위 밖에

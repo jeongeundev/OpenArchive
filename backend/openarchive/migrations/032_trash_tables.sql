@@ -1,3 +1,5 @@
+-- Copyright 2026 jeongeundev
+-- SPDX-License-Identifier: MIT
 -- 032_trash_tables.sql — 휴지통 이동 시각과 조회 인덱스 (ADR-060 결정 1·2)
 --
 -- 삭제는 시각을 기록하는 UPDATE로 처리하고, 청크·관계는 그대로 둬 복원 때 재계산하지 않는다.

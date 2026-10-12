@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 import psycopg
 import pytest
 from fastapi.testclient import TestClient

@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """정리 추천 — 저장된 관계 이웃이 가장 많이 든 폴더를 제안한다 (ADR-064).
 
 이웃은 `document_edges`의 src ∪ dst이고, 열람 술어를 통과한 문서만 센다. 표는 볼 수 있는 폴더에

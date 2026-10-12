@@ -1,3 +1,5 @@
+-- Copyright 2026 jeongeundev
+-- SPDX-License-Identifier: MIT
 -- 018_files_tables.sql — 업로드된 원본 파일을 판(file_version)으로 보관한다 (ADR-046, #108)
 --
 -- 원본을 DB 안 bytea로 두는 이유: 파일시스템은 HA 복제 밖이라 노드가 죽으면 원본이

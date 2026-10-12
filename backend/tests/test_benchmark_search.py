@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """검색 벤치마크는 격리 스키마만 사용하고 실제 DB에서 정리된다."""
 
 import importlib.util

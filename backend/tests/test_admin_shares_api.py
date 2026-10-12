@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """관리자 공유 조회와 비상 폐기의 세션 경계."""
 import pytest
 from conftest import login_as

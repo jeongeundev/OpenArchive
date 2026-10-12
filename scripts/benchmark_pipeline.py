@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """실제 모델·OpenProxy에서 지속 업로드/검색 및 큰 DOCX 파일을 측정한다.
 
 DATABASE_URL=... EMBEDDING_PROVIDER=local backend/.venv/bin/python \

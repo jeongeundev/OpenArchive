@@ -1,3 +1,5 @@
+-- Copyright 2026 jeongeundev
+-- SPDX-License-Identifier: MIT
 -- 001_extensions.sql — 확장 설치
 --
 -- pgvector: vector 타입과 거리 연산자(<=>)를 제공한다. 이 프로젝트가 DB에 요구하는

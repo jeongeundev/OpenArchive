@@ -1,3 +1,5 @@
+-- Copyright 2026 jeongeundev
+-- SPDX-License-Identifier: MIT
 -- 029_audit_triggers.sql — 감사 기록의 변경·삭제 거부 (ADR-055 결정 4)
 --
 -- 앱 롤은 테이블 소유자라 REVOKE로는 UPDATE·DELETE를 막을 수 없다. 직접 SQL로

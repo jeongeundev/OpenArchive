@@ -1,3 +1,5 @@
+// Copyright 2026 jeongeundev
+// SPDX-License-Identifier: MIT
 import type { TagSuggestionsResponse } from "@/lib/types";
 
 // textMissing은 RelatedDocuments와 같다 — 인식 실패 문서에 오지 않을 완료를 약속하지 않는다.

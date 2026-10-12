@@ -1,3 +1,5 @@
+-- Copyright 2026 jeongeundev
+-- SPDX-License-Identifier: MIT
 -- 020_lease_tables.sql — 잡 선점 lease (ADR-050, #121)
 --
 -- 좀비 판정을 "시작 후 5분"에서 "lease 만료"로 바꾼다. 워커는 선점할 때 lease를 찍고

@@ -1,3 +1,5 @@
+// Copyright 2026 jeongeundev
+// SPDX-License-Identifier: MIT
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { folderChildren, folderOptions, moveWithScopeConfirm, sameScope, scopeLabel } from "./folders";
 import type { Folder } from "./types";

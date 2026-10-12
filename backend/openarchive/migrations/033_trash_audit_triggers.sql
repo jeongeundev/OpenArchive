@@ -1,3 +1,5 @@
+-- Copyright 2026 jeongeundev
+-- SPDX-License-Identifier: MIT
 -- 033_trash_audit_triggers.sql — 휴지통 이동·복원 감사 (ADR-060 결정 5)
 ALTER TABLE audit_log DROP CONSTRAINT audit_log_action_valid;
 ALTER TABLE audit_log ADD CONSTRAINT audit_log_action_valid CHECK (action IN (

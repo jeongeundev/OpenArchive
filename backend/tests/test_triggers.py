@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """문서 변경 트리거 (ARCHITECTURE.md "자동 임베딩 파이프라인", ADR-001·ADR-009).
 
 이 파일이 검증하는 주장은 하나다 — **애플리케이션은 `documents`만 UPDATE하는데,

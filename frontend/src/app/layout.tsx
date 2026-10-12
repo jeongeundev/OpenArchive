@@ -1,3 +1,5 @@
+// Copyright 2026 jeongeundev
+// SPDX-License-Identifier: MIT
 import type { Metadata } from "next";
 // 글꼴은 패키지에 든 파일을 쓴다. next/font/google은 빌드 때마다 Google Fonts 응답을 받아와
 // 응답이 바뀌면(unicode-range 등) 소스가 그대로여도 동봉 산출물이 달라진다.

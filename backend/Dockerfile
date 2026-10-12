@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 # OpenArchive 앱 이미지 — API·임베딩 워커·웹 화면 (#95-e2, ADR-039 개정).
 #
 # DB는 넣지 않는다. 앱은 OpenSQL(또는 PostgreSQL 17 + pgvector)에 붙는 클라이언트라

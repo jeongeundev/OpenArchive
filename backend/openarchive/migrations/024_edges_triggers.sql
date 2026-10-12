@@ -1,3 +1,5 @@
+-- Copyright 2026 jeongeundev
+-- SPDX-License-Identifier: MIT
 -- 024_edges_triggers.sql — 재계산은 계산할 문서 행을 먼저 잠근다 (#95-e2 실측 교착)
 --
 -- 워커의 관계 잡은 문서를 잠근 뒤 이 함수를 불렀지만 `rebuild-edges`(demo가 부른다)는 잠그지

@@ -136,4 +136,11 @@ feat(db): content_hash 변경 트리거 추가                ← 통과시키�
 
 기여한 코드는 [MIT License](LICENSE)로 배포됩니다.
 
+소스 파일 맨 위에는 저작권과 라이선스를 두 줄로 적습니다(shebang이 있으면 그 아래). 주석 기호는 언어에 맞춥니다.
+
+```python
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
+```
+
 새 의존성을 추가할 때는 라이선스를 확인하십시오. 이 프로젝트는 의존하는 모든 오픈소스의 출처와 라이선스를 공개합니다.

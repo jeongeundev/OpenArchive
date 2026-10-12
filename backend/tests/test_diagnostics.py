@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 import psycopg
 import pytest
 from conftest import insert_test_document, login_as

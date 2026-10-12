@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """한컴 HWP 형식 공개 조건의 고지 문구 (ADR-059 결정 1).
 
 HWP 파서는 한컴이 공개한 「한글 문서 파일 형식 5.0」을 기준으로 만들었다. 공개 조건은 개발

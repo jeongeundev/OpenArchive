@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """임베딩 프로바이더 선택 (ARCHITECTURE.md "임베딩 프로바이더").
 
 질의 임베딩도 문서 임베딩과 같은 프로바이더를 써야 한다 — 벡터 공간이 다르면 검색이

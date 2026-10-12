@@ -1,3 +1,5 @@
+-- Copyright 2026 jeongeundev
+-- SPDX-License-Identifier: MIT
 -- 003_triggers.sql — 문서 변경을 파이프라인 기동으로 바꾸는 트랜잭셔널 아웃박스 (ADR-001)
 --
 -- 이 파일이 "임베딩 갱신이 DB 계층에서 자동 트리거되고 원본-벡터 정합성이 유지된다"는

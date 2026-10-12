@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """임베딩 프로바이더의 계약 (ARCHITECTURE.md "임베딩 프로바이더").
 
 운영 경로는 `LocalProvider`(BGE-M3) 하나뿐이다. 상용 API 기반 프로바이더는 만들지

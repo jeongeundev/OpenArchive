@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """API 토큰의 발급부터 공급·검색·열람·폐기까지 전 구간 계약."""
 
 from datetime import datetime

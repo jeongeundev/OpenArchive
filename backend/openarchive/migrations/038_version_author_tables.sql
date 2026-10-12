@@ -1,3 +1,5 @@
+-- Copyright 2026 jeongeundev
+-- SPDX-License-Identifier: MIT
 -- 038_version_author_tables.sql — 텍스트 버전 작성자 스냅샷 (ADR-061 결정 6)
 -- 사용자 삭제 뒤에도 이름이 남도록 author에는 FK를 걸지 않는다.
 -- 이름 없는 워커와 직접 접속을 구분하기 위해 author_via를 별도로 저장한다.

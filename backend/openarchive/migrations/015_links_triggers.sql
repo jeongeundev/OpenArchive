@@ -1,3 +1,5 @@
+-- Copyright 2026 jeongeundev
+-- SPDX-License-Identifier: MIT
 -- 015_links_triggers.sql — Obsidian 위키링크 대상을 제목으로 정규화한다 (#93 L1·L2, #103)
 --
 -- 코퍼스 A의 링크 1,619행 중 1,095행(68%)이 해석되지 않았고, 그중 701행(43%)은

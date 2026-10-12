@@ -1,3 +1,5 @@
+-- Copyright 2026 jeongeundev
+-- SPDX-License-Identifier: MIT
 -- 004_indexes.sql — 청크 임베딩 벡터 인덱스
 --
 -- HNSW를 쓴다 (ADR-002). IVFFlat은 인덱스 생성 시점에 데이터가 있어야 클러스터 품질이

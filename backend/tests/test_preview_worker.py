@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """미리보기 워커의 판별 커밋·재시도·소유권을 실제 DB로 검증한다."""
 
 import asyncio

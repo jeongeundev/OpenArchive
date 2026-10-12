@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """AI 에이전트에 문서 근거를 공급하는 FastMCP stdio 서버."""
 
 import asyncio

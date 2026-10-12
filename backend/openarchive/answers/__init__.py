@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """답변 프로바이더 선택 — 기본 꺼짐이 목적이다 (ADR-043 결정 2).
 
 예열하지 않는다 — Ollama가 모델 적재를 스스로 관리하고, 꺼져 있을 수 있는

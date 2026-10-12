@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """임베딩 프로바이더의 계약 (ARCHITECTURE.md "임베딩 프로바이더", ADR-003).
 
 여기서 확인하는 것은 벡터의 "품질"이 아니라 **후속 단계가 기대는 성질**이다.

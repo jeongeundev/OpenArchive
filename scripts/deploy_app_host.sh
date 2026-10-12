@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 # OpenSQL이 설치된 호스트에서 OpenArchive 앱 3종(API·임베딩 워커·프론트)을 기동한다.
 # install_opensql_host.sh 가 DB를 세운 뒤, 같은 호스트에서 실행한다.
 #

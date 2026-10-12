@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """열람 가능한 문서 관계를 기준으로 정리 후보를 집계한다."""
 
 from dataclasses import dataclass

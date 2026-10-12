@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """문서 본문을 임베딩 단위로 자르는 순수 함수 (ARCHITECTURE.md "청킹").
 
 DB도 모델도 파일시스템도 시간도 건드리지 않는다. 워커의 나머지 부분(트랜잭션·잠금·

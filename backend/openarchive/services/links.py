@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """위키링크를 조회하는 사용자의 열람 범위에서 해석한다."""
 
 from dataclasses import dataclass

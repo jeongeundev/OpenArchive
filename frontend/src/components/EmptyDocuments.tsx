@@ -1,3 +1,5 @@
+// Copyright 2026 jeongeundev
+// SPDX-License-Identifier: MIT
 /** 볼 수 있는 문서가 하나도 없을 때의 첫 화면. 올리는 길과 예제를 넣는 길을 함께 보인다. */
 export function EmptyDocuments({ username }: { username: string }): React.ReactElement {
   return (

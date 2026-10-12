@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """예제 코퍼스(`openarchive/demo_corpus/`)와 `openarchive demo` (#95-d).
 
 코퍼스는 패키지에 실려 pip 설치본에서도 `openarchive demo` 한 줄로 들어간다. 측정용

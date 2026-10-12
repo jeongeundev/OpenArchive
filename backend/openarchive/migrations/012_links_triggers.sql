@@ -1,3 +1,5 @@
+-- Copyright 2026 jeongeundev
+-- SPDX-License-Identifier: MIT
 -- 012_links_triggers.sql — 대괄호 리터럴을 위키링크에서 제외한다 (#49)
 --
 -- 011의 `[^\[\]]+`는 대괄호가 아닌 문자면 무엇이든 제목으로 받았다. 기술 문서의 JSON

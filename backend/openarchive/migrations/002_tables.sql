@@ -1,3 +1,5 @@
+-- Copyright 2026 jeongeundev
+-- SPDX-License-Identifier: MIT
 -- 002_tables.sql — 핵심 4테이블과 코얼레싱 제약
 --
 -- 이 파일이 이 과제의 심사 핵심을 담는다. 원본-벡터 정합성은 애플리케이션의 조율이

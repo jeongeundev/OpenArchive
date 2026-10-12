@@ -1,3 +1,5 @@
+// Copyright 2026 jeongeundev
+// SPDX-License-Identifier: MIT
 export type EmbeddingStatus = "pending" | "processing" | "ready" | "error";
 export type ContentType =
   "pdf" | "docx" | "txt" | "md" | "hwp" | "hwpx" | "xlsx" | "pptx" | "png" | "jpg" | "jpeg";

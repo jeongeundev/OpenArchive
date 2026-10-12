@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """빌드된 프론트엔드를 API와 같은 오리진에서 서빙한다 (ADR-041).
 
 Node 런타임을 사용자 쪽에서 없애기 위한 것이다. `STATIC_EXPORT=1 npm run build`가

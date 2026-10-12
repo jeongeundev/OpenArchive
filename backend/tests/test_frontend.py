@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """빌드된 프론트를 API와 같은 오리진에서 서빙한다 (ADR-041).
 
 정적 export는 문서 상세처럼 실행 중에 생기는 경로를 만들 수 없어, 껍데기 하나를

@@ -1,3 +1,5 @@
+-- Copyright 2026 jeongeundev
+-- SPDX-License-Identifier: MIT
 -- 045_account_folder_audit_triggers.sql — 비밀번호·관리자 권한·폴더·사용자 토큰 감사 (ADR-055 2026-10-12 개정)
 -- 관리자가 남의 폴더 이름을 바꾸거나 지워도 흔적이 없었고, 자격증명 변경이 빠져 있었다.
 -- psql 직접 변경도 남도록 앱이 아니라 DB 트리거가 같은 트랜잭션에서 쓴다 (ADR-055).

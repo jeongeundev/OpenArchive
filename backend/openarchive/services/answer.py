@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """ADR-043의 고정 검색 → 근거 → 프롬프트 → 생성 → 응답 파이프라인.
 
 DB 단계와 생성 단계를 나눠 생성 동안 커넥션을 점유하지 않는다.

@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """마이그레이션 러너 (ADR-005·ADR-012).
 
 실제 pgvector 컨테이너에 붙는다. 이 러너가 검증해야 하는 것 — 트랜잭션 경계,

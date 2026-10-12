@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """휴지통은 소유자·공유 주체에게도 존재하지 않는다 (ADR-060)."""
 
 import psycopg

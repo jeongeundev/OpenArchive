@@ -1,3 +1,5 @@
+// Copyright 2026 jeongeundev
+// SPDX-License-Identifier: MIT
 import type { DocumentSummary, EmbeddingStatus } from "@/lib/types";
 
 const STATUS_DISPLAY: Record<EmbeddingStatus, { label: string; className: string }> = {

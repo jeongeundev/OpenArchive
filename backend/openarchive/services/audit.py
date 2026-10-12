@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """감사 행위자는 트랜잭션 범위로만 DB에 전달한다."""
 
 import csv

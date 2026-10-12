@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """벡터 인덱스 (ARCHITECTURE.md "벡터 인덱스", ADR-002·ADR-011).
 
 ADR-002는 HNSW를 채택하면서 **"인덱스 생성 실행은 M0에서 확인한다 — 버전이 맞아도

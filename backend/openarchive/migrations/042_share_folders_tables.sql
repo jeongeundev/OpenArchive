@@ -1,3 +1,5 @@
+-- Copyright 2026 jeongeundev
+-- SPDX-License-Identifier: MIT
 -- 042_share_folders_tables.sql — 폴더 단위 외부 공유 (#206)
 CREATE TABLE share_folders (
   share_id   uuid NOT NULL REFERENCES shares(id) ON DELETE CASCADE,

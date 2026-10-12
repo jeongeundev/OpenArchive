@@ -1,3 +1,5 @@
+-- Copyright 2026 jeongeundev
+-- SPDX-License-Identifier: MIT
 -- 011_links_triggers.sql — 본문을 진실로 삼는 위키링크 교체 트리거
 --
 -- 벡터나 청크가 필요 없으므로 임베딩 완료를 기다리지 않는다. 기존 임베딩 트리거와

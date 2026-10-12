@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """pgvector 입력 리터럴 변환.
 
 워커(청크 임베딩 삽입)와 검색 서비스(질의 벡터 바인딩)가 같은 변환을 쓴다. 두 곳에

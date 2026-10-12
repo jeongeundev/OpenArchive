@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """텍스트 버전 비교 — Myers 줄 비교에 작업량 예산을 둔다 (#190).
 
 표준 `difflib`(Ratcliff/Obershelp)은 반복 줄이 많은 텍스트에서 바뀐 대목마다 후보를 다시 훑어

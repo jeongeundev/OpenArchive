@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """근거 기반 답변 평가(#96 c)의 채점 규칙을 고정한다.
 
 모델 확정과 #168 전후 비교를 이 수치로 말하므로, 무엇을 맞음으로 세는지(정답 문서 인용·핵심값 포함·

@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """공유 관리 서비스 — 공유·공유 부여·공유 토큰 (ADR-044 「공유」)."""
 
 from uuid import uuid4

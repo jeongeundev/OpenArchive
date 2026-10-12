@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """모델 없이 인용 계약을 검증하는 결정론적 답변 프로바이더.
 
 프롬프트의 근거 라벨을 그대로 인용해 서비스의 cited 판정을 검증한다.

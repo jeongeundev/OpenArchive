@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """제품 마이그레이션·검색 SQL로 HNSW 비용을 측정한다. 의미 검색 품질 평가는 아니다.
 
 DATABASE_URL=... backend/.venv/bin/python scripts/benchmark_search.py --out results.json

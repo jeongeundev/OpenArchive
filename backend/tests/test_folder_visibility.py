@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """폴더 열람 범위 상속 (ADR-054, #187).
 
 범위는 최상위 폴더만 갖고 하위 폴더·「폴더 범위 따름」 문서는 그것을 따른다. 「개별 지정」

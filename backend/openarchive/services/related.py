@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """문서의 관련 문서와 동일 텍스트 문서를 조회하는 서비스."""
 
 from dataclasses import dataclass

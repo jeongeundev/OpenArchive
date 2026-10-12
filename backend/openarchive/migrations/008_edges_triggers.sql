@@ -1,3 +1,5 @@
+-- Copyright 2026 jeongeundev
+-- SPDX-License-Identifier: MIT
 -- 008_edges_triggers.sql — 임베딩 완료를 저장 관계 그래프로 확장한다 (ADR-029)
 --
 -- 이 함수는 worker.finalize_job의 DELETE → INSERT → status='ready' 트랜잭션 안에서

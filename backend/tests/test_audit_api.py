@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """관리자 감사 로그 조회 API (ADR-055 결정 7·8)."""
 
 import psycopg

@@ -1,3 +1,5 @@
+// Copyright 2026 jeongeundev
+// SPDX-License-Identifier: MIT
 import { renderHook } from "@testing-library/react";
 import { StrictMode } from "react";
 import { describe, expect, it } from "vitest";

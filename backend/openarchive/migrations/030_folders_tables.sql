@@ -1,3 +1,5 @@
+-- Copyright 2026 jeongeundev
+-- SPDX-License-Identifier: MIT
 -- 030_folders_tables.sql — 폴더 트리와 열람 부여 (ADR-054, #187)
 --
 -- 범위는 최상위 폴더만 갖고 하위 폴더는 상속한다 (D1). 폴더 이동은 제공하지 않아

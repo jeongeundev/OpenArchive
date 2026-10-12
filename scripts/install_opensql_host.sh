@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 # Rocky Linux 9.7 x86-64 호스트에 OpenSQL을 single 모드로 설치한다.
 # UTM VM과 AWS EC2 양쪽에서 같은 절차를 밟기 위한 스크립트다.
 #

@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 """문서 폴더 지정·열람·이동 계약."""
 
 import hashlib

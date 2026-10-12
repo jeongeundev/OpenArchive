@@ -1,3 +1,5 @@
+// Copyright 2026 jeongeundev
+// SPDX-License-Identifier: MIT
 import type { DocumentProgress } from "@/lib/types";
 
 // 문서별 배지(StatusBadge)와 같은 라벨이다 — 집계와 표가 같은 말을 쓴다.

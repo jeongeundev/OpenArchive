@@ -1,3 +1,5 @@
+-- Copyright 2026 jeongeundev
+-- SPDX-License-Identifier: MIT
 -- 016_edge_jobs_tables.sql — 잡 큐에 종류를 들인다 (ADR-029 결정 3 개정, #107)
 --
 -- ready 전이에서 관계를 계산하는 대신 관계 잡을 기록하려면 큐가 두 종류를 담아야 한다.

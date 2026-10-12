@@ -1,3 +1,5 @@
+# Copyright 2026 jeongeundev
+# SPDX-License-Identifier: MIT
 import pytest
 from conftest import login_as
 from test_search_api import seed_documents
