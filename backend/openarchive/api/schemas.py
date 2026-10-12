@@ -490,6 +490,36 @@ class TagSuggestionsResponse(BaseModel):
     reason: str | None
 
 
+class FolderSuggestionItem(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    folder_id: UUID
+    path: list[FolderPathItem]
+    votes: int
+    total: int
+
+
+class FolderSuggestionResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    suggestion: FolderSuggestionItem | None
+
+
+class UnfiledDocumentItem(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    document_id: UUID
+    title: str
+    suggestion: FolderSuggestionItem | None
+
+
+class UnfiledResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    count: int
+    items: list[UnfiledDocumentItem]
+
+
 class ResolvedLinkItem(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

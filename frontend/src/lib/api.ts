@@ -16,6 +16,7 @@ import type {
   GroupSummary,
   Folder,
   FolderScope,
+  FolderSuggestionResponse,
   Principals,
   RelatedResponse,
   ResolvedLink,
@@ -30,6 +31,7 @@ import type {
   TokenScope,
   TokenSummary,
   TrashItem,
+  UnfiledResponse,
   Visibility,
   UserSummary,
 } from "./types";
@@ -639,6 +641,14 @@ export function deleteDocument(id: string): Promise<void> {
     { method: "DELETE" },
     { parse: false },
   );
+}
+
+export function getFolderSuggestion(id: string, signal?: AbortSignal): Promise<FolderSuggestionResponse> {
+  return request<FolderSuggestionResponse>(`/api/documents/${encodeURIComponent(id)}/folder-suggestion`, { signal });
+}
+
+export function listUnfiled(signal?: AbortSignal): Promise<UnfiledResponse> {
+  return request<UnfiledResponse>("/api/documents/unfiled", { signal });
 }
 
 export function listTrash(signal?: AbortSignal): Promise<TrashItem[]> {
