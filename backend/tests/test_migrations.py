@@ -109,7 +109,7 @@ def test_the_built_wheel_carries_the_pypi_page_and_the_license(built_wheel: Path
         names = set(archive.namelist())
         (metadata_path,) = [name for name in names if name.endswith(".dist-info/METADATA")]
         metadata = email.message_from_bytes(archive.read(metadata_path))
-        license_files = [name for name in names if ".dist-info/licenses/" in name]
+        license_files = [name for name in names if name.endswith(".dist-info/licenses/LICENSE")]
         license_text = archive.read(license_files[0]).decode() if license_files else ""
 
     assert metadata["License-Expression"] == "MIT"
@@ -273,3 +273,18 @@ async def test_ignores_non_sql_files_and_subdirectories(clean_db: str, tmp_path:
     applied = await run_migrations(clean_db, d)
 
     assert applied == ["001_create.sql"]
+
+
+def test_the_built_wheel_carries_the_licenses_of_bundled_frontend_components(built_wheel: Path):
+    """정적 빌드(static/)에 번들된 Next.js·React·JSZip 코드와 Geist 글꼴의 라이선스 본문을 함께 싣는다.
+
+    MIT는 저작권 고지와 본문을, SIL OFL 1.1은 글꼴을 재배포할 때 라이선스 동봉을 요구한다 (NOTICE.md).
+    """
+    with zipfile.ZipFile(built_wheel) as archive:
+        names = {name.rsplit(".dist-info/licenses/", 1)[1] for name in archive.namelist()
+                 if ".dist-info/licenses/" in name}
+
+    licenses_dir = Path(openarchive.__file__).resolve().parent.parent / "licenses"
+    expected = {f"licenses/{path.name}" for path in licenses_dir.iterdir()}
+    assert "licenses/geist-OFL-1.1.txt" in expected and "licenses/jszip-license.txt" in expected
+    assert names >= expected
