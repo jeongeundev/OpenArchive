@@ -129,7 +129,7 @@ CREATE TABLE documents (
   content_hash     text NOT NULL,          -- sha256, 트리거의 변경 감지 기준
   version          int  NOT NULL DEFAULT 1,
   owner_id         text NOT NULL,
-  visibility       text NOT NULL DEFAULT 'public',  -- public | private
+  visibility       text NOT NULL DEFAULT 'public' CHECK (visibility IN ('public','private')),  -- 046 (#193)
   tags             text[] NOT NULL DEFAULT '{}',
   embedding_status text NOT NULL DEFAULT 'pending', -- pending|processing|ready|error
   extraction_status text NOT NULL DEFAULT 'done',   -- pending|failed|done (021, ADR-052). OCR 추출 상태

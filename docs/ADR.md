@@ -2231,8 +2231,10 @@ step 1 비용으로 유리하게 재분류하지 않고 커밋 경계로 분리�
    저장할 수 있다. DB 계층까지 강제하려면 별도 마이그레이션과 DB 행동 테스트가 필요하며 이번
    문서·MCP 범위에는 포함하지 않았다.
    → 2026-10-05: psql 직접 INSERT·UPDATE가 기능명세서의 시연 경로(DB 직접 경로)가 되어 이 공백이 실제 입구에
-   놓였다. `CHECK (visibility IN ('public','private'))` 추가는 **이슈 #193**이 다룬다(미구현). 트레이드오프 4의
+   놓였다. `CHECK (visibility IN ('public','private'))` 추가는 **이슈 #193**이 다룬다. 트레이드오프 4의
    `owner_id` 실존 확인은 그 범위 밖이다.
+   → **2026-10-12 해소(#193)**: `046_visibility_check_tables.sql`이 `documents_visibility_valid`를 건다. 기존 행에
+   다른 값이 있으면 마이그레이션이 실패한다(조용히 고치지 않는다). 폴더는 030부터 같은 CHECK가 있었다.
 4. **`owner_id`가 실존하는 사용자인지는 검증하지 않는다.** `documents.owner_id`는 `text NOT NULL`
    뿐이고 `users` FK가 없다. `MCP_USER_ID`에 오타가 있으면 문서는 저장되지만 그 계정으로 로그인한
    사람에게는 보이지 않는다 — 비공개로 만들었다면 아무에게도 보이지 않는다. Web UI는 세션이,
