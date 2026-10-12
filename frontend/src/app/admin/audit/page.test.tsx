@@ -287,3 +287,32 @@ it("CSV 링크가 현재 사용자·동작 필터를 인코딩한다", async () 
     expect(link).toHaveAttribute("download");
   } finally { users.pop(); }
 });
+
+it("비밀번호·관리자 권한·폴더·토큰 변경을 표시하고 동작 필터에 둔다", async () => {
+  const items = [
+    entry({ action: "password_changed", document_id: null, document_title: null, detail: { user: "lee" } }),
+    entry({ action: "user_changed", document_id: null, document_title: null, detail: { change: "admin_granted", user: "lee" } }),
+    entry({ action: "user_changed", document_id: null, document_title: null, detail: { change: "admin_revoked", user: "lee" } }),
+    entry({ action: "user_changed", document_id: null, document_title: null, detail: { change: "created", user: "kim", is_admin: true } }),
+    entry({ action: "folder_changed", document_id: null, document_title: null, detail: { change: "created", folder_id: "f-1", folder_name: "RFP", parent_id: null } }),
+    entry({ action: "folder_changed", document_id: null, document_title: null, detail: { change: "renamed", folder_id: "f-1", folder_name: "제안", old_name: "RFP", parent_id: null } }),
+    entry({ action: "folder_changed", document_id: null, document_title: null, detail: { change: "deleted", folder_id: "f-1", folder_name: "제안", parent_id: null } }),
+    entry({ action: "token_changed", actor: "admin", document_id: null, document_title: null, detail: { change: "issued", owner: "lee", token_name: "배치", scope: "read", expires_at: null } }),
+    entry({ action: "token_changed", actor: "lee", document_id: null, document_title: null, detail: { change: "revoked", owner: "lee", token_name: "배치", scope: "read", expires_at: null } }),
+  ];
+  vi.stubGlobal("fetch", routedFetch(admin, [{ items, next_before_id: null }]).fetchMock);
+  render(<AuthProvider><AuditPage /></AuthProvider>);
+  const table = await screen.findByRole("table");
+  expect(within(table).getByText("비밀번호 변경")).toBeInTheDocument();
+  expect(within(table).getAllByText("폴더 변경")).toHaveLength(3);
+  expect(within(table).getAllByText("토큰 변경")).toHaveLength(2);
+  for (const label of [
+    "사용자 lee", "사용자 lee 관리자 권한 부여", "사용자 lee 관리자 권한 회수", "사용자 kim 생성(관리자)",
+    "폴더 「RFP」 생성", "폴더 「RFP」 → 「제안」", "폴더 「제안」 삭제",
+    "토큰 「배치」 발급 (소유자 lee)", "토큰 「배치」 폐기",
+  ]) expect(within(table).getByText(label)).toBeInTheDocument();
+  expect(within(rows()[4]).getByText("폴더 「RFP」")).toBeInTheDocument();
+  for (const [name, value] of [["비밀번호 변경", "password_changed"], ["폴더 변경", "folder_changed"], ["토큰 변경", "token_changed"]]) {
+    expect(screen.getByRole("option", { name })).toHaveValue(value);
+  }
+});

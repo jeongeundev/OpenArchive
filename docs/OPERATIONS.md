@@ -915,8 +915,25 @@ Bearer 필수·CORS 없음과 주소·토큰만 등록하는 계약에 따라 Ho
 
 ## 감사 로그
 
-문서 생성·텍스트 수정·삭제·열람 범위 변경(부여 대상 추가·제거 포함)·원본 교체·그룹 구성원 변경·원본 내려받기는
-DB가 원래 작업과 같은 트랜잭션에서 `audit_log`에 남긴다 (ADR-055). 열람·검색은 기록하지 않는다. 폴더 열람 범위 변경(최상위 폴더의
+다음 18개 동작을 DB가 원래 작업과 같은 트랜잭션에서 `audit_log`에 남긴다 (ADR-055, `services/audit.py`의 `AUDIT_ACTIONS`).
+열람·검색은 기록하지 않는다.
+
+| 동작 코드 | 화면 라벨 | 무엇 |
+|---|---|---|
+| `document_created` | 문서 생성 | 문서 생성 |
+| `text_updated` | 텍스트 수정 | 텍스트 버전 추가 |
+| `document_trashed` · `document_restored` | 휴지통 이동 · 복원 | 휴지통으로 보내기·되살리기 |
+| `document_deleted` | 영구 삭제 | 하드 삭제(휴지통 비우기·30일 자동 삭제 포함) |
+| `access_changed` | 열람 범위 변경 | 문서 공개범위·부여 대상 추가·제거, 폴더 범위 따름 전환·이동 |
+| `folder_access_changed` | 폴더 열람 범위 변경 | 최상위 폴더의 공개범위·부여 대상 |
+| `owner_changed` | 소유자 변경 | 문서·폴더 소유자 이전 |
+| `original_replaced` · `original_downloaded` · `original_previewed` | 원본 교체 · 원본 내려받기 · 원본 미리보기 | 원본 파일 판 |
+| `share_changed` | 외부 공유 변경 | 공유 생성·삭제·문서/폴더 추가·제거·공유 토큰 발급/폐기 |
+| `group_member_changed` | 그룹 구성원 변경 | 구성원 추가·제거 |
+| `group_changed` · `user_changed` | 그룹 변경 · 사용자 변경 | 생성·삭제, 사용자의 관리자 권한 부여·회수 |
+| `password_changed` | 비밀번호 변경 | 본인 변경·운영자 `reset-password` |
+| `folder_changed` | 폴더 변경 | 폴더 생성·이름 변경·삭제 |
+| `token_changed` | 토큰 변경 | 사용자 API 토큰 발급·폐기 | 폴더 열람 범위 변경(최상위 폴더의
 공개범위·부여 대상)은 `folder_access_changed`로, 문서의 「폴더 범위 따름」↔「개별 지정」 전환과 「폴더 범위 따름」 문서의
 폴더 이동은 `access_changed`(`detail.kind`가 `inherit`·`folder`)로 남는다 (#187, `031_folder_audit_triggers.sql`).
 원본 미리보기(PDF·PNG·JPG)는 내려받기와 별도 동작 `original_previewed`(판 번호)로 남는다 — 화면 라벨 「원본 미리보기」
@@ -927,8 +944,16 @@ DB가 원래 작업과 같은 트랜잭션에서 `audit_log`에 남긴다 (ADR-0
 보이고 사용자·동작으로 거른다. 본문·발췌는 보이지 않는다. API는 `GET /api/admin/audit`(관리자·세션 전용)이다.
 
 **추가 변경 기록(#201)** — 공유 생성·삭제·문서 추가/제거·공유 토큰 발급/폐기는 `share_changed`(「외부 공유 변경」)로 공유 이름·주인과 함께 남는다.
-그룹·사용자 생성·삭제는 `group_changed`(「그룹 변경」)·`user_changed`(「사용자 변경」)다. 사용자 토큰 발급·폐기는 기록 대상이 아니다.
-공유 삭제는 삭제 사건 1건, 사용자 삭제는 사용자 사건 1건만 남고 연쇄로 사라진 구성원·부여·공유는 개별 기록하지 않는다.
+그룹·사용자 생성·삭제는 `group_changed`(「그룹 변경」)·`user_changed`(「사용자 변경」)다.
+
+**계정·폴더·사용자 토큰(2026-10-12, `045_account_folder_audit_triggers.sql`)** — 비밀번호 변경은 `password_changed`(`detail.user`, 해시는
+남기지 않는다)로, 본인 변경(`PUT /api/auth/password`)과 운영자 `reset-password`가 같은 동작이다. 운영자 `reset-password`는
+`actor_via=cli`로 남는다(화면 「운영자 CLI」, 사람은 `db_role`로 구분 — `reextract`와 같다). 관리자 권한 부여·회수는 API에 경로가
+없어도 psql 변경까지 `user_changed`(`change: admin_granted/admin_revoked`)로 남고, 사용자 생성 기록에는 `is_admin`이 붙는다.
+폴더 생성·이름 변경·삭제는 `folder_changed`(`change: created/renamed/deleted`, `folder_name`, 이름 변경은 `old_name`)다 — 관리자가 남의
+폴더 이름을 바꾸거나 빈 폴더를 지운 것도 남는다. 사용자 API 토큰 발급·폐기는 `token_changed`(`change: issued/revoked`, 토큰 주인·이름·
+범위·만료)이며 토큰 원문·해시는 남기지 않는다.
+공유 삭제는 삭제 사건 1건, 사용자 삭제는 사용자 사건 1건만 남고 연쇄로 사라진 구성원·부여·공유·토큰은 개별 기록하지 않는다.
 
 **CSV 내려받기** — 감사 화면에서 「CSV 내려받기」를 누른다. `GET /api/admin/audit?format=csv`는 현재 `actor`·`action` 필터에 맞는
 전부를 최신순(id DESC)으로 내보내며 `limit`·`before_id` 페이지는 무시한다. 관리자 세션 전용이며 조회 자체는 기록하지 않는다.

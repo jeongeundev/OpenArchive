@@ -4386,6 +4386,30 @@ OpenProxy 풀 연결에도 적용된다(실측).
    > → **2026-10-09 개정 — 구현됨(#200).** 감사 동작에 `owner_changed`(「소유자 변경」)를 더했다(040).
    > 문서 `owner_id`·폴더 `created_by`의 실제 변경을 DB 트리거가 기록하며 detail은 ADR-061 결정 2 D5와 같다.
 
+   > → **2026-10-12 개정 — 비밀번호·폴더·관리자 권한·사용자 토큰 감사.** `045_account_folder_audit_triggers.sql`이 다음을 더했다.
+   > CHECK는 18종이다.
+   >
+   > | 대상 테이블 | 조건 | `action` · `detail` |
+   > |---|---|---|
+   > | `users` UPDATE OF `password_hash` | 실제 값 변경만 | `password_changed` · `{user}` — 해시는 넣지 않는다 |
+   > | `users` UPDATE OF `is_admin` | 실제 값 변경만 | `user_changed` · `{change: admin_granted/admin_revoked, user}` |
+   > | `users` INSERT | — | `user_changed`의 `created`에 `is_admin`을 더한다 |
+   > | `folders` INSERT / DELETE · UPDATE OF `name` | 이름은 실제 값 변경만 | `folder_changed` · `{change: created/renamed/deleted, folder_id, folder_name, parent_id}`, 이름 변경은 `old_name` |
+   > | `api_tokens` INSERT / DELETE | `user_id IS NOT NULL`(사용자 토큰) · 계정 삭제 연쇄 제외 | `token_changed` · `{change: issued/revoked, owner, token_name, scope, expires_at}` — 원문·해시는 넣지 않는다 |
+   >
+   > **왜.** 10/12 실무 대조에서 계정·자격증명·폴더 구조 변경이 빠져 있었다. 특히 관리자는 남의 폴더 이름을 바꾸고 빈 폴더를
+   > 지울 수 있는데(`services/folders.py`의 `is_admin` 분기) 그 흔적이 없었다 — 관리 권한과 열람 권한을 나눈 만큼(ADR-040)
+   > 관리 권한의 행사는 남아야 한다. 관리자 권한 부여는 API 경로가 없지만 psql로 바꿀 수 있으므로 DB가 쓰는 이유가 그대로
+   > 적용된다. 폴더 열람 범위·소유자는 `folder_access_changed`(031)·`owner_changed`(040)가 이미 남기므로 `folder_changed`는
+   > 생성·이름 변경·삭제만 맡는다(이동은 API에 없다).
+   >
+   > **사용자 토큰 미기록을 뒤집는다.** 위 2026-10-09 개정의 「사용자 토큰 발급·폐기는 기록하지 않는다」에는 이유가 적혀 있지
+   > 않았다. 실무 감사 로그는 자격증명의 발급·폐기를 남긴다(GitHub audit log의 personal access token 이벤트, Entra 감사의
+   > 자격증명 변경). 토큰은 비밀번호와 독립한 위임 자격증명이라(ADR-034) 비밀번호 변경만 남기면 같은 위험의 다른 입구가 빈다.
+   > 공유 토큰은 계속 `share_changed`가 맡고, 계정 삭제로 연쇄 폐기되는 토큰은 041과 같은 규칙으로 건너뛴다.
+   >
+   > 운영자 CLI `reset-password`는 `actor_via=cli`(행위자 이름 없음)로 남는다 — 화면 「운영자 CLI」, 사람은 `db_role`로 구분한다(구현 때 정함 2).
+
    > **구현 (2026-10-06, #186).** `audit_log.action`은 7종이다 — `document_created`·`text_updated`·`document_deleted`·
    > `access_changed`·`group_member_changed`·`original_replaced`·`original_downloaded`(CHECK). 「폴더 열람 범위 변경」은
    > 폴더 테이블이 생기는 #187에서 트리거와 CHECK 확장으로 더한다. 기록 지점은 다음과 같다.

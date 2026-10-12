@@ -31,6 +31,7 @@ def test_audit_defaults(conn):
     "document_created", "text_updated", "document_deleted", "access_changed",
     "group_member_changed", "original_replaced", "original_downloaded", "folder_access_changed",
     "document_trashed", "document_restored", "original_previewed", "owner_changed", "share_changed", "group_changed", "user_changed",
+    "password_changed", "folder_changed", "token_changed",
 ])
 def test_allowed_actions(conn, action):
     assert conn.execute(
@@ -366,6 +367,10 @@ def create_folder(conn, name="사업 자료"):
     ).fetchone()[0]
 
 
+def access_rows(conn):
+    return [row for row in audit_rows(conn) if row[0] == "folder_access_changed"]
+
+
 def test_folder_visibility_audit_and_unchanged_value(conn):
     folder = create_folder(conn)
     with conn.transaction():
@@ -375,10 +380,10 @@ def test_folder_visibility_audit_and_unchanged_value(conn):
         "kind": "visibility", "folder_id": str(folder), "folder_name": "사업 자료",
         "before": "public", "after": "private",
     })]
-    assert audit_rows(conn) == expected
+    assert access_rows(conn) == expected
     conn.execute("UPDATE folders SET visibility = 'private' WHERE id = %s", (folder,))
     conn.execute("UPDATE folders SET name = '새 이름' WHERE id = %s", (folder,))
-    assert audit_rows(conn) == expected
+    assert access_rows(conn) == expected
 
 
 @pytest.mark.parametrize("grantee_type", ["user", "group"])
@@ -415,7 +420,12 @@ def test_folder_grant_cascade_is_not_access_change(conn, parent):
     target = {"folders": folder, "users": user, "groups": group}[parent]
     conn.execute(f"DELETE FROM {parent} WHERE id = %s", (target,))
     kind = "user" if parent == "users" else "group"
-    expected = [] if parent == "folders" else [
+    expected = [
+        ("folder_changed", None, None, None, None, {
+            "change": "deleted", "folder_id": str(folder), "folder_name": "사업 자료",
+            "parent_id": None,
+        }),
+    ] if parent == "folders" else [
         (kind + "_changed", None, None, None, None,
          {"change": "deleted", kind: "bob" if parent == "users" else "개발팀"}),
     ]
@@ -540,6 +550,7 @@ def test_folder_owner_changed_audit(conn, child):
             "INSERT INTO folders (name, created_by, parent_id) "
             "VALUES ('사업 자료', 'alice', %s) RETURNING id", (folder,),
         ).fetchone()[0]
+    before = len(audit_rows(conn))
     with conn.transaction():
         set_actor(conn, actor="kim", via="cli")
         conn.execute("UPDATE folders SET created_by = 'lee' WHERE id = %s", (folder,))
@@ -547,9 +558,9 @@ def test_folder_owner_changed_audit(conn, child):
         "kind": "folder", "folder_id": str(folder), "folder_name": "사업 자료",
         "before": "alice", "after": "lee",
     })]
-    assert audit_rows(conn) == expected
+    assert audit_rows(conn)[before:] == expected
     conn.execute("UPDATE folders SET created_by = 'lee' WHERE id = %s", (folder,))
-    assert audit_rows(conn) == expected
+    assert audit_rows(conn)[before:] == expected
 
 
 @pytest.mark.parametrize("table,column", [("documents", "owner_id"), ("folders", "created_by")])
@@ -660,7 +671,12 @@ def test_share_folder_cascade_skips_removal_audit(conn, parent):
         table, target = ("shares", share) if parent == "share" else ("folders", folder)
         conn.execute(f"DELETE FROM {table} WHERE id=%s", (target,))
         assert audit_rows(conn)[len(before):] == (
-            [share_event(share, "deleted")] if parent == "share" else []
+            [share_event(share, "deleted")] if parent == "share" else [
+                ("folder_changed", "alice", "session", None, None, {
+                    "change": "deleted", "folder_id": str(folder),
+                    "folder_name": "사업 자료", "parent_id": None,
+                }),
+            ]
         )
         assert conn.execute("SELECT count(*) FROM share_folders").fetchone()[0] == 0
 
@@ -685,7 +701,8 @@ def test_share_tokens_and_admin_revocation(conn):
             "VALUES (%s, '개인', %s, 'read') RETURNING id", (user, str(uuid4())),
         ).fetchone()[0]
         conn.execute("DELETE FROM api_tokens WHERE id=%s", (token,))
-        assert audit_rows(conn) == before
+        # 사용자 토큰은 공유 변경이 아니라 token_changed로만 남는다 (ADR-055 2026-10-12 개정).
+        assert [row[0] for row in audit_rows(conn)[len(before):]] == ["token_changed"] * 2
 
 
 @pytest.mark.parametrize("table,key,name", [("users", "username", "새 사용자"),
@@ -701,9 +718,12 @@ def test_principal_creation_and_deletion(conn, table, key, name):
         ).fetchone()[0]
         conn.execute(f"DELETE FROM {table} WHERE id=%s", (target,))
         kind = "user" if table == "users" else "group"
+        created = {"change": "created", kind: name}
+        if table == "users":
+            created["is_admin"] = False
         assert audit_rows(conn)[len(before):] == [
-            (kind + "_changed", "admin", "session", None, None, {"change": change, kind: name})
-            for change in ("created", "deleted")
+            (kind + "_changed", "admin", "session", None, None, created),
+            (kind + "_changed", "admin", "session", None, None, {"change": "deleted", kind: name}),
         ]
 
 
@@ -721,6 +741,7 @@ def test_user_delete_skips_all_share_and_principal_cascades(conn):
                      (doc, share))
         folder = create_folder(conn)
         conn.execute("INSERT INTO share_folders (share_id, folder_id) VALUES (%s, %s)", (share, folder))
+        create_user_token(conn, user)
         before = audit_rows(conn)
         conn.execute("DELETE FROM users WHERE id=%s", (user,))
         assert audit_rows(conn)[len(before):] == [
@@ -734,3 +755,142 @@ def test_group_creation_without_actor(conn):
     assert audit_rows(conn)[len(before):] == [
         ("group_changed", None, None, None, None, {"change": "created", "group": "직접 생성"}),
     ]
+
+
+# ── 2026-10-12 개정: 비밀번호·관리자 권한·폴더·사용자 토큰 (ADR-055) ──
+
+
+def create_user_token(conn, user, expires_at=None):
+    token_hash = "secret-hash-" + str(uuid4())
+    token = conn.execute(
+        "INSERT INTO api_tokens (user_id, name, token_hash, scope, expires_at) "
+        "VALUES (%s, '개인', %s, 'read_write', %s) RETURNING id",
+        (user, token_hash, expires_at),
+    ).fetchone()[0]
+    return token, token_hash
+
+
+def test_password_change_records_only_actual_changes(conn):
+    with conn.transaction():
+        set_actor(conn)
+        user, _ = principals(conn)
+        before = audit_rows(conn)
+        conn.execute("UPDATE users SET password_hash = 'new-secret-hash' WHERE id=%s", (user,))
+        conn.execute("UPDATE users SET password_hash = 'new-secret-hash' WHERE id=%s", (user,))
+        conn.execute("UPDATE users SET username = 'bobby' WHERE id=%s", (user,))
+        assert audit_rows(conn)[len(before):] == [
+            ("password_changed", "alice", "session", None, None, {"user": "bob"}),
+        ]
+
+
+def test_password_change_without_actor_keeps_db_role(conn):
+    user, _ = principals(conn)
+    conn.execute("UPDATE users SET password_hash = 'reset' WHERE id=%s", (user,))
+    assert conn.execute(
+        "SELECT action, actor, actor_via, db_role = current_user, detail "
+        "FROM audit_log ORDER BY id DESC LIMIT 1"
+    ).fetchone() == ("password_changed", None, None, True, {"user": "bob"})
+
+
+def test_admin_flag_changes_record_grant_and_revoke(conn):
+    user, _ = principals(conn)
+    before = audit_rows(conn)
+    for value in (True, True, False):
+        conn.execute("UPDATE users SET is_admin = %s WHERE id=%s", (value, user))
+    assert audit_rows(conn)[len(before):] == [
+        ("user_changed", None, None, None, None, {"change": change, "user": "bob"})
+        for change in ("admin_granted", "admin_revoked")
+    ]
+
+
+def test_admin_user_creation_records_admin_flag(conn):
+    with conn.transaction():
+        set_actor(conn, "admin", via="cli")
+        conn.execute(
+            "INSERT INTO users (username, password_hash, is_admin) VALUES ('boss', 'hash', true)"
+        )
+    assert audit_rows(conn)[-1] == ("user_changed", "admin", "cli", None, None, {
+        "change": "created", "user": "boss", "is_admin": True,
+    })
+
+
+def test_folder_created_renamed_and_deleted(conn):
+    with conn.transaction():
+        set_actor(conn, "admin")
+        root = create_folder(conn)
+        child = conn.execute(
+            "INSERT INTO folders (name, created_by, parent_id) "
+            "VALUES ('제안서', 'alice', %s) RETURNING id", (root,),
+        ).fetchone()[0]
+        conn.execute("UPDATE folders SET name = '제안서 초안' WHERE id = %s", (child,))
+        conn.execute("UPDATE folders SET name = '제안서 초안' WHERE id = %s", (child,))
+        conn.execute("UPDATE folders SET updated_at = now() WHERE id = %s", (child,))
+        conn.execute("DELETE FROM folders WHERE id = %s", (child,))
+    assert audit_rows(conn) == [
+        ("folder_changed", "admin", "session", None, None, detail) for detail in (
+            {"change": "created", "folder_id": str(root), "folder_name": "사업 자료",
+             "parent_id": None},
+            {"change": "created", "folder_id": str(child), "folder_name": "제안서",
+             "parent_id": str(root)},
+            {"change": "renamed", "folder_id": str(child), "folder_name": "제안서 초안",
+             "old_name": "제안서", "parent_id": str(root)},
+            {"change": "deleted", "folder_id": str(child), "folder_name": "제안서 초안",
+             "parent_id": str(root)},
+        )
+    ]
+
+
+def test_folder_scope_and_owner_changes_are_not_folder_changes(conn):
+    folder = create_folder(conn)
+    conn.execute("UPDATE folders SET visibility = 'private' WHERE id = %s", (folder,))
+    conn.execute("UPDATE folders SET created_by = 'lee' WHERE id = %s", (folder,))
+    assert [row[0] for row in audit_rows(conn)] == [
+        "folder_changed", "folder_access_changed", "owner_changed",
+    ]
+
+
+def test_folder_change_rolls_back_with_the_folder(conn):
+    with pytest.raises(RuntimeError, match="rollback"), conn.transaction():
+        create_folder(conn)
+        assert len(audit_rows(conn)) == 1
+        raise RuntimeError("rollback")
+    assert audit_rows(conn) == []
+
+
+def test_user_token_issue_and_revoke_without_secret(conn):
+    with conn.transaction():
+        set_actor(conn, "bob")
+        user, _ = principals(conn)
+        before = audit_rows(conn)
+        token, token_hash = create_user_token(conn, user, "2027-01-01T00:00:00+00:00")
+        expires = conn.execute(
+            "SELECT to_jsonb(expires_at) FROM api_tokens WHERE id=%s", (token,)
+        ).fetchone()[0]
+        no_expiry, _ = create_user_token(conn, user)
+        set_actor(conn, "admin")
+        conn.execute("DELETE FROM api_tokens WHERE id=%s", (token,))
+        rows = audit_rows(conn)[len(before):]
+    base = {"owner": "bob", "token_name": "개인", "scope": "read_write"}
+    assert expires is not None
+    assert rows == [
+        ("token_changed", "bob", "session", None, None,
+         {**base, "change": "issued", "expires_at": expires}),
+        ("token_changed", "bob", "session", None, None,
+         {**base, "change": "issued", "expires_at": None}),
+        ("token_changed", "admin", "session", None, None,
+         {**base, "change": "revoked", "expires_at": expires}),
+    ]
+    assert token_hash not in str(rows)
+    assert str(token) not in str(rows) and str(no_expiry) not in str(rows)
+
+
+def test_user_delete_skips_user_token_revocation(conn):
+    with conn.transaction():
+        set_actor(conn, "admin")
+        user, _ = principals(conn)
+        create_user_token(conn, user)
+        before = audit_rows(conn)
+        conn.execute("DELETE FROM users WHERE id=%s", (user,))
+        assert audit_rows(conn)[len(before):] == [
+            ("user_changed", "admin", "session", None, None, {"change": "deleted", "user": "bob"}),
+        ]

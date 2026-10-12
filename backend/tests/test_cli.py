@@ -881,6 +881,20 @@ def test_reset_password_lets_a_locked_out_user_log_in_again(
     assert "recovered" not in capsys.readouterr().out
 
 
+def test_reset_password_is_audited_as_operator_cli(migrated_db: str, monkeypatch):
+    """운영자 재설정도 DB 트리거가 남긴다. 경로는 「운영자 CLI」, 사람은 접속 롤로 구분된다 (ADR-055)."""
+    _insert_user(migrated_db, "alice", "forgotten")
+    monkeypatch.setattr("openarchive.cli.getpass.getpass", lambda _prompt: "recovered")
+
+    assert main(["reset-password", "alice", "--dsn", migrated_db]) == 0
+
+    with psycopg.connect(migrated_db) as conn:
+        assert conn.execute(
+            "SELECT action, actor, actor_via, db_role = current_user, detail "
+            "FROM audit_log ORDER BY id DESC LIMIT 1"
+        ).fetchone() == ("password_changed", None, "cli", True, {"user": "alice"})
+
+
 def test_reset_password_invalidates_the_sessions_of_that_user(migrated_db: str, monkeypatch):
     user_id = _insert_user(migrated_db, "alice", "forgotten")
     other_id = _insert_user(migrated_db, "bob", "bob secret")
