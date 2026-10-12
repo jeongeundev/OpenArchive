@@ -591,8 +591,15 @@ def _docx_children(
     element: BaseOxmlElement, tag: str | None = None
 ) -> Iterator[BaseOxmlElement]:
     # 콘텐츠 컨트롤(`w:sdt`)은 문단·표·행·셀 어디든 감쌀 수 있다 — 감싼 내용을 제자리에 펼친다.
+    # 값을 넣지 않은 컨트롤의 안내 문구와 제목을 한 번 더 쓴 자동 목차는 내용이 아니라 건너뛴다.
     for child in element.iterchildren():
         if child.tag == f"{_W}sdt":
+            if child.xpath(
+                "w:sdtPr/w:showingPlcHdr"
+                " | w:sdtPr/w:docPartObj/w:docPartGallery[@w:val='Table of Contents']",
+                namespaces={"w": _W[1:-1]},
+            ):
+                continue
             for content in child.iterchildren(f"{_W}sdtContent"):
                 yield from _docx_children(content, tag)
         elif tag is None or child.tag == tag:
