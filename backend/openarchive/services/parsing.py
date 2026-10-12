@@ -25,6 +25,7 @@ import pypdfium2
 import pypdfium2.raw as pdfium_c
 import pytesseract
 from docx import Document
+from docx.oxml.xmlchemy import BaseOxmlElement
 from openpyxl import load_workbook
 from PIL import Image, ImageOps
 from pptx import Presentation
@@ -141,8 +142,7 @@ def extract_text(data: bytes, content_type: str) -> str:
         if content_type == "pptx":
             return _join_paragraphs(_pptx_slides(data))
 
-        document = Document(io.BytesIO(data))
-        return "\n\n".join(paragraph.text for paragraph in document.paragraphs)
+        return "\n\n".join(_docx_blocks(Document(io.BytesIO(data)).element.body))
     except EncryptedDocument:
         raise
     except Exception as error:
@@ -550,6 +550,49 @@ def _hwpx_text(element: ElementTree.Element) -> str:
 
 # XLSX 시트와 PPTX 슬라이드는 한 덩어리로 내고 덩어리 사이를 빈 줄로 둔다. 표는 두 형식 모두
 # 행마다 한 줄, 셀은 탭으로 구분한다.
+
+
+_W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+_MC_FALLBACK = "{http://schemas.openxmlformats.org/markup-compatibility/2006}Fallback"
+
+
+def _docx_blocks(container: BaseOxmlElement) -> Iterator[str]:
+    """본문·셀·텍스트 상자 안의 문단과 표를 문서 순서대로 낸다(#257).
+
+    문단은 빈 문단도 그대로 낸다 — 본문 문단만 있는 DOCX는 표를 읽기 전과 같은 텍스트가 된다.
+    문단에 걸린 텍스트 상자는 그 문단 바로 뒤에 상자 하나를 한 덩어리로, 표는 행마다 셀을 탭으로
+    이어 한 덩어리로 낸다. 비는 덩어리는 내지 않는다.
+    """
+    for child in container.iterchildren():
+        if child.tag == f"{_W}p":
+            yield child.text
+            for box in _docx_text_boxes(child):
+                text = "\n".join(block for block in _docx_blocks(box) if block.strip())
+                if text:
+                    yield text
+        elif child.tag == f"{_W}tbl":
+            rows = [
+                # 병합 셀은 `w:tc` 하나다 — 가로 병합은 칸을 넓히고 세로 병합의 이어지는 칸은 비어 있다.
+                # python-docx의 `row.cells`는 병합된 칸마다 같은 셀을 다시 돌려주므로 쓰지 않는다.
+                _tab_row(
+                    "\n".join(block for block in _docx_blocks(cell) if block.strip())
+                    for cell in row.iterchildren(f"{_W}tc")
+                )
+                for row in child.iterchildren(f"{_W}tr")
+            ]
+            text = "\n".join(row for row in rows if row.strip())
+            if text:
+                yield text
+
+
+def _docx_text_boxes(element: BaseOxmlElement) -> Iterator[BaseOxmlElement]:
+    # Word는 같은 상자를 DrawingML(`mc:Choice`)과 VML(`mc:Fallback`)로 두 번 쓴다 — 대체본은 건너뛴다.
+    # 상자 안의 상자는 바깥 상자의 `_docx_blocks`가 읽는다.
+    for child in element.iterchildren():
+        if child.tag == f"{_W}txbxContent":
+            yield child
+        elif child.tag != _MC_FALLBACK:
+            yield from _docx_text_boxes(child)
 
 
 def _xlsx_sheets(data: bytes) -> Iterator[str]:
