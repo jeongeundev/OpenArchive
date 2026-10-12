@@ -71,7 +71,7 @@ describe("정리할 문서 화면", () => {
     const leave = rowOf("연차 규정");
     expect(within(leave).getByRole("link", { name: "연차 규정" })).toHaveAttribute("href", "/documents/d-leave");
     expect(within(leave).getByText("인사")).toBeInTheDocument();
-    expect(within(leave).getByText("관련 문서 4개 중 3개")).toBeInTheDocument();
+    expect(within(leave).getByText("폴더에 있는 관련 문서 4개 중 3개")).toBeInTheDocument();
     expect(within(rowOf("외톨이 메모")).getByText("추천할 폴더가 없습니다")).toBeInTheDocument();
     expect(within(rowOf("외톨이 메모")).queryByRole("button")).not.toBeInTheDocument();
   });

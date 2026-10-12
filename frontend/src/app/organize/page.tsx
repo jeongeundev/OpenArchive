@@ -53,7 +53,7 @@ export default function OrganizePage(): React.ReactElement {
       <div>
         <h1 className="text-4xl font-semibold text-white">정리할 문서</h1>
         <p className="mt-3 text-sm text-neutral-400">
-          폴더 밖에 있는 내 문서입니다. 관련 문서의 절반 이상이 한 폴더에 있으면 그 폴더를 추천합니다. 자동으로 옮기지는 않습니다.
+          폴더 밖에 있는 내 문서입니다. 폴더에 든 관련 문서의 절반 이상이 한 폴더에 모여 있으면 그 폴더를 추천합니다. 자동으로 옮기지는 않습니다.
         </p>
       </div>
 
@@ -98,7 +98,7 @@ export default function OrganizePage(): React.ReactElement {
                         <>
                           <td className="px-4 py-3 text-neutral-300">{label}</td>
                           <td className="px-4 py-3 text-neutral-500">
-                            {`관련 문서 ${item.suggestion.total}개 중 ${item.suggestion.votes}개`}
+                            {`폴더에 있는 관련 문서 ${item.suggestion.total}개 중 ${item.suggestion.votes}개`}
                           </td>
                           <td className="px-4 py-3">
                             <div className="flex justify-end">

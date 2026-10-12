@@ -104,7 +104,7 @@ export function DocumentFolderSection({ documentId, folder, hiddenFolder = false
             {suggestionLabel}
           </button>
           <span className="ml-2 text-neutral-500">
-            {`관련 문서 ${suggestion.total}개 중 ${suggestion.votes}개가 이 폴더에 있습니다.`}
+            {`폴더에 있는 관련 문서 ${suggestion.total}개 중 ${suggestion.votes}개가 이 폴더에 있습니다.`}
           </span>
         </p>
       ) : null}

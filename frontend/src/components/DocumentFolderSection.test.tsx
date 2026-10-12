@@ -173,7 +173,7 @@ describe("DocumentFolderSection", () => {
     const fetchMock = stub({}, toHire);
     render(<DocumentFolderSection documentId="d1" folder={inInsa} isOwner onMoved={vi.fn()} />);
     await screen.findByRole("option", { name: "인사/채용" });
-    expect(await screen.findByText("관련 문서 4개 중 3개가 이 폴더에 있습니다.")).toBeInTheDocument();
+    expect(await screen.findByText("폴더에 있는 관련 문서 4개 중 3개가 이 폴더에 있습니다.")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "추천 폴더 인사/채용 고르기" }));
     expect(screen.getByLabelText("폴더")).toHaveValue("b");
     expect(moves(fetchMock)).toEqual([]);
