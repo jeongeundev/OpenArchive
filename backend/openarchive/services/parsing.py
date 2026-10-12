@@ -548,12 +548,14 @@ def _hwpx_text(element: ElementTree.Element) -> str:
     return "".join(parts)
 
 
-# XLSX 시트와 PPTX 슬라이드는 한 덩어리로 내고 덩어리 사이를 빈 줄로 둔다. 표는 두 형식 모두
-# 행마다 한 줄, 셀은 탭으로 구분한다.
+# XLSX 시트와 PPTX 슬라이드, DOCX 표는 한 덩어리로 내고 덩어리 사이를 빈 줄로 둔다. 표는 세 형식
+# 모두 행마다 한 줄, 셀은 탭으로 구분한다.
 
 
 _W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
 _MC_FALLBACK = "{http://schemas.openxmlformats.org/markup-compatibility/2006}Fallback"
+# 텍스트 상자를 찾을 때 내려가지 않는 곳 — 대체본과 변경 추적으로 지운 런(`w:delText`처럼 읽지 않는다)
+_DOCX_SKIPPED = frozenset({_MC_FALLBACK, f"{_W}del", f"{_W}moveFrom"})
 
 
 def _docx_blocks(container: BaseOxmlElement) -> Iterator[str]:
@@ -563,7 +565,7 @@ def _docx_blocks(container: BaseOxmlElement) -> Iterator[str]:
     문단에 걸린 텍스트 상자는 그 문단 바로 뒤에 상자 하나를 한 덩어리로, 표는 행마다 셀을 탭으로
     이어 한 덩어리로 낸다. 비는 덩어리는 내지 않는다.
     """
-    for child in container.iterchildren():
+    for child in _docx_children(container):
         if child.tag == f"{_W}p":
             yield child.text
             for box in _docx_text_boxes(child):
@@ -576,13 +578,25 @@ def _docx_blocks(container: BaseOxmlElement) -> Iterator[str]:
                 # python-docx의 `row.cells`는 병합된 칸마다 같은 셀을 다시 돌려주므로 쓰지 않는다.
                 _tab_row(
                     "\n".join(block for block in _docx_blocks(cell) if block.strip())
-                    for cell in row.iterchildren(f"{_W}tc")
+                    for cell in _docx_children(row, f"{_W}tc")
                 )
-                for row in child.iterchildren(f"{_W}tr")
+                for row in _docx_children(child, f"{_W}tr")
             ]
             text = "\n".join(row for row in rows if row.strip())
             if text:
                 yield text
+
+
+def _docx_children(
+    element: BaseOxmlElement, tag: str | None = None
+) -> Iterator[BaseOxmlElement]:
+    # 콘텐츠 컨트롤(`w:sdt`)은 문단·표·행·셀 어디든 감쌀 수 있다 — 감싼 내용을 제자리에 펼친다.
+    for child in element.iterchildren():
+        if child.tag == f"{_W}sdt":
+            for content in child.iterchildren(f"{_W}sdtContent"):
+                yield from _docx_children(content, tag)
+        elif tag is None or child.tag == tag:
+            yield child
 
 
 def _docx_text_boxes(element: BaseOxmlElement) -> Iterator[BaseOxmlElement]:
@@ -591,7 +605,7 @@ def _docx_text_boxes(element: BaseOxmlElement) -> Iterator[BaseOxmlElement]:
     for child in element.iterchildren():
         if child.tag == f"{_W}txbxContent":
             yield child
-        elif child.tag != _MC_FALLBACK:
+        elif child.tag not in _DOCX_SKIPPED:
             yield from _docx_text_boxes(child)
 
 
