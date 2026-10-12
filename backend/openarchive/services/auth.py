@@ -34,6 +34,8 @@ PRINCIPAL_SHARE = "share"
 # NIST SP 800-63B의 최소 길이. 구성 규칙은 두지 않는다 (ADR-040 2026-10-12 개정).
 MIN_PASSWORD_LENGTH = 8
 MAX_USERNAME_LENGTH = 64
+# 로그인이 실패 기록을 남기는 사용자명의 상한. 64자 제한 이전 계정이 있을 수 있어 넉넉히 둔다.
+MAX_LOGIN_USERNAME_LENGTH = 256
 # Microsoft Entra smart lockout 기본값: 연속 10회 실패면 60초 잠근다.
 MAX_LOGIN_FAILURES = 10
 LOGIN_LOCK_SECONDS = 60
@@ -333,49 +335,69 @@ async def authenticate_user(
 ) -> dict:
     """사용자명과 비밀번호를 검증한다. 모든 실패는 같은 예외로 표현한다.
 
-    잠긴 사용자명은 비밀번호를 보지 않고 `LoginLocked`로 거부한다. 실패는 `login_attempts`에
-    쌓이므로, 호출부는 `AuthenticationFailed`를 받으면 그 기록을 커밋한 뒤 거부해야 한다
+    잠긴 사용자명은 비밀번호를 보지 않고 `LoginLocked`로 거부한다. 같은 사용자명의 시도는
+    `login_attempts` 행 잠금으로 한 줄로 세운다 — 잠금 확인과 기록 사이에 동시 요청이 끼면
+    잠기기 직전·풀린 직후에 여러 요청이 비밀번호 검사를 받는다. 판정·기록은 자체 트랜잭션
+    블록에서 끝내고 예외는 그 뒤에 던진다(블록 안에서 던지면 실패 기록이 롤백된다).
+    호출부가 바깥 트랜잭션 안에서 부르면 블록은 savepoint이므로 호출부가 커밋해야 한다
     (ADR-040 2026-10-12 개정).
     """
-    locked = await (
+    if len(username) > MAX_LOGIN_USERNAME_LENGTH:
+        # 있을 수 없는 이름이다. 기록하면 btree 키 크기를 넘어 500이 난다 — 시간만 맞추고 거부한다.
+        verify_password(password, _DUMMY_PASSWORD_HASH)
+        raise AuthenticationFailed
+    async with conn.transaction():
         await conn.execute(
-            """SELECT ceil(extract(epoch FROM locked_until - now()))::int
-               FROM login_attempts WHERE username = %s AND locked_until > now()""",
+            "INSERT INTO login_attempts (username) VALUES (%s) ON CONFLICT (username) DO NOTHING",
             (username,),
         )
-    ).fetchone()
-    if locked is not None:
-        raise LoginLocked(max(locked[0], 1))
-    cur = conn.cursor(row_factory=dict_row)
-    await cur.execute(
-        "SELECT id, username, password_hash, is_admin FROM users WHERE username = %s",
-        (username,),
-    )
-    user = await cur.fetchone()
-    stored = _DUMMY_PASSWORD_HASH if user is None else user["password_hash"]
-    if not verify_password(password, stored) or user is None:
-        await _record_login_failure(conn, username)
+        state = await (
+            await conn.execute(
+                """SELECT ceil(extract(epoch FROM locked_until - now()))::int
+                   FROM login_attempts WHERE username = %s FOR UPDATE""",
+                (username,),
+            )
+        ).fetchone()
+        remaining = state[0] if state is not None else None
+        if remaining is not None and remaining > 0:
+            locked_for = remaining
+        else:
+            locked_for = None
+            cur = conn.cursor(row_factory=dict_row)
+            await cur.execute(
+                "SELECT id, username, password_hash, is_admin FROM users WHERE username = %s",
+                (username,),
+            )
+            user = await cur.fetchone()
+            stored = _DUMMY_PASSWORD_HASH if user is None else user["password_hash"]
+            if not verify_password(password, stored) or user is None:
+                user = None
+                await _record_login_failure(conn, username)
+            else:
+                await conn.execute(
+                    "DELETE FROM login_attempts WHERE username = %s", (username,)
+                )
+    if locked_for is not None:
+        raise LoginLocked(locked_for)
+    if user is None:
         raise AuthenticationFailed
-    await conn.execute("DELETE FROM login_attempts WHERE username = %s", (username,))
     del user["password_hash"]
     return user
 
 
 async def _record_login_failure(conn: psycopg.AsyncConnection, username: str) -> None:
-    """실패를 세고 문턱에 닿으면 잠근다. 한 문장이라 동시 실패도 빠짐없이 센다.
+    """실패를 세고 문턱에 닿으면 잠근다. 호출부가 그 행의 잠금을 쥔 상태에서 부른다.
 
-    잠금이 풀린 뒤에도 카운터는 남아, 다음 실패에서 곧바로 다시 잠근다(사실상 분당 1회).
+    잠금이 풀린 뒤에도 카운터는 남아, 다음 실패에서 곧바로 다시 잠근다.
     """
     await conn.execute(
         """
-        INSERT INTO login_attempts AS a (username, failures, locked_until)
-        VALUES (%(username)s, 1,
-                CASE WHEN 1 >= %(limit)s THEN now() + make_interval(secs => %(secs)s) END)
-        ON CONFLICT (username) DO UPDATE SET
-          failures = a.failures + 1,
-          locked_until = CASE WHEN a.failures + 1 >= %(limit)s
+        UPDATE login_attempts SET
+          failures = failures + 1,
+          locked_until = CASE WHEN failures + 1 >= %(limit)s
                               THEN now() + make_interval(secs => %(secs)s)
-                              ELSE a.locked_until END
+                              ELSE locked_until END
+        WHERE username = %(username)s
         """,
         {"username": username, "limit": MAX_LOGIN_FAILURES, "secs": LOGIN_LOCK_SECONDS},
     )

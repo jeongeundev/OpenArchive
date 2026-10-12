@@ -796,3 +796,71 @@ async def test_an_admin_can_still_delete_another_account(conn):
     await delete_user(conn, other["id"], actor="boss")
 
     assert await list_users_named(conn, "alice") == 0
+
+
+async def test_concurrent_attempts_at_the_threshold_get_only_one_password_check(
+    conn, migrated_db, monkeypatch
+):
+    """같은 사용자명의 시도는 행 잠금으로 한 줄로 선다 — 잠기기 직전의 동시 요청이 잠금을 새어 나가면
+    「사실상 분당 1회」가 거짓이 된다."""
+    await _create_user(conn, "correct horse")
+    await conn.execute(
+        "INSERT INTO login_attempts (username, failures) VALUES ('alice', %s)",
+        (MAX_LOGIN_FAILURES - 1,),
+    )
+    checks = []
+    real = auth_service.verify_password
+
+    def counting(password, stored):
+        checks.append(password)
+        return real(password, stored)
+
+    monkeypatch.setattr(auth_service, "verify_password", counting)
+
+    async def attempt():
+        async with await psycopg.AsyncConnection.connect(migrated_db, autocommit=True) as c:
+            try:
+                await authenticate_user(c, "alice", "wrong password")
+            except (AuthenticationFailed, LoginLocked) as error:
+                return type(error)
+
+    outcomes = await asyncio.gather(*(attempt() for _ in range(8)))
+
+    assert len(checks) == 1
+    assert sorted(outcome.__name__ for outcome in outcomes) == (
+        ["AuthenticationFailed"] + ["LoginLocked"] * 7
+    )
+    assert await _attempts(conn, "alice") == (MAX_LOGIN_FAILURES, True)
+
+
+async def test_a_lock_on_one_username_does_not_block_another(conn, migrated_db):
+    """사용자명별 직렬화다 — 남의 시도가 행 잠금을 쥐고 있어도 다른 사용자명은 기다리지 않는다."""
+    user_id = await _create_user(conn, "correct horse")
+    await conn.execute("INSERT INTO login_attempts (username) VALUES ('bob')")
+    async with await psycopg.AsyncConnection.connect(migrated_db) as holder:
+        await holder.execute("SELECT 1 FROM login_attempts WHERE username = 'bob' FOR UPDATE")
+        async with await psycopg.AsyncConnection.connect(migrated_db, autocommit=True) as c:
+            await c.execute("SET lock_timeout = '1s'")
+            assert (await authenticate_user(c, "alice", "correct horse"))["id"] == user_id
+
+
+async def test_a_success_removes_the_row_the_attempt_created(conn):
+    user_id = await _create_user(conn, "correct horse")
+
+    assert (await authenticate_user(conn, "alice", "correct horse"))["id"] == user_id
+    assert await _attempts(conn, "alice") is None
+
+
+async def test_a_too_long_username_is_rejected_without_recording(conn, monkeypatch):
+    """btree 행 크기를 넘는 키는 INSERT가 500으로 터진다 — 상한을 넘으면 기록하지 않고 거부한다."""
+    calls = []
+    real = auth_service.verify_password
+    monkeypatch.setattr(
+        auth_service, "verify_password", lambda p, s: calls.append(s) or real(p, s)
+    )
+
+    with pytest.raises(AuthenticationFailed):
+        await authenticate_user(conn, "a" * 4000, "anything")
+
+    assert len(calls) == 1
+    assert (await (await conn.execute("SELECT count(*) FROM login_attempts")).fetchone())[0] == 0

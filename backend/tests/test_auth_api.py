@@ -693,3 +693,16 @@ def test_admin_cannot_delete_their_own_account(db_client, migrated_db):
     assert response.status_code == 400
     assert response.json()["detail"] == "자기 계정은 삭제할 수 없습니다."
     assert "boss" in [row["username"] for row in db_client.get("/api/admin/users").json()]
+
+
+def test_login_with_a_4000_character_username_is_401_not_500(
+    db_client: TestClient, migrated_db: str
+):
+    response = db_client.post(
+        "/api/auth/login", json={"username": "a" * 4000, "password": "anything"}
+    )
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "인증에 실패했습니다."
+    with psycopg.connect(migrated_db) as conn:
+        assert conn.execute("SELECT count(*) FROM login_attempts").fetchone() == (0,)
