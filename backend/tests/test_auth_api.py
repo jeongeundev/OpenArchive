@@ -580,3 +580,129 @@ def test_admin_delete_user_without_owned_items(db_client, migrated_db):
     user = next(row for row in db_client.get("/api/admin/users").json() if row["username"] == "empty")
     assert db_client.delete(f"/api/admin/users/{user['id']}").status_code == 204
     assert "empty" not in [row["username"] for row in db_client.get("/api/admin/users").json()]
+
+
+# --- 로그인 실패 제한·비밀번호 최소 길이·자기 삭제 금지 (ADR-040 2026-10-12 개정) ---
+
+LOCKED_DETAIL = "로그인 시도가 너무 많습니다. 잠시 뒤 다시 시도하세요."
+
+
+def test_login_is_refused_with_429_and_retry_after_after_ten_failures(
+    db_client: TestClient, migrated_db: str
+):
+    """실패 기록은 401 응답과 함께 롤백되면 안 된다 — 요청을 넘어 쌓여야 잠긴다."""
+    create_user(migrated_db, password="right-password")
+    wrong = {"username": "alice", "password": "wrong-password"}
+
+    statuses = [db_client.post("/api/auth/login", json=wrong).status_code for _ in range(10)]
+    locked = db_client.post(
+        "/api/auth/login", json={"username": "alice", "password": "right-password"}
+    )
+
+    assert statuses == [401] * 10
+    assert locked.status_code == 429
+    assert locked.json()["detail"] == LOCKED_DETAIL
+    assert 0 < int(locked.headers["retry-after"]) <= 60
+    assert "set-cookie" not in locked.headers
+
+
+def test_login_lock_answers_the_same_for_an_unknown_username(
+    db_client: TestClient, migrated_db: str
+):
+    for _ in range(10):
+        assert db_client.post(
+            "/api/auth/login", json={"username": "ghost", "password": "anything"}
+        ).status_code == 401
+
+    response = db_client.post(
+        "/api/auth/login", json={"username": "ghost", "password": "anything"}
+    )
+
+    assert response.status_code == 429
+    assert response.json()["detail"] == LOCKED_DETAIL
+
+
+def test_admin_create_user_rejects_a_short_password_with_400(db_client, migrated_db):
+    from test_groups_api import login_admin
+
+    login_admin(db_client, migrated_db)
+
+    response = db_client.post(
+        "/api/admin/users", json={"username": "new-user", "password": "1234567"}
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "비밀번호는 8자 이상이어야 합니다."
+    assert "new-user" not in [row["username"] for row in db_client.get("/api/admin/users").json()]
+
+
+@pytest.mark.parametrize("username", ["", "   ", " new-user", "new-user ", "a" * 65])
+def test_admin_create_user_rejects_an_invalid_username_with_400(
+    db_client, migrated_db, username
+):
+    from test_groups_api import login_admin
+
+    login_admin(db_client, migrated_db)
+
+    response = db_client.post(
+        "/api/admin/users", json={"username": username, "password": "long-enough"}
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "사용자명은 비어 있거나 앞뒤에 공백이 있을 수 없습니다."
+
+
+def test_admin_create_user_rejects_the_reserved_share_prefix_with_400(db_client, migrated_db):
+    # 026의 CHECK가 막지만 서비스가 먼저 거르지 않으면 500이 된다
+    from test_groups_api import login_admin
+
+    login_admin(db_client, migrated_db)
+
+    response = db_client.post(
+        "/api/admin/users", json={"username": "share:outside", "password": "long-enough"}
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "사용자명은 'share:'로 시작할 수 없습니다."
+
+
+def test_password_change_rejects_a_short_new_password_with_400(
+    db_client: TestClient, migrated_db: str
+):
+    create_user(migrated_db)
+    db_client.post("/api/auth/login", json={"username": "alice", "password": "secret"})
+
+    response = db_client.put(
+        "/api/auth/password", json={"current_password": "secret", "new_password": "short"}
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "비밀번호는 8자 이상이어야 합니다."
+    # 바꾸지 않았으므로 세션도 그대로다.
+    assert db_client.get("/api/auth/me").json()["username"] == "alice"
+
+
+def test_admin_cannot_delete_their_own_account(db_client, migrated_db):
+    from test_groups_api import login_admin
+
+    login_admin(db_client, migrated_db)
+    me = next(row for row in db_client.get("/api/admin/users").json() if row["username"] == "boss")
+
+    response = db_client.delete(f"/api/admin/users/{me['id']}")
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "자기 계정은 삭제할 수 없습니다."
+    assert "boss" in [row["username"] for row in db_client.get("/api/admin/users").json()]
+
+
+def test_login_with_a_4000_character_username_is_401_not_500(
+    db_client: TestClient, migrated_db: str
+):
+    response = db_client.post(
+        "/api/auth/login", json={"username": "a" * 4000, "password": "anything"}
+    )
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "인증에 실패했습니다."
+    with psycopg.connect(migrated_db) as conn:
+        assert conn.execute("SELECT count(*) FROM login_attempts").fetchone() == (0,)

@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 from datetime import UTC, datetime, timedelta
 
@@ -5,8 +6,15 @@ import psycopg
 import pytest
 from conftest import login_as
 
+from openarchive.services import auth as auth_service
 from openarchive.services.auth import (
+    MAX_LOGIN_FAILURES,
+    MIN_PASSWORD_LENGTH,
     AuthenticationFailed,
+    CannotDeleteSelf,
+    InvalidUsername,
+    LoginLocked,
+    PasswordTooShort,
     TokenNotFound,
     UserNotFound,
     admin_exists,
@@ -15,6 +23,7 @@ from openarchive.services.auth import (
     create_session,
     create_token,
     create_user,
+    delete_user,
     hash_password,
     insert_token,
     list_tokens,
@@ -478,10 +487,10 @@ async def test_admin_exists_ignores_regular_accounts(conn):
     """init이 첫 관리자를 만들지 판정한다 — 일반 계정만 있으면 아직 관리자가 없다."""
     assert await admin_exists(conn) is False
 
-    await create_user(conn, "alice", "secret")
+    await create_user(conn, "alice", "secret-pw")
     assert await admin_exists(conn) is False
 
-    await create_user(conn, "boss", "secret", is_admin=True)
+    await create_user(conn, "boss", "secret-pw", is_admin=True)
     assert await admin_exists(conn) is True
 
 
@@ -556,3 +565,302 @@ async def test_token_usage_skips_locked_row(conn, migrated_db):
             principal = await validate_token(request, issued["token"])
             assert principal["username"] == "alice"
     assert (await list_tokens(conn, user_id))[0]["last_used_at"] == old
+
+
+# --- 비밀번호 최소 길이·사용자명 검증 (ADR-040 2026-10-12 개정) ---
+
+
+async def _password_hash(conn, username: str = "alice") -> str:
+    return (
+        await (
+            await conn.execute("SELECT password_hash FROM users WHERE username = %s", (username,))
+        ).fetchone()
+    )[0]
+
+
+def test_minimum_password_length_is_eight():
+    """NIST SP 800-63B의 최소 길이. 구성 규칙(대문자·특수문자)은 두지 않는다."""
+    assert MIN_PASSWORD_LENGTH == 8
+
+
+async def test_create_user_rejects_a_password_shorter_than_eight(conn):
+    with pytest.raises(PasswordTooShort, match="비밀번호는 8자 이상이어야 합니다."):
+        await create_user(conn, "alice", "1234567")
+
+    assert await list_users_named(conn, "alice") == 0
+    await create_user(conn, "alice", "12345678")
+    assert await list_users_named(conn, "alice") == 1
+
+
+async def list_users_named(conn, username: str) -> int:
+    return (
+        await (
+            await conn.execute("SELECT count(*) FROM users WHERE username = %s", (username,))
+        ).fetchone()
+    )[0]
+
+
+async def test_change_password_rejects_a_short_new_password_and_keeps_the_old_one(conn):
+    user_id = await _create_user(conn, "correct horse")
+    session = await create_session(conn, user_id)
+
+    with pytest.raises(PasswordTooShort):
+        await change_password(
+            conn, user_id, current_password="correct horse", new_password="short"
+        )
+
+    assert verify_password("correct horse", await _password_hash(conn))
+    assert (await validate_session(conn, session))["id"] == user_id
+
+
+async def test_reset_password_rejects_a_short_new_password_and_keeps_the_old_one(conn):
+    await _create_user(conn, "forgotten")
+
+    with pytest.raises(PasswordTooShort):
+        await reset_password(conn, "alice", "short")
+
+    assert verify_password("forgotten", await _password_hash(conn))
+
+
+async def test_login_does_not_check_the_length_of_an_existing_password(conn):
+    """기존 계정은 최소 길이 이전에 만든 짧은 비밀번호로도 계속 로그인한다."""
+    user_id = await _create_user(conn, "short")
+
+    assert (await authenticate_user(conn, "alice", "short"))["id"] == user_id
+
+
+@pytest.mark.parametrize(
+    "username", ["", "   ", " alice", "alice ", "\talice", "a" * 65],
+    ids=["empty", "blank", "leading", "trailing", "tab", "too-long"],
+)
+async def test_create_user_rejects_an_invalid_username(conn, username):
+    with pytest.raises(InvalidUsername):
+        await create_user(conn, username, "long-enough")
+
+    assert (await (await conn.execute("SELECT count(*) FROM users")).fetchone())[0] == 0
+
+
+async def test_create_user_accepts_a_64_character_username_with_inner_spaces(conn):
+    await create_user(conn, "a" * 64, "long-enough")
+    await create_user(conn, "kim min", "long-enough")
+
+    assert (await (await conn.execute("SELECT count(*) FROM users")).fetchone())[0] == 2
+
+
+# --- 로그인 실패 제한 (ADR-040 2026-10-12 개정) ---
+
+
+async def _fail(conn, username: str, times: int) -> None:
+    for _ in range(times):
+        with pytest.raises(AuthenticationFailed):
+            await authenticate_user(conn, username, "wrong password")
+
+
+async def _attempts(conn, username: str):
+    return await (
+        await conn.execute(
+            "SELECT failures, locked_until > now() FROM login_attempts WHERE username = %s",
+            (username,),
+        )
+    ).fetchone()
+
+
+def test_lockout_threshold_is_ten_failures():
+    """Microsoft Entra smart lockout 기본값 — 10회 실패 뒤 60초."""
+    assert MAX_LOGIN_FAILURES == 10
+
+
+async def test_ten_failures_lock_the_account_even_against_the_right_password(conn):
+    await _create_user(conn, "correct horse")
+
+    await _fail(conn, "alice", MAX_LOGIN_FAILURES)
+
+    with pytest.raises(LoginLocked) as locked:
+        await authenticate_user(conn, "alice", "correct horse")
+    assert 0 < locked.value.retry_after <= 60
+    assert await _attempts(conn, "alice") == (MAX_LOGIN_FAILURES, True)
+
+
+async def test_nine_failures_do_not_lock_and_a_success_clears_the_count(conn):
+    user_id = await _create_user(conn, "correct horse")
+
+    await _fail(conn, "alice", MAX_LOGIN_FAILURES - 1)
+    assert await _attempts(conn, "alice") == (MAX_LOGIN_FAILURES - 1, None)
+
+    assert (await authenticate_user(conn, "alice", "correct horse"))["id"] == user_id
+    assert await _attempts(conn, "alice") is None
+
+
+async def test_an_expired_lock_lets_the_right_password_in_and_clears_the_row(conn):
+    user_id = await _create_user(conn, "correct horse")
+    await _fail(conn, "alice", MAX_LOGIN_FAILURES)
+    await conn.execute(
+        "UPDATE login_attempts SET locked_until = now() - interval '1 second'"
+    )
+
+    assert (await authenticate_user(conn, "alice", "correct horse"))["id"] == user_id
+    assert await _attempts(conn, "alice") is None
+
+
+async def test_a_failure_after_an_expired_lock_locks_again_at_once(conn):
+    """잠금이 풀려도 카운터는 남는다 — 그 뒤로는 실패 한 번마다 다시 60초 (사실상 분당 1회)."""
+    await _create_user(conn, "correct horse")
+    await _fail(conn, "alice", MAX_LOGIN_FAILURES)
+    await conn.execute(
+        "UPDATE login_attempts SET locked_until = now() - interval '1 second'"
+    )
+
+    await _fail(conn, "alice", 1)
+
+    assert await _attempts(conn, "alice") == (MAX_LOGIN_FAILURES + 1, True)
+    with pytest.raises(LoginLocked):
+        await authenticate_user(conn, "alice", "correct horse")
+
+
+async def test_an_unknown_username_is_counted_and_locked_the_same_way(conn):
+    """잠금 여부로 계정이 있는지 알 수 없어야 한다."""
+    await _fail(conn, "nobody", MAX_LOGIN_FAILURES)
+
+    with pytest.raises(LoginLocked):
+        await authenticate_user(conn, "nobody", "anything")
+    assert await _attempts(conn, "nobody") == (MAX_LOGIN_FAILURES, True)
+
+
+async def test_failures_are_counted_per_username(conn):
+    await _create_user(conn, "correct horse")
+    await _fail(conn, "nobody", MAX_LOGIN_FAILURES)
+
+    assert (await authenticate_user(conn, "alice", "correct horse"))["username"] == "alice"
+
+
+async def test_an_unknown_username_still_computes_one_password_hash(conn, monkeypatch):
+    """없는 사용자명에서 scrypt를 건너뛰면 응답 시간으로 계정 존재가 드러난다."""
+    calls = []
+    real = auth_service.verify_password
+
+    def counting(password, stored):
+        calls.append(stored)
+        return real(password, stored)
+
+    monkeypatch.setattr(auth_service, "verify_password", counting)
+
+    with pytest.raises(AuthenticationFailed):
+        await authenticate_user(conn, "nobody", "anything")
+
+    assert len(calls) == 1
+    # 비용 파라미터가 실제 해시와 같아야 걸리는 시간이 같다.
+    assert calls[0].split("$")[:4] == hash_password("x").split("$")[:4]
+
+
+async def test_concurrent_failures_are_all_counted(conn, migrated_db):
+    """증가와 잠금 판정은 한 문장 UPSERT다 — 읽고 쓰는 두 문장이면 동시 실패가 사라진다."""
+    await _create_user(conn, "correct horse")
+
+    async def one_failure():
+        async with await psycopg.AsyncConnection.connect(migrated_db, autocommit=True) as c:
+            with pytest.raises(AuthenticationFailed):
+                await authenticate_user(c, "alice", "wrong password")
+
+    await asyncio.gather(*(one_failure() for _ in range(MAX_LOGIN_FAILURES)))
+
+    assert await _attempts(conn, "alice") == (MAX_LOGIN_FAILURES, True)
+
+
+async def test_reset_password_clears_the_lock(conn):
+    """운영자가 풀어 주는 경로다 — 재설정한 비밀번호로 바로 들어온다."""
+    user_id = await _create_user(conn, "forgotten")
+    await _fail(conn, "alice", MAX_LOGIN_FAILURES)
+
+    await reset_password(conn, "alice", "recovered")
+
+    assert await _attempts(conn, "alice") is None
+    assert (await authenticate_user(conn, "alice", "recovered"))["id"] == user_id
+
+
+# --- 관리자 자기 삭제 금지 (ADR-040 2026-10-12 개정) ---
+
+
+async def test_an_admin_cannot_delete_their_own_account(conn):
+    admin = await create_user(conn, "boss", "boss-secret", is_admin=True)
+
+    with pytest.raises(CannotDeleteSelf, match="자기 계정은 삭제할 수 없습니다."):
+        await delete_user(conn, admin["id"], actor="boss")
+
+    assert await list_users_named(conn, "boss") == 1
+
+
+async def test_an_admin_can_still_delete_another_account(conn):
+    await create_user(conn, "boss", "boss-secret", is_admin=True)
+    other = await create_user(conn, "alice", "alice-secret")
+
+    await delete_user(conn, other["id"], actor="boss")
+
+    assert await list_users_named(conn, "alice") == 0
+
+
+async def test_concurrent_attempts_at_the_threshold_get_only_one_password_check(
+    conn, migrated_db, monkeypatch
+):
+    """같은 사용자명의 시도는 행 잠금으로 한 줄로 선다 — 잠기기 직전의 동시 요청이 잠금을 새어 나가면
+    「사실상 분당 1회」가 거짓이 된다."""
+    await _create_user(conn, "correct horse")
+    await conn.execute(
+        "INSERT INTO login_attempts (username, failures) VALUES ('alice', %s)",
+        (MAX_LOGIN_FAILURES - 1,),
+    )
+    checks = []
+    real = auth_service.verify_password
+
+    def counting(password, stored):
+        checks.append(password)
+        return real(password, stored)
+
+    monkeypatch.setattr(auth_service, "verify_password", counting)
+
+    async def attempt():
+        async with await psycopg.AsyncConnection.connect(migrated_db, autocommit=True) as c:
+            try:
+                await authenticate_user(c, "alice", "wrong password")
+            except (AuthenticationFailed, LoginLocked) as error:
+                return type(error)
+
+    outcomes = await asyncio.gather(*(attempt() for _ in range(8)))
+
+    assert len(checks) == 1
+    assert sorted(outcome.__name__ for outcome in outcomes) == (
+        ["AuthenticationFailed"] + ["LoginLocked"] * 7
+    )
+    assert await _attempts(conn, "alice") == (MAX_LOGIN_FAILURES, True)
+
+
+async def test_a_lock_on_one_username_does_not_block_another(conn, migrated_db):
+    """사용자명별 직렬화다 — 남의 시도가 행 잠금을 쥐고 있어도 다른 사용자명은 기다리지 않는다."""
+    user_id = await _create_user(conn, "correct horse")
+    await conn.execute("INSERT INTO login_attempts (username) VALUES ('bob')")
+    async with await psycopg.AsyncConnection.connect(migrated_db) as holder:
+        await holder.execute("SELECT 1 FROM login_attempts WHERE username = 'bob' FOR UPDATE")
+        async with await psycopg.AsyncConnection.connect(migrated_db, autocommit=True) as c:
+            await c.execute("SET lock_timeout = '1s'")
+            assert (await authenticate_user(c, "alice", "correct horse"))["id"] == user_id
+
+
+async def test_a_success_removes_the_row_the_attempt_created(conn):
+    user_id = await _create_user(conn, "correct horse")
+
+    assert (await authenticate_user(conn, "alice", "correct horse"))["id"] == user_id
+    assert await _attempts(conn, "alice") is None
+
+
+async def test_a_too_long_username_is_rejected_without_recording(conn, monkeypatch):
+    """btree 행 크기를 넘는 키는 INSERT가 500으로 터진다 — 상한을 넘으면 기록하지 않고 거부한다."""
+    calls = []
+    real = auth_service.verify_password
+    monkeypatch.setattr(
+        auth_service, "verify_password", lambda p, s: calls.append(s) or real(p, s)
+    )
+
+    with pytest.raises(AuthenticationFailed):
+        await authenticate_user(conn, "a" * 4000, "anything")
+
+    assert len(calls) == 1
+    assert (await (await conn.execute("SELECT count(*) FROM login_attempts")).fetchone())[0] == 0

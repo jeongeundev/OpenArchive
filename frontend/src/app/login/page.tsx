@@ -4,7 +4,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
 import { useAuth } from "@/components/AuthProvider";
-import { login } from "@/lib/api";
+import { ApiError, login } from "@/lib/api";
 import { clearPasswordChangedNotice, wasPasswordChanged } from "@/lib/passwordChangeNotice";
 
 export default function LoginPage(): React.ReactElement {
@@ -31,8 +31,13 @@ export default function LoginPage(): React.ReactElement {
       const status = await login(username, password);
       setAuth(status);
       router.replace("/");
-    } catch {
-      setError("사용자명 또는 비밀번호를 확인하세요.");
+    } catch (reason: unknown) {
+      // 잠금(429)만 서버 안내를 보인다. 나머지는 실패 사유를 가리지 않고 한 문구로 둔다.
+      setError(
+        reason instanceof ApiError && reason.status === 429
+          ? reason.detail
+          : "사용자명 또는 비밀번호를 확인하세요.",
+      );
     } finally {
       setSubmitting(false);
     }

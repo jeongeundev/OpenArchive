@@ -32,7 +32,7 @@ describe("사용자 관리 화면", () => {
     expect(await screen.findByText("alice")).toBeInTheDocument();
 
     fireEvent.change(screen.getByRole("textbox", { name: "사용자명" }), { target: { value: "bob" } });
-    fireEvent.change(screen.getByLabelText("비밀번호"), { target: { value: "secret" } });
+    fireEvent.change(screen.getByLabelText("비밀번호"), { target: { value: "secret-pw" } });
     fireEvent.click(screen.getByRole("button", { name: "사용자 생성" }));
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(4));
@@ -108,7 +108,7 @@ describe("사용자 관리 화면 — 동작 뒤 조회 취소", () => {
     const { unmount } = render(<AuthProvider><UsersPage /></AuthProvider>);
     expect(await screen.findByText("alice")).toBeInTheDocument();
     fireEvent.change(screen.getByRole("textbox", { name: "사용자명" }), { target: { value: "bob" } });
-    fireEvent.change(screen.getByLabelText("비밀번호"), { target: { value: "secret" } });
+    fireEvent.change(screen.getByLabelText("비밀번호"), { target: { value: "secret-pw" } });
     fireEvent.click(screen.getByRole("button", { name: "사용자 생성" }));
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(4));
     unmount();
@@ -141,4 +141,64 @@ it("409인 행에서 자신과 삭제하는 관리자를 제외한 이전 대상
   fireEvent.click(screen.getByRole("button", { name: "이전 후 삭제" }));
   await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/admin/users/user-1?transfer_to=lee", expect.objectContaining({ method: "DELETE" })));
   await waitFor(() => expect(screen.queryByText("alice")).not.toBeInTheDocument());
+});
+
+
+describe("사용자 관리 화면 — 비밀번호 길이·자기 삭제 (ADR-040 2026-10-12 개정)", () => {
+  const self = { ...users[0], id: "user-0", username: "admin", is_admin: true };
+
+  it("비밀번호 칸은 8자 이상을 요구하고 그렇게 안내한다", async () => {
+    vi.stubGlobal("fetch", vi.fn()
+      .mockResolvedValueOnce(response(admin))
+      .mockResolvedValueOnce(response(users)));
+
+    render(<AuthProvider><UsersPage /></AuthProvider>);
+    await screen.findByText("alice");
+
+    const input = screen.getByLabelText("비밀번호");
+    expect(input).toHaveAttribute("minLength", "8");
+    expect(input).toHaveAccessibleDescription("8자 이상");
+  });
+
+  it("생성이 400으로 거부되면 서버가 준 이유를 보여준다", async () => {
+    vi.stubGlobal("fetch", vi.fn()
+      .mockResolvedValueOnce(response(admin))
+      .mockResolvedValueOnce(response(users))
+      .mockResolvedValueOnce(response({ detail: "비밀번호는 8자 이상이어야 합니다." }, 400)));
+
+    render(<AuthProvider><UsersPage /></AuthProvider>);
+    await screen.findByText("alice");
+    fireEvent.change(screen.getByRole("textbox", { name: "사용자명" }), { target: { value: "bob" } });
+    fireEvent.change(screen.getByLabelText("비밀번호"), { target: { value: "secret-pw" } });
+    fireEvent.click(screen.getByRole("button", { name: "사용자 생성" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("비밀번호는 8자 이상이어야 합니다.");
+  });
+
+  it("자기 행의 삭제 버튼은 누를 수 없다", async () => {
+    vi.stubGlobal("fetch", vi.fn()
+      .mockResolvedValueOnce(response(admin))
+      .mockResolvedValueOnce(response([self, ...users])));
+
+    render(<AuthProvider><UsersPage /></AuthProvider>);
+    await screen.findByText("alice");
+
+    const [own, other] = screen.getAllByRole("button", { name: "삭제" });
+    expect(own).toBeDisabled();
+    expect(other).toBeEnabled();
+  });
+
+  it("삭제가 400으로 거부되면 서버가 준 이유를 보이고 이전 선택은 열지 않는다", async () => {
+    vi.stubGlobal("fetch", vi.fn()
+      .mockResolvedValueOnce(response(admin))
+      .mockResolvedValueOnce(response(users))
+      .mockResolvedValueOnce(response({ detail: "자기 계정은 삭제할 수 없습니다." }, 400)));
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    render(<AuthProvider><UsersPage /></AuthProvider>);
+    fireEvent.click(await screen.findByRole("button", { name: "삭제" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("자기 계정은 삭제할 수 없습니다.");
+    expect(screen.queryByLabelText("이전받을 사용자")).not.toBeInTheDocument();
+  });
 });

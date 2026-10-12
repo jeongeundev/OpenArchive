@@ -31,6 +31,15 @@ CREDENTIAL_TOKEN = "token"
 PRINCIPAL_USER = "user"
 PRINCIPAL_SHARE = "share"
 
+# NIST SP 800-63B의 최소 길이. 구성 규칙은 두지 않는다 (ADR-040 2026-10-12 개정).
+MIN_PASSWORD_LENGTH = 8
+MAX_USERNAME_LENGTH = 64
+# 로그인이 실패 기록을 남기는 사용자명의 상한. 64자 제한 이전 계정이 있을 수 있어 넉넉히 둔다.
+MAX_LOGIN_USERNAME_LENGTH = 256
+# Microsoft Entra smart lockout 기본값: 연속 10회 실패면 60초 잠근다.
+MAX_LOGIN_FAILURES = 10
+LOGIN_LOCK_SECONDS = 60
+
 
 class UserAlreadyExists(Exception):
     """같은 사용자명의 계정이 이미 존재한다."""
@@ -45,6 +54,35 @@ class UserOwnsDocuments(Exception):
 
     def __init__(self):
         super().__init__("소유한 문서나 만든 폴더가 있어 삭제할 수 없습니다.")
+
+
+class CannotDeleteSelf(Exception):
+    """관리자가 자기 계정을 지우려 했다. 삭제는 관리자만 하므로 마지막 관리자도 이것으로 남는다."""
+
+    def __init__(self) -> None:
+        super().__init__("자기 계정은 삭제할 수 없습니다.")
+
+
+class PasswordTooShort(ValueError):
+    """새 비밀번호가 최소 길이보다 짧다."""
+
+    def __init__(self) -> None:
+        super().__init__(f"비밀번호는 {MIN_PASSWORD_LENGTH}자 이상이어야 합니다.")
+
+
+class InvalidUsername(ValueError):
+    """사용자명이 비었거나 앞뒤에 공백이 있거나 너무 길다."""
+
+    def __init__(self, message: str = "사용자명은 비어 있거나 앞뒤에 공백이 있을 수 없습니다.") -> None:
+        super().__init__(message)
+
+
+class LoginLocked(Exception):
+    """연속 실패로 그 사용자명의 로그인이 잠시 잠겼다. 비밀번호가 맞아도 거부한다."""
+
+    def __init__(self, retry_after: int) -> None:
+        super().__init__("로그인 시도가 너무 많습니다. 잠시 뒤 다시 시도하세요.")
+        self.retry_after = retry_after
 
 
 class AuthenticationFailed(Exception):
@@ -109,6 +147,32 @@ def verify_password(password: str, stored_hash: str) -> bool:
     return hmac.compare_digest(actual, expected)
 
 
+# 없는 사용자명에도 scrypt를 한 번 돌려 응답 시간으로 계정 존재가 드러나지 않게 한다.
+# 비용 파라미터가 실제 해시와 같아야 시간이 같다 — SCRYPT_*를 바꾸면 다시 만든다(테스트가 대조).
+# 모듈 import마다 scrypt를 돌리지 않으려고 미리 계산한 고정값이다.
+_DUMMY_PASSWORD_HASH = (
+    "scrypt$16384$8$1$nz7jsn9ublV8ot7b93wi3g==$"
+    "_tjPAEFnujJP-yQcAPpfpqRwloPQxLe_cjB49K-kiFXEy6MM_alNJW5YKp0sa-uIqgRb2cbzAU8aes4YM8Q1jQ=="
+)
+
+
+def _check_new_password(password: str) -> None:
+    if len(password) < MIN_PASSWORD_LENGTH:
+        raise PasswordTooShort
+
+
+def _check_username(username: str) -> None:
+    if (
+        not username
+        or username != username.strip()
+        or len(username) > MAX_USERNAME_LENGTH
+    ):
+        raise InvalidUsername
+    # 공유 주체의 예약 접두어 — 026의 CHECK가 막지만 그대로 두면 API가 500을 낸다 (ADR-044)
+    if username.startswith("share:"):
+        raise InvalidUsername("사용자명은 'share:'로 시작할 수 없습니다.")
+
+
 def hash_token(token: str) -> str:
     """원문 토큰의 sha256 hexdigest. salt를 쓰지 않아 인덱스로 조회된다."""
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
@@ -118,6 +182,8 @@ async def create_user(
     conn: psycopg.AsyncConnection, username: str, password: str, *, is_admin: bool = False
 ) -> dict:
     """관리자가 로그인 가능한 계정을 만든다."""
+    _check_username(username)
+    _check_new_password(password)
     cur = conn.cursor(row_factory=dict_row)
     try:
         await cur.execute(
@@ -180,6 +246,8 @@ async def delete_user(
         if row is None:
             raise UserNotFound
         owner = row[0]
+        if actor is not None and owner == actor:
+            raise CannotDeleteSelf
         if transfer_to is not None:
             if actor is not None and transfer_to == actor:
                 raise InvalidNewOwner("삭제를 수행하는 관리자 자신에게는 이전할 수 없습니다.")
@@ -236,6 +304,7 @@ async def change_password(
     new_password: str,
 ) -> None:
     """본인이 현재 비밀번호를 확인받고 바꾼다. 실패하면 아무것도 바꾸지 않는다."""
+    _check_new_password(new_password)
     stored = await (
         await conn.execute("SELECT password_hash FROM users WHERE id = %s", (user_id,))
     ).fetchone()
@@ -247,29 +316,91 @@ async def change_password(
 async def reset_password(
     conn: psycopg.AsyncConnection, username: str, new_password: str
 ) -> None:
-    """현재 비밀번호 없이 갈아끼우는 분실 복구 경로. 운영자 CLI 전용이다 (ADR-040)."""
+    """현재 비밀번호 없이 갈아끼우는 분실 복구 경로. 운영자 CLI 전용이다 (ADR-040).
+
+    로그인 잠금도 함께 푼다 — 운영자가 잠긴 계정을 열어 주는 경로다.
+    """
+    _check_new_password(new_password)
     row = await (
         await conn.execute("SELECT id FROM users WHERE username = %s", (username,))
     ).fetchone()
     if row is None:
         raise UserNotFound
     await _replace_password(conn, row[0], new_password)
+    await conn.execute("DELETE FROM login_attempts WHERE username = %s", (username,))
 
 
 async def authenticate_user(
     conn: psycopg.AsyncConnection, username: str, password: str
 ) -> dict:
-    """사용자명과 비밀번호를 검증한다. 모든 실패는 같은 예외로 표현한다."""
-    cur = conn.cursor(row_factory=dict_row)
-    await cur.execute(
-        "SELECT id, username, password_hash, is_admin FROM users WHERE username = %s",
-        (username,),
-    )
-    user = await cur.fetchone()
-    if user is None or not verify_password(password, user["password_hash"]):
+    """사용자명과 비밀번호를 검증한다. 모든 실패는 같은 예외로 표현한다.
+
+    잠긴 사용자명은 비밀번호를 보지 않고 `LoginLocked`로 거부한다. 같은 사용자명의 시도는
+    `login_attempts` 행 잠금으로 한 줄로 세운다 — 잠금 확인과 기록 사이에 동시 요청이 끼면
+    잠기기 직전·풀린 직후에 여러 요청이 비밀번호 검사를 받는다. 판정·기록은 자체 트랜잭션
+    블록에서 끝내고 예외는 그 뒤에 던진다(블록 안에서 던지면 실패 기록이 롤백된다).
+    호출부가 바깥 트랜잭션 안에서 부르면 블록은 savepoint이므로 호출부가 커밋해야 한다
+    (ADR-040 2026-10-12 개정).
+    """
+    if len(username) > MAX_LOGIN_USERNAME_LENGTH:
+        # 있을 수 없는 이름이다. 기록하면 btree 키 크기를 넘어 500이 난다 — 시간만 맞추고 거부한다.
+        verify_password(password, _DUMMY_PASSWORD_HASH)
+        raise AuthenticationFailed
+    async with conn.transaction():
+        await conn.execute(
+            "INSERT INTO login_attempts (username) VALUES (%s) ON CONFLICT (username) DO NOTHING",
+            (username,),
+        )
+        state = await (
+            await conn.execute(
+                """SELECT ceil(extract(epoch FROM locked_until - now()))::int
+                   FROM login_attempts WHERE username = %s FOR UPDATE""",
+                (username,),
+            )
+        ).fetchone()
+        remaining = state[0] if state is not None else None
+        if remaining is not None and remaining > 0:
+            locked_for = remaining
+        else:
+            locked_for = None
+            cur = conn.cursor(row_factory=dict_row)
+            await cur.execute(
+                "SELECT id, username, password_hash, is_admin FROM users WHERE username = %s",
+                (username,),
+            )
+            user = await cur.fetchone()
+            stored = _DUMMY_PASSWORD_HASH if user is None else user["password_hash"]
+            if not verify_password(password, stored) or user is None:
+                user = None
+                await _record_login_failure(conn, username)
+            else:
+                await conn.execute(
+                    "DELETE FROM login_attempts WHERE username = %s", (username,)
+                )
+    if locked_for is not None:
+        raise LoginLocked(locked_for)
+    if user is None:
         raise AuthenticationFailed
     del user["password_hash"]
     return user
+
+
+async def _record_login_failure(conn: psycopg.AsyncConnection, username: str) -> None:
+    """실패를 세고 문턱에 닿으면 잠근다. 호출부가 그 행의 잠금을 쥔 상태에서 부른다.
+
+    잠금이 풀린 뒤에도 카운터는 남아, 다음 실패에서 곧바로 다시 잠근다.
+    """
+    await conn.execute(
+        """
+        UPDATE login_attempts SET
+          failures = failures + 1,
+          locked_until = CASE WHEN failures + 1 >= %(limit)s
+                              THEN now() + make_interval(secs => %(secs)s)
+                              ELSE locked_until END
+        WHERE username = %(username)s
+        """,
+        {"username": username, "limit": MAX_LOGIN_FAILURES, "secs": LOGIN_LOCK_SECONDS},
+    )
 
 
 async def create_session(

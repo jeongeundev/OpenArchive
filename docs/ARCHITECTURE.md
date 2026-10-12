@@ -339,6 +339,8 @@ CREATE TABLE sessions (
   created_at timestamptz NOT NULL DEFAULT now(),
   expires_at timestamptz NOT NULL
 );
+-- login_attempts: 로그인 실패 제한 (044, ADR-040 2026-10-12 개정). users FK 없음 — 없는 사용자명도 같이 세고 잠근다
+CREATE TABLE login_attempts (username text PRIMARY KEY, failures integer NOT NULL DEFAULT 0 CHECK (failures >= 0), locked_until timestamptz);
 
 -- api_tokens: 프로그램용 장수명 위임 자격증명 (013, ADR-034)
 CREATE TABLE api_tokens (

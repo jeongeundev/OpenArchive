@@ -82,6 +82,7 @@ def test_owned_tables_match_the_migration_files():
         "group_members",
         "groups",
         "idempotency_keys",
+        "login_attempts",
         "sessions",
         "share_folders",
         "shares",
@@ -949,6 +950,93 @@ def test_reset_password_does_not_report_a_query_failure_as_a_connection_failure(
         main(["reset-password", "alice", "--dsn", clean_db])
 
     assert "연결하지 못했습니다" not in capsys.readouterr().out
+
+
+def test_create_user_refuses_a_short_password(migrated_db: str, monkeypatch, capsys):
+    """입력 오류는 빈 비밀번호와 같은 종료 코드 2다. 검사는 서비스가 한다 (ADR-040 개정)."""
+    monkeypatch.setenv("ADMIN_PASSWORD", "1234567")
+
+    exit_code = main(["create-user", "alice", "--dsn", migrated_db])
+
+    assert exit_code == 2
+    assert "비밀번호는 8자 이상이어야 합니다." in capsys.readouterr().out
+    assert accounts(migrated_db) == []
+
+
+def test_create_user_refuses_a_username_with_surrounding_spaces(
+    migrated_db: str, monkeypatch, capsys
+):
+    monkeypatch.setenv("ADMIN_PASSWORD", "long-enough")
+
+    exit_code = main(["create-user", " alice", "--dsn", migrated_db])
+
+    assert exit_code == 2
+    assert "사용자명은 비어 있거나 앞뒤에 공백이 있을 수 없습니다." in capsys.readouterr().out
+    assert accounts(migrated_db) == []
+
+
+def test_reset_password_refuses_a_short_password(migrated_db: str, monkeypatch, capsys):
+    _insert_user(migrated_db, "alice", "forgotten")
+    monkeypatch.setattr("openarchive.cli.getpass.getpass", lambda _prompt: "short")
+
+    exit_code = main(["reset-password", "alice", "--dsn", migrated_db])
+
+    assert exit_code == 2
+    assert "비밀번호는 8자 이상이어야 합니다." in capsys.readouterr().out
+    with psycopg.connect(migrated_db) as conn:
+        stored = conn.execute(
+            "SELECT password_hash FROM users WHERE username = 'alice'"
+        ).fetchone()[0]
+    assert verify_password("forgotten", stored)
+
+
+def test_reset_password_unlocks_a_locked_account(migrated_db: str, monkeypatch):
+    """잠긴 계정을 운영자가 풀어 주는 경로다 (ADR-040 개정)."""
+    _insert_user(migrated_db, "alice", "forgotten")
+    with psycopg.connect(migrated_db) as conn:
+        conn.execute(
+            "INSERT INTO login_attempts (username, failures, locked_until)"
+            " VALUES ('alice', 10, now() + interval '60 seconds')"
+        )
+    monkeypatch.setattr("openarchive.cli.getpass.getpass", lambda _prompt: "recovered")
+
+    assert main(["reset-password", "alice", "--dsn", migrated_db]) == 0
+
+    with psycopg.connect(migrated_db) as conn:
+        assert conn.execute("SELECT count(*) FROM login_attempts").fetchone() == (0,)
+
+
+def test_init_with_a_short_admin_password_finishes_without_an_admin(
+    clean_db: str, monkeypatch, capsys, tmp_path
+):
+    """빈 비밀번호와 같은 길 — 스키마는 적용됐으니 설치는 성공, 계정 생성은 다음 단계로."""
+    monkeypatch.setenv("ADMIN_PASSWORD", "1234567")
+
+    exit_code = main(["init", "--dsn", clean_db, "--yes", "--env-file", str(tmp_path / ".env")])
+
+    assert exit_code == 0
+    assert accounts(clean_db) == []
+    out = capsys.readouterr().out
+    assert "비밀번호는 8자 이상이어야 합니다." in out
+    assert "openarchive create-user admin --admin" in out
+
+
+def test_init_reports_an_invalid_admin_username(clean_db: str, monkeypatch, capsys, tmp_path):
+    """이름이 막힌 경우(이미 쓰는 이름)와 같은 길 — 다른 이름으로 다시 실행해야 한다."""
+    monkeypatch.setenv("ADMIN_PASSWORD", "long-enough")
+
+    exit_code = main(
+        [
+            "init", "--dsn", clean_db, "--yes", "--admin-username", " admin",
+            "--env-file", str(tmp_path / ".env"),
+        ]
+    )
+
+    assert exit_code == 1
+    assert accounts(clean_db) == []
+    out = capsys.readouterr().out
+    assert "사용자명은 비어 있거나 앞뒤에 공백이 있을 수 없습니다." in out
+    assert "--admin-username" in out
 
 
 def ready_documents(dsn: str, count: int) -> list:

@@ -88,9 +88,12 @@ export default function UsersPage(): React.ReactElement {
         <label className="text-sm text-neutral-400">사용자명
           <input className="mt-2 w-full rounded-lg border border-neutral-800 bg-neutral-900 px-4 py-3 text-neutral-300" onChange={(event) => setUsername(event.target.value)} required value={username} />
         </label>
-        <label className="text-sm text-neutral-400">비밀번호
-          <input className="mt-2 w-full rounded-lg border border-neutral-800 bg-neutral-900 px-4 py-3 text-neutral-300" onChange={(event) => setPassword(event.target.value)} required type="password" value={password} />
-        </label>
+        <div>
+          <label className="text-sm text-neutral-400">비밀번호
+            <input aria-describedby="new-user-password-hint" className="mt-2 w-full rounded-lg border border-neutral-800 bg-neutral-900 px-4 py-3 text-neutral-300" minLength={8} onChange={(event) => setPassword(event.target.value)} required type="password" value={password} />
+          </label>
+          <p className="mt-2 text-xs text-neutral-500" id="new-user-password-hint">8자 이상</p>
+        </div>
         <label className="flex items-center gap-2 text-sm text-neutral-300">
           <input checked={isAdmin} onChange={(event) => setIsAdmin(event.target.checked)} type="checkbox" /> 관리자
         </label>
@@ -106,7 +109,7 @@ export default function UsersPage(): React.ReactElement {
               <tr className="border-b border-neutral-800 last:border-0" key={user.id}>
                 <td className="px-4 py-3 text-white">{user.username}</td>
                 <td className="px-4 py-3 text-neutral-400">{user.is_admin ? "관리자" : "일반 사용자"}</td>
-                <td className="px-4 py-3 text-right"><button className="text-neutral-500 hover:text-neutral-300 disabled:text-neutral-600" disabled={working} onClick={() => void remove(user)} type="button">삭제</button>
+                <td className="px-4 py-3 text-right"><button className="text-neutral-500 hover:text-neutral-300 disabled:text-neutral-600" disabled={working || user.username === auth.username} onClick={() => void remove(user)} title={user.username === auth.username ? "자기 계정은 삭제할 수 없습니다." : undefined} type="button">삭제</button>
                   {transferUser === user.id ? <div className="mt-3 space-y-3 text-left">
                     <label className="block text-neutral-400">이전받을 사용자
                       <select className="mt-2 block rounded-lg border border-neutral-800 bg-neutral-900 px-4 py-3 text-neutral-300" disabled={working} value={transferTo} onChange={event => setTransferTo(event.target.value)}>

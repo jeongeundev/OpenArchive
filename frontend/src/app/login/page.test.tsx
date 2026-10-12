@@ -75,6 +75,27 @@ describe("로그인 화면", () => {
     expect(await screen.findByText("사용자명 또는 비밀번호를 확인하세요.")).toBeInTheDocument();
   });
 
+  it("시도가 너무 많아 잠기면(429) 서버가 준 안내를 보여준다", async () => {
+    const detail = "로그인 시도가 너무 많습니다. 잠시 뒤 다시 시도하세요.";
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(response({ authenticated: false, username: null, is_admin: false }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ detail }), {
+        status: 429,
+        headers: { "Content-Type": "application/json", "Retry-After": "60" },
+      }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<AuthProvider><LoginPage /></AuthProvider>);
+    fireEvent.change(await screen.findByRole("textbox", { name: "사용자명" }), {
+      target: { value: "alice" },
+    });
+    fireEvent.change(screen.getByLabelText("비밀번호"), { target: { value: "anything" } });
+    fireEvent.click(screen.getByRole("button", { name: "로그인" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(detail);
+    expect(screen.queryByText("사용자명 또는 비밀번호를 확인하세요.")).not.toBeInTheDocument();
+  });
+
   it("비밀번호를 바꾸고 밀려온 사람에게 그 사실을 알린다", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response({
       authenticated: false,

@@ -60,6 +60,8 @@ from openarchive.migrations import (
 from openarchive.services.answer import ASK_K, AnswerResult, gather_evidence, generate_answer
 from openarchive.services.audit import set_actor
 from openarchive.services.auth import (
+    InvalidUsername,
+    PasswordTooShort,
     UserAlreadyExists,
     UserNotFound,
     admin_exists,
@@ -592,7 +594,7 @@ async def _create_account(dsn: str, username: str, password: str, *, is_admin: b
 
 
 def _ensure_admin(dsn: str, username: str) -> bool | None:
-    """관리자가 있으면 True, 비밀번호가 없어 건너뛰면 False, 이름이 막혀 멈추면 None.
+    """관리자가 있으면 True, 비밀번호가 없거나 짧아 건너뛰면 False, 이름이 막혀 멈추면 None.
 
     이미 관리자가 있으면 묻지도 않는다 — init은 다시 실행하는 명령이다.
     """
@@ -612,6 +614,14 @@ def _ensure_admin(dsn: str, username: str) -> bool | None:
         print(f"'{username}'은 이미 일반 계정이 쓰고 있어 관리자로 만들지 않았습니다.")
         print("  --admin-username으로 다른 이름을 주어 다시 실행하십시오.")
         return None
+    except InvalidUsername as error:
+        print(f"{error} 관리자 계정을 만들지 않았습니다.")
+        print("  --admin-username으로 다른 이름을 주어 다시 실행하십시오.")
+        return None
+    except PasswordTooShort as error:
+        # 빈 비밀번호와 같은 길이다 — 설치는 성공으로 끝내고 계정 생성을 다음 단계로 넘긴다.
+        print(f"{error} 관리자 계정을 만들지 않았습니다.")
+        return False
     print(f"관리자 '{username}'을 만들었습니다.")
     return True
 
@@ -730,6 +740,9 @@ def run_reset_password(*, dsn: str | None, username: str) -> int:
     except UserNotFound:
         print(f"'{username}' 계정이 없습니다. 아무것도 바꾸지 않았습니다.")
         return 1
+    except PasswordTooShort as error:
+        print(f"{error} 아무것도 바꾸지 않았습니다.")
+        return 2
     print(f"'{username}'의 비밀번호를 재설정하고 그 계정의 로그인 세션을 모두 끊었습니다.")
     print("발급된 API 토큰은 그대로 유효합니다 — 폐기는 계정 설정 화면에서 합니다.")
     return 0
@@ -750,6 +763,9 @@ def run_create_user(*, dsn: str | None, username: str, is_admin: bool) -> int:
     except UserAlreadyExists as error:
         print(error)
         return 1
+    except (PasswordTooShort, InvalidUsername) as error:
+        print(f"{error} 계정을 만들지 않았습니다.")
+        return 2
     print(f"사용자 '{username}'을 생성했습니다.")
     return 0
 

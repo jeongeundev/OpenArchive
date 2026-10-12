@@ -156,6 +156,53 @@ describe("계정 설정 화면", () => {
     });
   });
 
+  it("새 비밀번호 칸은 8자 이상을 요구하고 그렇게 안내한다", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValueOnce(response(alice)).mockResolvedValueOnce(response(tokens)),
+    );
+
+    render(
+      <AuthProvider>
+        <SettingsPage />
+      </AuthProvider>,
+    );
+    const input = await screen.findByLabelText("새 비밀번호");
+
+    expect(input).toHaveAttribute("minLength", "8");
+    expect(input).toHaveAccessibleDescription("8자 이상");
+  });
+
+  it("새 비밀번호가 짧다는 400의 이유를 보여주고 로그인 화면으로 보내지 않는다", async () => {
+    replace.mockClear();
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(response(alice))
+        .mockResolvedValueOnce(response(tokens))
+        .mockResolvedValueOnce(response({ detail: "비밀번호는 8자 이상이어야 합니다." }, 400)),
+    );
+
+    render(
+      <AuthProvider>
+        <SettingsPage />
+      </AuthProvider>,
+    );
+    fireEvent.change(await screen.findByLabelText("현재 비밀번호"), {
+      target: { value: "old-secret" },
+    });
+    fireEvent.change(screen.getByLabelText("새 비밀번호"), {
+      target: { value: "new-secret" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "비밀번호 변경" }));
+
+    expect(
+      await screen.findByText("비밀번호는 8자 이상이어야 합니다."),
+    ).toBeInTheDocument();
+    expect(replace).not.toHaveBeenCalled();
+  });
+
   it("현재 비밀번호가 틀리면 백엔드가 준 이유를 보여준다", async () => {
     vi.stubGlobal(
       "fetch",

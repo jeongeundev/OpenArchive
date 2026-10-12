@@ -65,6 +65,7 @@ CORE_TABLES = {
     "document_links",
     "users",
     "sessions",
+    "login_attempts",
     "api_tokens",
     "shares",
     "document_files",
@@ -388,6 +389,47 @@ def test_auth_table_columns_and_constraints_match_the_account_model(
         ("users", "PRIMARY KEY", ["id"]),
         ("users", "UNIQUE", ["username"]),
     ]
+
+
+def test_login_attempts_are_keyed_by_username_without_a_user_reference(
+    conn: psycopg.Connection,
+):
+    """사용자명 기준이고 users FK가 없다 — 없는 사용자명도 같은 방식으로 세고 잠근다 (ADR-040 개정)."""
+    rows = conn.execute(
+        """
+        SELECT column_name, data_type, is_nullable, column_default
+        FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'login_attempts'
+        ORDER BY ordinal_position
+        """
+    ).fetchall()
+    assert rows == [
+        ("username", "text", "NO", None),
+        ("failures", "integer", "NO", "0"),
+        ("locked_until", "timestamp with time zone", "YES", None),
+    ]
+    constraints = conn.execute(
+        """
+        SELECT tc.constraint_type, array_agg(kcu.column_name::text ORDER BY kcu.ordinal_position)
+        FROM information_schema.table_constraints tc
+        JOIN information_schema.key_column_usage kcu
+          ON kcu.constraint_schema = tc.constraint_schema
+         AND kcu.constraint_name = tc.constraint_name
+        WHERE tc.table_schema = 'public' AND tc.table_name = 'login_attempts'
+          AND tc.constraint_type IN ('PRIMARY KEY', 'UNIQUE', 'FOREIGN KEY')
+        GROUP BY tc.constraint_name, tc.constraint_type
+        """
+    ).fetchall()
+    assert constraints == [("PRIMARY KEY", ["username"])]
+
+    conn.execute("INSERT INTO login_attempts (username) VALUES ('no-such-user')")
+    with pytest.raises(psycopg.errors.UniqueViolation):
+        conn.execute("INSERT INTO login_attempts (username) VALUES ('no-such-user')")
+
+
+def test_login_attempt_failures_cannot_go_negative(conn: psycopg.Connection):
+    with pytest.raises(psycopg.errors.CheckViolation):
+        conn.execute("INSERT INTO login_attempts (username, failures) VALUES ('alice', -1)")
 
 
 def test_username_is_unique(conn: psycopg.Connection):
