@@ -50,6 +50,32 @@ def test_key_hit_ignores_thousands_separators_and_accepts_alternative_spellings(
     assert missing["missing_keys"] == [["4천만 달러", "4,000만 달러", "40 million"]]
 
 
+def test_numeric_key_does_not_match_inside_a_longer_number():
+    """`8.6%`가 `18.6%` 안에서, `43개`가 `143개` 안에서 맞으면 틀린 값을 맞음으로 센다."""
+    for key, wrong, right in [
+        ("8.6%", "졸업생 18.6% 증가 [1]", "졸업생 8.6% 증가 [1]"),
+        ("43개", "143개 법령 [1]", "43개 법령 [1]"),
+        ("1.21392", "계수는 1.213925입니다 [1]", "계수는 1.21392입니다 [1]"),
+        ("37,505", "137,505명 [1]", "서울 37505명 [1]"),
+    ]:
+        item = {"answer_keys": [key]}
+        assert grade_answer(item, "answered", wrong, [_source(1)], {D1})["key_hit"] is False, key
+        assert grade_answer(item, "answered", right, [_source(1)], {D1})["key_hit"] is True, key
+    sources = [_source(1, content="전체 18.6% 증가", cited=False)]
+    assert grade_answer({"answer_keys": ["8.6%"]}, "answered", "답 [1]", sources, {D1})["keys_in_sources"] is False
+
+
+def test_whitespace_between_table_cells_still_separates_numbers():
+    """표 셀은 탭·공백으로만 나뉜다. 공백을 지운 뒤 경계를 보면 이웃 셀과 붙어 맞는 값을 놓친다."""
+    item = {"answer_keys": ["37,505", "1.21392"]}
+    sources = [_source(1, content="서울\t37505\t21152\n9월\t1.21392\t1.21169", cited=False)]
+
+    graded = grade_answer(item, "answered", "37,505 명, 1.21392 [1]", sources, {D1})
+
+    assert graded["keys_in_sources"] is True
+    assert graded["key_hit"] is True
+
+
 def test_key_hit_is_none_without_keys_or_answer():
     assert grade_answer({}, "answered", "답 [1]", [_source(1)], {D1})["key_hit"] is None
     assert grade_answer({"answer_keys": ["1"]}, "failed", None, [_source(1)], {D1})["key_hit"] is False
@@ -132,36 +158,40 @@ def test_percentile_uses_nearest_rank():
 
 def test_summary_keeps_answerable_and_no_answer_counts_apart():
     graded = [
-        {"status": "answered", "relevant": True, "key_hit": True, "keys_in_sources": True, "given_relevant": True,
+        {"status": "answered", "answerable": True, "key_hit": True, "keys_in_sources": True, "given_relevant": True,
          "cited_relevant": True, "refused": False, "leaks": [], "revision_cited": None,
          "latencies": [2.0, 4.0], "answers_differ": False},
-        {"status": "answered", "relevant": True, "key_hit": False, "keys_in_sources": True, "given_relevant": True,
+        {"status": "answered", "answerable": True, "key_hit": False, "keys_in_sources": True, "given_relevant": True,
          "cited_relevant": False, "refused": True, "leaks": [], "revision_cited": True,
          "latencies": [6.0, 8.0], "answers_differ": True},
-        {"status": "no_evidence", "relevant": False, "key_hit": None, "keys_in_sources": None, "given_relevant": None,
-         "cited_relevant": None, "refused": True, "leaks": [], "revision_cited": None,
+        {"status": "no_evidence", "answerable": False, "key_hit": None, "keys_in_sources": None,
+         "given_relevant": None, "cited_relevant": None, "refused": True, "leaks": [], "revision_cited": None,
          "latencies": [], "answers_differ": False},
-        {"status": "answered", "relevant": False, "key_hit": None, "keys_in_sources": None, "given_relevant": None,
+        {"status": "answered", "answerable": False, "key_hit": None, "keys_in_sources": None, "given_relevant": None,
          "cited_relevant": None, "refused": False, "leaks": ["비밀"], "revision_cited": None,
          "latencies": [10.0], "answers_differ": False},
-        {"status": "failed", "relevant": True, "key_hit": False, "keys_in_sources": False, "given_relevant": True,
+        {"status": "failed", "answerable": True, "key_hit": False, "keys_in_sources": False, "given_relevant": True,
          "cited_relevant": False, "refused": False, "leaks": [], "revision_cited": None,
          "latencies": [120.0], "answers_differ": False},
+        # 핵심값을 답하고 덧붙인 부분에서만 거절 문구를 쓴 답 — 맞은 답이지 거절 실패가 아니다
+        {"status": "answered", "answerable": True, "key_hit": True, "keys_in_sources": True, "given_relevant": True,
+         "cited_relevant": True, "refused": True, "leaks": [], "revision_cited": None,
+         "latencies": [], "answers_differ": False},
     ]
 
     summary = summarize(graded)
 
-    assert summary["queries"] == 5
-    assert summary["status_answered"] == 3
+    assert summary["queries"] == 6
+    assert summary["status_answered"] == 4
     assert summary["status_failed"] == 1
     assert summary["status_no_evidence"] == 1
-    assert summary["answerable"] == 3
-    assert summary["key_hits"] == 1
-    assert summary["key_graded"] == 3
-    assert summary["keys_in_sources"] == 2
+    assert summary["answerable"] == 4
+    assert summary["key_hits"] == 2
+    assert summary["key_graded"] == 4
+    assert summary["keys_in_sources"] == 3
     assert summary["model_misses"] == 1  # 근거에 있었는데 못 맞힘. 실패(타임아웃)는 근거에 없어 빠진다
-    assert summary["given_relevant"] == 3
-    assert summary["cited_relevant"] == 1
+    assert summary["given_relevant"] == 4
+    assert summary["cited_relevant"] == 2
     assert summary["false_refusals"] == 1
     assert summary["no_answer"] == 2
     assert summary["correct_refusals"] == 1
@@ -242,6 +272,42 @@ async def test_evaluator_runs_the_api_pipeline_and_resets_the_model_cache_before
     assert len(ok["latencies"]) == 3 and ok["answers_differ"] is False
     assert ok["manual"] == {"verdict": None, "note": None}
     assert secret["leaks"] == []
+    assert ok["answerable"] is True and secret["answerable"] is False
     # 생성마다 바로 앞에 초기화가 한 번. 근거 0건이면 모델을 부르지 않는다(서비스 계약).
     generations = len(ok["latencies"]) + len(secret["latencies"])
     assert events == ["reset", "generate"] * generations
+
+
+async def test_evaluator_grades_the_first_generation_and_flags_differing_repeats(migrated_db):
+    """반복의 답이 갈리면 어느 답을 채점했는지 정해져 있어야 한다 — 캐시 없이 처음 받은 답(첫 생성)이다."""
+    import psycopg
+    from conftest import insert_test_document, process_all_embedding_jobs
+    from scripts.eval_ask import evaluate
+
+    from openarchive.embeddings import FakeProvider
+
+    replies = iter(["13,784명입니다 [1]", f"{REFUSAL}.", f"{REFUSAL}."])
+
+    class DriftingProvider:
+        name = "drifting"
+
+        def generate(self, system, prompt):
+            return next(replies)
+
+    provider = FakeProvider()
+    async with await psycopg.AsyncConnection.connect(migrated_db, autocommit=True) as conn:
+        await insert_test_document(conn, title="접수", content="졸업생 13,784명이 늘었다.",
+                                   owner_id="alice", visibility="private", tags=["evaluation"])
+        await process_all_embedding_jobs(conn, provider)
+    evalset = {"queries": [{"id": "n", "query": "졸업생 13,784명이 늘었다", "relevant": ["접수"],
+                            "answer_keys": ["13,784명"]}]}
+
+    [graded] = await evaluate(
+        evalset, migrated_db, embedding_provider=provider, answer_provider=DriftingProvider(),
+        reset_cache=lambda: None, user_id="alice", tags=["evaluation"], context_chars=6000, repeats=3,
+    )
+
+    assert graded["answer"] == "13,784명입니다 [1]"
+    assert graded["key_hit"] is True and graded["refused"] is False
+    assert graded["answers_differ"] is True
+    assert graded["answerable"] is True
