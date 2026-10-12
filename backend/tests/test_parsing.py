@@ -280,9 +280,39 @@ def test_extract_text_reads_docx_simple_field_and_smart_tag_results() -> None:
         "<w:r><w:t xml:space=\"preserve\">표준 번호: </w:t></w:r>"
         '<w:fldSimple w:instr=" TITLE "><w:r><w:t>KS X 3255</w:t></w:r></w:fldSimple>'
         '<w:smartTag w:uri="urn:x" w:element="place"><w:r><w:t xml:space="preserve"> 서울</w:t></w:r></w:smartTag>'
+        '<w:hyperlink w:anchor="a"><w:r><w:t xml:space="preserve"> 링크</w:t></w:r></w:hyperlink>'
+        '<w:customXml w:element="x"><w:r><w:t xml:space="preserve"> 태그</w:t></w:r></w:customXml>'
+        '<w:dir w:val="rtl"><w:r><w:t xml:space="preserve"> 방향</w:t></w:r></w:dir>'
     )
 
-    assert extract_text(data, "docx") == "표준 번호: KS X 3255 서울"
+    assert extract_text(data, "docx") == "표준 번호: KS X 3255 서울 링크 태그 방향"
+
+
+def test_extract_text_reads_docx_ruby_base_without_its_guide() -> None:
+    # 윗주(`w:ruby`)는 본문 글자 위에 작게 단 읽기 안내다 — 본문 글자만 읽는다.
+    data = docx_with_paragraph(
+        "<w:r><w:ruby><w:rubyPr/><w:rt><w:r><w:t>じょうほう</w:t></w:r></w:rt>"
+        "<w:rubyBase><w:r><w:t>情報</w:t></w:r></w:rubyBase></w:ruby></w:r>"
+        "<w:r><w:t xml:space=\"preserve\"> 보호</w:t></w:r>"
+    )
+
+    assert extract_text(data, "docx") == "情報 보호"
+
+
+def test_extract_text_reads_docx_paragraphs_wrapped_in_block_custom_xml() -> None:
+    buf = io.BytesIO()
+    document = Document()
+    paragraph = document.add_paragraph("감싼 문단")._p
+    wrapper = parse_xml(
+        '<w:customXml xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
+        ' w:element="section"/>'
+    )
+    paragraph.addprevious(wrapper)
+    wrapper.append(paragraph)
+    document.add_paragraph("뒤 문단")
+    document.save(buf)
+
+    assert extract_text(buf.getvalue(), "docx") == "감싼 문단\n\n뒤 문단"
 
 
 def test_extract_text_reads_docx_inline_content_control_but_not_its_placeholder() -> None:
@@ -302,7 +332,7 @@ def test_extract_text_reads_docx_tracked_insertions_but_not_deletions() -> None:
     data = docx_with_paragraph(
         "<w:r><w:t xml:space=\"preserve\">계약 </w:t></w:r>"
         '<w:ins w:id="1" w:author="a"><w:r><w:t xml:space="preserve">변경 </w:t></w:r></w:ins>'
-        '<w:del w:id="2" w:author="a"><w:r><w:delText>삭제 </w:delText></w:r></w:del>'
+        '<w:del w:id="2" w:author="a"><w:r><w:t xml:space="preserve">삭제 </w:t></w:r></w:del>'
         '<w:moveTo w:id="3" w:author="a"><w:r><w:t xml:space="preserve">옮긴 </w:t></w:r></w:moveTo>'
         '<w:moveFrom w:id="4" w:author="a"><w:r><w:t xml:space="preserve">원래 자리 </w:t></w:r></w:moveFrom>'
         "<w:r><w:t>끝</w:t></w:r>"
