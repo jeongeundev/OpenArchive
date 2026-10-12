@@ -878,7 +878,7 @@ python3 opensql_remote_installer.py --mode 3node
    ```toml
    [general.etcd]
    enabled = true
-   endpoints = ["192.168.64.201:2379", "192.168.64.202:2379", "192.168.64.203:2379"]
+   endpoints = ["192.168.64.202:2379"]     # 자기 노드의 etcd 하나만 — node3는 .203 (아래 ⚠️)
    patroni_namespace = "/service"          # Patroni 키가 /service/opensql/… 에 있다
    patroni_scope = "opensql"
 
@@ -895,6 +895,11 @@ python3 opensql_remote_installer.py --mode 3node
    - ⚠️ **로컬 파일은 폴백 판이다 — 공유 설정의 `[pools.*]`와 늘 같게 둔다(`600`).** OpenProxy는 Patroni가 응답하지 않으면 로컬 파일로 대체해 뜨고, 그 판을 공유 설정에 저장할 수 있다 — 로컬 파일에 풀이 빠져 있으면 앱 접속이 끊긴다(#231, 원리는 OPENSQL_RESEARCH §20). 공유 설정을 바꾸면(`openproxy edit`) 두 파일도 같이 고친다. 노드 전용 절(`[general]`·`[general.etcd]`·`[general.virtual_router]`)은 남기고 `[pools.*]`를 etcd 판에서 가져오되 서버 역할은 `Auto`로 둔다
    - etcd 모드에서는 **파일 autoreload가 꺼진다.** 공유 설정 변경은 `openproxy edit` 또는 etcd 키로 한다
    - 역할 감지가 30초 폴링(`Patroni role refresh … 30 second interval`)에서 **etcd leader·members watch**로 바뀐다
+   - ⚠️ **`endpoints`에는 자기 노드의 etcd 하나만 둔다.** 문서 예시처럼 세 노드를 다 적으면 OpenProxy가 watch를 아무 etcd에나
+     붙이고(목록 순서와 무관), 그 노드가 **응답 없이 사라지면**(네트워크 분리·전원 차단) watch가 끊긴 줄 모른 채 매달린다.
+     Leader 분리 실측에서 Patroni는 33초에 승격했는데 OpenProxy는 그 뒤 71초 동안 이벤트를 받지 못해 쓰기가 111초 멈췄다.
+     자기 노드 하나로 바꾼 뒤 같은 회차가 30.7초다(OPENSQL_RESEARCH §21, OPENSQL_DEVIATIONS 1절). 이 줄은 노드 전용 절이라
+     공유 설정 키에 들어가지 않는다
    - 되돌리기: 백업 파일 복원 + 위 etcd 키 삭제 + 재시작
    - ❌ `session` + splitting은 쓰지 마라. 첫 쿼리로 서버가 고정돼 **한 연결에서 SELECT 후 쓰기가 10/10 실패**했다(로드밸런싱 문서의 경고와 일치)
 4. **systemd 등록** — 설치기 기본(`ENABLE_SERVICE=etcd`)은 etcd만 유닛으로 만든다. Patroni·OpenProxy가 `nohup` 맨 프로세스라 **재부팅한 노드가 클러스터에 돌아오지 않는다**

@@ -539,6 +539,8 @@ psql -c "SELECT active, pg_size_pretty(pg_current_wal_lsn() - restart_lsn) FROM 
 
 ```bash
 B="sudo -u barman -i /usr/local/bin/barman"
+$B show-server opensql | grep conninfo                          # 지금 Leader를 가리키는지 — 아니면 아래 한 줄
+$B config-switch opensql <지금 Leader의 Patroni 이름>            # 예: postgresql2
 $B receive-wal --stop opensql
 sudo -u barman ls /var/lib/barman/opensql/streaming/            # 갈라진 타임라인의 *.partial 확인
 sudo -u barman mv /var/lib/barman/opensql/streaming/<그 .partial> /var/lib/barman/<격리 디렉터리>/
@@ -546,6 +548,9 @@ sudo -u barman mv /var/lib/barman/opensql/streaming/<그 .partial> /var/lib/barm
 sudo -u barman ls /var/lib/barman/opensql/wals/ | grep history  # 새 타임라인의 .history가 보관됐는지
 $B check opensql                                                 # 전 항목 OK. 격리한 파일은 그 뒤 지운다
 ```
+
+분리가 풀릴 때 옛 Primary의 Patroni 콜백이 Agent를 **자기 쪽으로 다시 돌려놓는** 경우가 있다(10/12 두 회차 모두 —
+새 Leader의 콜백보다 늦게 도착했다). 그래서 conninfo부터 본다.
 
 실측(10/7)에서 슬롯이 분기점 앞(`restart_lsn`)을 가리키고 WAL이 남아 있어 공백 없이 이어졌다. 보관소의 갈라진 세그먼트는
 그대로 둔다 — 새 타임라인의 `.history`가 생기면 `latest` 복원이 그 세그먼트를 읽지 않는다. 지우려면 Barman 카탈로그를 손으로
