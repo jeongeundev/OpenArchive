@@ -263,3 +263,53 @@ def test_render_audit_csv_roundtrip_and_formula_safety(title):
     row["actor"] = row["actor_via"] = row["document_title"] = None
     [nulls] = list(csv.DictReader(io.StringIO(render_audit_csv([row])[1:])))
     assert nulls["actor"] == nulls["actor_via"] == nulls["document_title"] == ""
+
+
+def test_password_change_api_records_self(db_client, migrated_db):
+    login_as(db_client, "alice")
+    before = rows(migrated_db)
+    response = db_client.put(
+        "/api/auth/password",
+        json={"current_password": "test-password", "new_password": "새 비밀번호 여덟자"},
+    )
+    assert response.status_code == 200
+    assert rows(migrated_db)[len(before):] == [
+        ("password_changed", "alice", "session", None, {"user": "alice"}),
+    ]
+
+
+def test_user_token_api_records_issue_and_revoke(db_client, migrated_db):
+    token = issue_token(db_client, "alice", scope="read_write")
+    assert db_client.delete(f"/api/auth/tokens/{token['id']}").status_code == 204
+    issued, revoked = rows(migrated_db)[-2:]
+    assert issued[:3] == ("token_changed", "alice", "session")
+    assert revoked[:3] == ("token_changed", "alice", "session")
+    assert issued[4] == {"change": "issued", "owner": "alice", "token_name": "alice-read_write",
+                         "scope": "read_write", "expires_at": None}
+    assert revoked[4] == {**issued[4], "change": "revoked"}
+    assert token["token"] not in str(rows(migrated_db))
+
+
+def test_admin_rename_and_delete_of_others_folder_records_admin(db_client, migrated_db):
+    login_as(db_client, "alice")
+    response = db_client.post("/api/folders", json={"name": "앨리스 폴더"})
+    assert response.status_code == 201
+    folder = response.json()["id"]
+    assert rows(migrated_db)[-1] == ("folder_changed", "alice", "session", None, {
+        "change": "created", "folder_id": folder, "folder_name": "앨리스 폴더", "parent_id": None,
+    })
+    db_client.cookies.clear()
+    login_admin(db_client, migrated_db)
+    before = rows(migrated_db)
+    assert db_client.patch(f"/api/folders/{folder}", json={"name": "바뀐 폴더"}).status_code == 200
+    assert db_client.delete(f"/api/folders/{folder}").status_code == 204
+    assert rows(migrated_db)[len(before):] == [
+        ("folder_changed", "boss", "session", None, {
+            "change": "renamed", "folder_id": folder, "folder_name": "바뀐 폴더",
+            "old_name": "앨리스 폴더", "parent_id": None,
+        }),
+        ("folder_changed", "boss", "session", None, {
+            "change": "deleted", "folder_id": folder, "folder_name": "바뀐 폴더",
+            "parent_id": None,
+        }),
+    ]

@@ -722,6 +722,8 @@ async def _connect(dsn: str, **kwargs) -> psycopg.AsyncConnection:
 async def _reset(dsn: str, username: str, new_password: str) -> None:
     """해시 교체와 세션 무효화를 한 트랜잭션에 담는다. 둘 사이에서 끊기면 안 된다."""
     async with await _connect(dsn) as conn:
+        # 감사 기록을 「운영자 CLI」 경로로 남긴다 — 사람은 접속 롤로 구분된다 (ADR-055)
+        await set_actor(conn, actor=None, via="cli")
         await reset_password(conn, username, new_password)
 
 

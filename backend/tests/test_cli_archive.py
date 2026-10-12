@@ -603,8 +603,8 @@ def test_import_keep_folders_follows_the_folder_and_says_frontmatter_visibility_
     docs = placement(archive_db)
     assert all(d["folder"] == "팀" and d["follows"] for d in docs.values())
     assert "frontmatter의 visibility를 쓰지 않음 2건" in capsys.readouterr().out
-    # 생성 뒤에 범위를 바꾸지 않는다 — 열람 범위 변경은 세션 전용이다.
-    assert {row[0] for row in rows(archive_db)[len(before):]} == {"document_created"}
+    # 생성 뒤에 범위를 바꾸지 않는다 — 열람 범위 변경은 세션 전용이다. 폴더 「팀」 생성은 남는다(045).
+    assert {row[0] for row in rows(archive_db)[len(before):]} == {"folder_changed", "document_created"}
 
 
 def test_import_checks_existing_folders_inside_a_transaction_so_ha_reads_the_primary(

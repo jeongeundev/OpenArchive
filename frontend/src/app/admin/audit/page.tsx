@@ -31,6 +31,9 @@ const ACTION_LABEL: Record<AuditAction, string> = {
   original_replaced: "원본 교체",
   original_downloaded: "원본 내려받기",
   original_previewed: "원본 미리보기",
+  password_changed: "비밀번호 변경",
+  folder_changed: "폴더 변경",
+  token_changed: "토큰 변경",
 };
 
 const ACTIONS = Object.keys(ACTION_LABEL) as AuditAction[];
@@ -78,7 +81,21 @@ function actionDescription(entry: AuditEntry): string | null {
   }
   if (entry.action === "group_changed" || entry.action === "user_changed") {
     const subject = entry.action === "group_changed" ? `그룹 ${text(detail.group)}` : `사용자 ${text(detail.user)}`;
-    return `${subject} ${detail.change === "deleted" ? "삭제" : "생성"}`;
+    if (detail.change === "admin_granted") return `${subject} 관리자 권한 부여`;
+    if (detail.change === "admin_revoked") return `${subject} 관리자 권한 회수`;
+    if (detail.change === "deleted") return `${subject} 삭제`;
+    return `${subject} 생성${detail.is_admin === true ? "(관리자)" : ""}`;
+  }
+  if (entry.action === "password_changed") return `사용자 ${text(detail.user)}`;
+  if (entry.action === "folder_changed") {
+    const folder = `「${text(detail.folder_name)}」`;
+    if (detail.change === "renamed") return `폴더 「${text(detail.old_name)}」 → ${folder}`;
+    return `폴더 ${folder} ${detail.change === "deleted" ? "삭제" : "생성"}`;
+  }
+  if (entry.action === "token_changed") {
+    const owner = text(detail.owner);
+    const change = detail.change === "revoked" ? "폐기" : "발급";
+    return `토큰 「${text(detail.token_name)}」 ${change}${owner && owner !== entry.actor ? ` (소유자 ${owner})` : ""}`;
   }
   if (entry.action === "owner_changed") {
     return `${detail.kind === "folder" ? `폴더 「${text(detail.folder_name)}」 ` : ""}${text(detail.before)} → ${text(detail.after)}`;
@@ -188,8 +205,8 @@ export default function AuditPage(): React.ReactElement {
       <div>
         <h1 className="text-4xl font-semibold text-white">감사 로그</h1>
         <p className="mt-3 text-sm text-neutral-400">
-          문서와 열람 범위·외부 공유·그룹·사용자의 변경, 원본 내려받기·미리보기 기록입니다. 기록은 고치거나 지울 수 없습니다.
-          대상 문서는 제목만 보입니다.
+          문서와 열람 범위·폴더·외부 공유·그룹·사용자·비밀번호·API 토큰의 변경, 원본 내려받기·미리보기 기록입니다. 기록은 고치거나 지울 수 없습니다.
+          대상 문서의 제목과 폴더 이름만 보이고 본문은 보이지 않습니다.
         </p>
       </div>
 

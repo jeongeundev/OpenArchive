@@ -49,10 +49,11 @@ def test_admin_lists_entries_newest_first(db_client: TestClient, migrated_db: st
 
     assert response.status_code == 200
     items = response.json()["items"]
-    assert len(items) == 7
+    assert len(items) == 8
     assert [item["id"] for item in items] == sorted((item["id"] for item in items), reverse=True)
     assert all(set(item) == ENTRY_KEYS for item in items)
     assert [(item["action"], item["actor"], item["document_title"]) for item in items] == [
+        ("user_changed", None, None),
         ("user_changed", None, None),
         ("document_created", "bob", "셋째"),
         ("user_changed", None, None),
@@ -61,10 +62,13 @@ def test_admin_lists_entries_newest_first(db_client: TestClient, migrated_db: st
         ("document_created", "alice", "첫째"),
         ("user_changed", None, None),
     ]
-    assert items[1]["actor_via"] == "session"
-    assert items[1]["detail"] == {}
+    assert items[2]["actor_via"] == "session"
+    assert items[2]["detail"] == {}
+    # login_admin이 psql처럼 is_admin을 직접 올린 것도 남는다 (045).
     assert [item["detail"] for item in items if item["action"] == "user_changed"] == [
-        {"change": "created", "user": name} for name in ("boss", "bob", "alice")
+        {"change": "admin_granted", "user": "boss"},
+        *({"change": "created", "user": name, "is_admin": False}
+          for name in ("boss", "bob", "alice")),
     ]
     assert response.json()["next_before_id"] is None
 
@@ -106,9 +110,9 @@ def test_cursor_pages_without_gaps_or_duplicates(db_client: TestClient, migrated
     seed(db_client, migrated_db)
     all_ids = [item["id"] for item in db_client.get("/api/admin/audit").json()["items"]]
 
-    first = db_client.get("/api/admin/audit", params={"limit": 4}).json()
+    first = db_client.get("/api/admin/audit", params={"limit": 5}).json()
     second = db_client.get(
-        "/api/admin/audit", params={"limit": 4, "before_id": first["next_before_id"]}
+        "/api/admin/audit", params={"limit": 5, "before_id": first["next_before_id"]}
     ).json()
     third = db_client.get(
         "/api/admin/audit", params={"limit": 4, "before_id": all_ids[-1]}
@@ -123,9 +127,9 @@ def test_cursor_pages_without_gaps_or_duplicates(db_client: TestClient, migrated
 def test_last_partial_page_has_no_cursor(db_client: TestClient, migrated_db: str):
     seed(db_client, migrated_db)
 
-    page = db_client.get("/api/admin/audit", params={"limit": 4}).json()
+    page = db_client.get("/api/admin/audit", params={"limit": 5}).json()
     rest = db_client.get(
-        "/api/admin/audit", params={"limit": 4, "before_id": page["next_before_id"]}
+        "/api/admin/audit", params={"limit": 5, "before_id": page["next_before_id"]}
     ).json()
 
     assert len(rest["items"]) == 3

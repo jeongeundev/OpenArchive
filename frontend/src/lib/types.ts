@@ -340,7 +340,10 @@ export type AuditAction =
   | "original_previewed"
   | "share_changed"
   | "group_changed"
-  | "user_changed";
+  | "user_changed"
+  | "password_changed"
+  | "folder_changed"
+  | "token_changed";
 
 export type AuditActorVia = "session" | "token" | "mcp" | "cli" | "share" | "worker";
 

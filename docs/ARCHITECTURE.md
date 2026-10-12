@@ -512,12 +512,16 @@ CREATE TRIGGER trg_documents_content_changed
 | `trg_audit_share_grant_changed` | `document_grants` INSERT / DELETE — `share_id IS NOT NULL`, 연쇄 삭제 제외 (041) | `share_changed` · `{change: document_added/document_removed, share_id, share_name, owner}` · 대상 문서 id·제목 |
 | `trg_audit_share_folder_changed` | `share_folders` INSERT / DELETE — 공유·공유 소유자·폴더가 이미 없으면 제외 (043, #206) | `share_changed` · `{change: folder_added/folder_removed, share_id, share_name, owner, folder_id, folder_name}` · 대상 문서 NULL |
 | `trg_audit_share_token_changed` | `api_tokens` INSERT / DELETE — `share_id IS NOT NULL`, 연쇄 삭제 제외 (041) | `share_changed` · `{change: token_issued/token_revoked, share_id, share_name, owner, token_name}` |
-| `trg_audit_group_changed` / `trg_audit_user_changed` | `groups` / `users` INSERT / DELETE (041) | `group_changed` · `{change: created/deleted, group}` / `user_changed` · `{change: created/deleted, user}` |
+| `trg_audit_group_changed` / `trg_audit_user_changed` | `groups` / `users` INSERT / DELETE (041, 사용자 생성의 `is_admin`은 045) | `group_changed` · `{change: created/deleted, group}` / `user_changed` · `{change: created/deleted, user}` — 사용자 생성은 `is_admin`을 더한다 |
+| `trg_audit_admin_changed` | `users` UPDATE OF `is_admin`, 실제 값 변경만 (045) | `user_changed` · `{change: admin_granted/admin_revoked, user}` — API 경로가 없어도 psql 변경이 남는다 |
+| `trg_audit_password_changed` | `users` UPDATE OF `password_hash`, 실제 값 변경만 (045) | `password_changed` · `{user}` — 해시는 넣지 않는다. 본인 변경·운영자 `reset-password` 공통 |
+| `trg_audit_folder_created_deleted` / `trg_audit_folder_renamed` | `folders` INSERT / DELETE · UPDATE OF `name`, 실제 값 변경만 (045) | `folder_changed` · `{change: created/renamed/deleted, folder_id, folder_name, parent_id}`, 이름 변경은 `old_name`을 더한다. 열람 범위·소유자는 위 두 동작이 맡는다 |
+| `trg_audit_user_token_changed` | `api_tokens` INSERT / DELETE — `user_id IS NOT NULL`(사용자 토큰), 계정 삭제 연쇄 제외 (045) | `token_changed` · `{change: issued/revoked, owner, token_name, scope, expires_at}` — 토큰 원문·해시는 넣지 않는다 |
 | `trg_audit_log_reject_change` / `trg_audit_log_reject_truncate` | `audit_log` UPDATE·DELETE(행) / TRUNCATE(문) | 예외 — 거부 |
 
 - **부여 대상(사용자·그룹)의 추가·제거도 「열람 범위 변경」이다.** 「제한」 문서의 열람자는 부여 행으로 바뀐다. 그래서 `set_access`는 부여를 전량 교체하지 않고 **차이만** DELETE·INSERT한다 — 바뀌지 않은 대상이 「제거→추가」로 기록되지 않게.
 - **연쇄 삭제는 건너뛴다.** 문서·그룹·사용자를 지울 때 함께 지워지는 부여·구성원 행은 부모가 이미 없으므로 기록하지 않는다 — 실제 사건(문서 삭제)이 「부여 제거」 기록에 덮이지 않게. 그 대가로 그룹·사용자 삭제로 사라진 권한은 감사 로그에 없다(ADR-055 트레이드오프 6).
-- 공유 삭제는 `share_changed`의 `deleted` 1건, 사용자 삭제는 `user_changed` 1건만 남는다. 사용자 토큰 발급·폐기는 제외한다. 공유 부여는 `access_changed`가 아니라 `share_changed`다. `share_id`는 UUID 문자열, `owner`는 공유 주인 사용자명이고 공유 문서 부여 이외의 새 동작은 대상 문서 id·제목이 NULL이다.
+- 공유 삭제는 `share_changed`의 `deleted` 1건, 사용자 삭제는 `user_changed` 1건만 남는다(그 계정의 사용자 토큰 연쇄 폐기도 제외). 공유 부여는 `access_changed`가 아니라 `share_changed`다. `share_id`는 UUID 문자열, `owner`는 공유 주인 사용자명이고 공유 문서 부여 이외의 새 동작은 대상 문서 id·제목이 NULL이다.
 - 감사 행은 문서에 FK를 걸지 않고 제목·사용자명을 스냅샷으로 둔다. 문서를 지워도 그 문서의 기록과 제목이 남는다.
 
 **행위자 전달 흐름.** 진입점이 트랜잭션 안에서 `services/audit.py`의 `set_actor`를 부르면, 그것이 트랜잭션 범위 GUC 세 개(`openarchive.actor_id`·`actor_via`·`share_id`)를 `set_config(…, true)`로 건다. 트리거의 `audit_record()`가 그 값을 `NULLIF(current_setting(name, true), '')`로 읽는다 — HA 풀 백엔드에서는 값이 없을 때 NULL이 아니라 `''`이 온다.
