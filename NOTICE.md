@@ -11,7 +11,7 @@ OpenArchive는 MIT 라이선스(`LICENSE`)로 배포된다. 이 문서는 OpenAr
 | 구성 요소 | 버전 | 라이선스 | 본문(`backend/licenses/`) |
 |---|---|---|---|
 | Next.js(클라이언트 런타임) | 16.3.0 | MIT | `next-license.txt` |
-| React · React DOM · scheduler | 19.2.8 · 19.2.8 · 0.27.0 | MIT | `react-license.txt` · `react-dom-license.txt` · `scheduler-license.txt` |
+| React · React DOM · scheduler · react-server-dom-turbopack(RSC 클라이언트) | Next 16.3.0 동봉판(React `19.3.0-canary-cbb046ab-20260731`) — App Router는 `node_modules/react`가 아니라 `next/dist/compiled/react*`를 번들한다 | MIT | `react-license.txt`(react·react-server-dom-turbopack 공통) · `react-dom-license.txt` · `scheduler-license.txt` |
 | JSZip | 3.10.1 | MIT 또는 GPL-3.0-or-later 중 선택 — **OpenArchive는 MIT를 택한다** | `jszip-license.txt` |
 | pako (JSZip 의존) | 1.0.11 | MIT AND Zlib | `pako-license.txt` |
 | readable-stream (JSZip 의존) | 2.3.8 | MIT | `readable-stream-license.txt` |

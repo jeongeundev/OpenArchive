@@ -20,6 +20,9 @@ CHUNKS = sorted((ROOT / "backend" / "openarchive" / "static" / "_next" / "static
 BUNDLED = [
     # SWC가 넣는 모듈 상호 운용 도우미(`_interop_require_default`)
     ("r._=function(e){return e&&e.__esModule?e:{default:e}}", "@swc/helpers", "swc-helpers-license.txt"),
+    # App Router는 Next가 동봉한 React를 번들한다 — 버전은 node_modules/react가 아니라 이것이다
+    ("19.3.0-canary-cbb046ab-20260731", "19.3.0-canary-cbb046ab-20260731", "react-license.txt"),
+    ("createFromReadableStream", "react-server-dom-turbopack", "react-license.txt"),
     # Next.js `polyfill-nomodule` — 구형 브라우저용 폴리필 묶음
     ("zloirock", "core-js", "core-js-license.txt"),
     ("Network request failed", "whatwg-fetch", "whatwg-fetch-license.txt"),
