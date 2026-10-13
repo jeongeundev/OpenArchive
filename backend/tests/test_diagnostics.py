@@ -151,6 +151,33 @@ def test_diagnostics_lists_broken_links_without_exposing_a_reason(
     assert "reason" not in response.text
 
 
+def test_a_link_to_a_private_document_of_someone_else_counts_as_broken(
+    db_client: TestClient, migrated_db: str
+):
+    """볼 수 없는 대상으로 가는 링크는 대상이 없는 링크와 똑같이 깨진 링크로 보인다 (ADR-018)."""
+    source_id = _insert_document(
+        migrated_db, title="공개 출발", content="[[밥의 비공개]]", tags=["분류"]
+    )
+    _insert_document(
+        migrated_db,
+        title="밥의 비공개",
+        content="숨은 문서",
+        owner_id="bob",
+        visibility="private",
+        tags=["분류"],
+    )
+
+    as_alice = db_client.get("/api/diagnostics").json()["broken_links"]
+    db_client.post("/api/auth/logout")
+    login_as(db_client, "bob")
+    as_bob = db_client.get("/api/diagnostics").json()["broken_links"]
+
+    assert as_alice["items"] == [
+        {"source": {"document_id": source_id, "title": "공개 출발"}, "target_title": "밥의 비공개"}
+    ]
+    assert as_bob["count"] == 0
+
+
 def test_document_connected_only_to_invisible_private_document_looks_orphaned(
     db_client: TestClient, migrated_db: str
 ):

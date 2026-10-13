@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: MIT
 """위키링크 해석이 화면에 내놓는 순서를 고정한다.
 
-열람 범위 계약은 `test_visibility.py`가 본다. 여기서는 그 위에 얹힌 정렬을 본다 —
-정렬이 흔들리면 같은 문서를 두 번 열었을 때 링크와 백링크의 차례가 달라진다.
+주로 그 위에 얹힌 정렬을 본다 — 정렬이 흔들리면 같은 문서를 두 번 열었을 때 링크와 백링크의
+차례가 달라진다. 링크를 따라갈 대상에 열람 술어가 걸리는지도 여기서 직접 판별한다.
 """
 
 import psycopg
@@ -89,3 +89,19 @@ async def test_a_document_without_wikilinks_resolves_to_an_empty_list(links_conn
 
     assert await resolve_links(links_conn, document_id=document_id, user_id=None) == []
     assert await find_backlinks(links_conn, document_id=document_id, user_id=None) == []
+
+
+async def test_a_link_to_a_private_document_of_someone_else_stays_unresolved(links_conn):
+    """남의 비공개 문서 제목으로 링크해도 그 문서로 이어지지 않는다 — 존재가 드러나지 않는다 (ADR-018)."""
+    source_id = await insert_test_document(
+        links_conn, title="공개 출발", content="[[밥의 비공개]]", owner_id="alice"
+    )
+    hidden_id = await insert_test_document(
+        links_conn, title="밥의 비공개", content="숨은 문서", owner_id="bob", visibility="private"
+    )
+
+    as_alice = await resolve_links(links_conn, document_id=source_id, user_id="alice")
+    as_bob = await resolve_links(links_conn, document_id=source_id, user_id="bob")
+
+    assert [(link.title, link.document_id) for link in as_alice] == [("밥의 비공개", None)]
+    assert [(link.title, link.document_id) for link in as_bob] == [("밥의 비공개", hidden_id)]

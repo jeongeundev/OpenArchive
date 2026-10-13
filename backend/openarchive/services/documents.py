@@ -426,7 +426,12 @@ def _request_hash(kind: str, **fields: object) -> str:
 async def _replay(
     conn: psycopg.AsyncConnection, *, owner_id: str, key: str, request_hash: str
 ) -> dict | None:
-    """이미 기록된 키면 그 문서의 현재 요약을 돌려준다. 없으면 None이다."""
+    """이미 기록된 키면 그 문서의 현재 요약을 돌려준다. 없으면 None이다.
+
+    요약은 열람 술어를 거쳐 읽는다 — 휴지통으로 옮겼거나 소유권이 넘어가 이제 볼 수 없는
+    문서면 `DocumentNotFound`다. 처음 응답을 돌려주는 대신 지금 상태를 읽으므로, 술어 없이
+    읽으면 볼 수 없는 문서의 현재 제목·태그가 샌다 (ADR-018·047).
+    """
     row = await (
         await conn.execute(
             "SELECT request_hash, document_id FROM idempotency_keys"
@@ -439,8 +444,14 @@ async def _replay(
     if row[0] != request_hash:
         raise IdempotencyKeyReused("같은 Idempotency-Key로 다른 요청을 보낼 수 없습니다.")
     cur = conn.cursor(row_factory=dict_row)
-    await cur.execute(f"SELECT {SUMMARY_COLUMNS} FROM documents WHERE id = %s", (row[1],))
-    return await cur.fetchone()
+    await cur.execute(
+        f"SELECT {SUMMARY_COLUMNS} FROM documents d WHERE d.id = %(id)s AND {VISIBLE_TO_USER}",
+        {"id": row[1], "user": owner_id},
+    )
+    document = await cur.fetchone()
+    if document is None:
+        raise DocumentNotFound
+    return document
 
 
 async def _create_once(
