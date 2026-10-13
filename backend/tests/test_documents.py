@@ -571,6 +571,34 @@ async def test_a_concurrent_request_proceeds_when_the_first_one_rolls_back(
     assert row[0] == second["id"]
 
 
+async def test_the_same_key_for_a_trashed_document_answers_not_found(documents_conn):
+    """재전송이 휴지통 문서를 「만들어짐」으로 돌려주지 않는다 — 그 id는 조회하면 404다 (ADR-060)."""
+    request = {"title": "재시도", "content": "본문", "owner_id": "alice", "idempotency_key": "k-1"}
+    first = await create_text_document(documents_conn, **request)
+    await documents_conn.execute(
+        "UPDATE documents SET deleted_at = now() WHERE id = %s", (first["id"],)
+    )
+
+    with pytest.raises(DocumentNotFound):
+        await create_text_document(documents_conn, **request)
+    assert await document_count(documents_conn) == 1
+
+
+async def test_the_same_key_for_a_document_no_longer_visible_reveals_nothing(documents_conn):
+    """소유권이 넘어가 볼 수 없게 된 문서의 현재 제목·태그를 이전 소유자에게 돌려주지 않는다 (ADR-018)."""
+    request = {"title": "재시도", "content": "본문", "owner_id": "alice", "idempotency_key": "k-1"}
+    first = await create_text_document(documents_conn, **request)
+    await documents_conn.execute(
+        "UPDATE documents SET owner_id = 'bob', visibility = 'private', title = '새 소유자의 제목'"
+        " WHERE id = %s",
+        (first["id"],),
+    )
+
+    with pytest.raises(DocumentNotFound):
+        await create_text_document(documents_conn, **request)
+    assert await document_count(documents_conn) == 1
+
+
 async def test_create_without_a_key_records_nothing(documents_conn):
     """키가 없으면 지금처럼 동작한다 — 선택 헤더다."""
     request = {"title": "키 없음", "content": "본문", "owner_id": "alice"}
