@@ -35,7 +35,9 @@ def test_expected_header_set():
     assert {name.decode(): value.decode() for name, value in SECURITY_HEADERS} == EXPECTED
 
 
-@pytest.mark.parametrize("path", ["/", "/search", "/documents/00000000-0000-0000-0000-000000000000"])
+@pytest.mark.parametrize(
+    "path", ["/", "/search", "/documents/00000000-0000-0000-0000-000000000000"]
+)
 def test_static_pages(client: TestClient, path: str):
     response = client.get(path)
 
@@ -47,9 +49,13 @@ def test_static_pages(client: TestClient, path: str):
 def test_api_success_and_error(client: TestClient):
     assert_security_headers(client.get("/api/health"))
 
-    denied = client.get("/api/documents")
-    assert denied.status_code == 401
-    assert_security_headers(denied)
+    # DB를 타는 경로는 쓰지 않는다 — lifespan 없이 부르면 모듈 전역 풀이 관리 DSN으로
+    # 만들어져 뒤 테스트의 db_client가 그 풀을 물려받는다.
+    # 없는 /api 경로는 프론트 catch-all이 404.html로 받으므로 API 오류가 아니다.
+    rejected = client.post("/api/health")
+    assert rejected.status_code == 405
+    assert rejected.headers["content-type"] == "application/json"
+    assert_security_headers(rejected)
 
 
 def test_remote_mcp(client: TestClient):

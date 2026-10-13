@@ -21,6 +21,7 @@ from openarchive.api.groups import principals_router
 from openarchive.api.groups import router as groups_router
 from openarchive.api.retry import RetryOnUnavailable
 from openarchive.api.search import router as search_router
+from openarchive.api.security_headers import SecurityHeaders
 from openarchive.api.shares import router as shares_router
 from openarchive.api.system import router as system_router
 from openarchive.config import get_settings
@@ -61,6 +62,8 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="OpenArchive API", lifespan=lifespan)
 app.add_middleware(RetryOnUnavailable)
+# 나중에 더한 미들웨어가 바깥에 선다 — 재시도 미들웨어가 직접 만드는 503에도 헤더가 붙는다.
+app.add_middleware(SecurityHeaders)
 app.include_router(admin_router)
 app.include_router(admin_shares_router)
 app.include_router(groups_router)
