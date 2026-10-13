@@ -40,7 +40,7 @@ API로, AI 에이전트는 MCP로 같은 문서와 같은 권한 규칙 위에�
 | 항목 | 결과 | 출처 |
 |---|---|---|
 | HA 장애 전환 (3노드, 비동기 복제, 부하 중 주입, 2026-10-04) | 쓰기 중단: Primary 노드 사망 30.6~40.8초 · postmaster kill 14.1초 · switchover·VIP 이동·Leader 재부팅 10.1~10.3초 · Replica·etcd 장애(과반 상실 포함) 0초. 커밋 응답을 받은 업로드(원본 파일 포함)의 유실·중복은 전 회차 0 | [OpenSQL 환경 구축 §16](docs/SETUP_OPENSQL.md#16-ha-3노드-구성-110) |
-| Leader 네트워크 분리 (2026-10-12) | etcd `endpoints` 교정(#258) 전 111초 → 교정 뒤 30.7초, 유실 0 | [OpenSQL 조사 §21](docs/OPENSQL_RESEARCH.md#21-openproxy-etcd-watch가-사라진-노드에-매달린다-실측-2026-10-12) |
+| Leader 네트워크 분리 (2026-10-12) | etcd `endpoints` 교정(#258) 전 111초(업로드·검색 각 1건이 재시도 예산을 넘겨 실패) → 교정 뒤 30.7초(실패 0), 두 회차 모두 유실 0 | [OpenSQL 조사 §21](docs/OPENSQL_RESEARCH.md#21-openproxy-etcd-watch가-사라진-노드에-매달린다-실측-2026-10-12) |
 | 백업·복원 (Barman, 2026-10-04) | PITR: 복원본이 복원 지점과 같음(지점 뒤에 지운 문서 5건이 되살아나고 지점 뒤 업로드 10건은 없음), 쓰기 가능까지 161초 · 전체 복원: Barman 수신을 끊기 전 응답 성공한 업로드 120건 유실 0, 쓰기 가능까지 166초 | [운영 가이드 「복원 재현」](docs/OPERATIONS.md#복원-재현--scriptsdr_restorepy) |
 | 원본-벡터 정합성 | 위 HA 장애 전 회차에서 텍스트 버전과 청크 버전이 어긋난 문서 수가 0으로 수렴 | [OpenSQL 환경 구축 §16](docs/SETUP_OPENSQL.md#16-ha-3노드-구성-110) |
 | 검색 품질 (형식별 실문서 10개·질문 24개, #167) | 정답 문서 첫 결과 18/20 · 상위 5 20/20 · MRR 0.950 · 다른 계정의 비공개 문서 누출 0 | [검색 품질 검증 #167](docs/SEARCH_QUALITY_VALIDATION.md#형식별-실문서-기준선-167) |

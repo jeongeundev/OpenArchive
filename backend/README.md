@@ -31,7 +31,7 @@ EMBEDDING_PROVIDER=local openarchive serve
 |---|---|
 | `openarchive init` | 점검 → 스키마 적용 → 첫 관리자 생성 |
 | `openarchive serve` | API + 임베딩 워커 + 웹 화면 |
-| `openarchive import <폴더>` · `export <폴더>` · `search "…" --user` · `ask "…" --user` | 셸에서 문서를 넣고, 빼고, 찾고, 근거로 답합니다(`ask`는 `ANSWER_PROVIDER`가 켜져 있어야 함) |
+| `openarchive import <폴더> --user <계정>` · `export <폴더> --user <계정>` · `search "…" --user <계정>` · `ask "…" --user <계정>` | 셸에서 문서를 넣고, 빼고, 찾고, 근거로 답합니다(`ask`는 `ANSWER_PROVIDER`가 켜져 있어야 함) |
 | `openarchive demo --user <계정>` | 예제 문서를 넣어 봅니다 |
 | `openarchive create-user` · `reset-password` | 계정 추가 · 잊은 비밀번호 재설정 |
 | `openarchive rebuild-edges` · `rebuild-previews` · `reextract <문서 ID>\|--all` | 관계 전체 재계산 · 미리보기 변환 다시 걸기 · 보관된 원본에서 텍스트 다시 추출 |
