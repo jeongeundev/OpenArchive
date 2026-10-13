@@ -31,8 +31,19 @@ EMBEDDING_PROVIDER=local openarchive serve
 |---|---|
 | `openarchive init` | 점검 → 스키마 적용 → 첫 관리자 생성 |
 | `openarchive serve` | API + 임베딩 워커 + 웹 화면 |
-| `openarchive import <폴더>` · `export <폴더>` · `search "…"` | 셸에서 문서를 넣고, 빼고, 찾습니다 |
+| `openarchive import <폴더> --user <계정>` · `export <폴더> --user <계정>` · `search "…" --user <계정>` · `ask "…" --user <계정>` | 셸에서 문서를 넣고, 빼고, 찾고, 근거로 답합니다(`ask`는 `ANSWER_PROVIDER`가 켜져 있어야 함) |
+| `openarchive demo --user <계정>` | 예제 문서를 넣어 봅니다 |
 | `openarchive create-user` · `reset-password` | 계정 추가 · 잊은 비밀번호 재설정 |
+| `openarchive rebuild-edges` · `rebuild-previews` · `reextract <문서 ID>\|--all` | 관계 전체 재계산 · 미리보기 변환 다시 걸기 · 보관된 원본에서 텍스트 다시 추출 |
+
+위 명령은 서버 셸의 운영자 도구로 DB(`DATABASE_URL` 또는 `--dsn`)에 직접 붙습니다. 사용자는 웹에서 발급한
+API 토큰으로 REST에만 붙는 사용자 명령을 씁니다 — DB 접속 정보는 쓰지 않습니다.
+
+| 사용자 명령 | 하는 일 |
+|---|---|
+| `openarchive login --url <서버> --token <토큰>` · `whoami` | 로그인 · 로그인한 사용자와 토큰 범위 확인 |
+| `openarchive doc list` · `show` · `download` · `upload` · `edit` · `restore` · `tag` · `delete` · `trash` | 문서 목록·텍스트 보기·원본 내려받기·올리기·텍스트 바꾸기·버전 되돌리기·태그·휴지통 |
+| `openarchive search "…"` · `ask "…"` (`--user` 없이) | 로그인한 토큰의 열람 범위로 찾고 답합니다 |
 
 ## 문서
 

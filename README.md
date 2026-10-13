@@ -33,6 +33,26 @@ API로, AI 에이전트는 MCP로 같은 문서와 같은 권한 규칙 위에�
 
 ---
 
+## 검증 요약
+
+아래는 이미 문서에 기록한 측정값의 요약입니다. 모두 관측값이며 보장이 아닙니다 — 조건과 한계는 각 출처에 있습니다.
+
+| 항목 | 결과 | 출처 |
+|---|---|---|
+| HA 장애 전환 (3노드, 비동기 복제, 부하 중 주입, 2026-10-04) | 쓰기 중단: Primary 노드 사망 30.6~40.8초 · postmaster kill 14.1초 · switchover·VIP 이동·Leader 재부팅 10.1~10.3초 · Replica·etcd 장애(과반 상실 포함) 0초. 커밋 응답을 받은 업로드(원본 파일 포함)의 유실·중복은 전 회차 0 | [OpenSQL 환경 구축 §16](docs/SETUP_OPENSQL.md#16-ha-3노드-구성-110) |
+| Leader 네트워크 분리 (2026-10-12) | etcd `endpoints` 교정(#258) 전 111초(업로드·검색 각 1건이 재시도 예산을 넘겨 실패) → 교정 뒤 30.7초(실패 0), 두 회차 모두 유실 0 | [OpenSQL 조사 §21](docs/OPENSQL_RESEARCH.md#21-openproxy-etcd-watch가-사라진-노드에-매달린다-실측-2026-10-12) |
+| 백업·복원 (Barman, 2026-10-04) | PITR: 복원본이 복원 지점과 같음(지점 뒤에 지운 문서 5건이 되살아나고 지점 뒤 업로드 10건은 없음), 쓰기 가능까지 161초 · 전체 복원: Barman 수신을 끊기 전 응답 성공한 업로드 120건 유실 0, 쓰기 가능까지 166초 | [운영 가이드 「복원 재현」](docs/OPERATIONS.md#복원-재현--scriptsdr_restorepy) |
+| 원본-벡터 정합성 | 위 HA 장애 전 회차에서 텍스트 버전과 청크 버전이 어긋난 문서 수가 0으로 수렴 | [OpenSQL 환경 구축 §16](docs/SETUP_OPENSQL.md#16-ha-3노드-구성-110) |
+| 검색 품질 (형식별 실문서 10개·질문 24개, #167) | 정답 문서 첫 결과 18/20 · 상위 5 20/20 · MRR 0.950 · 다른 계정의 비공개 문서 누출 0 | [검색 품질 검증 #167](docs/SEARCH_QUALITY_VALIDATION.md#형식별-실문서-기준선-167) |
+| 검색 성능 (20,000 청크, 2026-10-03) | 15개 계획 모두 HNSW 사용, 제품 SQL 중앙값 광범위 351ms · 태그 142ms · 유형 110ms. iterative_scan(10/6)·클라이언트 바인딩(10/7) 전 측정 | [성능 검증](docs/PERFORMANCE_VALIDATION.md#20000-청크의-검색) |
+| OpenProxy — `BEGIN READ ONLY` | `BEGIN READ ONLY` 트랜잭션 안의 SELECT는 Replica로 간다(10회 중 10회, 2026-09-26). 검색은 plain `BEGIN`으로 Primary에서 읽는다 | [OpenSQL 조사 §6](docs/OPENSQL_RESEARCH.md#6-읽기쓰기-분리와-복제-지연-확정--이-프로젝트에-결정적) |
+| OpenProxy — 세션 상태 초기화 | 풀 백엔드를 넘길 때 `RESET ALL`만 하고 `DISCARD ALL`은 하지 않아 임시 테이블·`LISTEN` 등록이 다음 클라이언트로 샌다. 임시 테이블을 쓰지 않는다 | [OpenSQL 조사 §5-2](docs/OPENSQL_RESEARCH.md#5-2-실측--백엔드를-넘길-때-세션-상태를-부분만-초기화한다-실측-2026-08-05) |
+| OpenProxy — 서버 명령문 누적 × assert 빌드 | 트랜잭션 안 `select 1`이 4ms → 126ms. 앱은 파라미터를 클라이언트에서 바인딩한다 | [OpenSQL 조사 §18](docs/OPENSQL_RESEARCH.md#18-openproxy-서버-명령문-누적--assert-빌드--쓸수록-모든-문장이-느려진다-실측-2026-10-07) |
+| OpenProxy — 콜드 부팅 | 꺼진 클러스터를 켤 때 etcd 공유 설정을 불완전한 판으로 덮어써 VIP 접속이 끊겼다. Patroni가 모일 때까지 기다리게 했다(#231) | [OpenSQL 조사 §20](docs/OPENSQL_RESEARCH.md#20-openproxy-콜드-부팅--공유-설정-덮어쓰기-실측-2026-10-11) |
+| OpenProxy — etcd watch | 응답 없이 사라진 etcd 노드에 watch가 매달려 쓰기가 111초 멈췄다. `endpoints`를 자기 노드 하나로 둔다(#258) | [OpenSQL 조사 §21](docs/OPENSQL_RESEARCH.md#21-openproxy-etcd-watch가-사라진-노드에-매달린다-실측-2026-10-12) |
+
+---
+
 ## 주요 기능
 
 | 기능 | 설명 |
@@ -327,8 +347,8 @@ claude mcp add --transport http openarchive http://<서버>:8000/mcp --header "A
 - `/settings` — 내 비밀번호 변경 · API 토큰 발급·폐기 · 외부 공유와 읽기 전용 공유 토큰 관리.
   토큰 원문은 발급 직후 한 번만 보입니다.
 - `/admin/groups` — 그룹 생성·삭제와 구성원 관리. 관리자 전용이며 그룹 열람 부여는 문서 소유자가 합니다.
-- `/admin/users` · `/admin/status` — 사용자 발급 · 시스템 상태(임베딩 작업 카운터, 원본과 어긋난
-  문서 수). 관리자 전용이며, 관리자라도 남의 비공개 문서는 볼 수 없습니다.
+- `/admin/users` · `/admin/status` — 사용자 발급 · 시스템 상태(임베딩 작업 카운터, 텍스트와 청크 버전이
+  어긋난 문서 수). 관리자 전용이며, 관리자라도 남의 비공개 문서는 볼 수 없습니다.
 - `/admin/audit` · `/admin/shares` — 감사 로그 조회·CSV 내보내기 · 외부 공유 전수 조회와 토큰 비상 폐기.
   관리자 전용입니다.
 - `openarchive reset-password <user>` — 비밀번호를 잊은 계정을 서버에서 재설정. 웹에는 이 경로를
@@ -398,7 +418,9 @@ Replica·etcd 장애(과반 상실 포함) 0초였고, 커밋 응답을 받은 �
 replica에 닿지 않은 커밋은 사라질 수 있고, 복구 구간에는 쓰기가 멈춥니다(재시도가 그 구간을 흡수할
 뿐 "무중단"이 아닙니다). 회차별 표와 재현 명령은 [OpenSQL 환경 구축 §16](docs/SETUP_OPENSQL.md)
 「최종 구성 장애 검증」에, 공식 구성과 다르게 둔 설정은
-[공식 구성과 다른 점](docs/OPENSQL_DEVIATIONS.md)에 있습니다.
+[공식 구성과 다른 점](docs/OPENSQL_DEVIATIONS.md)에 있습니다. 위 수치는 #231·#258 교정(10/11·10/12)
+**전** 구성에서 잰 것입니다 — #258 교정 전(etcd `endpoints`에 세 노드) 구성으로 10/12에 Leader 네트워크
+분리를 다시 재니 쓰기가 111초 멈췄고, 교정 뒤 같은 분리는 30.7초였습니다([OpenSQL 조사 §21](docs/OPENSQL_RESEARCH.md#21-openproxy-etcd-watch가-사라진-노드에-매달린다-실측-2026-10-12)).
 
 이 그림을 떠받치는 설계 결정은 셋입니다 — 워커의 **기동 방식은 정합성의 일부가 아니고**(5초 폴링이
 주 경로, `NOTIFY`는 최적화), **검색은 필터·벡터 유사도·관계 확장까지 단일 SQL**이며, **볼 수 없는

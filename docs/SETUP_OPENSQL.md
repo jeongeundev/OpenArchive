@@ -1035,6 +1035,8 @@ VIP·node2·node3 직접 모두 같은 결과다.
 
 ### 최종 구성 장애 검증 (#165, 2026-10-04) — 현재 수치의 정본
 
+> **단서 — 이 표는 #231(Patroni 대기 드롭인, 10/11)·#258(OpenProxy etcd `endpoints`를 자기 노드 하나로, 10/12) 교정 전 구성에서 잰 것이다.** #258 교정 전(`endpoints`에 세 노드) 구성으로 10/12에 Leader 네트워크 분리를 다시 재니 쓰기가 **111초** 멈췄다 — 분리·전원 차단 회차는 OpenProxy의 etcd watch가 어느 노드에 붙어 있었는지에 따라 갈린다. 교정 뒤 실측(같은 분리 30.7초)과 원인은 [OPENSQL_RESEARCH §21](OPENSQL_RESEARCH.md#21-openproxy-etcd-watch가-사라진-노드에-매달린다-실측-2026-10-12)에 있다. 아래 수치는 바꾸지 않았다.
+
 **대상 구성**: 이 절 위 「설치 후 교정」을 모두 적용한 상태 — 비동기 복제(교정 5)·`failsafe_mode: true`(설치기 기본)·서버 keepalive(교정 6)·`idle_in_transaction_session_timeout` 0(공식값)·앱 전용 비슈퍼유저 롤 `openarchive` + `ScramSha256`·OpenProxy etcd 공유 설정(`Transaction` 풀·읽기/쓰기 분리·`use_patroni`·`worker_threads 2`)·watchdog 꺼짐. 측정 직후 `patronictl show-config`·etcd의 OpenProxy 설정·`pg_settings`로 위 값을 다시 확인했다. 앱은 main `0cb629b`(10/3 회차는 `a00f983`, 9/30 회차는 #150 적용 직후). 세 시점 사이에 워커·`db.py`를 포함한 앱 코드가 바뀌었으므로(#153~#171) 9/30·10/3 회차는 같은 클러스터 구성의 보조 증거로만 읽는다 — 모든 시나리오를 `0cb629b`로 다시 잰 것이 h165 회차다. 임베딩은 BGE-M3(`EMBEDDING_PROVIDER=local`), 측정 중 Mac의 다른 도커 컨테이너는 껐다(9/30 회차만 켜져 있었다).
 
 **판정**(`scripts/ha_failover.py`, 위반 하나면 종료 코드 1): 업로드는 텍스트 API와 **파일 업로드를 번갈아** 보낸다. 커밋 응답(2xx)을 받은 업로드가 전부 있고 본문 sha256이 같은가(유실 0) · 파일은 **원본 판(`document_files`)이 1판 하나로 보낸 바이트와 같은가**(DB 계산 sha256·재계산 둘 다) · 문서 버전이 1에 머물렀는가 · 실패 응답인데 남은 행·중복 행이 없는가 · 백오프(웹 UI·MCP와 같은 규칙) 뒤 사용자 가시 실패 0 · 원시 500 0 · error 잡 0 · 정합성 카운터 0 수렴 · 3노드 5432 직결 다이제스트(본문·청크 수·원본 바이트) 일치.
