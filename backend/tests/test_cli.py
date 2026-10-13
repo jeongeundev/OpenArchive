@@ -110,6 +110,15 @@ def test_init_is_idempotent_on_an_already_prepared_database(migrated_db: str, tm
     assert applied_migrations(migrated_db) == before
 
 
+def test_init_names_the_consistency_count_by_text_version(migrated_db: str, tmp_path, capsys):
+    """정합성 지표는 텍스트 버전과 청크 버전을 비교한다 — 원본 파일의 판과 헷갈리게 부르지 않는다 (ADR-046)."""
+    main(["init", "--dsn", migrated_db, "--yes", "--env-file", str(tmp_path / ".env")])
+
+    output = capsys.readouterr().out
+    assert "텍스트와 청크 버전이 어긋난 문서 0건" in output
+    assert "원본과 어긋난" not in output
+
+
 def test_init_preserves_existing_documents(migrated_db: str, tmp_path):
     """이미 쓰고 있는 설치에 다시 돌려도 데이터가 사라지지 않는다."""
     with psycopg.connect(migrated_db) as conn:
