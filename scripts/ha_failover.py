@@ -949,6 +949,13 @@ def main() -> int:
         )
         p.add_argument("--out", default="ha-runs")
         p.add_argument(
+            "--no-effect-check",
+            dest="effect_check",
+            action="store_false",
+            help="주입이 클러스터를 바꾸지 않는 측정(DR 수신 끊기 등) — 주입 효과 확인을 끈다."
+            " report에서는 이 플래그 없이 찍은 옛 기록에도 적용된다",
+        )
+        p.add_argument(
             "--api", default=os.environ.get("HA_API", "http://127.0.0.1:18021/api")
         )
     r = sub.choices["run"]
@@ -956,12 +963,6 @@ def main() -> int:
     r.add_argument("--settle", type=float, default=900)
     r.add_argument("--inject")
     r.add_argument("--inject-at", type=float, default=40)
-    r.add_argument(
-        "--no-effect-check",
-        dest="effect_check",
-        action="store_false",
-        help="주입이 클러스터를 바꾸지 않는 측정(DR 수신 끊기 등) — 주입 효과 확인을 끈다",
-    )
     r.add_argument(
         "--blob", action="store_true", help="20MB bytea 연속 쓰기로 복제 지연을 키운다"
     )
@@ -989,6 +990,8 @@ def main() -> int:
                 with psycopg.connect(dsn, **target.conn_kwargs()) as conn:
                     conn.execute("DROP TABLE IF EXISTS _ha_blob")
     summary, lines = summarize(path, target)
+    if not a.effect_check:  # report: meta에 effect_check가 없는 옛 기록(10/13 이전)도 끌 수 있게
+        summary["injection"] = None
     problems = judge(summary)
     result, code = verdict(problems, summary["injection"])
     print("\n".join(lines))

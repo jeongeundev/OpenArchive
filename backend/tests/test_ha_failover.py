@@ -582,9 +582,10 @@ def test_injection_without_any_observed_change_is_unconfirmed():
 @pytest.mark.parametrize(
     ("extra", "signal"),
     [
+        # kill -9 — 같은 노드·같은 TL로 재기동한다. 쓰기 중단과 멤버 상태로 잡힌다(실측 h165-s1)
         ([probe(20.0, ok=False), probe(30.0)], "쓰기 중단"),
         ([probe(30.0, server="10.0.0.2", tl=8)], "primary"),
-        ([probe(30.0, tl=8)], "primary"),  # kill -9 — 같은 노드 재기동이라도 TL이 바뀌면 관측된다
+        ([probe(30.0, tl=8)], "primary"),  # 같은 primary라도 TL만 바뀌면 관측된다
         ([ev("cluster", 30.0, **AFTER)], "Patroni"),
         (
             [ev("cluster", 30.0, members=BEFORE["members"][:2])],
