@@ -671,7 +671,7 @@ DATABASE_URL="…@127.0.0.1:15433/openarchive" openarchive serve --port 8011 &  
 $PY scripts/dr_restore.py converge dr1 --dsn "…@127.0.0.1:15433/openarchive"    # 처리 중이던 잡이 회수된다
 
 # 전체 복원 RPO — 부하 중 +60초에 Barman 수신을 끊고, 끊은 채로 받은 WAL 끝까지 복원한다
-$PY scripts/ha_failover.py run dr1-rpo --nodes $N --load 100 --inject-at 60 \
+$PY scripts/ha_failover.py run dr1-rpo --nodes $N --load 100 --inject-at 60 --no-effect-check \
     --inject "$PWD/backend/.venv/bin/python $PWD/scripts/dr_restore.py freeze"
 $PY scripts/dr_restore.py restore dr1 full                         # thaw보다 먼저 — 반대면 끊은 뒤 WAL도 받는다
 $PY scripts/dr_restore.py rpo ha-runs/dr1-rpo.jsonl --dsn "…@127.0.0.1:15433/openarchive"
@@ -682,6 +682,8 @@ $PY scripts/dr_restore.py drop                                     # 복원 인�
 - `restore`는 늘 `--target-tli latest --get-wal`로 복원하고, 대상 지점이 있으면 `--target-action promote`를 붙입니다.
   격리 설정(「복원 절차」 2번)을 덧붙여 띄우고, 쓰기 가능이 될 때까지의 시간을 `ha-runs/dr-<label>.json`에 남깁니다.
   대상 디렉터리는 이름이 `restore`로 시작해야 합니다 — 복원 전에 지우기 때문입니다.
+- `ha_failover.py`는 주입 뒤 클러스터 변화가 없으면 「주입 미확인」으로 판정하는데, Barman 수신 끊기는 클러스터를
+  바꾸지 않으므로 `--no-effect-check`로 그 확인을 끕니다 — 끊기가 걸렸는지는 `rpo`가 봅니다.
 - `verify`·`rpo`·`converge`는 위반이 있으면 종료 코드 1입니다. `rpo`는 끊기 전에 응답 성공한 업로드의 유실·내용 불일치와,
   끊은 뒤 업로드가 복원본에 있는지(= 끊기가 안 걸렸다)를 봅니다.
 - 끝나면 시험 계정의 문서를 지우고 계정을 삭제한 뒤, 복원용 SSH 키를 지웁니다.
