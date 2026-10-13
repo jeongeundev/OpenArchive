@@ -21,10 +21,17 @@ export function useDocument(id: string): {
   // 마운트 동안의 요청을 묶는다. 정리할 때 취소해 백오프 대기까지 멈춘다(ADR-048 결정 4).
   const controllerRef = useRef<AbortController | null>(null);
   const inFlightRef = useRef(false);
+  // 조회 중에 받은 refresh는 버리지 않고 끝난 뒤 한 번 더 조회한다 — 처리가 끝난 문서는 폴링이 없어
+  // 버리면 저장 직후의 태그·폴더가 옛 응답에 가린다.
+  const pendingRef = useRef(false);
 
-  const refresh = useCallback(() => {
+  const refresh = useCallback(function run() {
     const controller = controllerRef.current;
-    if (controller === null || inFlightRef.current) return;
+    if (controller === null) return;
+    if (inFlightRef.current) {
+      pendingRef.current = true;
+      return;
+    }
 
     inFlightRef.current = true;
     void getDocument(id, controller.signal)
@@ -49,6 +56,11 @@ export function useDocument(id: string): {
       .finally(() => {
         if (controller.signal.aborted) return;
         inFlightRef.current = false;
+        if (pendingRef.current) {
+          pendingRef.current = false;
+          run();
+          return;
+        }
         setLoading(false);
       });
   }, [id]);
@@ -62,6 +74,7 @@ export function useDocument(id: string): {
       controller.abort();
       controllerRef.current = null;
       inFlightRef.current = false;
+      pendingRef.current = false;
     };
   }, [refresh]);
 
