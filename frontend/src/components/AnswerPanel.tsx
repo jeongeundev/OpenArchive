@@ -4,12 +4,8 @@
 
 import Link from "next/link";
 
+import { passageHref } from "@/lib/passageLink";
 import type { AnswerSource, AskResponse } from "@/lib/types";
-
-/** 인용이 가리키는 「그 버전의 그 자리」 — 문서 상세가 이 주소로 그 판을 펼치고 대목을 강조한다. */
-function sourceHref(source: AnswerSource): string {
-  return `/documents/${encodeURIComponent(source.document_id)}?version=${source.based_on_version}&chunk=${source.chunk_index}`;
-}
 
 function versionLabel(source: AnswerSource): string {
   return source.revised
@@ -28,7 +24,7 @@ function AnswerText({ answer, sources }: { answer: string; sources: AnswerSource
         return source === undefined ? (
           part
         ) : (
-          <Link key={index} href={sourceHref(source)} title={`${source.title} · ${versionLabel(source)}`}
+          <Link key={index} href={passageHref(source)} title={`${source.title} · ${versionLabel(source)}`}
             className="text-[#0ea5e9] hover:underline">
             {part}
           </Link>
@@ -98,7 +94,7 @@ export function AnswerPanel({
                 <li key={source.label} className="text-sm">
                   <div className="flex flex-wrap items-baseline gap-2">
                     <span className="text-neutral-500">[{source.label}]</span>
-                    <Link href={sourceHref(source)} className="text-white hover:text-[#0ea5e9]">
+                    <Link href={passageHref(source)} className="text-white hover:text-[#0ea5e9]">
                       {source.title}
                     </Link>
                     <span className={source.revised ? "text-xs text-neutral-300" : "text-xs text-neutral-500"}>
@@ -117,7 +113,7 @@ export function AnswerPanel({
               <ul className="mt-2 space-y-1">
                 {uncited.map((source) => (
                   <li key={source.label}>
-                    <Link href={sourceHref(source)} className="text-neutral-400 hover:text-[#0ea5e9]">
+                    <Link href={passageHref(source)} className="text-neutral-400 hover:text-[#0ea5e9]">
                       [{source.label}] {source.title}
                     </Link>
                     <span className="ml-2 text-xs text-neutral-500">{versionLabel(source)}</span>
