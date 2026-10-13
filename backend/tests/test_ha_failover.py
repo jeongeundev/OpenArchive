@@ -22,6 +22,8 @@ from scripts.ha_failover import (
     Outcome,
     Target,
     call_with_backoff,
+    etcd_health,
+    injection_effect,
     judge,
     ledger_rows,
     next_delay,
@@ -31,6 +33,7 @@ from scripts.ha_failover import (
     tally,
     unavailable_spans,
     uploader,
+    verdict,
     write_outages,
 )
 
@@ -535,3 +538,115 @@ def test_unavailable_spans_merge_requests_that_saw_503():
 
     assert unavailable_spans(events) == [(11.0, 17.5, 3), (29.0, 30.0, 1)]
     assert unavailable_spans([req("upload", 1.0, [201])]) == []
+
+
+# --- 주입 효과 확인 (#214) --------------------------------------------------------------
+# 10/5 첫 분리 회차는 nft 규칙이 따옴표 때문에 만들어지지 않았는데(rc=1) 「판정: 통과」였다 — 장애가
+# 없었으니 정합성은 당연히 지켜진다. 주입 뒤 관측할 수 있는 변화가 하나도 없으면 통과라 하지 않는다.
+
+
+def probe(t, ok=True, server="10.0.0.1", tl=7):
+    return ev("probe", t, ok=ok, lat=0.02) | ({"server": server, "tl": tl} if ok else {})
+
+
+def etcd(t, **health):
+    return ev("etcd", t, health=health)
+
+
+def vip(t, holder, ping=True):
+    return ev("vip", t, holder=holder, ping=ping)
+
+
+QUIET = [
+    ev("meta", 0.0, phase="begin", label="part"),
+    ev("cluster", 0.5, **BEFORE),
+    etcd(0.6, n1=True, n2=True, n3=True),
+    vip(0.7, "n1"),
+    probe(1.0),
+    ev("inject", 10.0, phase="start", cmd="nft …"),
+    ev("inject", 10.2, phase="done", rc=1, out="syntax error"),
+    probe(10.5),
+    probe(60.0),
+    ev("meta", 70.0, phase="load_stopped"),
+    ev("meta", 80.0, phase="end", converged=True),
+]
+
+
+def test_injection_without_any_observed_change_is_unconfirmed():
+    effect = injection_effect(QUIET)
+
+    assert effect == {"rc": 1, "observed": []}
+    assert verdict([], effect) == ("주입 미확인", 2)
+
+
+@pytest.mark.parametrize(
+    ("extra", "signal"),
+    [
+        ([probe(20.0, ok=False), probe(30.0)], "쓰기 중단"),
+        ([probe(30.0, server="10.0.0.2", tl=8)], "primary"),
+        ([probe(30.0, tl=8)], "primary"),  # kill -9 — 같은 노드 재기동이라도 TL이 바뀌면 관측된다
+        ([ev("cluster", 30.0, **AFTER)], "Patroni"),
+        (
+            [ev("cluster", 30.0, members=BEFORE["members"][:2])],
+            "Patroni",
+        ),  # Replica 전원 차단 — 멤버가 빠진다
+        (
+            [etcd(30.0, n1=False, n2=True, n3=True)],
+            "etcd",
+        ),  # etcd 1대 정지 — 쓰기도 Patroni도 그대로다
+        ([vip(30.0, "n2")], "VIP"),
+    ],
+)
+def test_each_kind_of_change_after_injection_confirms_it(extra, signal):
+    effect = injection_effect(QUIET + extra)
+
+    assert any(signal in seen for seen in effect["observed"])
+    assert verdict([], effect) == ("통과", 0)
+
+
+def test_changes_before_injection_do_not_confirm_it():
+    """기준은 주입 직전 상태다 — 시작 무렵의 변화나 실패를 주입 효과로 세지 않는다."""
+    early = [
+        probe(0.2, ok=False),
+        ev("cluster", 0.1, **AFTER),
+        etcd(0.3, n1=False, n2=True, n3=True),
+        vip(0.4, "n2"),
+    ]
+
+    assert injection_effect(sorted(early + QUIET, key=lambda e: e["t"]))["observed"] == []
+
+
+def test_run_without_injection_is_not_checked():
+    assert injection_effect([e for e in QUIET if e["kind"] != "inject"]) is None
+    assert verdict([], None) == ("통과", 0)
+
+
+def test_effect_check_can_be_turned_off_for_runs_that_do_not_touch_the_cluster():
+    """DR 수신 끊기(`dr_restore.py freeze`)는 클러스터를 바꾸지 않는다 — 효과는 `dr_restore.py rpo`가 본다."""
+    off = [ev("meta", 0.0, phase="begin", label="dr-rpo", effect_check=False), *QUIET[1:]]
+
+    assert injection_effect(off) is None
+
+
+def test_violations_take_precedence_over_an_unconfirmed_injection():
+    assert verdict(["유실 1건"], injection_effect(QUIET)) == ("위반", 1)
+
+
+def test_tally_carries_the_injection_effect():
+    assert tally(QUIET)["injection"] == {"rc": 1, "observed": []}
+
+
+async def test_etcd_health_reads_each_node_and_counts_unreachable_as_down():
+    def handler(request: httpx.Request) -> httpx.Response:
+        host = request.url.host
+        assert request.url.port == 2379 and request.url.path == "/health"
+        if host == "n3":
+            raise httpx.ConnectError("refused")
+        return httpx.Response(200, json={"health": "true" if host == "n1" else "false"})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        assert await etcd_health(client, ["n1", "n2", "n3"]) == {
+            "n1": True,
+            "n2": False,
+            "n3": False,
+        }
