@@ -80,7 +80,7 @@ chore/  빌드·설정
 
 **타입**: `feat` `fix` `docs` `test` `refactor` `chore` `ci` `perf`
 
-**스코프**: `db` `worker` `api` `search` `mcp` `frontend` `adr`
+**스코프**: `db` `worker` `api` `search` `mcp` `cli` `frontend` `adr`
 
 ```
 feat(worker): SKIP LOCKED 기반 잡 claim 구현

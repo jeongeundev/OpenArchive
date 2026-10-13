@@ -57,13 +57,14 @@ OpenArchive/
 ├── examples/
 │   └── ingest_text.py            # 표준 라이브러리만 쓰는 독립 HTTP 텍스트 공급 예제
 ├── backend/
-│   ├── pyproject.toml            # fastapi, psycopg[binary,pool], pydantic-settings, mcp<2, pypdf, python-docx / [dev]: pytest, ruff / [local]: sentence-transformers
+│   ├── pyproject.toml            # fastapi, uvicorn, psycopg[binary,pool], pydantic-settings, mcp<2, httpx, pypdf, pytesseract, pypdfium2, pillow,
+│   │                             #   python-docx, olefile, openpyxl, python-pptx, python-multipart, networkx, pyyaml / [dev]: pytest, ruff 등 / [local]: sentence-transformers
 │   ├── openarchive/              # 설치되는 최상위 패키지 하나 (배포 이름 openarchive-server)
 │   │   ├── main.py               # FastAPI 앱 조립
 │   │   ├── config.py             # pydantic-settings — $OPENARCHIVE_HOME/.env(기본 ~/.openarchive/.env)
 │   │   ├── db.py                 # AsyncConnectionPool만 — import 시 부작용 없음
 │   │   ├── migrations/           # __init__.py = 러너(API startup과 `openarchive init`이 호출)
-│   │   │                         #   + SQL(패키지 안이라 wheel에 실린다) 001~037: extensions, tables, triggers, indexes,
+│   │   │                         #   + SQL(패키지 안이라 wheel에 실린다) 001~046: extensions, tables, triggers, indexes,
 │   │   │                         #   trgm, edges(006~008), auth(009), links(010~012), token(013),
 │   │   │                         #   edges 재설계(014 — rebuild_document_edges), 위키링크 정규화(015),
 │   │   │                         #   관계 잡 분리(016 — embedding_jobs.kind / 017 — ready 트리거,
@@ -75,16 +76,24 @@ OpenArchive/
 │   │   │                         #   감사 로그(028 — audit_log / 029 — 기록·거부 트리거, ADR-055),
 │   │   │                         #   폴더(030 — folders·folder_grants·documents.folder_id / 031 — 폴더 감사 트리거, ADR-054),
 │   │   │                         #   휴지통(032·033 — ADR-060), 토큰 만료(034 — ADR-061), 미리보기 감사(035),
-│   │   │                         #   미리보기 변환본(036 — document_file_previews / 037 — 변환 잡 트리거, ADR-058)
-│   │   │                         #   외부 공유·그룹·사용자 감사(041_share_principal_audit_triggers.sql, #201)
-│   │   │                         #   폴더 단위 공유(042 — share_folders / 043 — 폴더 공유 감사 트리거, #206)
+│   │   │                         #   미리보기 변환본(036 — document_file_previews / 037 — 변환 잡 트리거, ADR-058),
+│   │   │                         #   텍스트 버전 작성자(038 — author·author_via / 039 — 작성자 트리거, ADR-061 결정 6),
+│   │   │                         #   소유권 이전 감사(040 — owner_changed, ADR-061 결정 2, #200),
+│   │   │                         #   외부 공유·그룹·사용자 감사(041_share_principal_audit_triggers.sql, #201),
+│   │   │                         #   폴더 단위 공유(042 — share_folders / 043 — 폴더 공유 감사 트리거, #206),
+│   │   │                         #   로그인 실패 제한(044 — login_attempts, ADR-040 2026-10-12 개정),
+│   │   │                         #   비밀번호·관리자 권한·폴더·사용자 토큰 감사(045, ADR-055 2026-10-12 개정),
+│   │   │                         #   visibility CHECK(046 — #193)
 │   │   ├── cli.py                # `openarchive init`(첫 관리자 포함)·`serve`·`create-user`·`reset-password`·`rebuild-edges`·`rebuild-previews`·`reextract`
-│   │   │                         #   ·`import`·`export`·`search`·`ask`·`demo` — 운영자 CLI, DB에 직접 붙는다 (ADR-039·040·046)
+│   │   │                         #   ·`import`·`export`·`search --user`·`ask --user`·`demo` — 운영자 CLI, DB에 직접 붙는다 (ADR-039·040·046)
+│   │   │                         #   사용자 CLI `login`·`whoami`·`doc …`, 그리고 `--user` 없는 `search`·`ask`는 user_cli.py·client.py로
+│   │   │                         #   REST에 본인 API 토큰으로만 붙고 DB·DSN을 쓰지 않는다 (ADR-057, #189)
 │   │   ├── api/                  # 라우터: documents, search, ask, system, auth, admin, groups(+principals),
 │   │   │                         #   shares, admin_shares.py(관리자 공유 조회·토큰 폐기), audit(감사 로그 조회·CSV), folders(폴더), diagnostics, clusters / 미들웨어 retry (+ deps, schemas)
 │   │   ├── services/             # parsing, chunking, documents, search, related,
 │   │   │                         #   links, diagnostics, clusters, auth, system, visibility,
-│   │   │                         #   grants(그룹·부여), shares(외부 공유), folders(폴더 트리·범위, ADR-054), audit(행위자 전달·조회, ADR-055), answer(근거 조립·답변 생성, ADR-043)
+│   │   │                         #   grants(그룹·부여), shares(외부 공유), folders(폴더 트리·범위, ADR-054), audit(행위자 전달·조회, ADR-055), answer(근거 조립·답변 생성, ADR-043),
+│   │   │                         #   organize(정리 추천, ADR-064), preview(원본 판 PDF 변환, ADR-058), textdiff(텍스트 버전 비교, #190), trash(휴지통, ADR-060)
 │   │   ├── answers/              # 답변 생성 프로바이더: fake·ollama (ADR-043)
 │   │   ├── embeddings/           # base.py(Protocol), local.py(bge-m3), fake.py
 │   │   ├── worker.py             # 워커 진입점 — 임베딩 잡과 관계 잡을 같은 큐에서 처리
@@ -95,7 +104,7 @@ OpenArchive/
 └── frontend/
     └── src/
         ├── app/                  # /(목록+업로드), /documents/[id], /search(+답변 패널), /login, /settings,
-        │                         #   /diagnostics, /clusters, /admin/status, /admin/users, /admin/groups,
+        │                         #   /diagnostics, /clusters, /organize, /trash, /admin/status, /admin/users, /admin/groups,
         │                         #   /admin/audit, /admin/shares
         ├── components/
         ├── types/
@@ -310,7 +319,7 @@ CREATE UNIQUE INDEX uq_pending_job_per_doc_kind
 CREATE TABLE document_edges (
   src_document_id uuid NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
   dst_document_id uuid NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
-  kind            text NOT NULL,   -- overlaps|points_to|broader|related
+  kind            text NOT NULL,   -- overlaps|related (008이 CHECK로 두 종류만 남겼다)
   src_chunk_index int,             -- 위치가 의미 있는 관계만 채운다
   dst_chunk_index int,
   score           real NOT NULL,   -- ★ 척도가 kind마다 다르다 (아래)
@@ -362,7 +371,7 @@ CREATE TABLE api_tokens (
 CREATE TABLE audit_log (
   id             bigserial PRIMARY KEY,        -- 정렬·커서 기준 (같은 트랜잭션의 행은 occurred_at이 같다)
   occurred_at    timestamptz NOT NULL DEFAULT now(),
-  action         text NOT NULL,                -- CHECK 15종 (아래 「감사 로그」 절 — 029 7종 + 031·033·035·040·041)
+  action         text NOT NULL,                -- CHECK 18종 (아래 「감사 로그」 절 — 029 7종 + 031·033·035·040·041·045)
   actor          text,                         -- 사용자명 스냅샷. 앱 행위자가 없으면 NULL
   actor_via      text,                         -- session|token|mcp|cli|share|worker, 직접 SQL이면 NULL
   db_role        text NOT NULL DEFAULT current_user,
@@ -913,7 +922,8 @@ OpenSQL `patroni.yml`의 PostgreSQL 파라미터는 `max_connections: 100`이다
 문서 목록은 `services/documents.py`의 `list_documents`가 열람 술어와 상태·유형·태그 필터,
 제목 부분 일치(`ILIKE`)를 한 SQL에 적용한다. 제목 검색어는 앞뒤 공백을 제거하고 `\`·`%`·`_`를
 이스케이프해 와일드카드가 아닌 문자로 찾는다. 기본 정렬은 `updated_at DESC, id`이며,
-`sort=title`은 `title, id` 순이다. `count_documents`는 목록과 같은 WHERE 조각과 필터 값을
+`sort=title`은 숫자 → 한글 → 그 밖(영문 등) 순으로 묶은 뒤 묶음 안을 `lower(title) COLLATE "C"`,
+`title COLLATE "C"`, `id` 순으로 정렬한다 — DB 기본 콜레이션과 무관하게 가나다순이 고정된다(#255). `count_documents`는 목록과 같은 WHERE 조각과 필터 값을
 사용해 페이지 제한 없이 별도 SQL로 센다 — 조건 건수에도 열람 범위가 적용된다.
 `list_visible_tags`는 열람 가능한 문서의 태그만 중복 없이 태그순으로 반환한다.
 
@@ -935,6 +945,7 @@ OpenSQL `patroni.yml`의 PostgreSQL 파라미터는 `max_connections: 100`이다
 | `PUT /api/documents/{id}` | 편집된 문서 텍스트(`{content, version}` JSON) → `version`+1, `content`, `content_hash` UPDATE. **버전 이력 기록과 재임베딩 잡 생성은 트리거가 수행.** 요청의 `version`이 현재 버전과 다르면 **409** (아래) |
 | `GET /api/documents/{id}/versions/{version}` | 그 텍스트 버전의 본문과 `version`·`created_at`·nullable `author`·`author_via`. 열람 술어를 같은 SQL에 넣어 조회하며 없거나 볼 수 없으면 404 (ADR-037) |
 | `GET /api/documents/{id}/versions/{base}/diff/{target}` | **텍스트 버전 비교.** 서버가 줄 단위로 비교한다(`services/textdiff.py` — Myers O((N+M)D), git의 기본 알고리즘, 새 의존성 없음). 응답 `{base, target, identical, too_large, hunks: [{lines: [{op: equal\|added\|removed, text}]}]}` — 바뀐 곳 앞뒤 **3줄**만 맥락으로 싣고(`difflib.get_grouped_opcodes(3)`와 같은 묶음), `text`에는 줄 끝 개행을 넣지 않는다. `identical`은 두 텍스트가 문자열로 완전히 같을 때만 true이고 그때 `hunks`는 빈 배열. **작업량 예산**: 대각선 하나·직진한 줄 하나·역추적 기록 한 칸을 작업 1로 세다가 `MAX_DIFF_WORK`(500만)를 넘으면 그 자리에서 멈추고 `too_large: true`·빈 `hunks`로 답한다 — 쓴 작업량은 예산 + 2 + min(N, M)을 넘지 않는다(jsdiff `maxEditLength`와 같은 방식). 2026-10-08 실측(크기 4.8K~20K줄 × 반복도 × 고친 곳 10~3,000 × 흩어짐/몰림 × 전체 교체): 작업 100만당 **0.12~0.15초·기록 3.8MB**로 일정해 예산이 최악 약 0.75초·19MB를 보장한다. 작업량은 문서 크기가 아니라 바뀐 줄 수(D)에 따라 늘어 대략 D²이며, 고친 줄이 약 1,100줄을 넘으면 too_large다. 실제 규정 2022판↔현행판 21쌍은 최대 6만 작업·8ms다. 처음 쓴 표준 `difflib`(autojunk 끔)는 같은 줄의 짝 수 × 바뀐 대목 수에 비례해, 빈 줄로 나눈 마크다운 2,000문단을 10문단마다 고치면 23.6초였다(같은 입력 Myers 20ms) — 짝 수로 미리 거르는 상한은 바뀐 대목 수 축에서 깨져 버렸다. 계산은 이벤트 루프 밖 스레드에서 돈다. 두 버전 중 하나라도 없거나 볼 수 없으면 404, 공유 토큰은 403 (#190) |
+| `POST /api/documents/{id}/versions/{v}/restore` `{current_version}` | **되돌리기.** 그 텍스트 버전의 내용으로 **새 텍스트 버전**을 만든다(되감기가 아니다). 편집과 같은 경로라 버전 이력 기록·재임베딩 잡 생성은 트리거가 하고, 쓰기 권한(세션 또는 `read_write` 토큰)이 필요하다. `current_version`이 현재 버전과 다르거나 추출 중이면 409, 없거나 볼 수 없는 버전은 404 (ADR-037) |
 | `PUT /api/documents/{id}/tags` | `{tags: string[]}`로 태그 전체 교체. 트리거는 `UPDATE OF content_hash`에만 걸려 있으므로 **재임베딩을 유발하지 않는다** |
 | `DELETE /api/documents/{id}` | **휴지통 이동** — `deleted_at`을 채운다. 소유자만, 쓰기 토큰 허용. `?permanent=true`면 영구 삭제(CASCADE로 벡터·잡·원본 판까지 원자 삭제, 휴지통 밖 문서도 가능) (ADR-060) |
 | `GET /api/documents/trash` · `POST /api/documents/{id}/restore` | 내 휴지통 목록(제목·삭제 일시·영구 삭제 예정일) · 복원(`deleted_at`을 지운다, 재임베딩 없음). 소유자만 — 남의 문서는 관리자에게도 404 |
@@ -946,9 +957,9 @@ OpenSQL `patroni.yml`의 PostgreSQL 파라미터는 `max_connections: 100`이다
 | `GET /api/documents/{id}/backlinks` | **이 문서를 가리키는 문서.** 열람 가능한 출발 문서만 |
 | `POST /api/search` | 하이브리드 검색 + 관계 순회 (아래). 선택 `folder_id`는 그 폴더와 **하위 폴더**의 문서로 직접 결과를 좁힌다 |
 | `POST /api/ask` | **근거 기반 답변** — 로그인 필요. 검색과 같은 단일 SQL로 근거를 고른 뒤 답변 프로바이더가 답한다. 선택 `folder_id`는 검색과 같다. `ANSWER_PROVIDER=off`(기본)면 `status: "disabled"` (아래 「근거 기반 답변」, ADR-043) |
-| `POST /api/auth/login` · `logout` · `GET /api/auth/me` | 최소 로그인. 세션 토큰은 `sessions` 테이블에 저장 |
+| `POST /api/auth/login` · `logout` · `GET /api/auth/me` | 최소 로그인. 세션 토큰은 `sessions` 테이블에 저장. **로그인 실패 제한**: 같은 사용자명으로 연속 10회 실패하면 처음 60초 잠그고, 잠금이 풀린 뒤 다시 실패해 또 잠글 때마다 두 배(60·120·240…초), 3600초에서 멈춘다. 잠긴 동안은 비밀번호를 검사하지 않고 **429 + `Retry-After`(남은 초)**로 거부한다. 카운터는 `login_attempts`(044)에 사용자명 기준으로 두며 없는 사용자명도 똑같이 센다. 성공하면 지워지고 `openarchive reset-password`가 푼다 (ADR-040 「2026-10-12 개정」·「2026-10-13 개정」) |
 | `POST /api/auth/tokens` · `GET /api/auth/tokens` · `DELETE /api/auth/tokens/{id}` | **세션 전용** API 토큰 발급·목록·폐기. 원문은 발급 응답에만 반환하며 기본 scope는 `read` |
-| `PUT /api/auth/password` | **세션 전용** 자기 비밀번호 변경. 현재 비밀번호를 확인하고, 바꾼 뒤 그 계정의 세션을 전부 무효화한다. 틀린 현재 비밀번호는 403(세션은 유효하므로 401이 아니다). API 토큰은 폐기하지 않는다 (ADR-040) |
+| `PUT /api/auth/password` | **세션 전용** 자기 비밀번호 변경. 새 비밀번호는 8자 이상(구성 규칙 없음, 짧으면 400). 현재 비밀번호를 확인하고, 바꾼 뒤 그 계정의 세션을 전부 무효화한다. 틀린 현재 비밀번호는 403(세션은 유효하므로 401이 아니다). API 토큰은 폐기하지 않는다 (ADR-040) |
 | `GET /api/diagnostics` | **진단.** 고아 문서·깨진 링크·중복 후보 등을 **열람 범위 기준**으로 집계 (ADR-027) |
 | `GET /api/clusters` | **관계 지도.** 관계 그래프의 Louvain 군집. 조회 시점 계산, 열람 범위 기준. 이름은 (군집 안 빈도 − 밖 빈도)가 양수인 태그 중 최대, 없으면 중심 문서 제목 (ADR-042 개정) |
 | `GET /api/admin/users` 등 | 관리자 전용 |
@@ -956,7 +967,7 @@ OpenSQL `patroni.yml`의 PostgreSQL 파라미터는 `max_connections: 100`이다
 | `PUT /api/documents/{id}/owner` `{owner}` | **소유자·세션 전용**. 응답 `{owner_id, still_visible}`. 이전 소유자의 공유에서 제거·새 소유자의 직접 사용자 부여 정리. 보이는 비소유자 403, 안 보이면 404, 본인·없는 대상 400 (#200) |
 | `PUT /api/folders/{id}/owner` `{owner}` | **만든 사람·세션 전용**, 관리자 우회 없음. 한 폴더 행만 이전(하위 폴더·문서 그대로), 새 소유자의 사용자 부여 정리. 응답 `{created_by, still_visible}`. 비소유자 403, 안 보이면 404, 본인·없는 대상 400 (#200) |
 | `GET /api/admin/shares` · `DELETE /api/admin/shares/{share_id}/tokens/{token_id}` | **관리자·세션 전용** 외부 공유 전수 조회(이름·소유자·생성일·문서 수·폴더 수 `folder_count`·토큰 메타 — 문서·폴더 이름 없음)와 토큰 비상 폐기 (ADR-061 결정 3, #201·#206) |
-| `GET /api/admin/audit` | **관리자·세션 전용** 감사 로그 조회. 쿼리 `actor`·`action`(12종, 그 밖은 422)·`limit`(기본 50, 1~200)·`before_id`(id 커서). 응답 `{items, next_before_id}`, id 내림차순. 열람 술어를 걸지 않고 대상 문서 **제목**까지만 보인다(ADR-055 결정 8). 조회 자체는 기록하지 않는다 |
+| `GET /api/admin/audit` | **관리자·세션 전용** 감사 로그 조회. 쿼리 `actor`·`action`(18종, 그 밖은 422)·`limit`(기본 50, 1~200)·`before_id`(id 커서)·`format`(`json` 기본, `csv`). 응답 `{items, next_before_id}`, id 내림차순. `format=csv`는 같은 필터의 기록 전체를 CSV 파일로 내려준다(`limit`·`before_id` 무시). 열람 술어를 걸지 않고 대상 문서 **제목**까지만 보인다(ADR-055 결정 8). 조회 자체는 기록하지 않는다 |
 | `POST /api/admin/groups` · `GET /api/admin/groups` · `DELETE /api/admin/groups/{id}` | **관리자·세션 전용**. 그룹 생성·목록·삭제. 이름 변경 없음 (#97 b) |
 | `PUT /api/admin/groups/{id}/members/{username}` · `DELETE /api/admin/groups/{id}/members/{username}` | **관리자·세션 전용**. 구성원 추가·제거 (#97 b) |
 | `GET /api/principals` | **로그인**. 부여 대상 사용자명·그룹명 목록. 익명은 401 (#97 b) |
@@ -1000,12 +1011,12 @@ DB가 잠시 응답할 수 없으면(연결 끊김·페일오버·switchover 중
 | 상황 | 응답 |
 |---|---|
 | 처음 보는 키 | 평소처럼 문서를 만든다(201). 키는 문서와 **같은 트랜잭션**에 기록된다 |
-| 같은 키 + 같은 요청 | 새로 만들지 않고 처음 문서를 **201**로 돌려준다. 본문은 그 문서의 **현재** 요약이다(처음 응답을 저장해 두지 않는다 — 그새 `embedding_status`가 바뀌었을 수 있다) |
+| 같은 키 + 같은 요청 | 새로 만들지 않고 처음 문서를 **201**로 돌려준다. 본문은 그 문서의 **현재** 요약이다(처음 응답을 저장해 두지 않는다 — 그새 `embedding_status`가 바뀌었을 수 있다). 요약은 열람 술어를 거쳐 읽으므로, 그 문서가 이제 요청자에게 보이지 않으면(휴지통으로 옮김, 소유권 이전 뒤 볼 수 없음) **404**다 |
 | 같은 키 + 다른 요청 | **422**. 요청 비교는 본문 지문(파일은 파일명·바이트 해시·제목·태그·공개범위·부여 대상, 텍스트는 제목·본문·유형·태그·공개범위·부여 대상)으로 하며, 업로드에 쓴 키를 텍스트 공급에 쓰는 것도 다른 요청이다 |
 | 같은 키의 동시 요청 | 기본키가 직렬화한다. 뒤 요청은 앞 트랜잭션이 끝나기를 기다렸다가, 앞이 커밋했으면 그 문서를, 롤백했으면 자기가 만든 문서를 받는다 |
 | 키 없음 | 지금처럼 동작한다 — 재시도하면 문서가 두 번 생길 수 있다 |
 
-키는 **소유자 범위**다 — 다른 계정의 같은 키와 부딪히지 않고, 그 존재도 드러나지 않는다. 키는 **24시간** 보관되고 워커의 스윕 주기에 지워진다. 그 뒤 같은 키로 다시 보내면 새 문서가 생긴다. 문서를 지우면 그 키도 함께 지워진다(FK CASCADE).
+키는 **소유자 범위**다 — 다른 계정의 같은 키와 부딪히지 않고, 그 존재도 드러나지 않는다. 키는 **24시간** 보관되고 워커의 스윕 주기에 지워진다. 그 뒤 같은 키로 다시 보내면 새 문서가 생긴다. 문서를 영구 삭제하면 그 키도 함께 지워지므로(FK CASCADE) 같은 키로 다시 보내면 새 문서가 생긴다.
 
 ### 빈 파싱 결과 처리 (`POST /api/documents`)
 
@@ -1468,7 +1479,7 @@ class EmbeddingProvider(Protocol):
 
 ## 프론트엔드 패턴
 
-- 사용자 화면: `/`(목록 + 업로드 드롭존), `/documents/[id]`(메타데이터·텍스트 버전 이력·청크 수와 기준 버전 요약·**문서 텍스트 편집**·관련 문서·태그 추천), `/search`(질의 + 태그/유형 필터 + 결과. "실행된 SQL 보기" 토글. 로그인 사용자에게는 마지막 검색 입력으로 `POST /api/ask`를 부르는 **근거 기반 답변 패널** — `AnswerPanel`), `/clusters`(관계 군집 덩어리와 연결), `/organize`(정리할 문서 — 폴더 밖 내 문서와 추천 폴더, ADR-064), `/diagnostics`(고아·중복 후보·미분류·깨진 링크), `/login`, `/settings`(자기 비밀번호 변경·API 토큰·외부 공유)
+- 사용자 화면: `/`(목록 + 업로드 드롭존), `/documents/[id]`(메타데이터·텍스트 버전 이력·청크 수와 기준 버전 요약·**문서 텍스트 편집**·관련 문서·태그 추천), `/search`(질의 + 태그/유형 필터 + 결과. "실행된 SQL 보기" 토글. 로그인 사용자에게는 마지막 검색 입력으로 `POST /api/ask`를 부르는 **근거 기반 답변 패널** — `AnswerPanel`), `/clusters`(관계 군집 덩어리와 연결), `/organize`(정리할 문서 — 폴더 밖 내 문서와 추천 폴더, ADR-064), `/trash`(내 휴지통 — 복원·영구 삭제, ADR-060), `/diagnostics`(고아·중복 후보·미분류·깨진 링크), `/login`, `/settings`(자기 비밀번호 변경·API 토큰·외부 공유)
 - **편집은 Client Component**다. 보기 ↔ 편집 토글, 저장 시 `version`을 함께 전송하고 409를 처리한다. 저장 직후 상태 배지가 `pending → processing → ready`로 바뀌는 것을 2초 폴링으로 보여준다
 - **사용자 화면은 인프라 상태를 노출하지 않는다.** 페일오버가 나도 화면 구성이 달라지지 않으며, 사용자는 업로드·검색이 계속 성공하는 것만 본다 (UI_GUIDE 디자인 원칙 3).
 - **읽기 요청은 503·네트워크 오류를 백오프로 기다린다**(`lib/api.ts`). 읽기 함수는 `signal`을 받고, 훅과 화면 진입 시 조회는 마운트 동안 `AbortController` 하나로 묶어 **화면을 떠나면 진행 중인 요청과 백오프 대기를 함께 취소한다** — 쓸 곳 없는 재시도가 서버에 부하를 더하거나 재시도 안내가 다른 화면에 남지 않게 한다. 새 검색은 이전 검색을 취소한다. 사용자 동작으로 시작한 읽기(버전 본문 열기, 발급·생성 뒤 목록 다시 받기)도 `useUnmountSignal`로 같은 규칙을 따른다 — 앞선 쓰기 요청은 이미 커밋됐을 수 있어 취소하지 않는다. 기다리는 동안에만 `RetryNotice`가 「연결이 원활하지 않아 다시 시도하는 중입니다.」를 보이고 성공하면 사라진다. 무엇이 멈췄는지는 말하지 않는다. `/admin/status`의 `GET /api/system/status`만은 백오프하지 않는다 — 장애를 바로 드러내야 하는 관측 채널이고, 2초 폴링 자체가 재시도다 (ADR-048 결정 4, UI_GUIDE 원칙 3).

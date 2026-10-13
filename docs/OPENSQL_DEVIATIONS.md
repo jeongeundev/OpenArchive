@@ -8,7 +8,7 @@
 
 | 출처 | 내용 | 위치 |
 |---|---|---|
-| ① OpenSQL 문서 | Tmax의 설치·운영 매뉴얼 (docs.tibero.com/tmaxopensql) | 사본 `notes/ha110/docs/` (2026-09-25 수집, 40쪽) |
+| ① OpenSQL 문서 | Tmax의 설치·운영 매뉴얼 (docs.tibero.com/tmaxopensql) | 사본 `notes/ha110/docs/`(로컬, 비공개) (2026-09-25 수집, 40쪽) |
 | ② OpenSQL 배포판 | 설치기와 템플릿 — `opensql-installer/config/{patroni.yml, openproxy.toml, *.service, *.env}`, `openproxy/openproxy.ha.template.toml` | `Tmax_OpenSQL_3.17.8.7_rockylinux9.7_buildtime20260720` |
 
 - **둘이 갈리면 HA에 대해 명시적으로 말하는 쪽을 따른다.** 설치기는 "일단 도는" 값을 넣고(OpenProxy `session`·파서 끔·
@@ -67,7 +67,7 @@
 ## 점검하는 법
 
 ```bash
-# Patroni DCS — 설치기 bootstrap.dcs에 1절의 keepalive 5개만 더해져 있어야 한다
+# Patroni DCS — 설치기 bootstrap.dcs에 1절의 keepalive 4개만 더해져 있어야 한다
 sudo -u opensql /home/opensql/bin/patronictl -c /home/opensql/etc/patroni/patroni.yml show-config
 # OpenProxy가 실제로 적용한 설정(etcd 공유 설정 + 노드 파일)
 sudo -u opensql /home/opensql/bin/openproxy --log-target file /home/opensql/etc/openproxy/openproxy.toml show --full

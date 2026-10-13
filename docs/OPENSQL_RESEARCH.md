@@ -603,7 +603,7 @@ vip_addresses = ["178.176.0.200/24"]
 bash $OPENSQL_HOME/scripts/start_openproxy.sh    # 설정: $OPENSQL_HOME/etc/openproxy.toml
 bash $OPENSQL_HOME/scripts/stop_openproxy.sh     # SIGTERM
 bash $OPENSQL_HOME/scripts/restart_openproxy.sh
-bash $OPENSQL_HOME/scripts/reload_openproxy.sh   # SIGHUP, 무중단 설정 반영
+bash $OPENSQL_HOME/scripts/reload_openproxy.sh   # SIGHUP, 재시작 없이 설정 반영
 ```
 
 > ~~`server_lifetime`(1시간)과 `idle_timeout`(10분)은 **워커의 장수 LISTEN 연결에 직접 영향을 준다.** OpenProxy를 경유하면 LISTEN 연결이 최대 1시간마다 강제로 끊길 수 있다 (§7과 연결).~~
@@ -1020,6 +1020,7 @@ opensql=> SELECT 1;          -- 알림은 다음 쿼리 실행 시 표시된다
 > **설계 영향**
 > - `ADR-002`의 "HNSW 인덱스 사용 가능 여부 미확인" 리스크가 **해제**된다. `ARCHITECTURE.md`의 ⚠️ 경고도 제거한다.
 > - `ADR-011`의 "`hnsw.iterative_scan`은 0.8+ 전용인데 버전 미확인이므로 의존할 수 없다"는 **더 이상 유효하지 않다.** 필터 결합 검색의 recall 부족에 대해 `ef_search` 확대 외에 `iterative_scan = relaxed_order`라는 정공법을 쓸 수 있다.
+>   → **2026-10-06 개정(ADR-011 「2026-10-06 개정」)**: 실제로 채택한 것은 `strict_order`다. 거리순을 보장하지 않는 `relaxed_order`는 쓰지 않는다.
 > - `ADR-018`(관련 문서를 질의 시점 `avg(embedding)`으로)의 기능 가용성이 확정된다. 다만 **`avg` 결과가 HNSW 인덱스를 타는지는 플래너 문제라 여전히 실측 대상**이다 (§12-12).
 > - 인덱스 생성 자체는 실제로 실행해 확인한다 — 버전이 맞아도 빌드 옵션 등으로 막힐 가능성은 남는다.
 
