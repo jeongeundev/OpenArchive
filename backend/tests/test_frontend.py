@@ -92,6 +92,16 @@ def test_unknown_paths_get_the_404_page(client: TestClient):
     assert response.text == "<html>없음</html>"
 
 
+def test_shipped_404_page_is_korean():
+    """동봉 산출물의 404가 앱의 not-found 화면이다 — Next 기본 영어 화면이 아니다."""
+    app = FastAPI()
+    assert mount_frontend(app) is True
+    response = TestClient(app).get("/이런/경로는/없다")
+    assert response.status_code == 404
+    assert "페이지를 찾을 수 없습니다" in response.text
+    assert "This page could not be found" not in response.text
+
+
 @pytest.mark.parametrize(
     "path",
     ["/../../../etc/passwd", "/documents/../../etc/passwd", "/%2e%2e%2f%2e%2e%2fetc%2fpasswd"],
