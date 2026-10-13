@@ -33,14 +33,17 @@ CREDENTIAL_TOKEN = "token"
 PRINCIPAL_USER = "user"
 PRINCIPAL_SHARE = "share"
 
-# NIST SP 800-63B의 최소 길이. 구성 규칙은 두지 않는다 (ADR-040 2026-10-12 개정).
+# 실무 관례의 최소 길이(Entra 기본 8자). NIST SP 800-63B-4는 비밀번호 단일 인증이면 15자를 요구한다 —
+# 그 차이는 ADR-040 2026-10-13 개정에 적었다. 구성 규칙은 두지 않는다 (ADR-040 2026-10-12 개정).
 MIN_PASSWORD_LENGTH = 8
 MAX_USERNAME_LENGTH = 64
 # 로그인이 실패 기록을 남기는 사용자명의 상한. 64자 제한 이전 계정이 있을 수 있어 넉넉히 둔다.
 MAX_LOGIN_USERNAME_LENGTH = 256
-# Microsoft Entra smart lockout 기본값: 연속 10회 실패면 60초 잠근다.
+# Microsoft Entra smart lockout: 연속 10회 실패면 처음 60초 잠그고, 잠김이 반복되면 늘린다.
+# 다시 잠글 때마다 두 배로, 1시간에서 멈춘다(NIST SP 800-63B-4 §3.2.2가 예로 든 범위).
 MAX_LOGIN_FAILURES = 10
 LOGIN_LOCK_SECONDS = 60
+LOGIN_LOCK_MAX_SECONDS = 3600
 
 
 class UserAlreadyExists(Exception):
@@ -390,18 +393,26 @@ async def authenticate_user(
 async def _record_login_failure(conn: psycopg.AsyncConnection, username: str) -> None:
     """실패를 세고 문턱에 닿으면 잠근다. 호출부가 그 행의 잠금을 쥔 상태에서 부른다.
 
-    잠금이 풀린 뒤에도 카운터는 남아, 다음 실패에서 곧바로 다시 잠근다.
+    잠금이 풀린 뒤에도 카운터는 남아, 다음 실패에서 곧바로 다시 잠근다. 다시 잠글 때마다
+    잠금 시간은 두 배가 되고 상한에서 멈춘다 — 지수를 먼저 묶어 실패가 쌓여도 넘치지 않는다.
     """
     await conn.execute(
         """
         UPDATE login_attempts SET
           failures = failures + 1,
           locked_until = CASE WHEN failures + 1 >= %(limit)s
-                              THEN now() + make_interval(secs => %(secs)s)
+                              THEN now() + make_interval(secs => least(
+                                %(secs)s * power(2, least(failures + 1 - %(limit)s, 30)),
+                                %(max_secs)s))
                               ELSE locked_until END
         WHERE username = %(username)s
         """,
-        {"username": username, "limit": MAX_LOGIN_FAILURES, "secs": LOGIN_LOCK_SECONDS},
+        {
+            "username": username,
+            "limit": MAX_LOGIN_FAILURES,
+            "secs": LOGIN_LOCK_SECONDS,
+            "max_secs": LOGIN_LOCK_MAX_SECONDS,
+        },
     )
 
 

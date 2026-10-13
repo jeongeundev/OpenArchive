@@ -10,6 +10,8 @@ from conftest import login_as
 
 from openarchive.services import auth as auth_service
 from openarchive.services.auth import (
+    LOGIN_LOCK_MAX_SECONDS,
+    LOGIN_LOCK_SECONDS,
     MAX_LOGIN_FAILURES,
     MIN_PASSWORD_LENGTH,
     AuthenticationFailed,
@@ -705,7 +707,7 @@ async def test_an_expired_lock_lets_the_right_password_in_and_clears_the_row(con
 
 
 async def test_a_failure_after_an_expired_lock_locks_again_at_once(conn):
-    """잠금이 풀려도 카운터는 남는다 — 그 뒤로는 실패 한 번마다 다시 60초 (사실상 분당 1회)."""
+    """잠금이 풀려도 카운터는 남는다 — 그 뒤로는 실패 한 번마다 곧바로 다시 잠근다."""
     await _create_user(conn, "correct horse")
     await _fail(conn, "alice", MAX_LOGIN_FAILURES)
     await conn.execute(
@@ -717,6 +719,57 @@ async def test_a_failure_after_an_expired_lock_locks_again_at_once(conn):
     assert await _attempts(conn, "alice") == (MAX_LOGIN_FAILURES + 1, True)
     with pytest.raises(LoginLocked):
         await authenticate_user(conn, "alice", "correct horse")
+
+
+async def _expire_lock(conn) -> None:
+    await conn.execute(
+        "UPDATE login_attempts SET locked_until = now() - interval '1 second'"
+    )
+
+
+async def _lock_seconds(conn, username: str) -> int:
+    row = await (
+        await conn.execute(
+            "SELECT ceil(extract(epoch FROM locked_until - now()))::int"
+            " FROM login_attempts WHERE username = %s",
+            (username,),
+        )
+    ).fetchone()
+    return row[0]
+
+
+def test_lock_starts_at_one_minute_and_stops_at_one_hour():
+    """Entra smart lockout — 처음 1분, 잠김이 반복되면 늘어난다. NIST 63B-4가 예로 든 상한은 1시간."""
+    assert (LOGIN_LOCK_SECONDS, LOGIN_LOCK_MAX_SECONDS) == (60, 3600)
+
+
+async def test_each_relock_doubles_the_lock(conn):
+    """잠금이 풀린 뒤 또 틀리면 직전 잠금의 두 배로 잠근다 — 고정 60초면 하루 1,440회 추측이 끝없이 된다."""
+    await _create_user(conn, "correct horse")
+    await _fail(conn, "alice", MAX_LOGIN_FAILURES)
+    assert 55 < await _lock_seconds(conn, "alice") <= 60
+
+    await _expire_lock(conn)
+    await _fail(conn, "alice", 1)
+    assert 115 < await _lock_seconds(conn, "alice") <= 120
+
+    await _expire_lock(conn)
+    await _fail(conn, "alice", 1)
+    assert 235 < await _lock_seconds(conn, "alice") <= 240
+    with pytest.raises(LoginLocked) as locked:
+        await authenticate_user(conn, "alice", "correct horse")
+    assert 235 < locked.value.retry_after <= 240
+
+
+async def test_the_lock_stops_growing_at_one_hour(conn):
+    """실패가 아무리 쌓여도 상한에서 멈춘다 — 지수가 넘쳐 로그인이 500이 되지 않는다."""
+    await conn.execute(
+        "INSERT INTO login_attempts (username, failures) VALUES ('alice', 100000)"
+    )
+
+    await _fail(conn, "alice", 1)
+
+    assert LOGIN_LOCK_MAX_SECONDS - 5 < await _lock_seconds(conn, "alice") <= LOGIN_LOCK_MAX_SECONDS
 
 
 async def test_an_unknown_username_is_counted_and_locked_the_same_way(conn):
