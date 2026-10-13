@@ -18,6 +18,11 @@
 - 승격 대상: 리더가 바뀌었다면 새 리더가 주입 전 동기 standby였는가(ADR-049). 첫 상태와
   마지막 상태만 비교하므로 한 회차에 리더가 두 번 바뀌면 중간 승격은 판정하지 못한다
 
+주입이 실제로 걸렸는지도 본다(#214). 주입 뒤 쓰기 중단·primary·TL·Patroni 멤버·etcd 상태·VIP 중
+하나라도 주입 직전과 달라져야 한다 — 아무것도 바뀌지 않았으면 위반이 없어도 「주입 미확인」이다.
+장애가 없었으니 정합성은 당연히 지켜진다(10/5 첫 분리 회차는 nft 규칙이 만들어지지 않았는데 통과였다).
+클러스터를 바꾸지 않는 주입(DR 수신 끊기)은 `--no-effect-check`로 이 확인을 끈다.
+
 쓰기 중단 시간(RTO)은 100ms마다 VIP에 새 연결로 WAL을 남기는 트랜잭션을 커밋하는 probe로 잰다.
 `txid_current()`만으로는 커밋이 WAL을 쓰지 않아 동기 복제 대기를 타지 않는다 — 동기 standby가 죽어
 커밋이 멈춘 구간을 놓친다(S5a). probe의 실패는 관측값이며 판정에 넣지 않는다.
@@ -31,7 +36,7 @@
       --inject 'utmctl stop node1; sleep 90; utmctl start node1' --inject-at 40 --load 240
   backend/.venv/bin/python scripts/ha_failover.py report s2-1 --nodes …   # 기록으로 다시 판정
 
-결과는 `--out`(기본 ha-runs/)의 `<label>.jsonl`에 남는다. 종료 코드는 판정 통과 0, 위반 1.
+결과는 `--out`(기본 ha-runs/)의 `<label>.jsonl`에 남는다. 종료 코드는 판정 통과 0, 위반 1, 주입 미확인 2.
 """
 
 from __future__ import annotations
@@ -274,6 +279,44 @@ def judge(summary: dict) -> list[str]:
     return problems
 
 
+def _changed(events: list[dict], t0: float, state: Callable[[dict], object]) -> bool:
+    """주입 직전 마지막 상태와 다른 상태가 주입 뒤에 하나라도 기록됐는가. 직전 기록이 없으면 비교하지 않는다."""
+    before = [state(e) for e in events if e["t"] < t0]
+    return bool(before) and any(state(e) != before[-1] for e in events if e["t"] >= t0)
+
+
+def injection_effect(events: list[dict]) -> dict | None:
+    """주입 뒤 관측된 변화. 주입이 없거나 확인을 끈 회차(`--no-effect-check`)는 None이다."""
+    begin = next((e for e in events if e["kind"] == "meta" and e.get("phase") == "begin"), {})
+    starts = [e for e in events if e["kind"] == "inject" and e["phase"] == "start"]
+    if not starts or not begin.get("effect_check", True):
+        return None
+    t0 = starts[0]["t"]
+    by = lambda kind: [e for e in events if e["kind"] == kind]
+    observed = []
+    if write_outages(by("probe"), since=t0):
+        observed.append("쓰기 중단")
+    if _changed([e for e in by("probe") if e["ok"]], t0, lambda e: (e["server"], e["tl"])):
+        observed.append("primary·TL 변화")
+    if _changed(by("cluster"), t0, lambda e: e["members"]):
+        observed.append("Patroni 멤버 변화")
+    if _changed(by("etcd"), t0, lambda e: e["health"]):
+        observed.append("etcd 상태 변화")
+    if _changed(by("vip"), t0, lambda e: (e["holder"], e["ping"])):
+        observed.append("VIP 이동")
+    done = next((e for e in by("inject") if e["phase"] == "done"), {})
+    return {"rc": done.get("rc"), "observed": observed}
+
+
+def verdict(problems: list[str], injection: dict | None) -> tuple[str, int]:
+    """(판정, 종료 코드). 위반이 먼저다 — 주입이 안 걸렸어도 위반은 위반이다."""
+    if problems:
+        return "위반", 1
+    if injection is not None and not injection["observed"]:
+        return "주입 미확인", 2
+    return "통과", 0
+
+
 def write_outages(
     probes: list[dict], *, since: float
 ) -> list[tuple[float, float | None]]:
@@ -322,6 +365,7 @@ def tally(events: list[dict]) -> dict:
         "promotion": promotion(clusters[0], clusters[-1])
         if clusters
         else {"promoted_sync": None},
+        "injection": injection_effect(events),
     }
 
 
@@ -592,6 +636,31 @@ async def cluster_loop(
         await asyncio.sleep(1)
 
 
+async def etcd_health(client: httpx.AsyncClient, nodes: list[str]) -> dict[str, bool]:
+    """노드마다 etcd `/health`. 답하지 않는 노드는 내려간 것으로 친다."""
+    health = {}
+    for host in nodes:
+        try:
+            r = await client.get(f"http://{host}:2379/health", timeout=2)
+            health[host] = r.json().get("health") == "true"
+        except Exception:  # noqa: BLE001 — 접속 실패도 관측값이다
+            health[host] = False
+    return health
+
+
+async def etcd_loop(
+    log: Log, stop: asyncio.Event, client: httpx.AsyncClient, nodes: list[str]
+) -> None:
+    """etcd 정지는 쓰기도 Patroni 멤버도 바꾸지 않는다(s4·etcdq) — 주입 확인에 따로 본다."""
+    last = None
+    while not stop.is_set():
+        health = await etcd_health(client, nodes)
+        if health != last:
+            log("etcd", health=health)
+            last = health
+        await asyncio.sleep(1)
+
+
 async def _arp(host: str) -> str | None:
     p = await asyncio.create_subprocess_exec(
         "arp",
@@ -674,6 +743,7 @@ async def run(a: argparse.Namespace, target: Target, path: Path) -> None:
         inject_at=a.inject_at,
         load=a.load,
         nodes=target.nodes,
+        effect_check=a.effect_check,
     )
     async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_SECONDS) as client:
         (
@@ -689,6 +759,7 @@ async def run(a: argparse.Namespace, target: Target, path: Path) -> None:
             asyncio.create_task(searcher(log, stop_load, client, target)),
             asyncio.create_task(status_loop(log, stop_watch, target)),
             asyncio.create_task(cluster_loop(log, stop_watch, client, target.nodes)),
+            asyncio.create_task(etcd_loop(log, stop_watch, client, target.nodes)),
             asyncio.create_task(vip_loop(log, stop_watch, target)),
         ]
         if a.blob:
@@ -858,6 +929,10 @@ def summarize(path: Path, target: Target) -> tuple[dict, list[str]]:
     )
     lines.append(f"-- 노드: {nodes}")
     lines.append(f"-- 승격: {counted['promotion']}")
+    if (injection := counted["injection"]) is not None:
+        lines.append(
+            f"-- 주입: rc {injection['rc']} · 관측된 변화 {injection['observed'] or '없음'}"
+        )
     return counted | {"reconcile": rec, "nodes": nodes}, lines
 
 
@@ -881,6 +956,12 @@ def main() -> int:
     r.add_argument("--settle", type=float, default=900)
     r.add_argument("--inject")
     r.add_argument("--inject-at", type=float, default=40)
+    r.add_argument(
+        "--no-effect-check",
+        dest="effect_check",
+        action="store_false",
+        help="주입이 클러스터를 바꾸지 않는 측정(DR 수신 끊기 등) — 주입 효과 확인을 끈다",
+    )
     r.add_argument(
         "--blob", action="store_true", help="20MB bytea 연속 쓰기로 복제 지연을 키운다"
     )
@@ -909,11 +990,17 @@ def main() -> int:
                     conn.execute("DROP TABLE IF EXISTS _ha_blob")
     summary, lines = summarize(path, target)
     problems = judge(summary)
+    result, code = verdict(problems, summary["injection"])
     print("\n".join(lines))
-    print("== 판정: " + ("통과" if not problems else "위반"))
+    print("== 판정: " + result)
     for problem in problems:
         print(f"   ✗ {problem}")
-    return 1 if problems else 0
+    if summary["injection"] is not None and not summary["injection"]["observed"]:
+        print(
+            f"   ? 주입 뒤 관측된 변화가 없다(rc {summary['injection']['rc']}) — "
+            "장애가 실제로 걸렸는지 노드에서 확인한다"
+        )
+    return code
 
 
 if __name__ == "__main__":

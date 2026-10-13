@@ -25,7 +25,7 @@
   backend/.venv/bin/python scripts/dr_restore.py converge dr1 --dsn …   # 복원본에 앱을 붙인 뒤
   # 전체 복원 RPO
   backend/.venv/bin/python scripts/ha_failover.py run dr1-rpo --nodes … --load 100 --inject-at 60 \\
-      --inject 'backend/.venv/bin/python scripts/dr_restore.py freeze'
+      --no-effect-check --inject 'backend/.venv/bin/python scripts/dr_restore.py freeze'   # 클러스터는 그대로다 — 끊김은 rpo가 본다
   backend/.venv/bin/python scripts/dr_restore.py restore dr1 full   # 끊은 채로 — 먼저 thaw하면 끊은 뒤 WAL도 받는다
   backend/.venv/bin/python scripts/dr_restore.py rpo ha-runs/dr1-rpo.jsonl --dsn …
   backend/.venv/bin/python scripts/dr_restore.py thaw
