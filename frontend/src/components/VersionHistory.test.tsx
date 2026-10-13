@@ -230,7 +230,9 @@ describe("VersionHistory", () => {
     const mark = await screen.findByText(passage, { selector: "mark" });
     expect(mark.closest("pre")).toHaveTextContent("🚀 머리말 둘째 대목이다. 셋째");
     expect(fetchMock.mock.calls[0][0]).toBe("/api/documents/document-1/versions/2?chunk=1");
-    expect(scrollIntoView).toHaveBeenCalled();
+    // 스크롤은 <mark>가 그려진 뒤 effect에서 일어난다. findByText는 <mark>가 보이면 끝나므로,
+    // 느린 CI에서 스케줄러가 작업을 쪼개면 effect보다 먼저 여기에 닿는다 — 기다려서 확인한다.
+    await waitFor(() => expect(scrollIntoView).toHaveBeenCalled());
   });
 
   // 같은 문서 안에서 다른 인용으로 클라이언트 이동하면 컴포넌트가 다시 마운트되지 않는다.
