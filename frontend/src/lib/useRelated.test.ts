@@ -1,6 +1,6 @@
 // Copyright 2026 jeongeundev
 // SPDX-License-Identifier: MIT
-import { act, renderHook } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useRelated } from "./useRelated";
@@ -118,5 +118,25 @@ describe("useRelated 취소", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expectAllAborted(fetchMock);
     vi.unstubAllGlobals();
+  });
+
+  it("조회 중에 받은 refresh를 버리지 않고 끝난 뒤 한 번 더 조회한다", async () => {
+    let edges = related;
+    let releaseFirst!: () => void;
+    const gate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+    const fetchMock = vi.fn(async (url: string) => {
+      const body = JSON.stringify(url.endsWith("/related") ? edges : suggestions);
+      if (fetchMock.mock.calls.length <= 2) await gate;
+      return new Response(body, { status: 200, headers: { "Content-Type": "application/json" } });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const { result } = renderHook(() => useRelated("document-1", 1));
+    edges = { ...related, based_on_version: 2 };
+    act(() => result.current.refresh());
+    act(() => result.current.refresh());
+    releaseFirst();
+    await waitFor(() => expect(result.current.related?.based_on_version).toBe(2));
+    expect(result.current.loading).toBe(false);
+    expect(fetchMock).toHaveBeenCalledTimes(4);
   });
 });

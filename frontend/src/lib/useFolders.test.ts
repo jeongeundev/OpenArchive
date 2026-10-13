@@ -36,3 +36,22 @@ it("returns server denial as an error value and clears it after refresh", async 
   act(() => result.current.refresh());
   await waitFor(() => expect(result.current.error).toBeNull());
 });
+it("refresh during an in-flight load runs once more after it, so a folder created meanwhile appears", async () => {
+  let server: unknown[] = [];
+  let releaseFirst!: () => void;
+  const gate = new Promise<void>(resolve => { releaseFirst = resolve; });
+  const fetchMock = vi.fn(async () => {
+    const snapshot = JSON.stringify(server);
+    if (fetchMock.mock.calls.length === 1) await gate;
+    return new Response(snapshot);
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  const {result} = renderHook(() => useFolders());
+  server = [{id: "new"}];
+  act(() => result.current.refresh());
+  act(() => result.current.refresh());
+  releaseFirst();
+  await waitFor(() => expect(result.current.folders).toEqual([{id: "new"}]));
+  expect(result.current.loading).toBe(false);
+  expect(fetchMock).toHaveBeenCalledTimes(2);
+});

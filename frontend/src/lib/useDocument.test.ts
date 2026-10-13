@@ -202,4 +202,27 @@ describe("useDocument StrictMode", () => {
     expect(result.current.error).toBeNull();
     vi.unstubAllGlobals();
   });
+
+  it("조회 중에 받은 refresh를 버리지 않고 끝난 뒤 한 번 더 조회한다 — 처리가 끝난 문서는 폴링이 없다", async () => {
+    let server: DocumentDetail = { ...document, embedding_status: "ready" };
+    let releaseFirst!: () => void;
+    const gate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+    const fetchMock = vi.fn(async () => {
+      const body = JSON.stringify(server);
+      if (fetchMock.mock.calls.length === 1) await gate;
+      return new Response(body, { status: 200, headers: { "Content-Type": "application/json" } });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const { result } = renderHook(() => useDocument("document-1"));
+    server = { ...server, tags: ["OpenSQL", "운영"] };
+    act(() => result.current.refresh());
+    act(() => result.current.refresh());
+    releaseFirst();
+    for (let i = 0; i < 5; i += 1) await flushRequest();
+
+    expect(result.current.document?.tags).toEqual(["OpenSQL", "운영"]);
+    expect(result.current.loading).toBe(false);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    vi.unstubAllGlobals();
+  });
 });

@@ -23,10 +23,16 @@ export function useRelated(
   const [error, setError] = useState<string | null>(null);
   const controllerRef = useRef<AbortController | null>(null);
   const inFlightRef = useRef(false);
+  // 조회 중에 받은 refresh는 버리지 않고 끝난 뒤 한 번 더 조회한다 — 버리면 옛 응답이 남는다.
+  const pendingRef = useRef(false);
 
-  const refresh = useCallback(() => {
+  const refresh = useCallback(function run() {
     const controller = controllerRef.current;
-    if (controller === null || inFlightRef.current) return;
+    if (controller === null) return;
+    if (inFlightRef.current) {
+      pendingRef.current = true;
+      return;
+    }
 
     inFlightRef.current = true;
     void Promise.all([getRelated(id, controller.signal), getTagSuggestions(id, controller.signal)])
@@ -43,6 +49,11 @@ export function useRelated(
       .finally(() => {
         if (controller.signal.aborted) return;
         inFlightRef.current = false;
+        if (pendingRef.current) {
+          pendingRef.current = false;
+          run();
+          return;
+        }
         setLoading(false);
       });
   }, [id]);
@@ -56,6 +67,7 @@ export function useRelated(
       controller.abort();
       controllerRef.current = null;
       inFlightRef.current = false;
+      pendingRef.current = false;
     };
   }, [refresh, chunkVersion]);
 
