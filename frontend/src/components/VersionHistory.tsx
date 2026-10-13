@@ -157,7 +157,7 @@ export function VersionHistory({
         <p className="text-sm text-neutral-400">{restoreBlockedReason}</p>
       ) : null}
       {error !== null ? (
-        <p className="text-sm text-[#f87171]" role="status">
+        <p className="text-sm text-[#ef4444]" role="status">
           {error}
         </p>
       ) : null}

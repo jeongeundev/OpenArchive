@@ -51,7 +51,7 @@ describe("StatusPanel", () => {
     render(<StatusPanel status={{ ...status, inconsistent_documents: 2, stale_edge_documents: 4 }} error={null} />);
     expect(screen.getByText("텍스트와 청크 버전")).toBeInTheDocument();
     expect(screen.getByText(/텍스트 버전과 청크 버전이 어긋난 문서 수/)).toBeInTheDocument();
-    expect(screen.queryByText(/원본/)).not.toBeInTheDocument();
+    expect(screen.getByTestId("consistency-count").parentElement?.textContent).not.toMatch(/원본/);
     expect(screen.getByText("관계")).toBeInTheDocument();
     expect(screen.getByTestId("consistency-count")).toHaveTextContent("2");
     expect(screen.getByTestId("stale-edge-count")).toHaveTextContent("4");

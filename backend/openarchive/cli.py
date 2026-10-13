@@ -687,7 +687,7 @@ def run_init(
         f"  임베딩 잡 — 대기 {status.jobs.pending} · 처리 중 {status.jobs.processing} "
         f"· 실패 {status.jobs.error}"
     )
-    print(f"  원본과 어긋난 문서 {status.inconsistent_documents}건")
+    print(f"  텍스트와 청크 버전이 어긋난 문서 {status.inconsistent_documents}건")
     print(f"  관계가 아직 계산되지 않은 문서 {status.stale_edge_documents}건")
 
     has_admin = _ensure_admin(dsn, admin_username)
