@@ -5,6 +5,7 @@
 import Link from "next/link";
 import { useId, useState } from "react";
 
+import { passageHref } from "@/lib/passageLink";
 import { relationLabel } from "@/lib/relations";
 import type { SearchResponse } from "@/lib/types";
 
@@ -100,7 +101,9 @@ export function SearchResults({
                 >
                   <div className="flex items-start justify-between gap-4">
                     <div>
-                      <Link href={`/documents/${item.document_id}`} className="font-medium text-white hover:text-[#0ea5e9]">
+                      {/* 함께 볼 문서는 문서로만 간다 — 이전 판 결과의 chunk_index는 현재 판 번호라
+                          based_on_version의 대목이 아니다. */}
+                      <Link href={item.via === null ? passageHref(item) : `/documents/${item.document_id}`} className="font-medium text-white hover:text-[#0ea5e9]">
                         {item.title}
                       </Link>
                       <p className="mt-2 text-xs text-neutral-500">
