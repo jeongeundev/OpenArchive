@@ -25,12 +25,12 @@ const response: SearchResponse = {
 };
 
 describe("SearchResults", () => {
-  it("결과 제목을 상세 링크로 렌더링하고 점수를 소수점 3자리로 표시한다", () => {
+  it("직접 결과 제목을 그 텍스트 버전·그 대목으로 가는 링크로 렌더링하고 점수를 소수점 3자리로 표시한다", () => {
     render(<SearchResults response={response} loading={false} error={null} />);
 
     expect(screen.getByRole("link", { name: "OpenSQL 운영 가이드" })).toHaveAttribute(
       "href",
-      "/documents/document-1",
+      "/documents/document-1?version=2&chunk=2",
     );
     expect(screen.getByText("유사도 0.877")).toBeInTheDocument();
   });
@@ -79,6 +79,46 @@ describe("SearchResults", () => {
       "「OpenSQL 운영 가이드」에서 「관련 있음」로 이어짐",
     );
     expect(screen.getAllByText(/이어짐/)).toHaveLength(1);
+  });
+
+  it("함께 볼 문서는 대목이 아니라 문서로 링크한다 — 이전 판 결과의 청크 번호는 그 판의 대목이 아니다", () => {
+    render(
+      <SearchResults
+        response={{
+          ...response,
+          items: [
+            response.items[0],
+            {
+              ...response.items[0],
+              document_id: "document-2",
+              title: "OpenProxy 장애 대응",
+              chunk_index: 4,
+              based_on_version: 1,
+              via: { from_document_id: "document-1", kind: "related", depth: 1 },
+            },
+            {
+              ...response.items[0],
+              document_id: "document-3",
+              title: "OpenSQL 운영 가이드 이전 판",
+              chunk_index: 2,
+              based_on_version: 1,
+              via: { from_document_id: "document-3", kind: "revision", depth: 1 },
+            },
+          ],
+        }}
+        loading={false}
+        error={null}
+      />,
+    );
+
+    expect(screen.getByRole("link", { name: "OpenProxy 장애 대응" })).toHaveAttribute(
+      "href",
+      "/documents/document-2",
+    );
+    expect(screen.getByRole("link", { name: "OpenSQL 운영 가이드 이전 판" })).toHaveAttribute(
+      "href",
+      "/documents/document-3",
+    );
   });
 
   it("확장 결과에는 유사도를 표시하지 않는다", () => {
@@ -186,7 +226,7 @@ it("첫 발췌 밖의 검색된 본문 대목을 펼쳐 출처와 텍스트 버�
   expect(details).toHaveAttribute("open");
   expect(screen.getByText(passage)).toBeVisible();
   expect(screen.getByText("본문 대목 1 · 텍스트 버전 2")).toBeVisible();
-  expect(screen.getByRole("link", { name: "OpenSQL 운영 가이드" })).toHaveAttribute("href", "/documents/document-1");
+  expect(screen.getByRole("link", { name: "OpenSQL 운영 가이드" })).toHaveAttribute("href", "/documents/document-1?version=2&chunk=2");
   fireEvent.click(summary);
   expect(screen.getByText(passage)).not.toBeVisible();
 });
