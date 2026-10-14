@@ -89,8 +89,18 @@ WITH RECURSIVE candidates AS (
     ORDER BY c.embedding <=> %(qvec)s::vector
     LIMIT %(k)s * {CANDIDATE_MULTIPLIER}
 ),
+direct_ranked AS (
+    SELECT c.*,
+           NULL::uuid AS via_document_id, NULL::text AS via_kind, 0 AS depth
+    FROM (
+        SELECT DISTINCT ON (document_id) * FROM candidates
+        ORDER BY document_id, dist, chunk_index
+    ) c
+    JOIN documents d ON d.id = c.document_id
+    ORDER BY {TITLE_PRIORITY}, {NUMBER_TITLE_PRIORITY}, c.dist, c.document_id, c.chunk_index
+),
 direct_documents AS (
-    SELECT DISTINCT document_id FROM candidates
+    SELECT document_id FROM direct_ranked LIMIT %(k)s
 ),
 resolved_links AS (
     SELECT l.src_document_id, d.id AS dst_document_id,
@@ -197,14 +207,7 @@ deduplicated AS (
              dist, {VIA_KIND_PRIORITY.format(alias='')}, depth
 ),
 selected AS (
-    (SELECT * FROM deduplicated
-     WHERE depth = 0
-     ORDER BY (SELECT {TITLE_PRIORITY} FROM documents d
-                      WHERE d.id = deduplicated.document_id),
-              (SELECT {NUMBER_TITLE_PRIORITY} FROM documents d
-               WHERE d.id = deduplicated.document_id),
-              dist, document_id, chunk_index
-     LIMIT %(k)s)
+    (SELECT * FROM direct_ranked LIMIT %(k)s)
 
     UNION ALL
 
@@ -218,9 +221,11 @@ selected AS (
 SELECT d.id, d.title, d.filename, d.tags, d.content_type,
        COALESCE(excerpt.chunk_index, hit.chunk_index),
        COALESCE(excerpt.content, hit.content), 1 - hit.dist AS score, hit.version,
-       hit.via_document_id, hit.via_kind, hit.depth, preview_chunks.items, passages.items
+       hit.via_document_id, hit.via_kind, hit.depth, preview_chunks.items, passages.items, source.title
 FROM selected hit
 JOIN documents d ON d.id = hit.document_id
+-- 출처는 직접 후보 또는 열람 술어를 통과한 순회 문서라 이미 열람 범위 안이다.
+LEFT JOIN documents source ON source.id = hit.via_document_id
 LEFT JOIN LATERAL (
     SELECT matched.chunk_index,
            (SELECT string_agg(context.content, E'\n\n' ORDER BY context.chunk_index)
@@ -292,6 +297,7 @@ class SearchVia:
     from_document_id: UUID
     kind: str
     depth: int
+    from_title: str
 
 
 @dataclass(frozen=True)
@@ -503,7 +509,7 @@ async def search_documents(
             score=float(row[7]),
             based_on_version=row[8],
             via=(
-                SearchVia(from_document_id=row[9], kind=row[10], depth=row[11])
+                SearchVia(from_document_id=row[9], kind=row[10], depth=row[11], from_title=row[14])
                 if row[9] is not None
                 else None
             ),

@@ -466,6 +466,9 @@ async def test_graph_search_stops_at_depth_two_and_does_not_repeat_a_cycle(
         for hit in hits
     )
     assert max(hit.via.depth for hit in hits if hit.via is not None) == 2
+    depth_two = next(hit for hit in hits if hit.via is not None and hit.via.depth == 2)
+    assert depth_two.via.from_document_id == ids[1]
+    assert depth_two.via.from_title == "관계 문서 1"
 
 
 async def test_expanded_hit_excerpt_follows_the_edge_target_chunk(worker_conn, search_conn):
@@ -614,6 +617,7 @@ async def test_search_adds_the_previous_text_version_at_query_time(worker_conn, 
     assert hits[1].content == previous_content
     assert hits[1].based_on_version == 1
     assert hits[1].via is not None and hits[1].via.kind == "revision"
+    assert hits[1].via.from_title == "개정 문서"
     assert sum(hit.via is not None and hit.via.kind == "revision" for hit in hits) == 1
 
 
@@ -827,6 +831,9 @@ async def test_ef_search_returns_max_k_distinct_documents(worker_conn, search_co
             worker_conn, title=f"문서 {index}", content=f"공통 검색어 고유{index}"
         )
     await process_all_embedding_jobs(worker_conn, provider)
+
+    # 직접 벡터 결과의 한도를 검증한다. 관계 확장은 별도 k개까지 허용된다.
+    await worker_conn.execute("DELETE FROM document_edges")
 
     hits = await search_documents(search_conn, provider, query="공통 검색어", k=MAX_K)
 
@@ -1315,3 +1322,43 @@ def test_table_preview_does_not_wrap_to_the_end_for_an_indented_first_row():
     body = "  | 첫 조건 | 첫 결과 |\n| 마지막 조건 | 마지막 결과 | "
     preview = body.strip()
     assert _table_preview_context(body, preview) == preview
+
+
+async def test_vector_candidate_outside_displayed_direct_results_can_expand(worker_conn, search_conn):
+    provider = FakeProvider()
+    query = "휴가 신청 절차"
+    ids = [await insert_test_document(worker_conn, title=title, content=content)
+           for title, content in [
+               ("휴가 기준", query),
+               ("신청 안내", query + " 별도 안내"),
+               ("채움", "무관한 채움 내용"),
+           ]]
+    hidden = await insert_test_document(
+        worker_conn, title="숨은 출처", content=query,
+        owner_id="bob", visibility="private",
+    )
+    await process_all_embedding_jobs(worker_conn, provider)
+    await worker_conn.execute("DELETE FROM document_edges")
+    # 세 문서 모두 후보에 들어가고 B는 직접 1위 밖이라는 전제를 먼저 고정한다.
+    wide = await search_documents(search_conn, provider, query=query, k=3, user_id="alice")
+    assert [hit.document_id for hit in wide if hit.via is None][:2] == ids[:2]
+    for src, dst in [(ids[0], ids[1]), (ids[1], ids[0]), (ids[1], ids[2]),
+                     (ids[0], hidden), (hidden, ids[2])]:
+        await worker_conn.execute(
+            "INSERT INTO document_edges (src_document_id, dst_document_id, kind, "
+            "src_chunk_index, dst_chunk_index, score) VALUES (%s, %s, 'related', 0, 0, 0.9)",
+            (src, dst),
+        )
+    for k in (1, 2):
+        hits = await search_documents(search_conn, provider, query=query, k=k, user_id="alice")
+        direct = {hit.document_id for hit in hits if hit.via is None}
+        expanded = [hit for hit in hits if hit.via is not None]
+        assert direct.isdisjoint(hit.document_id for hit in expanded)
+        assert hidden not in {hit.document_id for hit in hits}
+        assert all(hit.via.from_document_id != hidden and hit.via.from_title != "숨은 출처"
+                   for hit in expanded)
+        if k == 1:
+            assert direct == {ids[0]}
+            assert [hit.document_id for hit in expanded] == [ids[1]]
+            assert expanded[0].via.from_document_id == ids[0]
+            assert expanded[0].via.from_title == "휴가 기준"

@@ -134,6 +134,10 @@ def test_search_defaults_to_at_most_ten_items(db_client: TestClient, migrated_db
         [{"title": f"문서 {index}", "content": f"공통 검색어 고유{index}"} for index in range(12)],
     )
 
+    # 관계 확장 없이 API의 기본 직접 결과 한도를 검증한다.
+    with psycopg.connect(migrated_db, autocommit=True) as conn:
+        conn.execute("DELETE FROM document_edges")
+
     response = db_client.post("/api/search", json={"query": "공통 검색어"})
 
     assert len(response.json()["items"]) == 10
