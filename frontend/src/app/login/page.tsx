@@ -47,24 +47,24 @@ export default function LoginPage(): React.ReactElement {
 
   return (
     <section className="max-w-md space-y-6">
-      <h1 className="text-4xl font-semibold text-white">로그인</h1>
+      <h1 className="text-4xl font-semibold text-strong">로그인</h1>
       {passwordChanged ? (
-        <p className="rounded-lg border border-[#0ea5e9] bg-[#141414] px-4 py-3 text-sm text-neutral-300" role="status">
+        <p className="rounded-lg border border-accent bg-card px-4 py-3 text-sm text-body" role="status">
           비밀번호를 바꿨습니다. 이 계정으로 열려 있던 모든 기기의 로그인이 끊겼으니 새
           비밀번호로 다시 로그인하세요. 발급한 API 토큰은 그대로 유효합니다.
         </p>
       ) : null}
-      <form className="space-y-4 rounded-lg border border-neutral-800 bg-[#141414] p-6" onSubmit={(event) => void submit(event)}>
-        <label className="block text-sm text-neutral-400">
+      <form className="space-y-4 rounded-lg border border-line bg-card p-6" onSubmit={(event) => void submit(event)}>
+        <label className="block text-sm text-muted">
           사용자명
-          <input className="mt-2 w-full rounded-lg border border-neutral-800 bg-neutral-900 px-4 py-3 text-neutral-300" autoComplete="username" onChange={(event) => setUsername(event.target.value)} type="text" value={username} />
+          <input className="mt-2 w-full rounded-lg border border-line bg-card px-4 py-3 text-body" autoComplete="username" onChange={(event) => setUsername(event.target.value)} type="text" value={username} />
         </label>
-        <label className="block text-sm text-neutral-400">
+        <label className="block text-sm text-muted">
           비밀번호
-          <input className="mt-2 w-full rounded-lg border border-neutral-800 bg-neutral-900 px-4 py-3 text-neutral-300" autoComplete="current-password" onChange={(event) => setPassword(event.target.value)} type="password" value={password} />
+          <input className="mt-2 w-full rounded-lg border border-line bg-card px-4 py-3 text-body" autoComplete="current-password" onChange={(event) => setPassword(event.target.value)} type="password" value={password} />
         </label>
-        {error !== null ? <p className="text-sm text-[#ef4444]" role="alert">{error}</p> : null}
-        <button className="rounded-lg bg-white px-4 py-2 text-sm text-black hover:bg-neutral-200 disabled:bg-neutral-700 disabled:text-neutral-400" disabled={submitting} type="submit">
+        {error !== null ? <p className="text-sm text-failed" role="alert">{error}</p> : null}
+        <button className="rounded-lg bg-strong px-4 py-2 text-sm text-on-strong hover:bg-strong/90 disabled:bg-sunken disabled:text-faint" disabled={submitting} type="submit">
           {submitting ? "로그인 중…" : "로그인"}
         </button>
       </form>

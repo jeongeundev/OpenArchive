@@ -20,7 +20,7 @@ export const dynamicParams = false;
 export default function DocumentDetailPage(): React.ReactElement {
   // useSearchParams(인용 위치)는 정적 export에서 Suspense 경계를 요구한다 — 없으면 빌드가 실패한다.
   return (
-    <Suspense fallback={<p className="text-sm text-neutral-500">불러오는 중…</p>}>
+    <Suspense fallback={<p className="text-sm text-muted">불러오는 중…</p>}>
       <DocumentDetailView />
     </Suspense>
   );

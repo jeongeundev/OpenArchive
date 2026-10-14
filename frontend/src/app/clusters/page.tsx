@@ -61,18 +61,18 @@ export default function ClustersPage(): React.ReactElement {
   return (
     <div className="space-y-8">
       <header>
-        <p className="text-sm text-neutral-500">현재 열람 범위 기준</p>
-        <h1 className="mt-2 text-4xl font-semibold text-white">관계 지도</h1>
-        <p className="mt-3 text-sm text-neutral-400">
+        <p className="text-sm text-muted">현재 열람 범위 기준</p>
+        <h1 className="mt-2 text-4xl font-semibold text-strong">관계 지도</h1>
+        <p className="mt-3 text-sm text-muted">
           관계 그래프에서 서로 많이 이어진 문서끼리 묶었습니다. 원의 크기는 문서 수, 선의 굵기는 덩어리 사이 관계 수이며, 가장 작은 값과 가장 큰 값 사이의 상대 크기로 그립니다. 덩어리 이름은 그 덩어리에 집중된 태그이고, 그런 태그가 없으면 연결이 가장 많은 문서의 제목입니다. 묶음은 관계로 계산한 추천이며 사실처럼 단정하지 않습니다.
         </p>
       </header>
 
-      {error !== null ? <p className="text-sm text-[#ef4444]" role="alert">{error}</p> : null}
-      {data === null && error === null ? <p className="text-sm text-neutral-500">불러오는 중…</p> : null}
-      {data?.clusters.length === 0 ? <p className="text-sm text-neutral-500">표시할 문서가 없습니다.</p> : null}
+      {error !== null ? <p className="text-sm text-failed" role="alert">{error}</p> : null}
+      {data === null && error === null ? <p className="text-sm text-muted">불러오는 중…</p> : null}
+      {data?.clusters.length === 0 ? <p className="text-sm text-muted">표시할 문서가 없습니다.</p> : null}
       {data !== null && data.clusters.length > 0 ? (
-        <section className="overflow-x-auto rounded-lg border border-neutral-800 bg-[#141414] p-4" aria-label="관계 지도 그래프">
+        <section className="overflow-x-auto rounded-lg border border-line bg-card p-4" aria-label="관계 지도 그래프">
           <svg className="min-w-[720px]" viewBox={`0 0 ${WIDTH} ${HEIGHT}`} role="img" aria-label="문서 덩어리와 덩어리 사이 연결">
             {data.connections.map((connection) => {
               const source = positions.get(connection.source);
@@ -81,7 +81,7 @@ export default function ClustersPage(): React.ReactElement {
               return (
                 <line
                   key={`${connection.source}:${connection.target}`}
-                  stroke="#404040"
+                  className="stroke-line-strong"
                   strokeWidth={1 + 5 * spread(connection.count, counts)}
                   x1={source.x}
                   x2={target.x}
@@ -96,7 +96,7 @@ export default function ClustersPage(): React.ReactElement {
               return (
                 <g
                   aria-label={`${cluster.name} 덩어리`}
-                  className="cursor-pointer outline-none focus:[&_circle]:stroke-white"
+                  className="cursor-pointer outline-none focus:[&_circle]:stroke-strong"
                   key={cluster.name}
                   onClick={() => setSelected(cluster)}
                   onKeyDown={(event) => {
@@ -106,15 +106,14 @@ export default function ClustersPage(): React.ReactElement {
                   tabIndex={0}
                 >
                   <circle
+                    className={selected?.name === cluster.name ? "fill-accent stroke-line-strong" : "fill-card stroke-line-strong"}
                     cx={position.x}
                     cy={position.y}
-                    fill={selected?.name === cluster.name ? "#0ea5e9" : "#262626"}
                     r={radius}
-                    stroke="#737373"
                     strokeWidth="1.5"
                   />
-                  <text className="pointer-events-none fill-white text-sm font-medium" textAnchor="middle" x={position.x} y={position.y - 2}>{cluster.name}</text>
-                  <text className="pointer-events-none fill-neutral-400 text-xs" textAnchor="middle" x={position.x} y={position.y + 16}>{cluster.size}개</text>
+                  <text className="pointer-events-none fill-strong text-sm font-medium" textAnchor="middle" x={position.x} y={position.y - 2}>{cluster.name}</text>
+                  <text className="pointer-events-none fill-muted text-xs" textAnchor="middle" x={position.x} y={position.y + 16}>{cluster.size}개</text>
                 </g>
               );
             })}
@@ -123,15 +122,15 @@ export default function ClustersPage(): React.ReactElement {
       ) : null}
 
       {selected !== null ? (
-        <section className="rounded-lg border border-neutral-800 bg-[#141414] p-6">
-          <h2 className="text-sm font-medium text-neutral-400">{selected.name} 문서 {selected.size}개</h2>
+        <section className="rounded-lg border border-line bg-card p-6">
+          <h2 className="text-sm font-medium text-muted">{selected.name} 문서 {selected.size}개</h2>
           {selected.name === "미분류" ? (
-            <p className="mt-2 text-sm text-neutral-500">아직 관계가 계산되지 않았거나 이어진 문서가 없는 문서입니다.</p>
+            <p className="mt-2 text-sm text-muted">아직 관계가 계산되지 않았거나 이어진 문서가 없는 문서입니다.</p>
           ) : null}
           <ul className="mt-4 space-y-2">
             {selected.documents.map((document) => (
               <li key={document.document_id}>
-                <Link className="text-sm text-neutral-300 hover:text-[#0ea5e9]" href={`/documents/${document.document_id}`}>
+                <Link className="text-sm text-body hover:text-accent" href={`/documents/${document.document_id}`}>
                   {document.title}
                 </Link>
               </li>

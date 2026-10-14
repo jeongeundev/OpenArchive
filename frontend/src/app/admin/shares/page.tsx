@@ -40,35 +40,35 @@ export default function SharesPage(): React.ReactElement {
     } finally { setWorking(false); }
   }
 
-  if (authLoading) return <p className="text-sm text-neutral-500">불러오는 중…</p>;
-  if (!auth.is_admin) return <p className="text-sm text-neutral-500">관리자 권한이 필요합니다.</p>;
+  if (authLoading) return <p className="text-sm text-muted">불러오는 중…</p>;
+  if (!auth.is_admin) return <p className="text-sm text-muted">관리자 권한이 필요합니다.</p>;
 
   return <section className="space-y-8">
     <div>
-      <h1 className="text-4xl font-semibold text-white">외부 공유</h1>
-      <p className="mt-3 text-sm text-neutral-400">모든 사용자의 공유와 토큰 사용 기록을 확인하고, 필요한 경우 토큰을 폐기합니다.</p>
+      <h1 className="text-4xl font-semibold text-strong">외부 공유</h1>
+      <p className="mt-3 text-sm text-muted">모든 사용자의 공유와 토큰 사용 기록을 확인하고, 필요한 경우 토큰을 폐기합니다.</p>
     </div>
-    {!loaded && error === null ? <p className="text-sm text-neutral-500">불러오는 중…</p> : null}
-    {loaded && shares.length === 0 ? <p className="text-sm text-neutral-500">외부 공유가 없습니다.</p> : null}
-    {loaded && shares.length > 0 ? <div className="overflow-x-auto rounded-lg border border-neutral-800 bg-[#141414]">
+    {!loaded && error === null ? <p className="text-sm text-muted">불러오는 중…</p> : null}
+    {loaded && shares.length === 0 ? <p className="text-sm text-muted">외부 공유가 없습니다.</p> : null}
+    {loaded && shares.length > 0 ? <div className="overflow-x-auto rounded-lg border border-line bg-card">
       <table className="w-full text-left text-sm">
-        <thead className="border-b border-neutral-800 text-neutral-400"><tr>{["공유 이름", "소유자", "생성일", "문서 수", "폴더 수", "토큰"].map(label => <th className="px-4 py-3 font-medium" key={label}>{label}</th>)}</tr></thead>
-        <tbody>{shares.map(share => <tr className="border-b border-neutral-800 last:border-0" key={share.id}>
-          <td className="px-4 py-3 text-white">{share.name}</td>
-          <td className="px-4 py-3 text-neutral-300">{share.owner}</td>
-          <td className="px-4 py-3 text-neutral-400"><time dateTime={share.created_at}>{DATE_FORMATTER.format(new Date(share.created_at))}</time></td>
-          <td className="px-4 py-3 text-neutral-300">{share.document_count}</td>
-          <td className="px-4 py-3 text-neutral-300">{share.folder_count}</td>
-          <td className="px-4 py-3 text-neutral-400">{share.tokens.length === 0 ? "토큰 없음" : <ul className="space-y-3">{share.tokens.map(token => <li className="space-y-1" key={token.id}>
-            <span className="text-neutral-300">{token.name}</span>
-            {token.expired ? <span className="ml-2 rounded bg-[#ef4444]/10 px-2 py-0.5 text-xs font-medium text-[#ef4444]">만료</span> : null}
-            <span className="block text-xs text-neutral-500">{token.expires_at === null ? "만료 없음" : `만료 ${formatExpiry(token.expires_at)}`}</span>
-            <span className="block text-xs text-neutral-500">{token.last_used_at === null ? "사용 기록 없음" : `마지막 사용 ${DATE_FORMATTER.format(new Date(token.last_used_at))}`}</span>
-            <button aria-label={`${token.name} 폐기`} className="text-neutral-500 hover:text-neutral-300 disabled:text-neutral-600" disabled={working} onClick={() => void revoke(share, token)} type="button">폐기</button>
+        <thead className="border-b border-line text-muted"><tr>{["공유 이름", "소유자", "생성일", "문서 수", "폴더 수", "토큰"].map(label => <th className="px-4 py-3 font-medium" key={label}>{label}</th>)}</tr></thead>
+        <tbody>{shares.map(share => <tr className="border-b border-line last:border-0" key={share.id}>
+          <td className="px-4 py-3 text-strong">{share.name}</td>
+          <td className="px-4 py-3 text-body">{share.owner}</td>
+          <td className="px-4 py-3 text-muted"><time dateTime={share.created_at}>{DATE_FORMATTER.format(new Date(share.created_at))}</time></td>
+          <td className="px-4 py-3 text-body">{share.document_count}</td>
+          <td className="px-4 py-3 text-body">{share.folder_count}</td>
+          <td className="px-4 py-3 text-muted">{share.tokens.length === 0 ? "토큰 없음" : <ul className="space-y-3">{share.tokens.map(token => <li className="space-y-1" key={token.id}>
+            <span className="text-body">{token.name}</span>
+            {token.expired ? <span className="ml-2 rounded bg-failed-soft px-2 py-0.5 text-xs font-medium text-failed">만료</span> : null}
+            <span className="block text-xs text-muted">{token.expires_at === null ? "만료 없음" : `만료 ${formatExpiry(token.expires_at)}`}</span>
+            <span className="block text-xs text-muted">{token.last_used_at === null ? "사용 기록 없음" : `마지막 사용 ${DATE_FORMATTER.format(new Date(token.last_used_at))}`}</span>
+            <button aria-label={`${token.name} 폐기`} className="text-muted hover:text-strong disabled:text-faint" disabled={working} onClick={() => void revoke(share, token)} type="button">폐기</button>
           </li>)}</ul>}</td>
         </tr>)}</tbody>
       </table>
     </div> : null}
-    {error !== null ? <p className="text-sm text-[#ef4444]" role="alert">{error}</p> : null}
+    {error !== null ? <p className="text-sm text-failed" role="alert">{error}</p> : null}
   </section>;
 }
