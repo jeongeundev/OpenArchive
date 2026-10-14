@@ -4,7 +4,7 @@
 
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Suspense, useCallback, useEffect, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 
 import { DocumentFilters } from "@/components/DocumentFilters";
 import { createFolder, listDocumentTags, type DocumentFilters as Filters } from "@/lib/api";
@@ -19,11 +19,12 @@ import { useAuth } from "@/components/AuthProvider";
 import { useDocumentProgress } from "@/lib/useDocumentProgress";
 import { useDocuments } from "@/lib/useDocuments";
 import { useFolders } from "@/lib/useFolders";
+import { listHref, listStateFromParams, rememberListHref } from "@/lib/urlState";
 
 const PAGE_SIZE = 50;
 
 export default function Home(): React.ReactElement {
-  // 선택 폴더를 주소(?folder=)에 두므로 useSearchParams가 필요하고, 정적 export는 Suspense 경계를 요구한다.
+  // 선택 폴더·조건·쪽을 주소에 두므로 useSearchParams가 필요하고, 정적 export는 Suspense 경계를 요구한다.
   return (
     <Suspense fallback={<p className="text-sm text-neutral-500">불러오는 중…</p>}>
       <HomeView />
@@ -36,17 +37,14 @@ function HomeView(): React.ReactElement {
   const searchParams = useSearchParams();
   const { auth } = useAuth();
   const { folders, loading: foldersLoading, error: foldersError, refresh: refreshFolders } = useFolders(auth.authenticated);
-  const folderParam = searchParams?.get("folder") ?? null;
+  // 폴더·조건·쪽은 주소가 기준이다 — 문서로 갔다가 뒤로 오면 같은 목록을 다시 그린다.
+  const query = searchParams?.toString() ?? "";
+  const listState = useMemo(() => listStateFromParams(new URLSearchParams(query)), [query]);
+  const { filters, page } = listState;
+  const folderParam = listState.folderId;
   // 받은 목록에 있는 폴더만 고른다. 서버가 볼 수 없는 폴더를 이미 뺐으므로 없으면 전체 문서로 되돌린다.
   const selectedFolder = folderParam === null ? null : folders.find(folder => folder.id === folderParam) ?? null;
   const folderId = selectedFolder?.id ?? null;
-  const [page, setPage] = useState(0);
-  const [pageFolderId, setPageFolderId] = useState(folderId);
-  if (pageFolderId !== folderId) {
-    setPageFolderId(folderId);
-    setPage(0);
-  }
-  const [filters, setFilters] = useState<Filters>({ sort: "updated" });
   const [tags, setTags] = useState<string[]>([]);
   const [tagsRevision, setTagsRevision] = useState(0);
   const { documents, total, loading, error, refresh } = useDocuments({
@@ -59,12 +57,19 @@ function HomeView(): React.ReactElement {
 
   useEffect(() => {
     if (folderParam === null || !auth.authenticated || foldersLoading || foldersError !== null) return;
-    if (!folders.some(folder => folder.id === folderParam)) router.replace("/");
-  }, [folderParam, folders, foldersLoading, foldersError, auth.authenticated, router]);
+    if (!folders.some(folder => folder.id === folderParam)) router.replace(listHref({ folderId: null, filters, page: 0 }));
+  }, [folderParam, folders, foldersLoading, foldersError, auth.authenticated, router, filters]);
 
+  useEffect(() => rememberListHref(listHref(listState)), [listState]);
+
+  // 폴더 이동은 기록에 남기고, 조건·쪽 변경은 남기지 않는다 — 제목 입력이 멈출 때마다 뒤로 가기 한 칸이 쌓이지 않게.
   const selectFolder = useCallback((id: string | null) => {
-    router.push(id === null ? "/" : `/?folder=${encodeURIComponent(id)}`);
-  }, [router]);
+    router.push(listHref({ folderId: id, filters, page: 0 }));
+  }, [router, filters]);
+
+  const setPage = useCallback((next: number) => {
+    router.replace(listHref({ ...listState, page: next }));
+  }, [router, listState]);
 
   const onCreateFolder = useCallback(async (name: string, parentId: string | null) => {
     await createFolder({ name, parentId });
@@ -87,9 +92,8 @@ function HomeView(): React.ReactElement {
   }, [tagsRevision]);
 
   const onFiltersChanged = useCallback((value: Filters) => {
-    setFilters(value);
-    setPage(0);
-  }, []);
+    router.replace(listHref({ folderId: folderParam, filters: value, page: 0 }));
+  }, [router, folderParam]);
   const hasConditions = Boolean(filters.q?.trim() || filters.contentType || filters.tag);
   const emptyMessage = hasConditions ? "조건에 맞는 문서가 없습니다."
     : folderId !== null ? "이 폴더에 문서가 없습니다." : undefined;

@@ -15,10 +15,21 @@ export function DocumentFilters({ value, tags, onChange }: {
   onChange: (value: Filters) => void;
 }): React.ReactElement {
   const [query, setQuery] = useState(value.q ?? "");
+  // 조건은 주소에서 온다. 바깥에서 바뀐 제목(뒤로 가기·「문서」 링크)은 입력칸에 반영하되, 내가 보낸 값이
+  // 돌아온 것이면 그사이 이어서 친 글자를 지우지 않는다. 반영하지 않으면 남은 입력이 300ms 뒤 주소를 되돌린다.
+  const [seenQ, setSeenQ] = useState(value.q ?? "");
+  const [sentQ, setSentQ] = useState<string | null>(null);
+  if ((value.q ?? "") !== seenQ) {
+    setSeenQ(value.q ?? "");
+    if ((value.q ?? "") !== sentQ) setQuery(value.q ?? "");
+  }
 
   useEffect(() => {
     if (query === (value.q ?? "")) return;
-    const timer = window.setTimeout(() => onChange({ ...value, q: query }), 300);
+    const timer = window.setTimeout(() => {
+      setSentQ(query);
+      onChange({ ...value, q: query });
+    }, 300);
     return () => window.clearTimeout(timer);
   }, [query, value, onChange]);
 

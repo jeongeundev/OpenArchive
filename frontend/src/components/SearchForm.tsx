@@ -13,16 +13,19 @@ export function SearchForm({
   onSearch,
   pending,
   folders = [],
+  initial = null,
 }: {
   onSearch: (input: SearchInput) => void;
   pending: boolean;
   folders?: Folder[];
+  /** 주소에서 복원한 조건. 처음 그릴 때만 읽는다. */
+  initial?: SearchInput | null;
 }): React.ReactElement {
-  const [query, setQuery] = useState("");
-  const [tags, setTags] = useState("");
-  const [contentType, setContentType] = useState<ContentType | "">("");
-  const [k, setK] = useState(10);
-  const [folderId, setFolderId] = useState<string | null>(null);
+  const [query, setQuery] = useState(initial?.query ?? "");
+  const [tags, setTags] = useState(initial?.tags.join(", ") ?? "");
+  const [contentType, setContentType] = useState<ContentType | "">(initial?.contentType ?? "");
+  const [k, setK] = useState(initial?.k ?? 10);
+  const [folderId, setFolderId] = useState<string | null>(initial?.folderId ?? null);
   // 볼 수 있는 폴더가 사라졌으면(목록 갱신·권한 변경) 선택도 버린다.
   const selectedFolderId = folders.some((folder) => folder.id === folderId) ? folderId : null;
 

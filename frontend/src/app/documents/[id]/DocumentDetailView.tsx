@@ -19,6 +19,7 @@ import { TextEditor } from "@/components/TextEditor";
 import { VersionHistory } from "@/components/VersionHistory";
 import { useDocument } from "@/lib/useDocument";
 import { useRelated } from "@/lib/useRelated";
+import { lastListHref } from "@/lib/urlState";
 import { ApiError, getDocumentBacklinks, getDocumentLinks, updateTags } from "@/lib/api";
 import { useAuth } from "@/components/AuthProvider";
 import { EXTRACTING_NOTICE, type Backlink, type ResolvedLink } from "@/lib/types";
@@ -113,7 +114,8 @@ export function DocumentDetailView(): React.ReactElement {
 
   return (
     <div className="space-y-8">
-      <Link href="/" className="text-sm text-neutral-500 hover:text-neutral-300">
+      {/* 마지막으로 본 목록의 폴더·조건·쪽으로 돌아간다. 문서는 불러온 뒤에만 그리므로 서버 프리렌더와 어긋나지 않는다. */}
+      <Link href={lastListHref()} className="text-sm text-neutral-500 hover:text-neutral-300">
         ← 목록으로 돌아가기
       </Link>
 

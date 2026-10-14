@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DocumentAccess, DocumentDetail } from "@/lib/types";
 import { AuthProvider } from "@/components/AuthProvider";
 import { DocumentDetailView } from "./DocumentDetailView";
+import { rememberListHref } from "@/lib/urlState";
 
 // useRouter는 DocumentActions가 삭제 후 목록으로 보낼 때만 쓴다. usePathname은 문서 ID의
 // 출처다 — 정적 export에서는 params에 껍데기 값이 들어오므로 URL에서 읽는다.
@@ -443,4 +444,24 @@ it("소유자 상세에는 소유자 이전을 표시한다", async () => {
   stubFetch(() => jsonResponse(detail));
   render(<AuthProvider><DocumentDetailView /></AuthProvider>);
   expect(await screen.findByRole("button", { name: "소유자 이전" })).toBeInTheDocument();
+});
+
+describe("목록으로 돌아가기", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    sessionStorage.clear();
+  });
+
+  it("마지막으로 본 목록의 조건과 쪽으로 돌아간다", async () => {
+    rememberListHref("/?sort=title&page=2");
+    stubFetch(() => jsonResponse(detail));
+    await renderPage();
+    expect(screen.getByRole("link", { name: "← 목록으로 돌아가기" })).toHaveAttribute("href", "/?sort=title&page=2");
+  });
+
+  it("목록을 거치지 않고 왔으면 첫 목록으로 간다", async () => {
+    stubFetch(() => jsonResponse(detail));
+    await renderPage();
+    expect(screen.getByRole("link", { name: "← 목록으로 돌아가기" })).toHaveAttribute("href", "/");
+  });
 });

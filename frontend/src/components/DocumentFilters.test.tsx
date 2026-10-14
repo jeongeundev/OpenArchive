@@ -42,3 +42,27 @@ it("선택 변경은 다른 조건을 보존하고 제목은 입력이 멈춘 �
   act(() => vi.advanceTimersByTime(300));
   expect(onChange).toHaveBeenCalledExactlyOnceWith({ ...value, q: "출장" });
 });
+
+it("바깥에서 제목 조건이 바뀌면 입력칸이 따라가고 이전 입력을 되돌려 쓰지 않는다", () => {
+  vi.useFakeTimers();
+  const onChange = vi.fn();
+  const { rerender } = render(<DocumentFilters value={{ q: "출장", sort: "updated" }} tags={[]} onChange={onChange} />);
+  rerender(<DocumentFilters value={{ sort: "updated" }} tags={[]} onChange={onChange} />);
+  expect(screen.getByLabelText("제목 검색")).toHaveValue("");
+  rerender(<DocumentFilters value={{ q: "교육", sort: "updated" }} tags={[]} onChange={onChange} />);
+  expect(screen.getByLabelText("제목 검색")).toHaveValue("교육");
+  act(() => vi.advanceTimersByTime(500));
+  expect(onChange).not.toHaveBeenCalled();
+});
+
+it("입력이 반영된 뒤에도 이어서 친 글자를 지우지 않는다", () => {
+  vi.useFakeTimers();
+  const onChange = vi.fn();
+  const { rerender } = render(<DocumentFilters value={{ sort: "updated" }} tags={[]} onChange={onChange} />);
+  fireEvent.change(screen.getByLabelText("제목 검색"), { target: { value: "출장" } });
+  act(() => vi.advanceTimersByTime(300));
+  expect(onChange).toHaveBeenLastCalledWith({ sort: "updated", q: "출장" });
+  fireEvent.change(screen.getByLabelText("제목 검색"), { target: { value: "출장비" } });
+  rerender(<DocumentFilters value={{ q: "출장", sort: "updated" }} tags={[]} onChange={onChange} />);
+  expect(screen.getByLabelText("제목 검색")).toHaveValue("출장비");
+});

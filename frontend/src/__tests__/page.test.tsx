@@ -1,17 +1,48 @@
 // Copyright 2026 jeongeundev
 // SPDX-License-Identifier: MIT
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { AuthProvider } from "@/components/AuthProvider";
+import { RequireAuth } from "@/components/RequireAuth";
 import Home from "@/app/page";
 import type { DocumentSummary, Folder } from "@/lib/types";
+import { lastListHref } from "@/lib/urlState";
 
-const navigation = vi.hoisted(() => ({ searchParams: new URLSearchParams(), push: vi.fn(), replace: vi.fn() }));
-vi.mock("next/navigation", () => ({
-  useRouter: () => ({ push: navigation.push, replace: navigation.replace }),
-  useSearchParams: () => navigation.searchParams,
-}));
+// 주소를 실제로 바꾸는 라우터 — 목록은 폴더·조건·쪽을 주소에 두고 주소에서 읽는다.
+const navigation = vi.hoisted(() => {
+  let params = new URLSearchParams();
+  const listeners = new Set<() => void>();
+  const go = (href: string) => {
+    params = new URL(href, "http://localhost").searchParams;
+    listeners.forEach((listener) => listener());
+  };
+  return {
+    params: () => params,
+    go,
+    subscribe: (listener: () => void) => {
+      listeners.add(listener);
+      return () => { listeners.delete(listener); };
+    },
+    push: vi.fn(go),
+    replace: vi.fn(go),
+  };
+});
+vi.mock("next/navigation", async () => {
+  const { useSyncExternalStore } = await import("react");
+  return {
+    useRouter: () => ({ push: navigation.push, replace: navigation.replace }),
+    usePathname: () => "/",
+    useSearchParams: () => useSyncExternalStore(navigation.subscribe, navigation.params),
+  };
+});
+
+afterEach(() => {
+  navigation.go("/");
+  navigation.push.mockClear();
+  navigation.replace.mockClear();
+  sessionStorage.clear();
+});
 
 const documents: DocumentSummary[] = [
   {
@@ -184,15 +215,13 @@ function requestedUrls(fetchMock: ReturnType<typeof vi.fn>): URL[] {
 describe("폴더 트리", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
-    navigation.searchParams = new URLSearchParams();
-    navigation.push.mockReset();
-    navigation.replace.mockReset();
   });
 
   it("폴더를 고르면 그 폴더에 든 문서만 목록과 건수로 조회하고 문서 수를 트리에 표시한다", async () => {
-    navigation.searchParams = new URLSearchParams("folder=folder-a");
+    navigation.go("/?folder=folder-a");
     const fetchMock = mockFinder(1, 2, [hr]);
-    render(<AuthProvider><Home /></AuthProvider>);
+    // 실제 앱처럼 로그인 확인 뒤에 그린다 — 주소의 폴더를 폴더 목록이 오기 전에 판정하지 않는다.
+    render(<AuthProvider><RequireAuth><Home /></RequireAuth></AuthProvider>);
     expect(await screen.findByRole("heading", { name: "인사" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /인사/ })).toHaveTextContent("1");
     await waitFor(() => {
@@ -212,18 +241,20 @@ describe("폴더 트리", () => {
   });
 
   it("볼 수 없는 폴더를 주소로 고르면 존재를 알리지 않고 전체 문서로 되돌린다", async () => {
-    navigation.searchParams = new URLSearchParams("folder=hidden");
+    navigation.go("/?folder=hidden");
     const fetchMock = mockFinder(2, 2, [hr]);
-    render(<AuthProvider><Home /></AuthProvider>);
+    // 실제 앱처럼 로그인 확인 뒤에 그린다 — 주소의 폴더를 폴더 목록이 오기 전에 판정하지 않는다.
+    render(<AuthProvider><RequireAuth><Home /></RequireAuth></AuthProvider>);
     await waitFor(() => expect(navigation.replace).toHaveBeenCalledWith("/"));
     expect(screen.queryByText(/찾을 수 없/)).not.toBeInTheDocument();
     expect(requestedUrls(fetchMock).some(url => url.searchParams.get("folder_id") === "hidden")).toBe(false);
   });
 
   it("빈 폴더를 고르면 폴더가 비었다고 알린다", async () => {
-    navigation.searchParams = new URLSearchParams("folder=folder-a");
+    navigation.go("/?folder=folder-a");
     mockFinder(0, 2, [{ ...hr, document_count: 0 }]);
-    render(<AuthProvider><Home /></AuthProvider>);
+    // 실제 앱처럼 로그인 확인 뒤에 그린다 — 주소의 폴더를 폴더 목록이 오기 전에 판정하지 않는다.
+    render(<AuthProvider><RequireAuth><Home /></RequireAuth></AuthProvider>);
     expect(await screen.findByText("이 폴더에 문서가 없습니다.")).toBeInTheDocument();
   });
 
@@ -248,7 +279,7 @@ describe("폴더 트리", () => {
     fireEvent.change(screen.getByLabelText("새 폴더 이름"), { target: { value: "인사" } });
     fireEvent.click(screen.getByRole("button", { name: "만들기" }));
     expect(await screen.findByRole("button", { name: /인사/ })).toBeInTheDocument();
-    navigation.searchParams = new URLSearchParams("folder=folder-a");
+    act(() => navigation.go("/?folder=folder-a"));
     rerender(<AuthProvider><Home /></AuthProvider>);
     const header = (await screen.findByRole("heading", { name: "인사" })).parentElement as HTMLElement;
     expect(header).toHaveTextContent("열람 범위 · 조직 공개");
@@ -256,7 +287,7 @@ describe("폴더 트리", () => {
 
   it("빈 폴더를 삭제하면 트리에서 사라지고 전체 문서로 돌아간다", async () => {
     vi.spyOn(window, "confirm").mockReturnValue(true);
-    navigation.searchParams = new URLSearchParams("folder=folder-a");
+    navigation.go("/?folder=folder-a");
     let folders: Folder[] = [{ ...hr, document_count: 0 }];
     vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const url = new URL(String(input), "http://localhost");
@@ -271,7 +302,8 @@ describe("폴더 트리", () => {
         : url.pathname.endsWith("/tags") ? [] : [];
       return Promise.resolve(new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } }));
     }));
-    render(<AuthProvider><Home /></AuthProvider>);
+    // 실제 앱처럼 로그인 확인 뒤에 그린다 — 주소의 폴더를 폴더 목록이 오기 전에 판정하지 않는다.
+    render(<AuthProvider><RequireAuth><Home /></RequireAuth></AuthProvider>);
     fireEvent.click(await screen.findByRole("button", { name: "삭제" }));
     await waitFor(() => expect(navigation.push).toHaveBeenCalledWith("/"));
     await waitFor(() => expect(screen.queryByRole("button", { name: /인사/ })).not.toBeInTheDocument());
@@ -283,5 +315,72 @@ describe("폴더 트리", () => {
     render(<Home />);
     await screen.findByRole("link", { name: "OpenSQL 운영 가이드" });
     expect(screen.queryByRole("button", { name: "전체 문서" })).not.toBeInTheDocument();
+  });
+});
+
+function listRequests(fetchMock: ReturnType<typeof vi.fn>): URL[] {
+  return requestedUrls(fetchMock).filter(url => url.pathname === "/api/documents");
+}
+
+describe("목록 상태 주소", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("주소의 조건과 쪽으로 조회하고 필터에도 표시한다", async () => {
+    navigation.go("/?q=출장&type=hwp&tag=보안&sort=title&page=2");
+    const fetchMock = mockFinder(120, 300);
+    render(<Home />);
+
+    expect(await screen.findByText("120건 중 51–100")).toBeInTheDocument();
+    const last = listRequests(fetchMock).at(-1);
+    expect(Object.fromEntries(last?.searchParams ?? [])).toMatchObject({ q: "출장", content_type: "hwp", tag: "보안", sort: "title", offset: "50" });
+    expect(screen.getByLabelText("제목 검색")).toHaveValue("출장");
+    expect(screen.getByLabelText("문서 유형")).toHaveValue("hwp");
+    expect(screen.getByLabelText("정렬")).toHaveValue("title");
+  });
+
+  it("조건과 쪽을 바꾸면 기록을 쌓지 않고 주소를 바꾼다", async () => {
+    mockFinder(120, 300);
+    render(<Home />);
+    await screen.findByText("120건 중 1–50");
+
+    fireEvent.change(screen.getByLabelText("정렬"), { target: { value: "title" } });
+    expect(navigation.replace).toHaveBeenLastCalledWith("/?sort=title");
+    fireEvent.click(screen.getByRole("button", { name: "다음" }));
+    expect(navigation.replace).toHaveBeenLastCalledWith("/?sort=title&page=2");
+    expect(navigation.push).not.toHaveBeenCalled();
+  });
+
+  it("폴더를 바꾸면 조건은 두고 쪽만 처음으로 돌린다", async () => {
+    navigation.go("/?tag=보안&page=3");
+    mockFinder(120, 300, [hr]);
+    render(<AuthProvider><Home /></AuthProvider>);
+
+    fireEvent.click(await screen.findByRole("button", { name: /인사/ }));
+
+    expect(navigation.push).toHaveBeenLastCalledWith("/?folder=folder-a&tag=%EB%B3%B4%EC%95%88");
+  });
+
+  it("주소에서 조건이 빠지면 제목 입력칸도 비우고 되돌려 쓰지 않는다", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    navigation.go("/?q=출장");
+    mockFinder(2, 2);
+    render(<Home />);
+    expect(screen.getByLabelText("제목 검색")).toHaveValue("출장");
+
+    act(() => navigation.go("/"));
+    act(() => vi.advanceTimersByTime(500));
+
+    expect(screen.getByLabelText("제목 검색")).toHaveValue("");
+    expect(navigation.params().get("q")).toBeNull();
+    vi.useRealTimers();
+  });
+
+  it("지금 목록 주소를 「목록으로 돌아가기」용으로 기억한다", async () => {
+    navigation.go("/?sort=title&page=2");
+    mockFinder(120, 300);
+    render(<Home />);
+    await screen.findByText("120건 중 51–100");
+
+    expect(lastListHref()).toBe("/?sort=title&page=2");
   });
 });

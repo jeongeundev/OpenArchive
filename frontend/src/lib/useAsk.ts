@@ -8,13 +8,12 @@ import { ApiError, ask } from "./api";
 import type { AskResponse } from "./types";
 import type { SearchInput } from "./useSearch";
 
-/** 근거 기반 답변 요청. 마지막 요청만 살리고, `reset`은 새 검색이 이전 답을 지울 때 쓴다. */
+/** 근거 기반 답변 요청. 마지막 요청만 살린다 — 새 검색은 화면을 새로 그려 이전 요청을 취소한다. */
 export function useAsk(): {
   response: AskResponse | null;
   loading: boolean;
   error: string | null;
   run: (input: SearchInput) => void;
-  reset: () => void;
 } {
   const [response, setResponse] = useState<AskResponse | null>(null);
   const [loading, setLoading] = useState(false);
@@ -22,13 +21,6 @@ export function useAsk(): {
   const controllerRef = useRef<AbortController | null>(null);
 
   useEffect(() => () => controllerRef.current?.abort(), []);
-
-  const reset = useCallback(() => {
-    controllerRef.current?.abort();
-    setResponse(null);
-    setLoading(false);
-    setError(null);
-  }, []);
 
   const run = useCallback((input: SearchInput) => {
     controllerRef.current?.abort();
@@ -50,5 +42,5 @@ export function useAsk(): {
       });
   }, []);
 
-  return { response, loading, error, run, reset };
+  return { response, loading, error, run };
 }
