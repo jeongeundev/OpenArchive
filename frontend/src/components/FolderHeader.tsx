@@ -54,25 +54,25 @@ export function FolderHeader({ folder, folders, onChanged, onDeleted, onAccessSa
   }
 
   return (
-    <div className="space-y-3 rounded-lg border border-neutral-800 bg-[#141414] p-4">
-      <h2 className="text-lg font-semibold text-white">{folderPath(folder, folders)}</h2>
-      <p className="text-sm text-neutral-400">
-        <span>열람 범위</span> · <span className="text-neutral-300">{label}</span>
+    <div className="space-y-3 rounded-lg border border-line bg-card p-4">
+      <h2 className="text-lg font-semibold text-strong">{folderPath(folder, folders)}</h2>
+      <p className="text-sm text-muted">
+        <span>열람 범위</span> · <span className="text-body">{label}</span>
       </p>
       <div className="flex flex-wrap items-center gap-3 text-sm">
-        <button type="button" onClick={() => { setMode("child"); setError(null); }} className="text-neutral-500 hover:text-neutral-300">하위 폴더</button>
-        <button type="button" onClick={() => { setMode("rename"); setError(null); }} className="text-neutral-500 hover:text-neutral-300">이름 변경</button>
-        <button type="button" onClick={remove} className="text-neutral-500 hover:text-neutral-300">삭제</button>
-        <button type="button" onClick={() => { setMode(mode === "owner" ? "idle" : "owner"); setError(null); }} className="text-neutral-500 hover:text-neutral-300">소유자 이전</button>
+        <button type="button" onClick={() => { setMode("child"); setError(null); }} className="text-muted hover:text-strong">하위 폴더</button>
+        <button type="button" onClick={() => { setMode("rename"); setError(null); }} className="text-muted hover:text-strong">이름 변경</button>
+        <button type="button" onClick={remove} className="text-muted hover:text-strong">삭제</button>
+        <button type="button" onClick={() => { setMode(mode === "owner" ? "idle" : "owner"); setError(null); }} className="text-muted hover:text-strong">소유자 이전</button>
         {folder.parent_id === null ? (
           <button type="button" aria-expanded={accessOpen} onClick={() => setAccessOpen(open => !open)}
-            className="text-neutral-500 hover:text-neutral-300">열람 범위</button>
+            className="text-muted hover:text-strong">열람 범위</button>
         ) : null}
         {folder.can_share ? (
           <button type="button" aria-expanded={shareOpen} onClick={() => setShareOpen(open => !open)}
-            className="text-neutral-500 hover:text-neutral-300">외부 공유</button>
+            className="text-muted hover:text-strong">외부 공유</button>
         ) : null}
-        {!folder.can_manage ? <span className="text-neutral-500">폴더를 만든 사람만 바꿀 수 있습니다</span> : null}
+        {!folder.can_manage ? <span className="text-muted">폴더를 만든 사람만 바꿀 수 있습니다</span> : null}
       </div>
       {mode === "child" ? (
         <FolderNameForm key="child" label="하위 폴더 이름" submitLabel="만들기" onCancel={() => setMode("idle")}
@@ -86,7 +86,7 @@ export function FolderHeader({ folder, folders, onChanged, onDeleted, onAccessSa
         setMode("idle");
         if (result.still_visible) onChanged(); else onDeleted();
       }} /> : null}
-      {error !== null ? <p role="alert" className="text-sm text-[#ef4444]">{error}</p> : null}
+      {error !== null ? <p role="alert" className="text-sm text-failed">{error}</p> : null}
       {accessOpen && folder.parent_id === null ? (
         <FolderAccessPanel folder={folder} onSaved={onAccessSaved ?? onChanged} />
       ) : null}

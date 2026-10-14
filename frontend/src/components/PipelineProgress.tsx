@@ -23,17 +23,17 @@ export function PipelineProgress({
 
   return (
     <div className="space-y-1 text-sm">
-      <p aria-label="처리 현황" className="text-neutral-300" role="status">
-        <span className="font-medium text-white">문서 {total}건</span>
+      <p aria-label="처리 현황" className="text-body" role="status">
+        <span className="font-medium text-strong">문서 {total}건</span>
         {STAGES.filter((stage) => progress[stage.key] > 0).map((stage) => (
-          <span className="text-neutral-400" key={stage.key}>
+          <span className="text-muted" key={stage.key}>
             {" · "}
             {stage.label} {progress[stage.key]}
           </span>
         ))}
       </p>
       {inFlight > 0 ? (
-        <p className="text-xs text-neutral-500">
+        <p className="text-xs text-muted">
           처리 중인 문서는 워커가 임베딩을 마치면 검색에 나타납니다.
         </p>
       ) : null}

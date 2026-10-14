@@ -39,15 +39,15 @@ export function OwnerTransferForm({ owner, submitLabel, disabled = false, kind =
   }
 
   return <form className="space-y-3" onSubmit={event => void submit(event)}>
-    <p className="text-sm text-neutral-300">현재 소유자: {owner}</p>
-    <label className="block text-sm text-neutral-400">이전받을 사용자
-      <select className="mt-2 block rounded-lg border border-neutral-800 bg-neutral-900 px-4 py-3 text-neutral-300" value={selected} disabled={disabled || working} onChange={event => setSelected(event.target.value)}>
+    <p className="text-sm text-body">현재 소유자: {owner}</p>
+    <label className="block text-sm text-muted">이전받을 사용자
+      <select className="mt-2 block rounded-lg border border-line bg-card px-4 py-3 text-body" value={selected} disabled={disabled || working} onChange={event => setSelected(event.target.value)}>
         <option value="">사용자를 고르세요</option>
         {users.filter(user => user !== owner).map(user => <option key={user} value={user}>{user}</option>)}
       </select>
     </label>
-    <button type="submit" disabled={disabled || working || !selected} className="rounded-lg bg-white px-4 py-2 text-sm text-black hover:bg-neutral-200 disabled:bg-neutral-700 disabled:text-neutral-400">{submitLabel}</button>
-    {error !== null ? <p role="alert" className="text-sm text-[#ef4444]">{error}</p> : null}
+    <button type="submit" disabled={disabled || working || !selected} className="rounded-lg bg-strong px-4 py-2 text-sm text-on-strong hover:bg-strong/90 disabled:bg-sunken disabled:text-faint">{submitLabel}</button>
+    {error !== null ? <p role="alert" className="text-sm text-failed">{error}</p> : null}
   </form>;
 }
 
@@ -58,8 +58,8 @@ export function OwnerTransfer({ documentId, owner, disabled, onTransferred }: {
   onTransferred: () => void;
 }): React.ReactElement {
   const router = useRouter();
-  return <section className="space-y-4 rounded-lg border border-neutral-800 bg-[#141414] p-6">
-    <h2 className="text-sm font-medium text-neutral-400">소유자</h2>
+  return <section className="space-y-4 rounded-lg border border-line bg-card p-6">
+    <h2 className="text-sm font-medium text-muted">소유자</h2>
     <OwnerTransferForm key={owner} owner={owner} disabled={disabled} submitLabel="소유자 이전" onTransfer={async next => {
       const result = await transferDocumentOwner(documentId, next);
       if (result.still_visible) onTransferred();

@@ -5,7 +5,7 @@
 import { useEffect } from "react";
 
 const BUTTON_CLASS =
-  "rounded border border-neutral-700 px-3 py-1 text-neutral-300 hover:border-neutral-500 disabled:cursor-not-allowed disabled:opacity-40";
+  "rounded border border-line-strong px-3 py-1 text-body hover:border-muted disabled:cursor-not-allowed disabled:opacity-40";
 
 export function DocumentPager({
   page,
@@ -32,7 +32,7 @@ export function DocumentPager({
 
   return (
     <nav aria-label="문서 목록 페이지" className="flex items-center justify-end gap-3 text-sm">
-      <span className="text-neutral-400">
+      <span className="text-muted">
         {total}건 중 {first}–{last}
       </span>
       <button

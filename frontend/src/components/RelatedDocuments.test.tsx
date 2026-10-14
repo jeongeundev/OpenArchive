@@ -44,7 +44,7 @@ describe("RelatedDocuments", () => {
     );
 
     expect(screen.getByText("임베딩이 완료되면 표시됩니다.")).toHaveClass(
-      "text-neutral-500",
+      "text-muted",
     );
     expect(screen.queryByRole("list")).not.toBeInTheDocument();
   });

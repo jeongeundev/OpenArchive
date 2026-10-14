@@ -36,13 +36,13 @@ export function FolderNameForm({ label, initial = "", submitLabel, onSubmit, onC
   return (
     <form onSubmit={submit} className="space-y-2">
       <input aria-label={label} value={name} autoFocus onChange={event => setName(event.target.value)}
-        className="w-full rounded-lg border border-neutral-800 bg-neutral-900 px-3 py-2 text-sm text-neutral-300" />
+        className="w-full rounded-lg border border-line bg-card px-3 py-2 text-sm text-body" />
       <div className="flex gap-3 text-sm">
         <button type="submit" disabled={saving || !name.trim()}
-          className="rounded-lg bg-white px-3 py-1 text-black hover:bg-neutral-200 disabled:opacity-50">{submitLabel}</button>
-        <button type="button" onClick={onCancel} className="text-neutral-500 hover:text-neutral-300">취소</button>
+          className="rounded-lg bg-strong px-3 py-1 text-on-strong hover:bg-strong/90 disabled:opacity-50">{submitLabel}</button>
+        <button type="button" onClick={onCancel} className="text-muted hover:text-strong">취소</button>
       </div>
-      {error !== null ? <p role="alert" className="text-sm text-[#ef4444]">{error}</p> : null}
+      {error !== null ? <p role="alert" className="text-sm text-failed">{error}</p> : null}
     </form>
   );
 }
@@ -64,11 +64,11 @@ export function FolderTree({ folders, selectedId, onSelect, onCreate }: {
     return (
       <li key={folder.id}>
         <button type="button" onClick={() => onSelect(folder.id)} aria-current={selected ? "true" : undefined}
-          className={`flex w-full justify-between gap-2 rounded px-2 py-1 text-left text-sm ${selected ? "bg-neutral-800 text-white" : "text-neutral-300 hover:text-white"}`}>
+          className={`flex w-full justify-between gap-2 rounded px-2 py-1 text-left text-sm ${selected ? "bg-sunken text-strong" : "text-body hover:text-strong"}`}>
           <span className="truncate">{folder.name}</span>
-          <span className="text-neutral-500">{folder.document_count}</span>
+          <span className="text-muted">{folder.document_count}</span>
         </button>
-        {children.length > 0 ? <ul className="ml-3 border-l border-neutral-800 pl-2">{children.map(item)}</ul> : null}
+        {children.length > 0 ? <ul className="ml-3 border-l border-line pl-2">{children.map(item)}</ul> : null}
       </li>
     );
   }
@@ -76,7 +76,7 @@ export function FolderTree({ folders, selectedId, onSelect, onCreate }: {
   return (
     <nav aria-label="폴더" className="space-y-3">
       <button type="button" onClick={() => onSelect(null)} aria-current={selectedId === null ? "true" : undefined}
-        className={`w-full rounded px-2 py-1 text-left text-sm ${selectedId === null ? "bg-neutral-800 text-white" : "text-neutral-300 hover:text-white"}`}>
+        className={`w-full rounded px-2 py-1 text-left text-sm ${selectedId === null ? "bg-sunken text-strong" : "text-body hover:text-strong"}`}>
         전체 문서
       </button>
       {roots.length > 0 ? <ul className="space-y-1">{roots.map(item)}</ul> : null}
@@ -84,7 +84,7 @@ export function FolderTree({ folders, selectedId, onSelect, onCreate }: {
         <FolderNameForm label="새 폴더 이름" submitLabel="만들기" onCancel={() => setCreating(false)}
           onSubmit={async name => { await onCreate(name, null); setCreating(false); }} />
       ) : (
-        <button type="button" onClick={() => setCreating(true)} className="text-sm text-[#0ea5e9] hover:underline">새 폴더</button>
+        <button type="button" onClick={() => setCreating(true)} className="text-sm text-accent hover:underline">새 폴더</button>
       )}
     </nav>
   );

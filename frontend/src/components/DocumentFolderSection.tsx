@@ -67,20 +67,20 @@ export function DocumentFolderSection({ documentId, folder, hiddenFolder = false
   return (
     <section className="space-y-3">
       {folder !== null ? (
-        <p className="text-sm text-neutral-400">
-          <span className="mr-2 text-neutral-500">폴더</span>
+        <p className="text-sm text-muted">
+          <span className="mr-2 text-muted">폴더</span>
           {folder.path.map((item, index) => (
             <Fragment key={item.id}>
-              {index > 0 ? <span className="text-neutral-600">/</span> : null}
-              <Link className="text-[#0ea5e9] hover:underline" href={`/?folder=${encodeURIComponent(item.id)}`}>
+              {index > 0 ? <span className="text-faint">/</span> : null}
+              <Link className="text-accent hover:underline" href={`/?folder=${encodeURIComponent(item.id)}`}>
                 {item.name}
               </Link>
             </Fragment>
           ))}
         </p>
       ) : hiddenFolder ? (
-        <p className="text-sm text-neutral-400">
-          <span className="mr-2 text-neutral-500">폴더</span>
+        <p className="text-sm text-muted">
+          <span className="mr-2 text-muted">폴더</span>
           <span>볼 수 없는 폴더</span>
         </p>
       ) : null}
@@ -92,25 +92,25 @@ export function DocumentFolderSection({ documentId, folder, hiddenFolder = false
           </div>
           <button type="button" onClick={() => void move()}
             disabled={disabled || moving || unchanged}
-            className="rounded-lg bg-white px-4 py-3 text-sm text-black hover:bg-neutral-200 disabled:opacity-50">
+            className="rounded-lg bg-strong px-4 py-3 text-sm text-on-strong hover:bg-strong/90 disabled:opacity-50">
             옮기기
           </button>
         </div>
       ) : null}
       {isOwner && suggestion !== null ? (
-        <p className="text-sm text-neutral-400">
-          <span className="mr-2 text-neutral-500">추천 폴더</span>
+        <p className="text-sm text-muted">
+          <span className="mr-2 text-muted">추천 폴더</span>
           <button type="button" aria-label={`추천 폴더 ${suggestionLabel} 고르기`}
             onClick={() => setTarget(suggestion.folder_id)} disabled={disabled || moving || foldersLoading}
-            className="text-[#0ea5e9] hover:underline disabled:text-neutral-600">
+            className="text-accent hover:underline disabled:text-faint">
             {suggestionLabel}
           </button>
-          <span className="ml-2 text-neutral-500">
+          <span className="ml-2 text-muted">
             {`폴더에 있는 관련 문서 ${suggestion.total}개 중 ${suggestion.votes}개가 이 폴더에 있습니다.`}
           </span>
         </p>
       ) : null}
-      {error !== null ? <p className="text-sm text-[#ef4444]" role="alert">{error}</p> : null}
+      {error !== null ? <p className="text-sm text-failed" role="alert">{error}</p> : null}
     </section>
   );
 }

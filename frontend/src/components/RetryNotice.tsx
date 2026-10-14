@@ -14,7 +14,7 @@ export function RetryNotice(): React.ReactElement | null {
   const retrying = useSyncExternalStore(subscribeRetrying, isRetrying, () => false);
   if (!retrying) return null;
   return (
-    <p role="status" className="mb-6 text-sm text-neutral-400">
+    <p role="status" className="mb-6 text-sm text-muted">
       연결이 원활하지 않아 다시 시도하는 중입니다.
     </p>
   );

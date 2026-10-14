@@ -114,25 +114,25 @@ export function SharesSection(): React.ReactElement {
   return (
     <div className="space-y-4">
       <div>
-        <h2 className="text-sm font-medium text-neutral-400">외부 공유</h2>
-        <p className="mt-2 text-sm text-neutral-400">
+        <h2 className="text-sm font-medium text-muted">외부 공유</h2>
+        <p className="mt-2 text-sm text-muted">
           계정이 없는 외부 협업자에게 문서 일부를 엽니다. 공유 토큰은 읽기 전용이며, 그 토큰으로는
           공유에 넣은 문서만 보이고 나머지 문서는 존재하지 않는 것처럼 보입니다. 접속은 REST API로
           합니다.
         </p>
-        <p className="mt-2 text-sm text-neutral-400">
+        <p className="mt-2 text-sm text-muted">
           조직 공개 문서도 공유에 넣으면 외부에 열립니다. 문서는 문서 상세의 「열람 범위」 패널에서,
           폴더는 폴더 화면의 「외부 공유」에서 공유에 넣습니다.
         </p>
       </div>
 
       <form
-        className="flex flex-wrap items-end gap-4 rounded-lg border border-neutral-800 bg-[#141414] p-6"
+        className="flex flex-wrap items-end gap-4 rounded-lg border border-line bg-card p-6"
         onSubmit={create}
       >
-        <label className="flex-1 text-sm text-neutral-400">공유 이름
+        <label className="flex-1 text-sm text-muted">공유 이름
           <input
-            className="mt-2 w-full rounded-lg border border-neutral-800 bg-neutral-900 px-4 py-3 text-neutral-300"
+            className="mt-2 w-full rounded-lg border border-line bg-card px-4 py-3 text-body"
             onChange={(event) => setName(event.target.value)}
             placeholder="B사 협업"
             required
@@ -141,7 +141,7 @@ export function SharesSection(): React.ReactElement {
           />
         </label>
         <button
-          className="rounded-lg bg-white px-4 py-2 text-sm text-black hover:bg-neutral-200 disabled:bg-neutral-700 disabled:text-neutral-400"
+          className="rounded-lg bg-strong px-4 py-2 text-sm text-on-strong hover:bg-strong/90 disabled:bg-sunken disabled:text-faint"
           disabled={working}
           type="submit"
         >
@@ -149,10 +149,10 @@ export function SharesSection(): React.ReactElement {
         </button>
       </form>
 
-      {error !== null ? <p className="text-sm text-[#ef4444]" role="alert">{error}</p> : null}
+      {error !== null ? <p className="text-sm text-failed" role="alert">{error}</p> : null}
 
       {shares !== null && shares.length === 0 ? (
-        <p className="text-sm text-neutral-500">아직 공유가 없습니다.</p>
+        <p className="text-sm text-muted">아직 공유가 없습니다.</p>
       ) : null}
 
       {(shares ?? []).map((share) => {
@@ -160,13 +160,13 @@ export function SharesSection(): React.ReactElement {
         return (
           <section
             aria-labelledby={headingId}
-            className="space-y-4 rounded-lg border border-neutral-800 bg-[#141414] p-6"
+            className="space-y-4 rounded-lg border border-line bg-card p-6"
             key={share.id}
           >
             <div className="flex items-start justify-between gap-4">
-              <h3 className="text-sm font-medium text-white" id={headingId}>{share.name}</h3>
+              <h3 className="text-sm font-medium text-strong" id={headingId}>{share.name}</h3>
               <button
-                className="text-sm text-neutral-500 hover:text-neutral-300 disabled:text-neutral-600"
+                className="text-sm text-muted hover:text-strong disabled:text-faint"
                 disabled={working}
                 onClick={() => remove(share)}
                 type="button"
@@ -177,16 +177,16 @@ export function SharesSection(): React.ReactElement {
 
             {share.folders.length > 0 ? (
               <div>
-                <p className="text-xs text-neutral-500">포함 폴더</p>
+                <p className="text-xs text-muted">포함 폴더</p>
                 <ul className="mt-2 space-y-1">
                   {share.folders.map((folder) => (
                     <li className="flex items-center justify-between gap-4 text-sm" key={folder.id}>
-                      <Link className="text-[#0ea5e9] hover:underline" href={`/?folder=${encodeURIComponent(folder.id)}`}>
+                      <Link className="text-accent hover:underline" href={`/?folder=${encodeURIComponent(folder.id)}`}>
                         {folder.name}
                       </Link>
                       <button
                         aria-label={`${folder.name} 빼기`}
-                        className="text-neutral-500 hover:text-neutral-300 disabled:text-neutral-600"
+                        className="text-muted hover:text-strong disabled:text-faint"
                         disabled={working}
                         onClick={() =>
                           void run(
@@ -206,19 +206,19 @@ export function SharesSection(): React.ReactElement {
 
             {share.documents.length > 0 || share.folders.length === 0 ? (
             <div>
-              <p className="text-xs text-neutral-500">포함 문서</p>
+              <p className="text-xs text-muted">포함 문서</p>
               {share.documents.length === 0 ? (
-                <p className="mt-2 text-sm text-neutral-500">아직 넣은 문서가 없습니다.</p>
+                <p className="mt-2 text-sm text-muted">아직 넣은 문서가 없습니다.</p>
               ) : (
                 <ul className="mt-2 space-y-1">
                   {share.documents.map((document) => (
                     <li className="flex items-center justify-between gap-4 text-sm" key={document.id}>
-                      <Link className="text-[#0ea5e9] hover:underline" href={`/documents/${document.id}`}>
+                      <Link className="text-accent hover:underline" href={`/documents/${document.id}`}>
                         {document.title}
                       </Link>
                       <button
                         aria-label={`${document.title} 빼기`}
-                        className="text-neutral-500 hover:text-neutral-300 disabled:text-neutral-600"
+                        className="text-muted hover:text-strong disabled:text-faint"
                         disabled={working}
                         onClick={() =>
                           void run(
@@ -238,24 +238,24 @@ export function SharesSection(): React.ReactElement {
             ) : null}
 
             <div>
-              <p className="text-xs text-neutral-500">공유 토큰</p>
+              <p className="text-xs text-muted">공유 토큰</p>
               {share.tokens.length === 0 ? (
-                <p className="mt-2 text-sm text-neutral-500">발급한 토큰이 없습니다.</p>
+                <p className="mt-2 text-sm text-muted">발급한 토큰이 없습니다.</p>
               ) : (
                 <ul className="mt-2 space-y-1">
                   {share.tokens.map((token) => (
                     <li className="flex items-center justify-between gap-4 text-sm" key={token.id}>
                       <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
-                        <span className="text-neutral-300">{token.name}</span>
+                        <span className="text-body">{token.name}</span>
                         {token.expired ? (
-                          <span className="rounded bg-[#ef4444]/10 px-2 py-0.5 text-xs font-medium text-[#ef4444]">
+                          <span className="rounded bg-failed-soft px-2 py-0.5 text-xs font-medium text-failed">
                             만료
                           </span>
                         ) : null}
-                        <span className="text-xs text-neutral-500">
+                        <span className="text-xs text-muted">
                           {token.expires_at === null ? "만료 없음" : `만료 ${formatExpiry(token.expires_at)}`}
                         </span>
-                        <span className="text-xs text-neutral-500">
+                        <span className="text-xs text-muted">
                           {token.last_used_at === null
                             ? "사용 기록 없음"
                             : `마지막 사용 ${formatDate(token.last_used_at)}`}
@@ -263,7 +263,7 @@ export function SharesSection(): React.ReactElement {
                       </span>
                       <button
                         aria-label={`${token.name} 폐기`}
-                        className="text-neutral-500 hover:text-neutral-300 disabled:text-neutral-600"
+                        className="text-muted hover:text-strong disabled:text-faint"
                         disabled={working}
                         onClick={() => revoke(share, token.id, token.name)}
                         type="button"
@@ -276,21 +276,21 @@ export function SharesSection(): React.ReactElement {
               )}
 
               {issued?.shareId === share.id ? (
-                <div className="mt-3 space-y-2 rounded-lg border border-[#0ea5e9] p-4" role="status">
-                  <p className="text-sm text-white">
+                <div className="mt-3 space-y-2 rounded-lg border border-accent p-4" role="status">
+                  <p className="text-sm text-strong">
                     &lsquo;{issued.token.name}&rsquo; 공유 토큰을 발급했습니다. 지금 복사해 협업자에게
                     전달하세요 — <strong className="font-semibold">이 값은 다시 볼 수 없습니다.</strong>
                   </p>
-                  <code className="block break-all rounded-lg border border-neutral-800 bg-neutral-900 px-4 py-3 font-mono text-sm text-neutral-200">
+                  <code className="block break-all rounded-lg border border-line bg-card px-4 py-3 font-mono text-sm text-strong">
                     {issued.token.token}
                   </code>
                 </div>
               ) : null}
 
               <form className="mt-3 flex flex-wrap items-end gap-4" onSubmit={(event) => issue(event, share)}>
-                <label className="flex-1 text-sm text-neutral-400">토큰 이름
+                <label className="flex-1 text-sm text-muted">토큰 이름
                   <input
-                    className="mt-2 w-full rounded-lg border border-neutral-800 bg-neutral-900 px-4 py-3 text-neutral-300"
+                    className="mt-2 w-full rounded-lg border border-line bg-card px-4 py-3 text-body"
                     onChange={(event) =>
                       setTokenNames((current) => ({ ...current, [share.id]: event.target.value }))
                     }
@@ -300,9 +300,9 @@ export function SharesSection(): React.ReactElement {
                     value={tokenNames[share.id] ?? ""}
                   />
                 </label>
-                <label className="text-sm text-neutral-400">만료일 (선택)
+                <label className="text-sm text-muted">만료일 (선택)
                   <input
-                    className="mt-2 w-full rounded-lg border border-neutral-800 bg-neutral-900 px-4 py-3 text-neutral-300"
+                    className="mt-2 w-full rounded-lg border border-line bg-card px-4 py-3 text-body"
                     min={todayInputValue()}
                     onChange={(event) =>
                       setTokenExpiries((current) => ({ ...current, [share.id]: event.target.value }))
@@ -312,7 +312,7 @@ export function SharesSection(): React.ReactElement {
                   />
                 </label>
                 <button
-                  className="rounded-lg bg-white px-4 py-2 text-sm text-black hover:bg-neutral-200 disabled:bg-neutral-700 disabled:text-neutral-400"
+                  className="rounded-lg bg-strong px-4 py-2 text-sm text-on-strong hover:bg-strong/90 disabled:bg-sunken disabled:text-faint"
                   disabled={working}
                   type="submit"
                 >

@@ -24,42 +24,42 @@ export function DocumentMeta({
   document: DocumentDetail;
 }): React.ReactElement {
   return (
-    <section className="rounded-lg border border-neutral-800 bg-[#141414] p-6">
+    <section className="rounded-lg border border-line bg-card p-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
-        <h1 className="text-4xl font-semibold text-white">{document.title}</h1>
+        <h1 className="text-4xl font-semibold text-strong">{document.title}</h1>
         <DocumentStatusBadge document={document} />
       </div>
 
       <dl className="mt-6 grid gap-4 text-sm sm:grid-cols-2">
         <div>
-          <dt className="text-neutral-500">파일명</dt>
-          <dd className="mt-1 text-neutral-300">{document.filename ?? "—"}</dd>
+          <dt className="text-muted">파일명</dt>
+          <dd className="mt-1 text-body">{document.filename ?? "—"}</dd>
         </div>
         <div>
-          <dt className="text-neutral-500">유형</dt>
-          <dd className="mt-1 uppercase text-neutral-300">{document.content_type}</dd>
+          <dt className="text-muted">유형</dt>
+          <dd className="mt-1 uppercase text-body">{document.content_type}</dd>
         </div>
         <div>
-          <dt className="text-neutral-500">열람 범위</dt>
-          <dd className="mt-1 text-neutral-300">
+          <dt className="text-muted">열람 범위</dt>
+          <dd className="mt-1 text-body">
             {VISIBILITY_LABEL[document.effective_visibility]}
           </dd>
         </div>
         <div>
-          <dt className="text-neutral-500">소유자</dt>
-          <dd className="mt-1 text-neutral-300">{document.owner_id}</dd>
+          <dt className="text-muted">소유자</dt>
+          <dd className="mt-1 text-body">{document.owner_id}</dd>
         </div>
         <div>
-          <dt className="text-neutral-500">생성 일시</dt>
-          <dd className="mt-1 text-neutral-300">{formatDate(document.created_at)}</dd>
+          <dt className="text-muted">생성 일시</dt>
+          <dd className="mt-1 text-body">{formatDate(document.created_at)}</dd>
         </div>
         <div>
-          <dt className="text-neutral-500">수정 일시</dt>
-          <dd className="mt-1 text-neutral-300">{formatDate(document.updated_at)}</dd>
+          <dt className="text-muted">수정 일시</dt>
+          <dd className="mt-1 text-body">{formatDate(document.updated_at)}</dd>
         </div>
       </dl>
 
-      <p className="mt-6 border-t border-neutral-800 pt-4 text-sm text-neutral-500">
+      <p className="mt-6 border-t border-line pt-4 text-sm text-muted">
         {indexStatus(document)}
       </p>
     </section>

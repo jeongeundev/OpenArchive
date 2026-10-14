@@ -21,9 +21,9 @@ export function DocumentTable({
   emptyMessage?: string;
 }): React.ReactElement {
   return (
-    <div className="overflow-x-auto rounded-lg border border-neutral-800 bg-[#141414]">
-      <table className="w-full text-left text-sm text-neutral-300">
-        <thead className="border-b border-neutral-800 text-xs text-neutral-400">
+    <div className="overflow-x-auto rounded-lg border border-line bg-card">
+      <table className="w-full text-left text-sm text-body">
+        <thead className="border-b border-line text-xs text-muted">
           <tr>
             <th className="px-4 py-3 font-medium" scope="col">제목</th>
             <th className="px-4 py-3 font-medium" scope="col">유형</th>
@@ -34,10 +34,10 @@ export function DocumentTable({
             <th className="px-4 py-3 font-medium" scope="col">수정일</th>
           </tr>
         </thead>
-        <tbody className="divide-y divide-neutral-800">
+        <tbody className="divide-y divide-line">
           {documents.length === 0 ? (
             <tr>
-              <td className="px-4 py-8 text-neutral-500" colSpan={7}>
+              <td className="px-4 py-8 text-muted" colSpan={7}>
                 {emptyMessage}
               </td>
             </tr>
@@ -46,26 +46,26 @@ export function DocumentTable({
               <tr key={document.id}>
                 <td className="px-4 py-3 font-medium">
                   <Link
-                    className="text-white hover:text-[#0ea5e9]"
+                    className="text-strong hover:text-accent"
                     href={`/documents/${document.id}`}
                   >
                     {document.title}
                   </Link>
                 </td>
-                <td className="px-4 py-3 uppercase text-neutral-400">
+                <td className="px-4 py-3 uppercase text-muted">
                   {document.content_type}
                 </td>
-                <td className="px-4 py-3 text-neutral-400">
+                <td className="px-4 py-3 text-muted">
                   {document.tags.length > 0 ? document.tags.join(", ") : "—"}
                 </td>
-                <td className="px-4 py-3 text-neutral-400">{document.owner_id}</td>
+                <td className="px-4 py-3 text-muted">{document.owner_id}</td>
                 <td className="px-4 py-3">
                   {VISIBILITY_LABEL[document.effective_visibility]}
                 </td>
                 <td className="px-4 py-3">
                   <DocumentStatusBadge document={document} />
                 </td>
-                <td className="whitespace-nowrap px-4 py-3 text-neutral-400">
+                <td className="whitespace-nowrap px-4 py-3 text-muted">
                   {DATE_FORMATTER.format(new Date(document.updated_at))}
                 </td>
               </tr>

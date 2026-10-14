@@ -24,7 +24,7 @@ export function GranteePicker({
 }): React.ReactElement {
   return (
     <div className="space-y-4 text-sm">
-      <p className="text-neutral-500">{description}</p>
+      <p className="text-muted">{description}</p>
 
       <GranteeList
         candidates={principals.users}
@@ -42,7 +42,7 @@ export function GranteePicker({
           onChange={(next) => onChange({ users, groups: next })}
           selected={groups}
         />
-        <p className="text-neutral-500">
+        <p className="text-muted">
           그룹 구성원은 관리자가 변경할 수 있습니다. 관리자도 보면 안 되는 문서는 사용자에게 직접
           부여하세요.
         </p>
@@ -79,14 +79,14 @@ function GranteeList({
       <ul aria-label={`부여된 ${label}`} className="flex flex-wrap gap-2">
         {selected.map((name) => (
           <li
-            className="flex items-center gap-2 rounded bg-neutral-800 px-2 py-1 text-xs text-neutral-300"
+            className="flex items-center gap-2 rounded bg-sunken px-2 py-1 text-xs text-body"
             key={name}
           >
-            <span className="text-neutral-500">{label}</span>
+            <span className="text-muted">{label}</span>
             {name}
             <button
               aria-label={`${label} ${name} 제거`}
-              className="text-neutral-500 hover:text-neutral-300 disabled:text-neutral-600"
+              className="text-muted hover:text-strong disabled:text-faint"
               disabled={disabled}
               onClick={() => onChange(selected.filter((item) => item !== name))}
               type="button"
@@ -99,7 +99,7 @@ function GranteeList({
       <div className="flex gap-3">
         <select
           aria-label={`${label} 선택`}
-          className="rounded-lg border border-neutral-800 bg-neutral-900 px-4 py-2 text-neutral-300 disabled:text-neutral-600"
+          className="rounded-lg border border-line bg-card px-4 py-2 text-body disabled:text-faint"
           disabled={disabled}
           onChange={(event) => setInput(event.target.value)}
           value={input}
@@ -112,7 +112,7 @@ function GranteeList({
           ))}
         </select>
         <button
-          className="text-neutral-500 hover:text-neutral-300 disabled:text-neutral-600"
+          className="text-muted hover:text-strong disabled:text-faint"
           disabled={disabled || input === ""}
           onClick={add}
           type="button"

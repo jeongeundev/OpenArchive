@@ -90,12 +90,12 @@ describe("VersionHistory", () => {
     expect(fetchMock.mock.calls[0][0]).toBe("/api/documents/document-1/versions/1/diff/3");
     const added = screen.getByText("+ 새 줄");
     expect(added).toHaveAttribute("data-op", "added");
-    expect(added).toHaveClass("text-green-400");
+    expect(added).toHaveClass("text-done");
     const removed = screen.getByText("− 이전 줄");
     expect(removed).toHaveAttribute("data-op", "removed");
-    expect(removed).toHaveClass("text-red-400");
+    expect(removed).toHaveClass("text-failed");
     expect(screen.getByText("맥락")).toHaveAttribute("data-op", "equal");
-    expect(screen.getByText("맥락")).toHaveClass("text-neutral-400");
+    expect(screen.getByText("맥락")).toHaveClass("text-muted");
     expect(screen.getByText("…")).toBeInTheDocument();
     expect(added.closest(".overflow-auto")).toHaveClass("max-h-96", "overflow-auto");
     fireEvent.click(screen.getByRole("button", { name: "닫기" }));

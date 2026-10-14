@@ -50,7 +50,7 @@ describe("DocumentMeta", () => {
     render(<DocumentMeta document={{ ...document, chunk_count: 0, chunk_version: null }} />);
 
     expect(screen.getByText("아직 색인된 청크가 없습니다.")).toHaveClass(
-      "text-neutral-500",
+      "text-muted",
     );
   });
 

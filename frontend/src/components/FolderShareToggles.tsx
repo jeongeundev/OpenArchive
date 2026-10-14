@@ -67,25 +67,25 @@ export function FolderShareToggles({ folder }: { folder: Folder }): React.ReactE
   }
 
   return (
-    <section className="space-y-3 border-t border-neutral-800 pt-4">
-      <h3 className="text-sm font-medium text-neutral-400">외부 공유</h3>
-      <p className="text-sm text-neutral-500">
+    <section className="space-y-3 border-t border-line pt-4">
+      <h3 className="text-sm font-medium text-muted">외부 공유</h3>
+      <p className="text-sm text-muted">
         공유에 넣으면 이 폴더와 하위 폴더의 「폴더 범위 따름」 문서가 소유자와 관계없이 공유 대상에게 보입니다.
         나중에 들어오는 문서도 포함됩니다.
       </p>
-      <p className="text-sm text-neutral-500">「개별 지정」 문서는 빠집니다.</p>
+      <p className="text-sm text-muted">「개별 지정」 문서는 빠집니다.</p>
       {loadError !== null ? (
-        <p className="text-sm text-neutral-500">{loadError}</p>
+        <p className="text-sm text-muted">{loadError}</p>
       ) : shares === null ? (
-        <p className="text-sm text-neutral-500">불러오는 중…</p>
+        <p className="text-sm text-muted">불러오는 중…</p>
       ) : shares.length === 0 ? (
-        <p className="text-sm text-neutral-500">
-          외부 공유가 없습니다. <Link className="text-[#0ea5e9] hover:underline" href="/settings">설정 화면</Link>에서 공유를 만드세요.
+        <p className="text-sm text-muted">
+          외부 공유가 없습니다. <Link className="text-accent hover:underline" href="/settings">설정 화면</Link>에서 공유를 만드세요.
         </p>
       ) : (
         <fieldset disabled={pending !== null}>
           <legend className="sr-only">폴더를 넣을 공유</legend>
-          <div className="flex flex-wrap gap-4 text-sm text-neutral-300">
+          <div className="flex flex-wrap gap-4 text-sm text-body">
             {shares.map(share => (
               <label className="flex items-center gap-2" key={share.id}>
                 <input checked={share.included} onChange={() => void toggle(share)} type="checkbox" />
@@ -95,8 +95,8 @@ export function FolderShareToggles({ folder }: { folder: Folder }): React.ReactE
           </div>
         </fieldset>
       )}
-      {error !== null ? <p className="text-sm text-[#ef4444]" role="alert">{error}</p> : null}
-      {message !== null ? <p className="text-sm text-neutral-400">{message}</p> : null}
+      {error !== null ? <p className="text-sm text-failed" role="alert">{error}</p> : null}
+      {message !== null ? <p className="text-sm text-muted">{message}</p> : null}
     </section>
   );
 }

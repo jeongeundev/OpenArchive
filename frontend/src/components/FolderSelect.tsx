@@ -19,10 +19,10 @@ export function FolderSelect({ folders, value, onChange, label, noneLabel, disab
   const selectId = id ?? generatedId;
   return (
     <div>
-      <label htmlFor={selectId} className="mb-2 block text-sm text-neutral-400">{label}</label>
+      <label htmlFor={selectId} className="mb-2 block text-sm text-muted">{label}</label>
       <select id={selectId} value={value ?? ""} disabled={disabled}
         onChange={event => onChange(event.target.value || null)}
-        className="w-full rounded-lg border border-neutral-800 bg-neutral-900 px-4 py-3 text-sm text-neutral-300 disabled:opacity-50">
+        className="w-full rounded-lg border border-line bg-card px-4 py-3 text-sm text-body disabled:opacity-50">
         <option value="">{noneLabel}</option>
         {folderOptions(folders).map(option => <option key={option.id} value={option.id}>{option.label}</option>)}
       </select>

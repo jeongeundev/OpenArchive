@@ -48,7 +48,7 @@ export function WikilinkContent({
     if (targets.length === 0) {
       parts.push(
         <span
-          className="border-b border-dashed border-neutral-600 text-neutral-500"
+          className="border-b border-dashed border-line-strong text-muted"
           key={`${start}-${parsed.title}`}
         >
           {parsed.label}
@@ -61,7 +61,7 @@ export function WikilinkContent({
             <Fragment key={target.document_id}>
               {index > 0 ? " · " : null}
               <Link
-                className="text-[#0ea5e9] hover:underline"
+                className="text-accent hover:underline"
                 href={`/documents/${target.document_id}`}
               >
                 {parsed.label}
