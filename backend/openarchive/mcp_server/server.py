@@ -15,6 +15,7 @@ from uuid import UUID, uuid4
 
 import psycopg
 from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp.exceptions import ToolError
 
 from openarchive.config import get_settings
 from openarchive.db import close_pool, connection, get_pool, is_unavailable
@@ -138,6 +139,26 @@ def _document_payload(document: dict) -> dict:
     return payload
 
 
+class StrictArgumentsFastMCP(FastMCP):
+    """도구 스키마에 없는 인자를 거부한다.
+
+    SDK의 인자 모델은 모르는 인자를 조용히 버린다. 그러면 범위를 좁히려던 인자를 잘못 쓴
+    에이전트가 넓은 범위의 결과를 받고도 알 수 없고, 쓰기 도구는 엉뚱한 인자를 버린 채 저장한다.
+    """
+
+    async def call_tool(self, name: str, arguments: dict[str, Any]):
+        tool = self._tool_manager.get_tool(name)
+        if tool is not None:
+            known = tool.parameters.get("properties", {})
+            unknown = sorted(set(arguments) - set(known))
+            if unknown:
+                raise ToolError(
+                    f"{name}에 없는 인자입니다: {', '.join(unknown)}"
+                    f" (받는 인자: {', '.join(known)})"
+                )
+        return await super().call_tool(name, arguments)
+
+
 def build_server(
     resolve_principal: Callable[[], McpPrincipal],
     resolve_provider: Callable[[], EmbeddingProvider],
@@ -145,7 +166,7 @@ def build_server(
     lifespan=None,
     **fastmcp_settings,
 ) -> FastMCP:
-    server = FastMCP("OpenArchive", lifespan=lifespan, **fastmcp_settings)
+    server = StrictArgumentsFastMCP("OpenArchive", lifespan=lifespan, **fastmcp_settings)
     @with_backoff
     async def search_documents(
         query: str,

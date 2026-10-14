@@ -117,7 +117,7 @@ OpenArchive/
 
 `services/grants.py`는 그룹·구성원 관리와 부여 대상 이름 해석을 맡는다(#97 b). 문서 열람 범위 조회·교체는 문서 서비스가 소유자 경계를 지키며 이 서비스를 재사용한다(ADR-044 「관리 경로」).
 
-MCP 서버는 `openarchive.services`를 직접 재사용한다. `search_documents`는 발췌(`excerpt`)·출처(`document_id`, `title`, `filename`)·기준 버전(`based_on_version`)을 반환하고, `get_document`는 문서 텍스트와 텍스트 버전·청크 상태를(`version`을 주면 그 텍스트 버전의 본문과 작성 기록만 — 근거의 `based_on_version`이 현재 버전과 다를 때 그 근거가 나온 버전을 확인하는 경로, 열람 술어는 문서와 같다), `list_documents`는 접근 가능한 문서 메타데이터를 반환한다. `create_document`는 `title`·`content`·`content_type`(`txt`·`md`)·`tags`·`visibility`·`grant_users`·`grant_groups`를 받아 기존 텍스트 진입점으로 공급한다. stdio의 사용자 컨텍스트는 툴 인자가 아니라 `MCP_USER_ID` 환경변수로 고정한다. 미설정 시 public 문서 읽기는 허용하지만 소유자를 확정할 수 없어 쓰기는 거부한다 (ADR-025, ADR-036).
+MCP 서버는 `openarchive.services`를 직접 재사용한다. `search_documents`는 발췌(`excerpt`)·출처(`document_id`, `title`, `filename`)·기준 버전(`based_on_version`)을 반환하고, `get_document`는 문서 텍스트와 텍스트 버전·청크 상태를(`version`을 주면 그 텍스트 버전의 본문과 작성 기록만 — 근거의 `based_on_version`이 현재 버전과 다를 때 그 근거가 나온 버전을 확인하는 경로, 열람 술어는 문서와 같다), `list_documents`는 접근 가능한 문서 메타데이터를 반환한다. `create_document`는 `title`·`content`·`content_type`(`txt`·`md`)·`tags`·`visibility`·`grant_users`·`grant_groups`를 받아 기존 텍스트 진입점으로 공급한다. stdio의 사용자 컨텍스트는 툴 인자가 아니라 `MCP_USER_ID` 환경변수로 고정한다. 미설정 시 public 문서 읽기는 허용하지만 소유자를 확정할 수 없어 쓰기는 거부한다 (ADR-025, ADR-036). 도구 스키마에 없는 인자는 거부한다 — SDK 기본은 조용히 버리는데, 그러면 범위를 좁히려던 인자를 잘못 쓴 에이전트가 넓은 범위의 결과를 받고도 알 수 없다(`StrictArgumentsFastMCP`, stdio·원격 공통).
 
 원격 MCP는 API 앱의 `/mcp`에서 Streamable HTTP로 동작한다(ADR-056, 구현 #188). 주체는 매 요청 검증한 Bearer 토큰에서만 정하며 `MCP_USER_ID`는 stdio 전용이다. 읽기 3개는 모든 유효 토큰에, 생성은 `read_write` 사용자 토큰에만 열린다. 공유 토큰은 공유에 넣은 문서만 읽는다. 두 transport는 같은 서비스·열람 술어·도구 본체를 사용하며, 원격은 API 풀과 예열된 프로바이더를 공유한다.
 
