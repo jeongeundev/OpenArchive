@@ -324,6 +324,37 @@ async def test_search_tool_matches_the_rest_endpoint_and_returns_evidence(
     assert tool_items[0]["passages"]
 
 
+async def test_search_tool_narrows_direct_hits_to_a_visible_folder(monkeypatch, mcp_database):
+    """폴더 ID는 get_document의 folder에서 얻고, 볼 수 없는 폴더는 없는 폴더와 같이 빈 결과다."""
+    from openarchive.mcp_server.server import get_document, search_documents
+
+    async with await psycopg.AsyncConnection.connect(mcp_database, autocommit=True) as conn:
+        folders = {}
+        for name, owner, visibility in (("인사", "alice", "public"), ("임원", "alice", "private")):
+            cur = await conn.execute(
+                "INSERT INTO folders (name, created_by, visibility) VALUES (%s, %s, %s) RETURNING id",
+                (name, owner, visibility),
+            )
+            folders[name] = (await cur.fetchone())[0]
+        inside = await insert_test_document(conn, title="휴가 규정", content="휴가 근거")
+        outside = await insert_test_document(conn, title="출장 규정", content="휴가 근거")
+        await conn.execute(
+            "UPDATE documents SET folder_id = %s WHERE id = %s", (folders["인사"], inside)
+        )
+        await process_all_embedding_jobs(conn, FakeProvider())
+
+    monkeypatch.setenv("MCP_USER_ID", "bob")
+    get_settings.cache_clear()
+    folder_id = (await get_document(str(inside)))["folder"]["id"]
+    unfiltered = (await search_documents("휴가 근거"))["items"]
+    narrowed = (await search_documents("휴가 근거", folder_id=folder_id))["items"]
+
+    assert {item["document_id"] for item in unfiltered} == {str(inside), str(outside)}
+    assert {item["document_id"] for item in narrowed if item["via"] is None} == {str(inside)}
+    for hidden in (str(folders["임원"]), str(uuid4())):
+        assert (await search_documents("휴가 근거", folder_id=hidden))["items"] == []
+
+
 async def test_mcp_user_setting_controls_private_access_for_all_tools(
     monkeypatch, mcp_database
 ):
@@ -728,7 +759,7 @@ async def test_wrapped_read_tools_keep_their_argument_schema():
     tools = {tool.name: tool for tool in await mcp.list_tools()}
 
     assert set(tools["search_documents"].inputSchema["properties"]) == {
-        "query", "tags", "content_type", "k"
+        "query", "tags", "content_type", "folder_id", "k"
     }
     assert tools["search_documents"].inputSchema["required"] == ["query"]
     assert set(tools["get_document"].inputSchema["properties"]) == {"document_id", "version"}
@@ -884,7 +915,7 @@ async def test_stdio_tool_property_sets_are_unchanged():
     from openarchive.mcp_server.server import mcp
 
     assert {tool.name: set(tool.inputSchema["properties"]) for tool in await mcp.list_tools()} == {
-        "search_documents": {"query", "tags", "content_type", "k"},
+        "search_documents": {"query", "tags", "content_type", "folder_id", "k"},
         "get_document": {"document_id", "version"},
         "list_documents": {"tag", "status", "extraction_status"},
         "create_document": {
