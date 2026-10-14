@@ -22,7 +22,11 @@ from openarchive.embeddings import get_provider
 from openarchive.embeddings.base import EmbeddingProvider
 from openarchive.services.audit import set_actor
 from openarchive.services.auth import PRINCIPAL_SHARE, SCOPE_READ_WRITE
-from openarchive.services.documents import ExtractionStatus, create_text_document
+from openarchive.services.documents import (
+    ExtractionStatus,
+    create_text_document,
+    get_document_version,
+)
 from openarchive.services.documents import get_document as get_document_service
 from openarchive.services.documents import list_documents as list_documents_service
 from openarchive.services.related import find_related
@@ -206,12 +210,20 @@ def build_server(
         }
 
     @with_backoff
-    async def get_document(document_id: str) -> dict:
+    async def get_document(document_id: str, version: int | None = None) -> dict:
         """문서 텍스트·텍스트 버전 목록·청크 상태를 반환합니다.
 
         검색 결과의 문서 전체 내용과 색인 기준 버전을 확인할 때 사용합니다.
+        version을 주면 그 텍스트 버전의 본문과 작성 기록만 반환합니다. 근거의
+        based_on_version이 현재 버전과 다를 때 그 근거가 나온 버전을 확인하는 데 씁니다.
         """
         principal = resolve_principal()
+        if version is not None:
+            async with connection() as conn:
+                past = await get_document_version(
+                    conn, UUID(document_id), version=version, user_id=principal.principal
+                )
+            return {"document_id": document_id, **_json_value(past)}
         async with connection() as conn:
             parsed_id = UUID(document_id)
             document = await get_document_service(
