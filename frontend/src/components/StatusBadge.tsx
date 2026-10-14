@@ -23,7 +23,7 @@ function Badge({ label, tone }: { label: string; tone: Tone }): React.ReactEleme
   const style = TONE[tone];
   return (
     <span
-      className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium ${style.badge}`}
+      className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2 py-0.5 text-xs font-medium ${style.badge}`}
     >
       <span aria-hidden="true" className={`size-2 shrink-0 rounded-full ${style.dot}`} />
       {label}
