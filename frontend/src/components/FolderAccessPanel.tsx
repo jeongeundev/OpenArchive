@@ -78,14 +78,14 @@ export function FolderAccessPanel({ folder, onSaved }: {
   const disabled = saving || !loaded;
 
   return (
-    <section className="space-y-4 border-t border-neutral-800 pt-4">
-      <h3 className="text-sm font-medium text-neutral-400">폴더 열람 범위</h3>
+    <section className="space-y-4 border-t border-line pt-4">
+      <h3 className="text-sm font-medium text-muted">폴더 열람 범위</h3>
       {!folder.can_change_access ? (
-        <p className="text-sm text-neutral-500">폴더를 만든 사람만 바꿀 수 있습니다</p>
+        <p className="text-sm text-muted">폴더를 만든 사람만 바꿀 수 있습니다</p>
       ) : null}
       <fieldset disabled={disabled}>
         <legend className="sr-only">폴더 열람 범위</legend>
-        <div className="flex gap-4 text-sm text-neutral-300">
+        <div className="flex gap-4 text-sm text-body">
           {(["public", "private"] as const).map(value => (
             <label className="flex items-center gap-2" key={value}>
               <input checked={visibility === value} name={`folder-visibility-${folder.id}`}
@@ -101,19 +101,19 @@ export function FolderAccessPanel({ folder, onSaved }: {
             description="선택한 사용자와 그룹 구성원만 이 폴더와 폴더 범위를 따르는 문서를 봅니다."
             onChange={next => { setUsers(next.users); setGroups(next.groups); }} />
           {users.length === 0 && groups.length === 0 ? (
-            <p className="text-sm text-neutral-500">대상을 고르지 않으면 폴더를 만든 사람만 봅니다</p>
+            <p className="text-sm text-muted">대상을 고르지 않으면 폴더를 만든 사람만 봅니다</p>
           ) : null}
         </>
       ) : (
-        <p className="text-sm text-neutral-500">조직 공개 폴더는 로그인한 모든 사용자가 봅니다.</p>
+        <p className="text-sm text-muted">조직 공개 폴더는 로그인한 모든 사용자가 봅니다.</p>
       )}
-      <p className="text-sm text-neutral-500">폴더 범위를 따르는 문서(다른 사람이 넣은 문서 포함)에 바로 적용됩니다</p>
+      <p className="text-sm text-muted">폴더 범위를 따르는 문서(다른 사람이 넣은 문서 포함)에 바로 적용됩니다</p>
       <button type="button" disabled={disabled} onClick={() => void save()}
-        className="rounded-lg bg-white px-4 py-2 text-sm text-black hover:bg-neutral-200 disabled:bg-neutral-700 disabled:text-neutral-400">
+        className="rounded-lg bg-strong px-4 py-2 text-sm text-on-strong hover:bg-strong/90 disabled:bg-sunken disabled:text-faint">
         {saving ? "저장 중…" : "열람 범위 저장"}
       </button>
-      {error !== null ? <p className="text-sm text-[#ef4444]" role="alert">{error}</p> : null}
-      {message !== null ? <p className="text-sm text-neutral-400">{message}</p> : null}
+      {error !== null ? <p className="text-sm text-failed" role="alert">{error}</p> : null}
+      {message !== null ? <p className="text-sm text-muted">{message}</p> : null}
     </section>
   );
 }

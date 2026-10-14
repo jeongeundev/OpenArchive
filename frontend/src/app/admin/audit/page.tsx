@@ -199,42 +199,42 @@ export default function AuditPage(): React.ReactElement {
     }
   }
 
-  if (authLoading) return <p className="text-sm text-neutral-500">불러오는 중…</p>;
-  if (!auth.is_admin) return <p className="text-sm text-neutral-500">관리자 권한이 필요합니다.</p>;
+  if (authLoading) return <p className="text-sm text-muted">불러오는 중…</p>;
+  if (!auth.is_admin) return <p className="text-sm text-muted">관리자 권한이 필요합니다.</p>;
 
   return (
     <section className="space-y-8">
       <div>
-        <h1 className="text-4xl font-semibold text-white">감사 로그</h1>
-        <p className="mt-3 text-sm text-neutral-400">
+        <h1 className="text-4xl font-semibold text-strong">감사 로그</h1>
+        <p className="mt-3 text-sm text-muted">
           문서와 열람 범위·폴더·외부 공유·그룹·사용자·비밀번호·API 토큰의 변경, 원본 내려받기·미리보기 기록입니다. 기록은 고치거나 지울 수 없습니다.
           대상 문서의 제목과 폴더 이름만 보이고 문서 텍스트는 보이지 않습니다.
         </p>
       </div>
 
-      <div className="flex flex-wrap items-end gap-4 rounded-lg border border-neutral-800 bg-[#141414] p-6">
-        <label className="text-sm text-neutral-400">사용자
-          <select className="mt-2 block rounded-lg border border-neutral-800 bg-neutral-900 px-4 py-3 text-neutral-300" onChange={(event) => setActor(event.target.value)} value={actor}>
+      <div className="flex flex-wrap items-end gap-4 rounded-lg border border-line bg-card p-6">
+        <label className="text-sm text-muted">사용자
+          <select className="mt-2 block rounded-lg border border-line bg-card px-4 py-3 text-body" onChange={(event) => setActor(event.target.value)} value={actor}>
             <option value="">전체</option>
             {users.map((user) => <option key={user.id} value={user.username}>{user.username}</option>)}
           </select>
         </label>
-        <label className="text-sm text-neutral-400">동작
-          <select className="mt-2 block rounded-lg border border-neutral-800 bg-neutral-900 px-4 py-3 text-neutral-300" onChange={(event) => setAction(event.target.value as AuditAction | "")} value={action}>
+        <label className="text-sm text-muted">동작
+          <select className="mt-2 block rounded-lg border border-line bg-card px-4 py-3 text-body" onChange={(event) => setAction(event.target.value as AuditAction | "")} value={action}>
             <option value="">전체</option>
             {ACTIONS.map((value) => <option key={value} value={value}>{ACTION_LABEL[value]}</option>)}
           </select>
         </label>
-        <a className="text-sm text-neutral-400 hover:text-[#0ea5e9]" download href={auditCsvUrl({ actor, action })}>CSV 내려받기</a>
+        <a className="text-sm text-muted hover:text-accent" download href={auditCsvUrl({ actor, action })}>CSV 내려받기</a>
       </div>
 
-      {!loaded && error === null ? <p className="text-sm text-neutral-500">불러오는 중…</p> : null}
-      {loaded && items.length === 0 ? <p className="text-sm text-neutral-500">기록이 없습니다.</p> : null}
+      {!loaded && error === null ? <p className="text-sm text-muted">불러오는 중…</p> : null}
+      {loaded && items.length === 0 ? <p className="text-sm text-muted">기록이 없습니다.</p> : null}
 
       {loaded && items.length > 0 ? (
-        <div className="overflow-x-auto rounded-lg border border-neutral-800 bg-[#141414]">
+        <div className="overflow-x-auto rounded-lg border border-line bg-card">
           <table className="w-full text-left text-sm">
-            <thead className="border-b border-neutral-800 text-neutral-400">
+            <thead className="border-b border-line text-muted">
               <tr>
                 <th className="px-4 py-3 font-medium">시각</th>
                 <th className="px-4 py-3 font-medium">사용자</th>
@@ -246,16 +246,16 @@ export default function AuditPage(): React.ReactElement {
               {items.map((entry) => {
                 const description = actionDescription(entry);
                 return (
-                  <tr className="border-b border-neutral-800 last:border-0" key={entry.id}>
-                    <td className="whitespace-nowrap px-4 py-3 text-neutral-400">
+                  <tr className="border-b border-line last:border-0" key={entry.id}>
+                    <td className="whitespace-nowrap px-4 py-3 text-muted">
                       <time dateTime={entry.occurred_at}>{DATE_FORMATTER.format(new Date(entry.occurred_at))}</time>
                     </td>
-                    <td className="px-4 py-3 text-neutral-300">{actorLabel(entry)}</td>
-                    <td className="px-4 py-3 text-neutral-300">
+                    <td className="px-4 py-3 text-body">{actorLabel(entry)}</td>
+                    <td className="px-4 py-3 text-body">
                       <span>{actionLabel(entry)}</span>
-                      {description !== null ? <span className="block text-neutral-500">{description}</span> : null}
+                      {description !== null ? <span className="block text-muted">{description}</span> : null}
                     </td>
-                    <td className="px-4 py-3 text-neutral-300">{entry.document_title ?? (typeof entry.detail.folder_name === "string" ? `폴더 「${entry.detail.folder_name}」` : "—")}</td>
+                    <td className="px-4 py-3 text-body">{entry.document_title ?? (typeof entry.detail.folder_name === "string" ? `폴더 「${entry.detail.folder_name}」` : "—")}</td>
                   </tr>
                 );
               })}
@@ -265,9 +265,9 @@ export default function AuditPage(): React.ReactElement {
       ) : null}
 
       {nextBeforeId !== null ? (
-        <button className="text-sm text-neutral-500 hover:text-neutral-300 disabled:text-neutral-600" disabled={loadingMore} onClick={() => void loadMore()} type="button">더 보기</button>
+        <button className="text-sm text-muted hover:text-strong disabled:text-faint" disabled={loadingMore} onClick={() => void loadMore()} type="button">더 보기</button>
       ) : null}
-      {error !== null ? <p className="text-sm text-[#ef4444]" role="alert">{error}</p> : null}
+      {error !== null ? <p className="text-sm text-failed" role="alert">{error}</p> : null}
     </section>
   );
 }

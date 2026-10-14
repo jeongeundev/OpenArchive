@@ -16,10 +16,10 @@ const status: SystemStatus = {
 describe("StatusPanel", () => {
   it("정합성 0과 2를 정상 수렴 색과 처리 중 색으로 구분한다", () => {
     const { rerender } = render(<StatusPanel status={status} error={null} />);
-    expect(screen.getByTestId("consistency-count")).toHaveClass("text-[#22c55e]");
+    expect(screen.getByTestId("consistency-count")).toHaveClass("text-done");
     rerender(<StatusPanel status={{ ...status, inconsistent_documents: 2 }} error={null} />);
-    expect(screen.getByTestId("consistency-count")).toHaveClass("text-[#a3a3a3]");
-    expect(screen.getByTestId("consistency-count")).not.toHaveClass("text-[#ef4444]");
+    expect(screen.getByTestId("consistency-count")).toHaveClass("text-wait");
+    expect(screen.getByTestId("consistency-count")).not.toHaveClass("text-failed");
   });
 
   it("관계가 다 반영되면 반영됨을 알리고, 남아 있으면 그 건수를 보여준다", () => {
@@ -33,10 +33,10 @@ describe("StatusPanel", () => {
 
   it("관계 미반영 건수도 0과 그 외를 색으로 가르되 오류 색을 쓰지 않는다", () => {
     const { rerender } = render(<StatusPanel status={status} error={null} />);
-    expect(screen.getByTestId("stale-edge-count")).toHaveClass("text-[#22c55e]");
+    expect(screen.getByTestId("stale-edge-count")).toHaveClass("text-done");
     rerender(<StatusPanel status={{ ...status, stale_edge_documents: 4 }} error={null} />);
-    expect(screen.getByTestId("stale-edge-count")).toHaveClass("text-[#a3a3a3]");
-    expect(screen.getByTestId("stale-edge-count")).not.toHaveClass("text-[#ef4444]");
+    expect(screen.getByTestId("stale-edge-count")).toHaveClass("text-wait");
+    expect(screen.getByTestId("stale-edge-count")).not.toHaveClass("text-failed");
   });
 
   it("관계 미반영이 남아 있을 때 저절로 0이 된다고 단정하지 않고 복구 경로를 알린다", () => {

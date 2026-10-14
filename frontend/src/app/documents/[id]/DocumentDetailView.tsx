@@ -81,9 +81,9 @@ export function DocumentDetailView(): React.ReactElement {
     return () => controller.abort();
   }, [id, document?.version]);
 
-  if (loading) return <p className="text-sm text-neutral-500">불러오는 중…</p>;
+  if (loading) return <p className="text-sm text-muted">불러오는 중…</p>;
   if (document === null) {
-    return <p className="text-sm text-neutral-500">{error ?? "문서를 찾을 수 없습니다."}</p>;
+    return <p className="text-sm text-muted">{error ?? "문서를 찾을 수 없습니다."}</p>;
   }
   // 화면에 보이는 태그 목록. 저장 전 편집분이 있으면 그쪽이 기준이다 — 추천 적용도
   // 이 목록 위에 얹어야 편집 중이던 태그가 조용히 사라지지 않는다.
@@ -115,7 +115,7 @@ export function DocumentDetailView(): React.ReactElement {
   return (
     <div className="space-y-8">
       {/* 마지막으로 본 목록의 폴더·조건·쪽으로 돌아간다. 문서는 불러온 뒤에만 그리므로 서버 프리렌더와 어긋나지 않는다. */}
-      <Link href={lastListHref()} className="text-sm text-neutral-500 hover:text-neutral-300">
+      <Link href={lastListHref()} className="text-sm text-muted hover:text-strong">
         ← 목록으로 돌아가기
       </Link>
 
@@ -160,21 +160,21 @@ export function DocumentDetailView(): React.ReactElement {
       />
 
       {linksError !== null ? (
-        <p className="text-sm text-neutral-500" role="status">
+        <p className="text-sm text-muted" role="status">
           {linksError}
         </p>
       ) : null}
 
       {backlinks.length > 0 ? (
         <section className="space-y-4">
-          <h2 className="text-sm font-medium text-neutral-400">
+          <h2 className="text-sm font-medium text-muted">
             이 문서를 가리키는 문서
           </h2>
           <ul className="space-y-2">
             {backlinks.map((backlink) => (
               <li key={backlink.document_id}>
                 <Link
-                  className="text-sm text-[#0ea5e9] hover:underline"
+                  className="text-sm text-accent hover:underline"
                   href={`/documents/${backlink.document_id}`}
                 >
                   {backlink.title}
@@ -204,8 +204,8 @@ export function DocumentDetailView(): React.ReactElement {
         />
       ) : (
         <section className="space-y-3">
-          <h2 className="text-sm font-medium text-neutral-400">관련 문서</h2>
-          <p className="text-sm text-neutral-500">
+          <h2 className="text-sm font-medium text-muted">관련 문서</h2>
+          <p className="text-sm text-muted">
             {relatedData.loading ? "불러오는 중…" : "관련 문서를 불러오지 못했습니다."}
           </p>
         </section>
@@ -223,21 +223,21 @@ export function DocumentDetailView(): React.ReactElement {
         />
       ) : (
         <section className="space-y-3">
-          <h2 className="text-sm font-medium text-neutral-400">태그 추천</h2>
-          <p className="text-sm text-neutral-500">
+          <h2 className="text-sm font-medium text-muted">태그 추천</h2>
+          <p className="text-sm text-muted">
             {relatedData.loading ? "불러오는 중…" : "태그 추천을 불러오지 못했습니다."}
           </p>
         </section>
       )}
 
       {relatedData.error !== null ? (
-        <p className="text-sm text-neutral-500" role="status">
+        <p className="text-sm text-muted" role="status">
           {relatedData.error}
         </p>
       ) : null}
 
       {error !== null ? (
-        <p className="text-sm text-neutral-500" role="status">
+        <p className="text-sm text-muted" role="status">
           {error}
         </p>
       ) : null}

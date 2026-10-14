@@ -3,21 +3,101 @@
  */
 @import "tailwindcss";
 
-/* 다크모드 고정 (docs/UI_GUIDE.md) — prefers-color-scheme로 분기하지 않는다. */
+/* 의미 토큰 두 벌 (docs/UI_GUIDE.md). 색은 html[data-theme] 하나로만 가른다 — 운영체제 설정은
+ * 첫 방문 기본값일 뿐이고(lib/theme.ts), prefers-color-scheme 미디어 쿼리로 가르지 않는다.
+ * data-theme이 없으면(정적 산출물) 라이트다. */
 :root {
-  --background: #0a0a0a;
-  --foreground: #ededed;
+  color-scheme: light;
+  --oa-page: #ffffff;
+  --oa-card: #ffffff;
+  --oa-sunken: #f3f4f6;
+  --oa-line: #e5e7eb;
+  --oa-line-strong: #d1d5db;
+  --oa-strong: #111827;
+  --oa-body: #374151;
+  --oa-muted: #6b7280;
+  --oa-faint: #9ca3af;
+  --oa-on-strong: #ffffff;
+  --oa-accent: #1d4ed8;
+  --oa-accent-soft: #eff6ff;
+  --oa-done: #047857;
+  --oa-done-soft: #ecfdf5;
+  --oa-failed: #b91c1c;
+  --oa-failed-soft: #fef2f2;
+  --oa-wait: #6b7280;
+  --oa-wait-soft: #f3f4f6;
+  --oa-attention: #b45309;
+  --oa-attention-soft: #fffbeb;
+}
+
+html[data-theme="dark"] {
+  color-scheme: dark;
+  --oa-page: #0a0a0a;
+  --oa-card: #141414;
+  --oa-sunken: #262626;
+  --oa-line: #262626;
+  --oa-line-strong: #404040;
+  --oa-strong: #ffffff;
+  --oa-body: #d4d4d4;
+  --oa-muted: #a3a3a3;
+  --oa-faint: #525252;
+  --oa-on-strong: #000000;
+  --oa-accent: #0ea5e9;
+  --oa-accent-soft: rgb(14 165 233 / 0.1);
+  --oa-done: #22c55e;
+  --oa-done-soft: rgb(34 197 94 / 0.1);
+  --oa-failed: #ef4444;
+  --oa-failed-soft: rgb(239 68 68 / 0.1);
+  --oa-wait: #a3a3a3;
+  --oa-wait-soft: rgb(163 163 163 / 0.1);
+  --oa-attention: #f59e0b;
+  --oa-attention-soft: rgb(245 158 11 / 0.1);
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --color-page: var(--oa-page);
+  --color-card: var(--oa-card);
+  --color-sunken: var(--oa-sunken);
+  --color-line: var(--oa-line);
+  --color-line-strong: var(--oa-line-strong);
+  --color-strong: var(--oa-strong);
+  --color-body: var(--oa-body);
+  --color-muted: var(--oa-muted);
+  --color-faint: var(--oa-faint);
+  --color-on-strong: var(--oa-on-strong);
+  --color-accent: var(--oa-accent);
+  --color-accent-soft: var(--oa-accent-soft);
+  --color-done: var(--oa-done);
+  --color-done-soft: var(--oa-done-soft);
+  --color-failed: var(--oa-failed);
+  --color-failed-soft: var(--oa-failed-soft);
+  --color-wait: var(--oa-wait);
+  --color-wait-soft: var(--oa-wait-soft);
+  --color-attention: var(--oa-attention);
+  --color-attention-soft: var(--oa-attention-soft);
+  /* 웹폰트를 쓰지 않는다 — 런타임 외부 자원 0, 정적 산출물 재현성. */
+  --font-sans: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", system-ui, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
+  background: var(--color-page);
+  color: var(--color-body);
   font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+  }
 }

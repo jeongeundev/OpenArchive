@@ -54,24 +54,24 @@ export default function TrashPage(): React.ReactElement {
   return (
     <section className="space-y-8">
       <div>
-        <h1 className="text-4xl font-semibold text-white">휴지통</h1>
-        <p className="mt-3 text-sm text-neutral-400">
+        <h1 className="text-4xl font-semibold text-strong">휴지통</h1>
+        <p className="mt-3 text-sm text-muted">
           내가 지운 문서입니다. 복원하면 원래 폴더·열람 범위·태그 그대로 돌아오고, 영구 삭제 예정일이 지나면 자동으로 영구 삭제됩니다.
         </p>
       </div>
 
-      {actionError !== null ? <p className="text-sm text-[#ef4444]" role="alert">{actionError}</p> : null}
+      {actionError !== null ? <p className="text-sm text-failed" role="alert">{actionError}</p> : null}
 
       {loadError !== null ? (
-        <p className="text-sm text-neutral-500" role="status">{loadError}</p>
+        <p className="text-sm text-muted" role="status">{loadError}</p>
       ) : items === null ? (
-        <p className="text-sm text-neutral-500">불러오는 중…</p>
+        <p className="text-sm text-muted">불러오는 중…</p>
       ) : items.length === 0 ? (
-        <p className="text-sm text-neutral-500">휴지통이 비어 있습니다.</p>
+        <p className="text-sm text-muted">휴지통이 비어 있습니다.</p>
       ) : (
-        <div className="overflow-x-auto rounded-lg border border-neutral-800 bg-[#141414]">
+        <div className="overflow-x-auto rounded-lg border border-line bg-card">
           <table className="w-full text-left text-sm">
-            <thead className="border-b border-neutral-800 text-neutral-400">
+            <thead className="border-b border-line text-muted">
               <tr>
                 <th className="px-4 py-3 font-medium">제목</th>
                 <th className="px-4 py-3 font-medium">삭제 일시</th>
@@ -81,14 +81,14 @@ export default function TrashPage(): React.ReactElement {
             </thead>
             <tbody>
               {items.map((item) => (
-                <tr className="border-b border-neutral-800 last:border-0" key={item.id}>
-                  <td className="px-4 py-3 text-white">{item.title}</td>
-                  <td className="px-4 py-3 text-neutral-400"><DateCell value={item.deleted_at} /></td>
-                  <td className="px-4 py-3 text-neutral-400"><DateCell value={item.purge_at} /></td>
+                <tr className="border-b border-line last:border-0" key={item.id}>
+                  <td className="px-4 py-3 text-strong">{item.title}</td>
+                  <td className="px-4 py-3 text-muted"><DateCell value={item.deleted_at} /></td>
+                  <td className="px-4 py-3 text-muted"><DateCell value={item.purge_at} /></td>
                   <td className="px-4 py-3">
                     <div className="flex justify-end gap-3">
                       <button
-                        className="text-sm text-[#0ea5e9] hover:underline disabled:cursor-not-allowed disabled:text-neutral-600"
+                        className="text-sm text-accent hover:underline disabled:cursor-not-allowed disabled:text-faint"
                         disabled={workingId !== null}
                         onClick={() => void act(item, restoreDocument, "문서를 복원하지 못했습니다.")}
                         type="button"
@@ -96,7 +96,7 @@ export default function TrashPage(): React.ReactElement {
                         복원
                       </button>
                       <button
-                        className="text-sm text-neutral-500 hover:text-neutral-300 disabled:cursor-not-allowed disabled:text-neutral-600"
+                        className="text-sm text-muted hover:text-strong disabled:cursor-not-allowed disabled:text-faint"
                         disabled={workingId !== null}
                         onClick={() => purge(item)}
                         type="button"

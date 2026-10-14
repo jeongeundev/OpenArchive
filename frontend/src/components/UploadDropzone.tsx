@@ -190,20 +190,20 @@ export function UploadDropzone({
 
   return (
     <form
-      className="space-y-4 rounded-lg border border-neutral-800 bg-[#141414] p-6"
+      className="space-y-4 rounded-lg border border-line bg-card p-6"
       onSubmit={(event) => void submit(event)}
     >
       <div>
-        <h2 className="text-sm font-medium text-neutral-400">문서 업로드</h2>
-        <p className="mt-2 text-sm text-neutral-500">
+        <h2 className="text-sm font-medium text-muted">문서 업로드</h2>
+        <p className="mt-2 text-sm text-muted">
           업로드한 파일에서 텍스트를 추출해 저장합니다. 원본 파일은 문서 상세에서 내려받을 수 있습니다.
         </p>
       </div>
 
       <label
         className={`block cursor-pointer rounded-lg border border-dashed p-6 text-sm ${
-          dragging ? "border-[#0ea5e9]" : "border-neutral-700"
-        } ${disabled ? "cursor-not-allowed text-neutral-600" : "text-neutral-300"}`}
+          dragging ? "border-accent" : "border-line-strong"
+        } ${disabled ? "cursor-not-allowed text-faint" : "text-body"}`}
         htmlFor="document-file"
         onDragEnter={(event) => {
           event.preventDefault();
@@ -232,18 +232,18 @@ export function UploadDropzone({
           onChange={(event) => void selectFiles(Array.from(event.target.files ?? []))}
           type="file"
         />
-        <span className="mt-2 block text-neutral-500">
+        <span className="mt-2 block text-muted">
           지원 형식: {SUPPORTED_CONTENT_TYPES.join(", ")} · ZIP 안의 지원 문서도 선택할 수 있습니다.
         </span>
       </label>
 
       {items.length > 0 ? (
-        <ul aria-label="업로드 목록" className="space-y-1 text-sm text-neutral-300">
+        <ul aria-label="업로드 목록" className="space-y-1 text-sm text-body">
           {items.map((item, index) => (
             <li key={`${item.name}-${index}`} className="flex flex-wrap gap-x-2">
               <span>{`${item.name} — ${item.status}`}</span>
               {item.detail !== undefined ? (
-                <span className="text-[#ef4444]">{item.detail}</span>
+                <span className="text-failed">{item.detail}</span>
               ) : null}
             </li>
           ))}
@@ -252,20 +252,20 @@ export function UploadDropzone({
 
       <div className="grid gap-4 sm:grid-cols-2">
         {fileCount <= 1 ? (
-          <label className="text-sm text-neutral-400">
+          <label className="text-sm text-muted">
             제목 (선택)
             <input
-              className="mt-2 w-full rounded-lg border border-neutral-800 bg-neutral-900 px-4 py-3 text-neutral-300"
+              className="mt-2 w-full rounded-lg border border-line bg-card px-4 py-3 text-body"
               disabled={disabled}
               onChange={(event) => setTitle(event.target.value)}
               value={title}
             />
           </label>
         ) : null}
-        <label className="text-sm text-neutral-400">
+        <label className="text-sm text-muted">
           태그 (쉼표로 구분)
           <input
-            className="mt-2 w-full rounded-lg border border-neutral-800 bg-neutral-900 px-4 py-3 text-neutral-300"
+            className="mt-2 w-full rounded-lg border border-line bg-card px-4 py-3 text-body"
             disabled={disabled}
             onChange={(event) => setTags(event.target.value)}
             value={tags}
@@ -286,18 +286,18 @@ export function UploadDropzone({
 
       {folder !== null ? (
         <div className="text-sm">
-          <p className="text-neutral-400">
-            열람 범위: <span className="text-neutral-300">{`폴더 범위 따름(${scopeLabel(folder.scope)})`}</span>
+          <p className="text-muted">
+            열람 범위: <span className="text-body">{`폴더 범위 따름(${scopeLabel(folder.scope)})`}</span>
           </p>
-          <p className="mt-1 text-neutral-500">개별 지정은 업로드 뒤 문서 상세에서 합니다</p>
+          <p className="mt-1 text-muted">개별 지정은 업로드 뒤 문서 상세에서 합니다</p>
           {auth.username !== null && folder.created_by !== auth.username ? (
-            <p className="mt-1 text-neutral-500">폴더를 만든 사람이 범위를 바꾸면 이 문서에도 적용됩니다</p>
+            <p className="mt-1 text-muted">폴더를 만든 사람이 범위를 바꾸면 이 문서에도 적용됩니다</p>
           ) : null}
         </div>
       ) : (
       <fieldset disabled={disabled}>
-        <legend className="text-sm text-neutral-400">열람 범위</legend>
-        <div className="mt-2 flex gap-4 text-sm text-neutral-300">
+        <legend className="text-sm text-muted">열람 범위</legend>
+        <div className="mt-2 flex gap-4 text-sm text-body">
           <label className="flex items-center gap-2">
             <input
               checked={visibility === "public"}
@@ -322,9 +322,9 @@ export function UploadDropzone({
         {visibility === "private" ? (
           <div className="mt-4">
             {principalsError !== null ? (
-              <p className="text-sm text-[#ef4444]" role="alert">{principalsError}</p>
+              <p className="text-sm text-failed" role="alert">{principalsError}</p>
             ) : principals === null ? (
-              <p className="text-sm text-neutral-500">대상 목록을 불러오는 중…</p>
+              <p className="text-sm text-muted">대상 목록을 불러오는 중…</p>
             ) : (
               <GranteePicker
                 disabled={disabled}
@@ -339,11 +339,11 @@ export function UploadDropzone({
       </fieldset>
       )}
 
-      {error !== null ? <p className="text-sm text-[#ef4444]">{error}</p> : null}
-      {message !== null ? <p className="text-sm text-neutral-400">{message}</p> : null}
+      {error !== null ? <p className="text-sm text-failed">{error}</p> : null}
+      {message !== null ? <p className="text-sm text-muted">{message}</p> : null}
 
       <button
-        className="rounded-lg bg-white px-4 py-2 text-sm text-black hover:bg-neutral-200 disabled:cursor-not-allowed disabled:bg-neutral-700 disabled:text-neutral-400"
+        className="rounded-lg bg-strong px-4 py-2 text-sm text-on-strong hover:bg-strong/90 disabled:cursor-not-allowed disabled:bg-sunken disabled:text-faint"
         disabled={disabled || pendingCount === 0}
         type="submit"
       >

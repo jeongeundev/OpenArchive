@@ -53,33 +53,33 @@ export default function OrganizePage(): React.ReactElement {
   return (
     <section className="space-y-8">
       <div>
-        <h1 className="text-4xl font-semibold text-white">정리할 문서</h1>
-        <p className="mt-3 text-sm text-neutral-400">
+        <h1 className="text-4xl font-semibold text-strong">정리할 문서</h1>
+        <p className="mt-3 text-sm text-muted">
           폴더 밖에 있는 내 문서입니다. 폴더에 든 관련 문서의 절반 이상이 한 폴더에 모여 있으면 그 폴더를 추천합니다. 자동으로 옮기지는 않습니다.
         </p>
       </div>
 
-      {actionError !== null ? <p className="text-sm text-[#ef4444]" role="alert">{actionError}</p> : null}
+      {actionError !== null ? <p className="text-sm text-failed" role="alert">{actionError}</p> : null}
       {foldersError !== null ? (
-        <p className="text-sm text-neutral-500" role="status">폴더 목록을 불러오지 못해 옮길 수 없습니다.</p>
+        <p className="text-sm text-muted" role="status">폴더 목록을 불러오지 못해 옮길 수 없습니다.</p>
       ) : null}
 
       {loadError !== null ? (
-        <p className="text-sm text-neutral-500" role="status">{loadError}</p>
+        <p className="text-sm text-muted" role="status">{loadError}</p>
       ) : result === null ? (
-        <p className="text-sm text-neutral-500">불러오는 중…</p>
+        <p className="text-sm text-muted">불러오는 중…</p>
       ) : result.items.length === 0 ? (
-        <p className="text-sm text-neutral-500">폴더 밖에 있는 내 문서가 없습니다.</p>
+        <p className="text-sm text-muted">폴더 밖에 있는 내 문서가 없습니다.</p>
       ) : (
         <>
           {result.count > result.items.length ? (
-            <p className="text-sm text-neutral-500">
+            <p className="text-sm text-muted">
               {`폴더 밖 문서 ${result.count}건 중 최근 ${result.items.length}건입니다.`}
             </p>
           ) : null}
-          <div className="overflow-x-auto rounded-lg border border-neutral-800 bg-[#141414]">
+          <div className="overflow-x-auto rounded-lg border border-line bg-card">
             <table className="w-full text-left text-sm">
-              <thead className="border-b border-neutral-800 text-neutral-400">
+              <thead className="border-b border-line text-muted">
                 <tr>
                   <th className="px-4 py-3 font-medium">제목</th>
                   <th className="px-4 py-3 font-medium">추천 폴더</th>
@@ -91,24 +91,24 @@ export default function OrganizePage(): React.ReactElement {
                 {result.items.map((item) => {
                   const label = item.suggestion?.path.map((each) => each.name).join("/") ?? null;
                   return (
-                    <tr className="border-b border-neutral-800 last:border-0" key={item.document_id}>
+                    <tr className="border-b border-line last:border-0" key={item.document_id}>
                       <td className="px-4 py-3">
-                        <Link className="text-white hover:text-[#0ea5e9]" href={`/documents/${item.document_id}`}>
+                        <Link className="text-strong hover:text-accent" href={`/documents/${item.document_id}`}>
                           {item.title}
                         </Link>
                       </td>
                       {item.suggestion === null ? (
-                        <td className="px-4 py-3 text-neutral-500" colSpan={3}>추천할 폴더가 없습니다</td>
+                        <td className="px-4 py-3 text-muted" colSpan={3}>추천할 폴더가 없습니다</td>
                       ) : (
                         <>
-                          <td className="px-4 py-3 text-neutral-300">{label}</td>
-                          <td className="px-4 py-3 text-neutral-500">
+                          <td className="px-4 py-3 text-body">{label}</td>
+                          <td className="px-4 py-3 text-muted">
                             {`폴더에 있는 관련 문서 ${item.suggestion.total}개 중 ${item.suggestion.votes}개`}
                           </td>
                           <td className="px-4 py-3">
                             <div className="flex justify-end">
                               <button
-                                className="text-sm text-[#0ea5e9] hover:underline disabled:cursor-not-allowed disabled:text-neutral-600"
+                                className="text-sm text-accent hover:underline disabled:cursor-not-allowed disabled:text-faint"
                                 disabled={workingId !== null || foldersLoading || foldersError !== null}
                                 onClick={() => void apply(item, item.suggestion!.folder_id)}
                                 type="button"

@@ -76,50 +76,50 @@ export default function UsersPage(): React.ReactElement {
     }
   }
 
-  if (authLoading) return <p className="text-sm text-neutral-500">불러오는 중…</p>;
-  if (!auth.is_admin) return <p className="text-sm text-neutral-500">관리자 권한이 필요합니다.</p>;
+  if (authLoading) return <p className="text-sm text-muted">불러오는 중…</p>;
+  if (!auth.is_admin) return <p className="text-sm text-muted">관리자 권한이 필요합니다.</p>;
 
   return (
     <section className="space-y-8">
       <div>
-        <h1 className="text-4xl font-semibold text-white">사용자 관리</h1>
-        <p className="mt-3 text-sm text-neutral-400">계정을 만들고 삭제합니다.</p>
+        <h1 className="text-4xl font-semibold text-strong">사용자 관리</h1>
+        <p className="mt-3 text-sm text-muted">계정을 만들고 삭제합니다.</p>
       </div>
 
-      <form className="grid gap-4 rounded-lg border border-neutral-800 bg-[#141414] p-6 sm:grid-cols-2" onSubmit={(event) => void submit(event)}>
-        <label className="text-sm text-neutral-400">사용자명
-          <input className="mt-2 w-full rounded-lg border border-neutral-800 bg-neutral-900 px-4 py-3 text-neutral-300" onChange={(event) => setUsername(event.target.value)} required value={username} />
+      <form className="grid gap-4 rounded-lg border border-line bg-card p-6 sm:grid-cols-2" onSubmit={(event) => void submit(event)}>
+        <label className="text-sm text-muted">사용자명
+          <input className="mt-2 w-full rounded-lg border border-line bg-card px-4 py-3 text-body" onChange={(event) => setUsername(event.target.value)} required value={username} />
         </label>
         <div>
-          <label className="text-sm text-neutral-400">비밀번호
-            <input aria-describedby="new-user-password-hint" className="mt-2 w-full rounded-lg border border-neutral-800 bg-neutral-900 px-4 py-3 text-neutral-300" minLength={8} onChange={(event) => setPassword(event.target.value)} required type="password" value={password} />
+          <label className="text-sm text-muted">비밀번호
+            <input aria-describedby="new-user-password-hint" className="mt-2 w-full rounded-lg border border-line bg-card px-4 py-3 text-body" minLength={8} onChange={(event) => setPassword(event.target.value)} required type="password" value={password} />
           </label>
-          <p className="mt-2 text-xs text-neutral-500" id="new-user-password-hint">8자 이상</p>
+          <p className="mt-2 text-xs text-muted" id="new-user-password-hint">8자 이상</p>
         </div>
-        <label className="flex items-center gap-2 text-sm text-neutral-300">
+        <label className="flex items-center gap-2 text-sm text-body">
           <input checked={isAdmin} onChange={(event) => setIsAdmin(event.target.checked)} type="checkbox" /> 관리자
         </label>
-        <div><button className="rounded-lg bg-white px-4 py-2 text-sm text-black hover:bg-neutral-200 disabled:bg-neutral-700 disabled:text-neutral-400" disabled={working} type="submit">사용자 생성</button></div>
+        <div><button className="rounded-lg bg-strong px-4 py-2 text-sm text-on-strong hover:bg-strong/90 disabled:bg-sunken disabled:text-faint" disabled={working} type="submit">사용자 생성</button></div>
       </form>
 
       <div className="space-y-3">
-        <p className="text-sm text-neutral-500">문서나 폴더를 소유한 사용자는 이전받을 사용자를 고른 뒤 삭제합니다. 이전해도 열람 범위는 바뀌지 않습니다.</p>
-        <div className="overflow-x-auto rounded-lg border border-neutral-800 bg-[#141414]">
+        <p className="text-sm text-muted">문서나 폴더를 소유한 사용자는 이전받을 사용자를 고른 뒤 삭제합니다. 이전해도 열람 범위는 바뀌지 않습니다.</p>
+        <div className="overflow-x-auto rounded-lg border border-line bg-card">
           <table className="w-full text-left text-sm">
-            <thead className="border-b border-neutral-800 text-neutral-500"><tr><th className="px-4 py-3 font-medium">사용자명</th><th className="px-4 py-3 font-medium">권한</th><th className="px-4 py-3"><span className="sr-only">작업</span></th></tr></thead>
+            <thead className="border-b border-line text-muted"><tr><th className="px-4 py-3 font-medium">사용자명</th><th className="px-4 py-3 font-medium">권한</th><th className="px-4 py-3"><span className="sr-only">작업</span></th></tr></thead>
             <tbody>{users.map((user) => (
-              <tr className="border-b border-neutral-800 last:border-0" key={user.id}>
-                <td className="px-4 py-3 text-white">{user.username}</td>
-                <td className="px-4 py-3 text-neutral-400">{user.is_admin ? "관리자" : "일반 사용자"}</td>
-                <td className="px-4 py-3 text-right"><button className="text-neutral-500 hover:text-neutral-300 disabled:text-neutral-600" disabled={working || user.username === auth.username} onClick={() => void remove(user)} title={user.username === auth.username ? "자기 계정은 삭제할 수 없습니다." : undefined} type="button">삭제</button>
+              <tr className="border-b border-line last:border-0" key={user.id}>
+                <td className="px-4 py-3 text-strong">{user.username}</td>
+                <td className="px-4 py-3 text-muted">{user.is_admin ? "관리자" : "일반 사용자"}</td>
+                <td className="px-4 py-3 text-right"><button className="text-muted hover:text-strong disabled:text-faint" disabled={working || user.username === auth.username} onClick={() => void remove(user)} title={user.username === auth.username ? "자기 계정은 삭제할 수 없습니다." : undefined} type="button">삭제</button>
                   {transferUser === user.id ? <div className="mt-3 space-y-3 text-left">
-                    <label className="block text-neutral-400">이전받을 사용자
-                      <select className="mt-2 block rounded-lg border border-neutral-800 bg-neutral-900 px-4 py-3 text-neutral-300" disabled={working} value={transferTo} onChange={event => setTransferTo(event.target.value)}>
+                    <label className="block text-muted">이전받을 사용자
+                      <select className="mt-2 block rounded-lg border border-line bg-card px-4 py-3 text-body" disabled={working} value={transferTo} onChange={event => setTransferTo(event.target.value)}>
                         <option value="">사용자를 고르세요</option>
                         {users.filter(item => item.id !== user.id && item.username !== auth.username).map(item => <option key={item.id} value={item.username}>{item.username}</option>)}
                       </select>
                     </label>
-                    <button className="rounded-lg bg-white px-4 py-2 text-black hover:bg-neutral-200 disabled:bg-neutral-700 disabled:text-neutral-400" disabled={working || !transferTo} onClick={() => void remove(user, transferTo)} type="button">이전 후 삭제</button>
+                    <button className="rounded-lg bg-strong px-4 py-2 text-on-strong hover:bg-strong/90 disabled:bg-sunken disabled:text-faint" disabled={working || !transferTo} onClick={() => void remove(user, transferTo)} type="button">이전 후 삭제</button>
                   </div> : null}
                 </td>
               </tr>
@@ -127,7 +127,7 @@ export default function UsersPage(): React.ReactElement {
           </table>
         </div>
       </div>
-      {error !== null ? <p className="text-sm text-[#ef4444]" role="alert">{error}</p> : null}
+      {error !== null ? <p className="text-sm text-failed" role="alert">{error}</p> : null}
     </section>
   );
 }

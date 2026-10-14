@@ -5,8 +5,8 @@
  */
 export function SiteFooter(): React.ReactElement {
   return (
-    <footer className="border-t border-neutral-800">
-      <p className="mx-auto max-w-5xl px-6 py-4 text-xs text-neutral-500">
+    <footer className="border-t border-line">
+      <p className="mx-auto max-w-5xl px-6 py-4 text-xs text-muted">
         본 제품은 한컴의 HWP 문서 파일(.hwp) 공개 문서를 참고하여 개발하였습니다.
       </p>
     </footer>

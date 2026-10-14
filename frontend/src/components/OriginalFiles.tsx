@@ -114,28 +114,28 @@ export function OriginalFiles({
 
   return (
     <section className="space-y-4">
-      <h2 className="text-sm font-medium text-neutral-400">원본 파일</h2>
+      <h2 className="text-sm font-medium text-muted">원본 파일</h2>
 
       {hasOriginal ? (
-        <ol className="divide-y divide-neutral-800 rounded-lg border border-neutral-800 bg-[#141414] px-5">
+        <ol className="divide-y divide-line rounded-lg border border-line bg-card px-5">
           {files.map((file) => (
             <li
               key={file.file_version}
               className="flex flex-wrap items-center justify-between gap-4 py-4"
             >
               <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
-                <span className="text-neutral-300">{file.file_version}판</span>
+                <span className="text-body">{file.file_version}판</span>
                 {file.file_version === latest ? (
-                  <span className="rounded bg-[#0ea5e9]/10 px-2 py-0.5 text-xs text-[#0ea5e9]">
+                  <span className="rounded bg-accent-soft px-2 py-0.5 text-xs text-accent">
                     현재
                   </span>
                 ) : null}
-                <span className="text-neutral-300">{file.filename}</span>
-                <span className="text-xs text-neutral-500">{formatSize(file.size)}</span>
-                <time className="text-xs text-neutral-500" dateTime={file.uploaded_at}>
+                <span className="text-body">{file.filename}</span>
+                <span className="text-xs text-muted">{formatSize(file.size)}</span>
+                <time className="text-xs text-muted" dateTime={file.uploaded_at}>
                   {formatDate(file.uploaded_at)}
                 </time>
-                <span className="text-xs text-neutral-500">
+                <span className="text-xs text-muted">
                   {file.text_version === null ? "텍스트 인식 전" : `텍스트 v${file.text_version}`}
                 </span>
               </div>
@@ -144,7 +144,7 @@ export function OriginalFiles({
                 {/* 미리보기 여부는 서버의 preview_status만 따른다(ADR-058) — 변환본도 같은 경로로 열린다. */}
                 {file.preview_status === "ready" ? (
                   <a
-                    className="text-xs text-[#0ea5e9] hover:underline"
+                    className="text-xs text-accent hover:underline"
                     href={originalPreviewUrl(document.id, file.file_version)}
                     target="_blank"
                     rel="noopener noreferrer"
@@ -152,10 +152,10 @@ export function OriginalFiles({
                     미리보기
                   </a>
                 ) : file.preview_status === "pending" ? (
-                  <span className="text-xs text-neutral-500">미리보기 준비 중</span>
+                  <span className="text-xs text-muted">미리보기 준비 중</span>
                 ) : null}
                 <a
-                  className="text-xs text-[#0ea5e9] hover:underline"
+                  className="text-xs text-accent hover:underline"
                   download
                   href={originalFileUrl(
                     document.id,
@@ -169,12 +169,12 @@ export function OriginalFiles({
           ))}
         </ol>
       ) : (
-        <p className="text-sm text-neutral-500">원본 파일이 없습니다.</p>
+        <p className="text-sm text-muted">원본 파일이 없습니다.</p>
       )}
 
       <div className="flex flex-wrap gap-3">
         <button
-          className="rounded-lg bg-white px-4 py-2 text-sm text-black hover:bg-neutral-200 disabled:cursor-not-allowed disabled:bg-neutral-700 disabled:text-neutral-400"
+          className="rounded-lg bg-strong px-4 py-2 text-sm text-on-strong hover:bg-strong/90 disabled:cursor-not-allowed disabled:bg-sunken disabled:text-faint"
           disabled={actionsDisabled}
           onClick={() => inputRef.current?.click()}
           type="button"
@@ -183,7 +183,7 @@ export function OriginalFiles({
         </button>
         {hasOriginal ? (
           <button
-            className="text-sm text-neutral-500 hover:text-neutral-300 disabled:cursor-not-allowed disabled:text-neutral-600"
+            className="text-sm text-muted hover:text-strong disabled:cursor-not-allowed disabled:text-faint"
             disabled={actionsDisabled}
             onClick={() => void reextract()}
             type="button"
@@ -207,15 +207,15 @@ export function OriginalFiles({
         />
       </div>
 
-      {extracting ? <p className="text-sm text-neutral-400">{EXTRACTING_NOTICE}</p> : null}
+      {extracting ? <p className="text-sm text-muted">{EXTRACTING_NOTICE}</p> : null}
 
       {error !== null ? (
-        <p className="text-sm text-[#ef4444]" role="status">
+        <p className="text-sm text-failed" role="status">
           {error}
         </p>
       ) : null}
       {notice !== null ? (
-        <p className="text-sm text-neutral-400" role="status">
+        <p className="text-sm text-muted" role="status">
           {notice}
         </p>
       ) : null}

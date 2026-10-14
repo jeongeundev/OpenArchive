@@ -68,7 +68,7 @@ describe("DocumentTable", () => {
   it("빈 목록에는 안내 문구를 표시한다", () => {
     render(<DocumentTable documents={[]} />);
 
-    expect(screen.getByText("아직 문서가 없습니다.")).toHaveClass("text-neutral-500");
+    expect(screen.getByText("아직 문서가 없습니다.")).toHaveClass("text-muted");
   });
 
   it("추출 상태 배지가 임베딩 상태 배지보다 우선한다", () => {

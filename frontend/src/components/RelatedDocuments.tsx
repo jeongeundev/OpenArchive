@@ -25,9 +25,9 @@ export function RelatedDocuments({
 
   return (
     <section className="space-y-4">
-      <h2 className="text-sm font-medium text-neutral-400">관련 문서</h2>
+      <h2 className="text-sm font-medium text-muted">관련 문서</h2>
       {response.reason === "not_indexed" ? (
-        <p className="text-sm text-neutral-500">
+        <p className="text-sm text-muted">
           {textMissing
             ? "텍스트를 인식하지 못해 표시할 수 없습니다."
             : "임베딩이 완료되면 표시됩니다."}
@@ -36,13 +36,13 @@ export function RelatedDocuments({
         <>
           {response.identical.length > 0 ? (
             <div className="space-y-2">
-              <p className="text-sm text-neutral-300">동일한 텍스트의 문서가 있습니다</p>
+              <p className="text-sm text-body">동일한 텍스트의 문서가 있습니다</p>
               <ul className="space-y-1">
                 {response.identical.map((item) => (
                   <li key={item.document_id}>
                     <Link
                       href={`/documents/${item.document_id}`}
-                      className="text-sm text-neutral-300 hover:text-[#0ea5e9]"
+                      className="text-sm text-body hover:text-accent"
                     >
                       {item.title}
                     </Link>
@@ -52,35 +52,35 @@ export function RelatedDocuments({
             </div>
           ) : null}
           {response.reason === "no_edges" ? (
-            <p className="text-sm text-neutral-500">처리는 끝났지만 관련 문서가 없습니다.</p>
+            <p className="text-sm text-muted">처리는 끝났지만 관련 문서가 없습니다.</p>
           ) : null}
         </>
       )}
       {response.reason !== "not_indexed" && response.items.length > 0 ? (
         <div className="space-y-4">
-          <p className="text-sm text-neutral-300">내용이 유사한 문서가 있습니다</p>
+          <p className="text-sm text-body">내용이 유사한 문서가 있습니다</p>
           {groups.map(([kind, items]) => (
             <div key={kind} className="space-y-2">
-              <h3 className="text-xs font-medium text-neutral-400">{relationLabel(kind)}</h3>
-              <ul className="divide-y divide-neutral-800 rounded-lg border border-neutral-800 bg-[#141414] px-5">
+              <h3 className="text-xs font-medium text-muted">{relationLabel(kind)}</h3>
+              <ul className="divide-y divide-line rounded-lg border border-line bg-card px-5">
                 {items.map((item) => (
                   <li key={item.document_id} className="space-y-2 py-4">
                     <div className="flex flex-wrap items-center justify-between gap-3">
                       <Link
                         href={`/documents/${item.document_id}`}
-                        className="text-sm text-white hover:text-[#0ea5e9]"
+                        className="text-sm text-strong hover:text-accent"
                       >
                         {item.title}
                       </Link>
-                      <div className="flex gap-3 text-xs text-neutral-500">
-                        <span className="text-[#0ea5e9]">{item.score.toFixed(3)}</span>
+                      <div className="flex gap-3 text-xs text-muted">
+                        <span className="text-accent">{item.score.toFixed(3)}</span>
                         <span>v{response.based_on_version} 기준</span>
                         {item.mutual ? <span>서로 찾음</span> : null}
                       </div>
                     </div>
                     <div className="flex flex-wrap gap-2">
                       {item.tags.map((tag) => (
-                        <span key={tag} className="rounded bg-neutral-800 px-2 py-1 text-xs text-neutral-300">
+                        <span key={tag} className="rounded bg-sunken px-2 py-1 text-xs text-body">
                           {tag}
                         </span>
                       ))}

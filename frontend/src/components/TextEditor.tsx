@@ -80,10 +80,10 @@ export function TextEditor({
   return (
     <section className="space-y-4">
       <div className="flex items-center justify-between gap-4">
-        <h2 className="text-sm font-medium text-neutral-400">{textLabel}</h2>
+        <h2 className="text-sm font-medium text-muted">{textLabel}</h2>
         {!editing && editable ? (
           <button
-            className="text-sm text-neutral-500 hover:text-neutral-300 disabled:cursor-not-allowed disabled:text-neutral-600"
+            className="text-sm text-muted hover:text-strong disabled:cursor-not-allowed disabled:text-faint"
             disabled={!editable}
             onClick={() => changeEditing(true)}
             type="button"
@@ -93,17 +93,17 @@ export function TextEditor({
         ) : null}
       </div>
       {extracting ? (
-        <p className="text-sm text-neutral-400" role="status">
+        <p className="text-sm text-muted" role="status">
           {EXTRACTING_NOTICE}
         </p>
       ) : null}
       {document.extraction_status === "failed" && !recognitionFailedEmpty ? (
-        <p className="text-sm text-neutral-500">
+        <p className="text-sm text-muted">
           마지막 텍스트 인식에 실패해 이전 추출 텍스트를 표시합니다.
         </p>
       ) : null}
       {showsExtractionNotice && !extracting && !recognitionFailedEmpty ? (
-        <p className="text-sm text-neutral-500">
+        <p className="text-sm text-muted">
           원본 파일이 아니라 업로드 시 추출된 텍스트를 편집합니다. 저장하면 새 텍스트 버전이
           만들어집니다.
         </p>
@@ -112,25 +112,25 @@ export function TextEditor({
         <form className="space-y-3" onSubmit={(event) => void save(event)}>
           <label className="sr-only" htmlFor="extracted-text">{textLabel}</label>
           <textarea
-            className="min-h-80 w-full rounded-lg border border-neutral-800 bg-neutral-900 px-4 py-3 text-sm leading-relaxed text-neutral-300"
+            className="min-h-80 w-full rounded-lg border border-line bg-card px-4 py-3 text-sm leading-relaxed text-body"
             id="extracted-text"
             onChange={(event) => setContent(event.target.value)}
             value={content}
           />
-          <p className="text-xs text-neutral-500">
+          <p className="text-xs text-muted">
             다른 문서를 연결하려면 [[문서 제목]] 형식으로 입력하세요.
           </p>
-          {error !== null ? <p className="text-sm text-[#ef4444]">{error}</p> : null}
+          {error !== null ? <p className="text-sm text-failed">{error}</p> : null}
           <div className="flex gap-3">
             <button
-              className="rounded-lg bg-white px-4 py-2 text-sm text-black hover:bg-neutral-200 disabled:cursor-not-allowed disabled:bg-neutral-700 disabled:text-neutral-400"
+              className="rounded-lg bg-strong px-4 py-2 text-sm text-on-strong hover:bg-strong/90 disabled:cursor-not-allowed disabled:bg-sunken disabled:text-faint"
               disabled={saving}
               type="submit"
             >
               {saving ? "저장 중…" : "저장"}
             </button>
             <button
-              className="text-sm text-neutral-500 hover:text-neutral-300 disabled:text-neutral-600"
+              className="text-sm text-muted hover:text-strong disabled:text-faint"
               disabled={saving}
               onClick={cancel}
               type="button"
@@ -140,11 +140,11 @@ export function TextEditor({
           </div>
         </form>
       ) : recognitionFailedEmpty ? (
-        <p className="rounded-lg border border-neutral-800 bg-[#141414] p-6 text-sm text-neutral-400">
+        <p className="rounded-lg border border-line bg-card p-6 text-sm text-muted">
           원본에서 텍스트를 인식하지 못했습니다. 원본을 교체하거나 다시 추출해 보세요.
         </p>
       ) : (
-        <div className="whitespace-pre-wrap rounded-lg border border-neutral-800 bg-[#141414] p-6 text-sm leading-relaxed text-neutral-300">
+        <div className="whitespace-pre-wrap rounded-lg border border-line bg-card p-6 text-sm leading-relaxed text-body">
           <WikilinkContent content={document.content} links={links} />
         </div>
       )}

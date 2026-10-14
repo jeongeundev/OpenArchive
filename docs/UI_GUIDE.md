@@ -19,70 +19,93 @@
 | 모든 카드에 동일한 rounded-2xl | 균일한 둥근 모서리는 템플릿 느낌 |
 | 배경 gradient orb (blur-3xl 원형) | 모든 AI 랜딩 페이지에 있는 장식 |
 
-## 색상
-### 배경
-| 용도 | 값 |
-|------|------|
-| 페이지 | #0a0a0a |
-| 카드 | #141414 |
+## 테마와 색상
 
-### 텍스트
-| 용도 | 값 |
-|------|------|
-| 주 텍스트 | text-white |
-| 본문 | text-neutral-300 |
-| 보조 | text-neutral-400 |
-| 비활성 | text-neutral-500 |
+색·글꼴 체계는 같은 저작자의 runloom UI 가이드를 따랐다.
 
-### 포인트 색 (1가지)
-| 용도 | 값 |
-|------|------|
-| 인터랙티브 요소(링크, 활성 필터, 유사도 점수 강조) | #0ea5e9 (sky-500) |
+- **라이트·다크 두 테마, 사용자가 고른다.** 첫 방문(저장된 선택 없음)은 운영체제 설정(`prefers-color-scheme`)을 따르고,
+  헤더의 테마 버튼으로 바꾸면 이 브라우저(`localStorage` `openarchive-theme`)에 기억해 다음 방문에도 유지한다. 저장이 막힌
+  브라우저(개인 정보 보호 모드)에서도 그 탭에서는 바뀐다.
+- 색은 `html[data-theme]` 하나로만 가른다 — `layout.tsx` `<head>`의 짧은 인라인 스크립트가 그리기 전에
+  `data-theme`을 정해 첫 화면이 깜빡이지 않는다. `data-theme`이 없으면(정적 산출물) 라이트다.
+- **화면·컴포넌트는 아래 의미 토큰 유틸리티만 쓴다**(`text-strong`·`bg-card`·`border-line`·`text-failed` 등).
+  원시 팔레트 클래스(`neutral-`·`gray-`·`white`·`black`·`red-`·`green-`·`sky-`)와 대괄호 색(`[#…]`)은 금지이며,
+  `frontend/src/design-guard.test.ts`가 지킨다. 값은 `globals.css`가 두 벌로 정의한다.
+- 그림자(`shadow`)·`blur`·`backdrop-`·그라데이션·보라/인디고 계열을 쓰지 않는다. 테두리는 1px, `line`·`line-strong` 두 단계다.
 
-### 데이터/시맨틱 색상
-| 용도 | 값 |
-|------|------|
-| ready (임베딩 완료) | #22c55e |
-| error (임베딩 실패) | #ef4444 |
-| pending/processing (대기·처리 중) | #a3a3a3 |
+| 토큰 | 라이트 | 다크 | 쓰임 |
+|---|---|---|---|
+| `page` | #ffffff | #0a0a0a | 페이지 배경 |
+| `card` | #ffffff | #141414 | 카드·입력 배경 |
+| `sunken` | #f3f4f6 | #262626 | 태그 칩·비활성 버튼·코드 배경 |
+| `line` | #e5e7eb | #262626 | 기본 테두리·구분선 |
+| `line-strong` | #d1d5db | #404040 | 입력·강조 테두리 |
+| `strong` | #111827 | #ffffff | 제목·주 텍스트·기본 버튼 배경 |
+| `body` | #374151 | #d4d4d4 | 본문 |
+| `muted` | #6b7280 | #a3a3a3 | 보조 텍스트 |
+| `faint` | #9ca3af | #525252 | 비활성 |
+| `on-strong` | #ffffff | #000000 | 기본 버튼 글자 |
+| `accent` | #1d4ed8 | #0ea5e9 | 포인트 색 1가지 — 링크·활성 필터·유사도 점수·포커스 링·진행 중 |
+| `accent-soft` | #eff6ff | accent 10% | 활성 배경 |
+| `done` / `done-soft` | #047857 / #ecfdf5 | #22c55e / 10% | 완료 (ready) |
+| `failed` / `failed-soft` | #b91c1c / #fef2f2 | #ef4444 / 10% | 오류 (error) |
+| `wait` / `wait-soft` | #6b7280 / #f3f4f6 | #a3a3a3 / 10% | 대기 (pending) |
+| `attention` / `attention-soft` | #b45309 / #fffbeb | #f59e0b / 10% | 주의 |
 
-임베딩 상태 배지는 위 시맨틱 색만 사용한다. processing은 색 대신 텍스트 변화("처리 중…")로 진행을 표현한다.
+글꼴은 두 테마 공통 시스템 스택이다 — 웹폰트·CDN을 쓰지 않는다.
+
+- `font-sans`: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", system-ui, sans-serif
+- `font-mono`: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace
+
+키보드 포커스는 `:focus-visible`에 2px `accent` 테두리로 보인다.
+
+### 상태 배지
+
+임베딩 상태 배지와 텍스트 인식 배지는 **연한 배경 알약 + 점 + 한글**이다. 색만으로 상태를 말하지 않도록 점 모양도 다르다.
+배지 글자는 그대로다. 점은 `aria-hidden`.
+
+| 상태 | 글자 | 색 | 점 |
+|------|------|------|------|
+| `ready` | 「완료」 | `done` | 채운 점 |
+| `error` | 「실패」 | `failed` | 채운 점 |
+| `pending` | 「대기 중」 | `wait` | 빈 점 |
+| `processing` | 「처리 중…」 | `accent` | 채운 점 + 깜빡임(`motion-safe:animate-pulse`) |
 
 **텍스트 인식 배지** (이미지·스캔 PDF, ADR-052): 추출이 끝나지 않은 문서는 임베딩 배지 대신 인식 배지를 보인다 — 인식 전에는 임베딩 상태가 의미 없다. 목록과 상세 모두 같다.
 
-| `extraction_status` | 배지 | 색 |
+| `extraction_status` | 배지 | 색 · 점 |
 |------|------|------|
-| `pending` | 「텍스트 인식 중」 | #a3a3a3 |
-| `failed` | 「텍스트 인식 실패」 | #ef4444 |
+| `pending` | 「텍스트 인식 중」 | `wait` · 빈 점 |
+| `failed` | 「텍스트 인식 실패」 | `failed` · 채운 점 |
 | `done` | (임베딩 상태 배지를 그대로) | — |
 
 ## 컴포넌트
 ### 카드
 ```
-rounded-lg bg-[#141414] border border-neutral-800 p-6
+rounded-lg bg-card border border-line p-6
 ```
 
 ### 버튼
 ```
-Primary: rounded-lg bg-white text-black hover:bg-neutral-200
-Text:    text-neutral-500 hover:text-neutral-300
+Primary: rounded-lg bg-strong text-on-strong hover:bg-strong/90
+Text:    text-muted hover:text-strong
 ```
 
 ### 입력 필드
 ```
-rounded-lg bg-neutral-900 border border-neutral-800 px-4 py-3
+rounded-lg bg-card border border-line-strong px-4 py-3
 ```
 
 ### 상태 배지
 ```
-rounded px-2 py-0.5 text-xs font-medium — 시맨틱 색 텍스트 + 동일 색 10% 배경
+inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium — {색}-soft 배경 + {색} 글자 + size-2 rounded-full 점
 ```
 
 ## 레이아웃
 - 전체 너비: max-w-5xl
 - 정렬: 좌측 정렬 기본. 중앙 정렬 금지
 - 간격: gap-3~4, 섹션 간 space-y-8
-- 헤더: 제품명 + 문서·검색·관계 지도·정리할 문서(로그인 사용자)·문서 진단 링크 + 로그인 상태(익명이면 로그인 링크, 로그인했으면 **사용자명이 `/settings`로 가는 링크**이고 그 옆에 로그아웃). 관리자에게만 사용자 관리·그룹 관리·외부 공유·감사 로그·**시스템 상태**(`/admin/status`) 링크를 더한다. 일반 사용자 메뉴에는 시스템 상태가 없다 (2026-10-08 구현, #190)
+- 헤더: 제품명 + 문서·검색·관계 지도·정리할 문서(로그인 사용자)·문서 진단 링크 + 로그인 상태(익명이면 로그인 링크, 로그인했으면 **사용자명이 `/settings`로 가는 링크**이고 그 옆에 로그아웃, 그 뒤 테마 버튼 「다크 테마」/「라이트 테마」(바꿀 대상 이름, 익명에게도 보인다)). 관리자에게만 사용자 관리·그룹 관리·외부 공유·감사 로그·**시스템 상태**(`/admin/status`) 링크를 더한다. 일반 사용자 메뉴에는 시스템 상태가 없다 (2026-10-08 구현, #190)
 - **상단 고정 상태바 없음.** 접속 노드·페일오버 정보는 사용자 화면에 표시하지 않는다 (디자인 원칙 3)
 
 ## 화면 구성
@@ -111,7 +134,7 @@ rounded px-2 py-0.5 text-xs font-medium — 시맨틱 색 텍스트 + 동일 색
 
 > 사용자 화면은 **인프라 상태를 일절 노출하지 않는다.** 페일오버가 일어나도 화면 구성은 달라지지 않으며, 사용자는 업로드와 검색이 계속 성공하는 것만 본다.
 >
-> **재시도 중 안내**: 읽기 요청이 503·네트워크 오류로 백오프 중일 때만 본문 위에 「연결이 원활하지 않아 다시 시도하는 중입니다.」를 보조 텍스트(`text-neutral-400`, `role="status"`)로 띄우고, 요청이 끝나면 치운다. 오류 색·경고 아이콘을 쓰지 않고, DB·노드·장애·페일오버 같은 말을 넣지 않는다 — 사용자에게 필요한 것은 "기다리면 된다"뿐이다. 60초 안에 풀리지 않으면 각 화면의 기존 오류 표시로 넘어간다. 화면을 떠나면 그 화면의 재시도는 취소되어 안내도 함께 사라진다. `/admin/status`는 예외다 — 관측 채널이라 실패를 기다리지 않고 바로 보인다 (ADR-048 결정 4).
+> **재시도 중 안내**: 읽기 요청이 503·네트워크 오류로 백오프 중일 때만 본문 위에 「연결이 원활하지 않아 다시 시도하는 중입니다.」를 보조 텍스트(`text-muted`, `role="status"`)로 띄우고, 요청이 끝나면 치운다. 오류 색·경고 아이콘을 쓰지 않고, DB·노드·장애·페일오버 같은 말을 넣지 않는다 — 사용자에게 필요한 것은 "기다리면 된다"뿐이다. 60초 안에 풀리지 않으면 각 화면의 기존 오류 표시로 넘어간다. 화면을 떠나면 그 화면의 재시도는 취소되어 안내도 함께 사라진다. `/admin/status`는 예외다 — 관측 채널이라 실패를 기다리지 않고 바로 보인다 (ADR-048 결정 4).
 
 > 검색 결과의 링크는 **문서 상세 화면으로** 간다. 원본 파일로 가지 않는다 — 검색·편집·버전의 단위가 원본 파일이 아니라 문서 텍스트이기 때문이다(아래 용어 규칙). 원본 파일은 문서 상세의 「원본 파일」 절에서 내려받는다.
 
@@ -326,7 +349,7 @@ rounded px-2 py-0.5 text-xs font-medium — 시맨틱 색 텍스트 + 동일 색
 
 - 버전이 둘 이상이면 각 버전 줄에 체크박스를 둔다. **정확히 두 개**를 고르면 「비교」가 켜지고, 낮은 버전을 기준(base)으로 비교한다. 두 개를 고른 뒤에는 나머지 체크박스를 비활성화한다
 - 현재가 아닌 버전 줄에 「현재와 비교」를 둔다 — 그 버전을 기준으로 현재 버전과 비교한다
-- 결과 패널 제목은 「v{base} ↔ v{target} 비교」. 추가된 줄은 `+ ` 초록(`text-green-400`), 삭제된 줄은 `− ` 빨강(`text-red-400`), 맥락 줄은 회색이고 고정폭 글꼴로 보인다. 바뀐 곳 앞뒤 3줄만 맥락으로 보이며 떨어진 덩어리 사이에는 「…」를 둔다
+- 결과 패널 제목은 「v{base} ↔ v{target} 비교」. 추가된 줄은 `+ ` 완료 색(`text-done`), 삭제된 줄은 `− ` 오류 색(`text-failed`), 맥락 줄은 회색이고 고정폭 글꼴로 보인다. 바뀐 곳 앞뒤 3줄만 맥락으로 보이며 떨어진 덩어리 사이에는 「…」를 둔다
 - 두 텍스트가 완전히 같으면 「두 버전의 내용이 같습니다.」 — 되돌리기로 만든 버전과 원래 버전이 그 예다
 - 서버가 비교 상한을 넘어 계산하지 않았으면(`too_large`) 「문서가 커서 비교 결과를 표시할 수 없습니다. 각 버전의 「본문 보기」로 확인하세요.」 — 바뀐 줄이 아주 많은 경우(약 1,100줄 이상, 문서를 통째로 바꾼 경우 등)다(ARCHITECTURE 텍스트 버전 비교의 작업량 예산)
 - 비교의 대상은 텍스트 버전이지 원본 파일이 아니다. 비교는 서버가 하므로 화면은 줄을 다시 계산하지 않는다
@@ -375,7 +398,7 @@ rounded px-2 py-0.5 text-xs font-medium — 시맨틱 색 텍스트 + 동일 색
 
   > 텍스트를 인식하지 못해 표시할 수 없습니다.
 
-  오류로 보이게 하지 않는다. 빨간색·경고 아이콘을 쓰지 않고 보조 텍스트(text-neutral-500)로 둔다
+  오류로 보이게 하지 않는다. 빨간색·경고 아이콘을 쓰지 않고 보조 텍스트(`text-muted`)로 둔다
 
 ### 유사 문서 표시 — "중복"이라고 쓰지 않는다
 
@@ -433,7 +456,7 @@ rounded px-2 py-0.5 text-xs font-medium — 시맨틱 색 텍스트 + 동일 색
    - 현재 접속 DB 노드 (`inet_server_addr()`)
    - `pending` / `processing` / 「회수 대기」 / `error` **임베딩** 잡 수 (관계 잡은 여기 세지 않는다). 「회수 대기」는 lease가 만료된 `processing` 잡(`recovery_pending`) — 워커가 죽었거나 연결을 잃어 다음 스윕이 `pending`으로 되돌릴 잡이다. 그 아래에 「워커가 {lease}초 동안 처리 중임을 알리지 않은 잡은 회수됩니다.」를 둔다 (ADR-050)
    - **정합성 검증**: 텍스트 버전과 청크 버전이 어긋난 문서 수 (`c.version <> d.version`). 평상시 0, 재임베딩 중에만 증가했다가 다시 0으로 수렴한다 — **"원본-벡터 정합성"을 숫자로 보여주는 지표**
-   - **관계 반영**: 관계가 아직 반영되지 않은 문서 수. 같은 정합성 카드 안에서 위 수와 나란히 두고 레이블(「원본과 청크 버전」 / 「관계」)로 가른다. 관계는 임베딩이 끝난 뒤 별도 잡으로 계산되므로 **0보다 큰 값 자체는 오류가 아니다** — 오류 색(`#ef4444`)을 쓰지 않고 `jobs.error`와 구분한다. 다만 관계 잡이 재시도를 소진해 `error`로 격리돼도 이 수에 계속 세므로, **설명 문구는 저절로 0이 된다고 단정하지 않는다** — 워커 확인과 `openarchive rebuild-edges` 복구 경로를 함께 안내한다 (ADR-029 결정 3 개정)
+   - **관계 반영**: 관계가 아직 반영되지 않은 문서 수. 같은 정합성 카드 안에서 위 수와 나란히 두고 레이블(「원본과 청크 버전」 / 「관계」)로 가른다. 관계는 임베딩이 끝난 뒤 별도 잡으로 계산되므로 **0보다 큰 값 자체는 오류가 아니다** — 오류 색(`failed`)을 쓰지 않고 `jobs.error`와 구분한다. 다만 관계 잡이 재시도를 소진해 `error`로 격리돼도 이 수에 계속 세므로, **설명 문구는 저절로 0이 된다고 단정하지 않는다** — 워커 확인과 `openarchive rebuild-edges` 복구 경로를 함께 안내한다 (ADR-029 결정 3 개정)
    - **텍스트 인식**: 인식 대기 문서 수와 인식 실패 문서 수 (`extraction_status`가 `pending`·`failed`). 실패 문서는 원본 교체나 `openarchive reextract`로 다시 돌린다 (ADR-052)
    - **미리보기 변환**: 대기·실패·변환기 없음 **판 수** (`document_file_previews.status`가 `pending`·`failed`·`unavailable`). 실패는 오류 색, 대기·변환기 없음은 기본 색이다. 변환기 없음이 0보다 크면 변환기(rhwp·LibreOffice)·한글 글꼴·bubblewrap 설치를 확인하고 `openarchive rebuild-previews`로 다시 걸라고 안내한다 (ADR-058)
    - 임베딩 프로바이더명
@@ -446,14 +469,15 @@ rounded px-2 py-0.5 text-xs font-medium — 시맨틱 색 텍스트 + 동일 색
 ## 타이포그래피
 | 용도 | 스타일 |
 |------|--------|
-| 페이지 제목 | text-4xl font-semibold text-white |
-| 카드 제목 | text-sm font-medium text-neutral-400 |
-| 본문 | text-sm text-neutral-300 leading-relaxed |
-| 코드/SQL 표시 | font-mono text-xs, bg-neutral-900 블록 |
+| 페이지 제목 | text-4xl font-semibold text-strong |
+| 카드 제목 | text-sm font-medium text-muted |
+| 본문 | text-sm text-body leading-relaxed |
+| 코드/SQL 표시 | font-mono text-xs, bg-sunken 블록 |
 
 ## 애니메이션
 - fade-in (0.4s) — 검색 결과·목록 갱신 시에만
-- 그 외 모든 애니메이션 금지
+- 「처리 중」 배지 점의 깜빡임(`motion-safe:animate-pulse`)
+- 그 외 모든 애니메이션 금지. 운영체제의 동작 줄이기(`prefers-reduced-motion`)가 켜져 있으면 위 둘도 끈다
 
 ## 아이콘
 - SVG 인라인, strokeWidth 1.5

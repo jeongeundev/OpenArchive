@@ -139,17 +139,17 @@ export function AccessPanel({
 
   return (
     <section className="space-y-4">
-      <h2 className="text-sm font-medium text-neutral-400">열람 범위</h2>
+      <h2 className="text-sm font-medium text-muted">열람 범위</h2>
       {loadError !== null ? (
-        <p className="text-sm text-neutral-500">{loadError}</p>
+        <p className="text-sm text-muted">{loadError}</p>
       ) : loaded === null ? (
-        <p className="text-sm text-neutral-500">불러오는 중…</p>
+        <p className="text-sm text-muted">불러오는 중…</p>
       ) : (
         <>
           {inFolder ? (
             <fieldset disabled={controlsDisabled}>
               <legend className="sr-only">폴더 범위 상속</legend>
-              <div className="flex flex-wrap gap-4 text-sm text-neutral-300">
+              <div className="flex flex-wrap gap-4 text-sm text-body">
                 <label className="flex items-center gap-2">
                   <input
                     checked={followsFolder}
@@ -169,7 +169,7 @@ export function AccessPanel({
                   개별 지정
                 </label>
               </div>
-              <p className="mt-2 text-sm text-neutral-500">
+              <p className="mt-2 text-sm text-muted">
                 {followsFolder
                   ? "폴더를 만든 사람이 범위를 바꾸면 이 문서에도 적용됩니다."
                   : "폴더 범위와 상관없이 이 문서만의 열람 범위를 씁니다."}
@@ -180,7 +180,7 @@ export function AccessPanel({
             <>
               <fieldset disabled={controlsDisabled}>
                 <legend className="sr-only">열람 범위</legend>
-                <div className="flex gap-4 text-sm text-neutral-300">
+                <div className="flex gap-4 text-sm text-body">
                   {(["public", "private"] as const).map((value) => (
                     <label className="flex items-center gap-2" key={value}>
                       <input
@@ -207,7 +207,7 @@ export function AccessPanel({
                   users={users}
                 />
               ) : (
-                <p className="text-sm text-neutral-500">
+                <p className="text-sm text-muted">
                   조직 공개 문서는 로그인한 모든 사용자가 봅니다.
                   {clearsGrants ? " 저장하면 지정한 부여 대상도 함께 지워집니다. 외부 공유 포함은 유지됩니다." : ""}
                 </p>
@@ -215,7 +215,7 @@ export function AccessPanel({
             </>
           )}
           <button
-            className="rounded-lg bg-white px-4 py-2 text-sm text-black hover:bg-neutral-200 disabled:bg-neutral-700 disabled:text-neutral-400"
+            className="rounded-lg bg-strong px-4 py-2 text-sm text-on-strong hover:bg-strong/90 disabled:bg-sunken disabled:text-faint"
             disabled={controlsDisabled}
             onClick={() => void save()}
             type="button"
@@ -232,8 +232,8 @@ export function AccessPanel({
         sharedOutside={sharedOutside}
         shares={shares}
       />
-      {error !== null ? <p className="text-sm text-[#ef4444]" role="alert">{error}</p> : null}
-      {message !== null ? <p className="text-sm text-neutral-400">{message}</p> : null}
+      {error !== null ? <p className="text-sm text-failed" role="alert">{error}</p> : null}
+      {message !== null ? <p className="text-sm text-muted">{message}</p> : null}
     </section>
   );
 }
@@ -281,19 +281,19 @@ function ShareToggles({
 
   return (
     <div className="space-y-2">
-      <h3 className="text-sm font-medium text-neutral-400">내 공유에 포함</h3>
+      <h3 className="text-sm font-medium text-muted">내 공유에 포함</h3>
       {error !== null ? (
-        <p className="text-sm text-neutral-500">{error}</p>
+        <p className="text-sm text-muted">{error}</p>
       ) : shares === null ? (
-        <p className="text-sm text-neutral-500">불러오는 중…</p>
+        <p className="text-sm text-muted">불러오는 중…</p>
       ) : shares.length === 0 ? (
-        <p className="text-sm text-neutral-500">
-          외부 공유가 없습니다. <Link className="text-[#0ea5e9] hover:underline" href="/settings">설정 화면</Link>에서 공유를 만드세요.
+        <p className="text-sm text-muted">
+          외부 공유가 없습니다. <Link className="text-accent hover:underline" href="/settings">설정 화면</Link>에서 공유를 만드세요.
         </p>
       ) : (
         <fieldset disabled={disabled || pending !== null}>
           <legend className="sr-only">내 공유에 포함</legend>
-          <div className="flex flex-wrap gap-4 text-sm text-neutral-300">
+          <div className="flex flex-wrap gap-4 text-sm text-body">
             {shares.map((share) => (
               <label className="flex items-center gap-2" key={share.id}>
                 <input checked={share.included} onChange={() => void toggle(share)} type="checkbox" />
@@ -304,12 +304,12 @@ function ShareToggles({
         </fieldset>
       )}
       {sharedOutside ? (
-        <p className="text-sm text-neutral-500">
+        <p className="text-sm text-muted">
           이 문서는 조직 공개와 별개로 외부 공유에 열려 있습니다. 공유 토큰을 가진 외부 주체도 읽습니다.
         </p>
       ) : null}
-      {toggleError !== null ? <p className="text-sm text-[#ef4444]" role="alert">{toggleError}</p> : null}
-      {message !== null ? <p className="text-sm text-neutral-400">{message}</p> : null}
+      {toggleError !== null ? <p className="text-sm text-failed" role="alert">{toggleError}</p> : null}
+      {message !== null ? <p className="text-sm text-muted">{message}</p> : null}
     </div>
   );
 }

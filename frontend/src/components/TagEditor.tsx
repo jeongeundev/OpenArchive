@@ -32,17 +32,17 @@ export function TagEditor({
 
   return (
     <section className="space-y-4">
-      <h2 className="text-sm font-medium text-neutral-400">태그</h2>
+      <h2 className="text-sm font-medium text-muted">태그</h2>
       <div className="flex flex-wrap gap-2">
         {tags.map((tag) => (
           <span
-            className="flex items-center gap-2 rounded bg-neutral-800 px-2 py-1 text-xs text-neutral-300"
+            className="flex items-center gap-2 rounded bg-sunken px-2 py-1 text-xs text-body"
             key={tag}
           >
             {tag}
             <button
               aria-label={`${tag} 태그 삭제`}
-              className="text-neutral-500 hover:text-neutral-300 disabled:text-neutral-600"
+              className="text-muted hover:text-strong disabled:text-faint"
               disabled={controlsDisabled}
               onClick={() => onChange(tags.filter((item) => item !== tag))}
               type="button"
@@ -55,7 +55,7 @@ export function TagEditor({
       <div className="flex gap-3">
         <label className="sr-only" htmlFor="tag-input">태그</label>
         <input
-          className="rounded-lg border border-neutral-800 bg-neutral-900 px-4 py-3 text-sm text-neutral-300 disabled:text-neutral-600"
+          className="rounded-lg border border-line bg-card px-4 py-3 text-sm text-body disabled:text-faint"
           disabled={controlsDisabled}
           id="tag-input"
           onChange={(event) => setInput(event.target.value)}
@@ -68,7 +68,7 @@ export function TagEditor({
           value={input}
         />
         <button
-          className="text-sm text-neutral-500 hover:text-neutral-300 disabled:text-neutral-600"
+          className="text-sm text-muted hover:text-strong disabled:text-faint"
           disabled={controlsDisabled}
           onClick={addTag}
           type="button"
@@ -76,7 +76,7 @@ export function TagEditor({
           태그 추가
         </button>
         <button
-          className="rounded-lg bg-white px-4 py-2 text-sm text-black hover:bg-neutral-200 disabled:bg-neutral-700 disabled:text-neutral-400"
+          className="rounded-lg bg-strong px-4 py-2 text-sm text-on-strong hover:bg-strong/90 disabled:bg-sunken disabled:text-faint"
           disabled={controlsDisabled}
           onClick={onSave}
           type="button"
@@ -84,7 +84,7 @@ export function TagEditor({
           {saving ? "저장 중…" : "태그 저장"}
         </button>
       </div>
-      {error !== null ? <p className="text-sm text-[#ef4444]">{error}</p> : null}
+      {error !== null ? <p className="text-sm text-failed">{error}</p> : null}
     </section>
   );
 }

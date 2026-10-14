@@ -26,7 +26,7 @@ const PAGE_SIZE = 50;
 export default function Home(): React.ReactElement {
   // 선택 폴더·조건·쪽을 주소에 두므로 useSearchParams가 필요하고, 정적 export는 Suspense 경계를 요구한다.
   return (
-    <Suspense fallback={<p className="text-sm text-neutral-500">불러오는 중…</p>}>
+    <Suspense fallback={<p className="text-sm text-muted">불러오는 중…</p>}>
       <HomeView />
     </Suspense>
   );
@@ -115,8 +115,8 @@ function HomeView(): React.ReactElement {
   return (
     <section className="space-y-8">
       <div>
-        <h1 className="text-4xl font-semibold text-white">문서</h1>
-        <p className="mt-3 text-sm text-neutral-400">
+        <h1 className="text-4xl font-semibold text-strong">문서</h1>
+        <p className="mt-3 text-sm text-muted">
           저장된 문서와 임베딩 처리 상태를 확인합니다.
         </p>
       </div>
@@ -125,7 +125,7 @@ function HomeView(): React.ReactElement {
       {auth.authenticated ? (
         <aside>
           <FolderTree folders={folders} selectedId={folderId} onSelect={selectFolder} onCreate={onCreateFolder} />
-          <Link href="/trash" className="mt-6 block px-2 text-sm text-neutral-400 hover:text-white">휴지통</Link>
+          <Link href="/trash" className="mt-6 block px-2 text-sm text-muted hover:text-strong">휴지통</Link>
         </aside>
       ) : null}
       <div className="min-w-0 space-y-8">
@@ -141,13 +141,13 @@ function HomeView(): React.ReactElement {
       {globalTotal === 0 && auth.username !== null ? (
         <EmptyDocuments username={auth.username} />
       ) : loading ? (
-        <p className="text-sm text-neutral-500">불러오는 중…</p>
+        <p className="text-sm text-muted">불러오는 중…</p>
       ) : (
         <div className="space-y-4">
           {progress !== null ? <PipelineProgress progress={progress} /> : null}
           <DocumentTable documents={documents} emptyMessage={emptyMessage} />
           {globalTotal === null && progressError !== null ? (
-            <p className="text-sm text-neutral-500" role="status">
+            <p className="text-sm text-muted" role="status">
               처리 현황을 불러오지 못했습니다 — 전체 문서 수를 표시할 수 없습니다.
               ({progressError})
             </p>
@@ -164,7 +164,7 @@ function HomeView(): React.ReactElement {
       )}
 
       {error !== null && !loading ? (
-        <p className="text-sm text-neutral-500" role="status">
+        <p className="text-sm text-muted" role="status">
           {error}
         </p>
       ) : null}

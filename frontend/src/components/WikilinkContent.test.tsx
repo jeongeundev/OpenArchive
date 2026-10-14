@@ -35,7 +35,7 @@ describe("WikilinkContent", () => {
     expect(screen.queryAllByRole("link")).toHaveLength(0);
     for (const title of ["없는 문서", "보이지 않는 문서"]) {
       const broken = screen.getByText(title);
-      expect(broken).toHaveClass("border-dashed", "text-neutral-500");
+      expect(broken).toHaveClass("border-dashed", "text-muted");
       expect(broken).not.toHaveAttribute("title");
       expect(broken).not.toHaveAttribute("aria-label");
     }

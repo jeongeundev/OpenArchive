@@ -18,7 +18,7 @@ import { searchHref, searchInputFromParams } from "@/lib/urlState";
 export default function SearchPage(): React.ReactElement {
   // 검색 조건을 주소에 두므로 useSearchParams가 필요하고, 정적 export는 Suspense 경계를 요구한다.
   return (
-    <Suspense fallback={<p className="text-sm text-neutral-500">불러오는 중…</p>}>
+    <Suspense fallback={<p className="text-sm text-muted">불러오는 중…</p>}>
       <SearchRoute />
     </Suspense>
   );
@@ -81,8 +81,8 @@ function SearchView({ initial, input, folders, authenticated, onSearch }: {
   return (
     <section className="space-y-8">
       <div>
-        <h1 className="text-4xl font-semibold text-white">검색</h1>
-        <p className="mt-3 text-sm text-neutral-400">
+        <h1 className="text-4xl font-semibold text-strong">검색</h1>
+        <p className="mt-3 text-sm text-muted">
           태그·유형·폴더 필터와 벡터 유사도를 한 번의 SQL로 검색합니다.
         </p>
       </div>

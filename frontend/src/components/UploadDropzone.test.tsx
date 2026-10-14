@@ -93,7 +93,7 @@ describe("UploadDropzone", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "업로드" }));
 
-    expect(await screen.findByText(detail)).toHaveClass("text-[#ef4444]");
+    expect(await screen.findByText(detail)).toHaveClass("text-failed");
   });
 
   it("성공하면 폼을 초기화하고 목록 새로고침을 요청한다", async () => {
@@ -195,7 +195,7 @@ describe("UploadDropzone", () => {
     fireEvent.click(screen.getByRole("button", { name: "업로드" }));
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
-    expect(await screen.findByText(detail)).toHaveClass("text-[#ef4444]");
+    expect(await screen.findByText(detail)).toHaveClass("text-failed");
     expect(screen.getByText("a.txt — 실패")).toBeInTheDocument();
     expect(screen.getByText("b.txt — 완료")).toBeInTheDocument();
     expect(

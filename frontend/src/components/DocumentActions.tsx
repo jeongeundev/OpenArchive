@@ -57,7 +57,7 @@ export function DocumentActions({
       <div className="flex flex-wrap gap-3">
         {document.embedding_status === "error" ? (
           <button
-            className="rounded-lg bg-white px-4 py-2 text-sm text-black hover:bg-neutral-200 disabled:cursor-not-allowed disabled:bg-neutral-700 disabled:text-neutral-400"
+            className="rounded-lg bg-strong px-4 py-2 text-sm text-on-strong hover:bg-strong/90 disabled:cursor-not-allowed disabled:bg-sunken disabled:text-faint"
             disabled={actionsDisabled}
             onClick={() => void reembed()}
             type="button"
@@ -66,7 +66,7 @@ export function DocumentActions({
           </button>
         ) : null}
         <button
-          className="text-sm text-neutral-500 hover:text-neutral-300 disabled:cursor-not-allowed disabled:text-neutral-600"
+          className="text-sm text-muted hover:text-strong disabled:cursor-not-allowed disabled:text-faint"
           disabled={actionsDisabled}
           onClick={() => void remove()}
           type="button"
@@ -74,7 +74,7 @@ export function DocumentActions({
           삭제
         </button>
       </div>
-      {error !== null ? <p className="text-sm text-[#ef4444]">{error}</p> : null}
+      {error !== null ? <p className="text-sm text-failed">{error}</p> : null}
     </div>
   );
 }

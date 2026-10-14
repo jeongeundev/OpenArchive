@@ -143,4 +143,16 @@ describe("SiteHeader", () => {
 
     await waitFor(() => expect(screen.getByRole("link", { name: "로그인" })).toBeInTheDocument());
   });
+
+  it.each([
+    [{ authenticated: false, username: null, is_admin: false }, "로그인"],
+    [{ authenticated: true, username: "alice", is_admin: false }, "로그아웃"],
+  ])("로그인 여부와 무관하게 테마 버튼을 둔다 (%#)", async (me, anchor) => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response(me)));
+
+    render(<AuthProvider><SiteHeader /></AuthProvider>);
+
+    await screen.findByText(anchor);
+    expect(screen.getByRole("button", { name: /테마$/ })).toBeInTheDocument();
+  });
 });

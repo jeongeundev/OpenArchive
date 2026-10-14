@@ -48,7 +48,7 @@ describe("SearchResults", () => {
       <SearchResults response={{ items: [], sql: "SELECT empty" }} loading={false} error={null} />,
     );
 
-    expect(screen.getByText("검색 결과가 없습니다.")).toHaveClass("text-neutral-500");
+    expect(screen.getByText("검색 결과가 없습니다.")).toHaveClass("text-muted");
   });
 
   it("확장 결과에는 출발 문서와 도달 관계를 표시하고 직접 매칭에는 표시하지 않는다", () => {

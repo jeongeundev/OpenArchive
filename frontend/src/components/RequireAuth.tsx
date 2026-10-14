@@ -23,5 +23,5 @@ export function RequireAuth({ children }: { children: React.ReactNode }): React.
   // 익명은 아무 문서도 보지 못하므로(ADR-028) 화면도 그리지 않는다. 그리고 나서 지우면
   // 한 프레임이지만 목록 자리와 개수가 드러난다.
   if (isPublic || (!loading && auth.authenticated)) return <>{children}</>;
-  return <p className="text-sm text-neutral-500">불러오는 중…</p>;
+  return <p className="text-sm text-muted">불러오는 중…</p>;
 }

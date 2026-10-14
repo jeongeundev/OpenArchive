@@ -127,18 +127,18 @@ export default function SettingsPage(): React.ReactElement {
   return (
     <section className="space-y-8">
       <div>
-        <h1 className="text-4xl font-semibold text-white">계정 설정</h1>
-        <p className="mt-3 text-sm text-neutral-400">
+        <h1 className="text-4xl font-semibold text-strong">계정 설정</h1>
+        <p className="mt-3 text-sm text-muted">
           {auth.username} 계정의 API 토큰·외부 공유·비밀번호를 관리합니다.
         </p>
       </div>
 
       <div className="space-y-4">
         <div>
-          <h2 className="text-sm font-medium text-neutral-400">API 토큰</h2>
-          <p className="mt-2 text-sm text-neutral-400">
+          <h2 className="text-sm font-medium text-muted">API 토큰</h2>
+          <p className="mt-2 text-sm text-muted">
             프로그램이 이 저장소에 문서를 공급하거나 검색할 때 쓰는 자격증명입니다.{" "}
-            <code className="rounded border border-neutral-800 bg-neutral-900 px-1.5 py-0.5 font-mono text-xs text-neutral-300">
+            <code className="rounded border border-line bg-card px-1.5 py-0.5 font-mono text-xs text-body">
               Authorization: Bearer &lt;토큰&gt;
             </code>{" "}
             헤더로 보냅니다. 발급은 로그인 세션에서만 할 수 있으므로 토큰이 다른 토큰을 만들 수는
@@ -147,12 +147,12 @@ export default function SettingsPage(): React.ReactElement {
         </div>
 
         <form
-          className="grid gap-4 rounded-lg border border-neutral-800 bg-[#141414] p-6 sm:grid-cols-2"
+          className="grid gap-4 rounded-lg border border-line bg-card p-6 sm:grid-cols-2"
           onSubmit={(event) => void issue(event)}
         >
-          <label className="text-sm text-neutral-400">토큰 이름
+          <label className="text-sm text-muted">토큰 이름
             <input
-              className="mt-2 w-full rounded-lg border border-neutral-800 bg-neutral-900 px-4 py-3 text-neutral-300"
+              className="mt-2 w-full rounded-lg border border-line bg-card px-4 py-3 text-body"
               onChange={(event) => setName(event.target.value)}
               placeholder="배치 투입 스크립트"
               required
@@ -160,9 +160,9 @@ export default function SettingsPage(): React.ReactElement {
               value={name}
             />
           </label>
-          <label className="text-sm text-neutral-400">권한 범위
+          <label className="text-sm text-muted">권한 범위
             <select
-              className="mt-2 w-full rounded-lg border border-neutral-800 bg-neutral-900 px-4 py-3 text-neutral-300"
+              className="mt-2 w-full rounded-lg border border-line bg-card px-4 py-3 text-body"
               onChange={(event) => setScope(event.target.value as TokenScope)}
               value={scope}
             >
@@ -170,21 +170,21 @@ export default function SettingsPage(): React.ReactElement {
               <option value="read_write">읽기·쓰기 — 문서 등록·수정까지</option>
             </select>
           </label>
-          <label className="text-sm text-neutral-400">만료일 (선택)
+          <label className="text-sm text-muted">만료일 (선택)
             <input
-              className="mt-2 w-full rounded-lg border border-neutral-800 bg-neutral-900 px-4 py-3 text-neutral-300"
+              className="mt-2 w-full rounded-lg border border-line bg-card px-4 py-3 text-body"
               min={todayInputValue()}
               onChange={(event) => setExpiryDate(event.target.value)}
               type="date"
               value={expiryDate}
             />
           </label>
-          <p className="self-end pb-3 text-xs text-neutral-500">
+          <p className="self-end pb-3 text-xs text-muted">
             만료일을 비우면 만료 없이 발급합니다. 고른 날짜가 끝날 때까지 쓸 수 있습니다.
           </p>
           <div className="sm:col-span-2">
             <button
-              className="rounded-lg bg-white px-4 py-2 text-sm text-black hover:bg-neutral-200 disabled:bg-neutral-700 disabled:text-neutral-400"
+              className="rounded-lg bg-strong px-4 py-2 text-sm text-on-strong hover:bg-strong/90 disabled:bg-sunken disabled:text-faint"
               disabled={tokenWorking}
               type="submit"
             >
@@ -194,23 +194,23 @@ export default function SettingsPage(): React.ReactElement {
         </form>
 
         {issued !== null ? (
-          <div className="space-y-2 rounded-lg border border-[#0ea5e9] bg-[#141414] p-6" role="status">
-            <p className="text-sm text-white">
+          <div className="space-y-2 rounded-lg border border-accent bg-card p-6" role="status">
+            <p className="text-sm text-strong">
               &lsquo;{issued.name}&rsquo; 토큰을 발급했습니다. 지금 복사하세요 —{" "}
               <strong className="font-semibold">이 값은 다시 볼 수 없습니다.</strong>
             </p>
-            <code className="block break-all rounded-lg border border-neutral-800 bg-neutral-900 px-4 py-3 font-mono text-sm text-neutral-200">
+            <code className="block break-all rounded-lg border border-line bg-card px-4 py-3 font-mono text-sm text-strong">
               {issued.token}
             </code>
-            <p className="text-xs text-neutral-500">
+            <p className="text-xs text-muted">
               서버에는 해시만 남습니다. 잃어버리면 이 토큰을 폐기하고 새로 발급하세요.
             </p>
           </div>
         ) : null}
 
-        <div className="overflow-x-auto rounded-lg border border-neutral-800 bg-[#141414]">
+        <div className="overflow-x-auto rounded-lg border border-line bg-card">
           <table className="w-full text-left text-sm">
-            <thead className="border-b border-neutral-800 text-neutral-500">
+            <thead className="border-b border-line text-muted">
               <tr>
                 <th className="px-4 py-3 font-medium">이름</th>
                 <th className="px-4 py-3 font-medium">범위</th>
@@ -222,26 +222,26 @@ export default function SettingsPage(): React.ReactElement {
             </thead>
             <tbody>
               {tokens.length === 0 ? (
-                <tr><td className="px-4 py-3 text-neutral-500" colSpan={6}>발급한 토큰이 없습니다.</td></tr>
+                <tr><td className="px-4 py-3 text-muted" colSpan={6}>발급한 토큰이 없습니다.</td></tr>
               ) : tokens.map((token) => (
-                <tr className="border-b border-neutral-800 last:border-0" key={token.id}>
-                  <td className="px-4 py-3 text-white">{token.name}</td>
-                  <td className="px-4 py-3 text-neutral-400">{SCOPE_LABEL[token.scope]}</td>
-                  <td className="px-4 py-3 text-neutral-400">{formatDate(token.created_at)}</td>
-                  <td className="px-4 py-3 text-neutral-400">
+                <tr className="border-b border-line last:border-0" key={token.id}>
+                  <td className="px-4 py-3 text-strong">{token.name}</td>
+                  <td className="px-4 py-3 text-muted">{SCOPE_LABEL[token.scope]}</td>
+                  <td className="px-4 py-3 text-muted">{formatDate(token.created_at)}</td>
+                  <td className="px-4 py-3 text-muted">
                     {token.expired ? (
-                      <span className="mr-2 rounded bg-[#ef4444]/10 px-2 py-0.5 text-xs font-medium text-[#ef4444]">
+                      <span className="mr-2 rounded bg-failed-soft px-2 py-0.5 text-xs font-medium text-failed">
                         만료
                       </span>
                     ) : null}
                     <span>{formatExpiry(token.expires_at)}</span>
                   </td>
-                  <td className="px-4 py-3 text-neutral-400">
+                  <td className="px-4 py-3 text-muted">
                     {token.last_used_at === null ? "사용 기록 없음" : formatDate(token.last_used_at)}
                   </td>
                   <td className="px-4 py-3 text-right">
                     <button
-                      className="text-neutral-500 hover:text-neutral-300 disabled:text-neutral-600"
+                      className="text-muted hover:text-strong disabled:text-faint"
                       disabled={tokenWorking}
                       onClick={() => void revoke(token)}
                       type="button"
@@ -254,31 +254,31 @@ export default function SettingsPage(): React.ReactElement {
             </tbody>
           </table>
         </div>
-        <p className="text-xs text-neutral-500">
+        <p className="text-xs text-muted">
           「마지막 사용」은 성공한 요청 기준이며 1분 단위로 기록됩니다. 만료된 토큰은 401을 받고, 목록에서
           지우려면 폐기하세요.
         </p>
-        {tokenError !== null ? <p className="text-sm text-[#ef4444]" role="alert">{tokenError}</p> : null}
+        {tokenError !== null ? <p className="text-sm text-failed" role="alert">{tokenError}</p> : null}
       </div>
 
       {!authLoading && auth.authenticated ? <SharesSection /> : null}
 
       <div className="space-y-4">
         <div>
-          <h2 className="text-sm font-medium text-neutral-400">비밀번호</h2>
-          <p className="mt-2 text-sm text-neutral-400">
+          <h2 className="text-sm font-medium text-muted">비밀번호</h2>
+          <p className="mt-2 text-sm text-muted">
             바꾸면 이 계정으로 열려 있던 모든 기기의 로그인이 끊기고 다시 로그인해야 합니다.
             발급한 API 토큰은 영향을 받지 않습니다.
           </p>
         </div>
 
         <form
-          className="grid gap-4 rounded-lg border border-neutral-800 bg-[#141414] p-6 sm:grid-cols-2"
+          className="grid gap-4 rounded-lg border border-line bg-card p-6 sm:grid-cols-2"
           onSubmit={(event) => void submitPassword(event)}
         >
-          <label className="text-sm text-neutral-400">현재 비밀번호
+          <label className="text-sm text-muted">현재 비밀번호
             <input
-              className="mt-2 w-full rounded-lg border border-neutral-800 bg-neutral-900 px-4 py-3 text-neutral-300"
+              className="mt-2 w-full rounded-lg border border-line bg-card px-4 py-3 text-body"
               onChange={(event) => setCurrentPassword(event.target.value)}
               required
               type="password"
@@ -286,10 +286,10 @@ export default function SettingsPage(): React.ReactElement {
             />
           </label>
           <div>
-            <label className="text-sm text-neutral-400">새 비밀번호
+            <label className="text-sm text-muted">새 비밀번호
               <input
                 aria-describedby="new-password-hint"
-                className="mt-2 w-full rounded-lg border border-neutral-800 bg-neutral-900 px-4 py-3 text-neutral-300"
+                className="mt-2 w-full rounded-lg border border-line bg-card px-4 py-3 text-body"
                 minLength={8}
                 onChange={(event) => setNewPassword(event.target.value)}
                 required
@@ -297,11 +297,11 @@ export default function SettingsPage(): React.ReactElement {
                 value={newPassword}
               />
             </label>
-            <p className="mt-2 text-xs text-neutral-500" id="new-password-hint">8자 이상</p>
+            <p className="mt-2 text-xs text-muted" id="new-password-hint">8자 이상</p>
           </div>
           <div className="sm:col-span-2">
             <button
-              className="rounded-lg bg-white px-4 py-2 text-sm text-black hover:bg-neutral-200 disabled:bg-neutral-700 disabled:text-neutral-400"
+              className="rounded-lg bg-strong px-4 py-2 text-sm text-on-strong hover:bg-strong/90 disabled:bg-sunken disabled:text-faint"
               disabled={passwordWorking}
               type="submit"
             >
@@ -309,7 +309,7 @@ export default function SettingsPage(): React.ReactElement {
             </button>
           </div>
         </form>
-        {passwordError !== null ? <p className="text-sm text-[#ef4444]" role="alert">{passwordError}</p> : null}
+        {passwordError !== null ? <p className="text-sm text-failed" role="alert">{passwordError}</p> : null}
       </div>
     </section>
   );

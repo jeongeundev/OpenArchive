@@ -18,14 +18,14 @@ function AnswerText({ answer, sources }: { answer: string; sources: AnswerSource
   const byLabel = new Map(sources.map((source) => [source.label, source]));
   const parts = answer.split(/(\[\d+\])/);
   return (
-    <p data-testid="answer-text" className="whitespace-pre-wrap text-sm leading-relaxed text-neutral-200">
+    <p data-testid="answer-text" className="whitespace-pre-wrap text-sm leading-relaxed text-strong">
       {parts.map((part, index) => {
         const source = byLabel.get(Number(/^\[(\d+)\]$/.exec(part)?.[1]));
         return source === undefined ? (
           part
         ) : (
           <Link key={index} href={passageHref(source)} title={`${source.title} · ${versionLabel(source)}`}
-            className="text-[#0ea5e9] hover:underline">
+            className="text-accent hover:underline">
             {part}
           </Link>
         );
@@ -56,28 +56,28 @@ export function AnswerPanel({
   const uncited = response?.sources.filter((source) => !source.cited) ?? [];
 
   return (
-    <section aria-labelledby="answer-panel" className="space-y-4 rounded-lg border border-neutral-800 bg-[#141414] p-6">
+    <section aria-labelledby="answer-panel" className="space-y-4 rounded-lg border border-line bg-card p-6">
       <div>
-        <h2 id="answer-panel" className="font-medium text-white">근거 기반 답변</h2>
-        <p className="mt-2 text-xs text-neutral-500">
+        <h2 id="answer-panel" className="font-medium text-strong">근거 기반 답변</h2>
+        <p className="mt-2 text-xs text-muted">
           검색된 문서만 근거로 답하도록 지시합니다. 보장은 아닙니다 — 인용한 근거를 확인하세요.
         </p>
       </div>
 
       {loading ? (
-        <p className="text-sm text-neutral-400">답변을 만드는 중… 로컬 모델은 수십 초 걸릴 수 있습니다.</p>
+        <p className="text-sm text-muted">답변을 만드는 중… 로컬 모델은 수십 초 걸릴 수 있습니다.</p>
       ) : null}
-      {error !== null ? <p className="text-sm text-[#ef4444]" role="status">{error}</p> : null}
+      {error !== null ? <p className="text-sm text-failed" role="status">{error}</p> : null}
 
       {response === null && !loading ? (
         <button type="button" onClick={onAsk}
-          className="rounded-lg border border-neutral-700 px-4 py-2 text-sm text-white hover:border-[#0ea5e9]">
+          className="rounded-lg border border-line-strong px-4 py-2 text-sm text-strong hover:border-accent">
           이 검색어로 답변 받기
         </button>
       ) : null}
 
       {response !== null && response.status !== "answered" ? (
-        <p className="text-sm text-neutral-400">
+        <p className="text-sm text-muted">
           {response.status === "failed" && response.detail !== null ? `${response.detail} ` : ""}
           {UNANSWERED[response.status]}
         </p>
@@ -87,21 +87,21 @@ export function AnswerPanel({
         <>
           <AnswerText answer={response.answer} sources={response.sources} />
           {cited.length > 0 ? (
-            <div className="space-y-3 border-t border-neutral-800 pt-4">
-            <h3 id="answer-cited" className="text-sm font-medium text-white">인용한 근거</h3>
+            <div className="space-y-3 border-t border-line pt-4">
+            <h3 id="answer-cited" className="text-sm font-medium text-strong">인용한 근거</h3>
             <ol aria-labelledby="answer-cited" className="space-y-3">
               {cited.map((source) => (
                 <li key={source.label} className="text-sm">
                   <div className="flex flex-wrap items-baseline gap-2">
-                    <span className="text-neutral-500">[{source.label}]</span>
-                    <Link href={passageHref(source)} className="text-white hover:text-[#0ea5e9]">
+                    <span className="text-muted">[{source.label}]</span>
+                    <Link href={passageHref(source)} className="text-strong hover:text-accent">
                       {source.title}
                     </Link>
-                    <span className={source.revised ? "text-xs text-neutral-300" : "text-xs text-neutral-500"}>
+                    <span className={source.revised ? "text-xs text-body" : "text-xs text-muted"}>
                       {versionLabel(source)}
                     </span>
                   </div>
-                  <p className="mt-1 line-clamp-3 whitespace-pre-wrap text-xs text-neutral-400">{source.content}</p>
+                  <p className="mt-1 line-clamp-3 whitespace-pre-wrap text-xs text-muted">{source.content}</p>
                 </li>
               ))}
             </ol>
@@ -109,14 +109,14 @@ export function AnswerPanel({
           ) : null}
           {uncited.length > 0 ? (
             <details className="text-sm">
-              <summary className="cursor-pointer text-neutral-500">인용하지 않은 근거 {uncited.length}건</summary>
+              <summary className="cursor-pointer text-muted">인용하지 않은 근거 {uncited.length}건</summary>
               <ul className="mt-2 space-y-1">
                 {uncited.map((source) => (
                   <li key={source.label}>
-                    <Link href={passageHref(source)} className="text-neutral-400 hover:text-[#0ea5e9]">
+                    <Link href={passageHref(source)} className="text-muted hover:text-accent">
                       [{source.label}] {source.title}
                     </Link>
-                    <span className="ml-2 text-xs text-neutral-500">{versionLabel(source)}</span>
+                    <span className="ml-2 text-xs text-muted">{versionLabel(source)}</span>
                   </li>
                 ))}
               </ul>

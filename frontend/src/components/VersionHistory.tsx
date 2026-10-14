@@ -152,18 +152,18 @@ export function VersionHistory({
 
   return (
     <section className="space-y-4">
-      <h2 className="text-sm font-medium text-neutral-400">텍스트 버전 이력</h2>
+      <h2 className="text-sm font-medium text-muted">텍스트 버전 이력</h2>
       {!disabled && restoreBlockedReason !== null ? (
-        <p className="text-sm text-neutral-400">{restoreBlockedReason}</p>
+        <p className="text-sm text-muted">{restoreBlockedReason}</p>
       ) : null}
       {error !== null ? (
-        <p className="text-sm text-[#ef4444]" role="status">
+        <p className="text-sm text-failed" role="status">
           {error}
         </p>
       ) : null}
       {sortedVersions.length >= 2 ? (
         <button
-          className="rounded-lg bg-white px-3 py-2 text-xs text-black hover:bg-neutral-200 disabled:cursor-not-allowed disabled:opacity-50"
+          className="rounded-lg bg-strong px-3 py-2 text-xs text-on-strong hover:bg-strong/90 disabled:cursor-not-allowed disabled:opacity-50"
           disabled={selectedVersions.length !== 2 || comparing}
           onClick={() => {
             const [base, target] = [...selectedVersions].sort((a, b) => a - b);
@@ -174,29 +174,29 @@ export function VersionHistory({
           비교
         </button>
       ) : null}
-      {comparing ? <p className="text-sm text-neutral-400" role="status">비교하는 중…</p> : null}
+      {comparing ? <p className="text-sm text-muted" role="status">비교하는 중…</p> : null}
       {diff !== null ? (
-        <div className="space-y-3 rounded-lg border border-neutral-800 bg-[#141414] p-4">
+        <div className="space-y-3 rounded-lg border border-line bg-card p-4">
           <div className="flex items-center justify-between gap-4">
-            <h3 className="text-sm text-neutral-300">v{diff.base} ↔ v{diff.target} 비교</h3>
-            <button className="text-xs text-neutral-500 hover:text-neutral-300" onClick={() => setDiff(null)} type="button">닫기</button>
+            <h3 className="text-sm text-body">v{diff.base} ↔ v{diff.target} 비교</h3>
+            <button className="text-xs text-muted hover:text-strong" onClick={() => setDiff(null)} type="button">닫기</button>
           </div>
           {diff.identical ? (
-            <p className="text-sm text-neutral-400">두 버전의 내용이 같습니다.</p>
+            <p className="text-sm text-muted">두 버전의 내용이 같습니다.</p>
           ) : diff.too_large ? (
-            <p className="text-sm text-neutral-400">문서가 커서 비교 결과를 표시할 수 없습니다. 각 버전의 「본문 보기」로 확인하세요.</p>
+            <p className="text-sm text-muted">문서가 커서 비교 결과를 표시할 수 없습니다. 각 버전의 「본문 보기」로 확인하세요.</p>
           ) : diff.hunks.length === 0 ? (
-            <p className="text-sm text-neutral-400">줄 끝 개행만 다릅니다.</p>
+            <p className="text-sm text-muted">줄 끝 개행만 다릅니다.</p>
           ) : (
             <div className="max-h-96 overflow-auto font-mono text-xs">
               {diff.hunks.map((hunk, hunkIndex) => (
                 <div key={hunkIndex}>
-                  {hunkIndex > 0 ? <div className="py-2 text-neutral-500">…</div> : null}
+                  {hunkIndex > 0 ? <div className="py-2 text-muted">…</div> : null}
                   {hunk.lines.map((line, lineIndex) => (
                     <div
                       key={lineIndex}
                       data-op={line.op}
-                      className={`whitespace-pre-wrap break-words ${line.op === "added" ? "text-green-400" : line.op === "removed" ? "text-red-400" : "text-neutral-400"}`}
+                      className={`whitespace-pre-wrap break-words ${line.op === "added" ? "text-done" : line.op === "removed" ? "text-failed" : "text-muted"}`}
                     >
                       {line.op === "added" ? "+ " : line.op === "removed" ? "− " : "  "}{line.text}
                     </div>
@@ -208,9 +208,9 @@ export function VersionHistory({
         </div>
       ) : null}
       {sortedVersions.length === 0 ? (
-        <p className="text-sm text-neutral-500">편집 이력이 없습니다.</p>
+        <p className="text-sm text-muted">편집 이력이 없습니다.</p>
       ) : (
-        <ol className="divide-y divide-neutral-800 rounded-lg border border-neutral-800 bg-[#141414] px-5">
+        <ol className="divide-y divide-line rounded-lg border border-line bg-card px-5">
           {sortedVersions.map((item) => (
             <li key={item.version} className="space-y-3 py-4">
               <div className="flex items-center justify-between gap-4">
@@ -226,16 +226,16 @@ export function VersionHistory({
                         : previous.filter((version) => version !== item.version))}
                     />
                   ) : null}
-                  <span className="text-sm text-neutral-300">v{item.version}</span>
+                  <span className="text-sm text-body">v{item.version}</span>
                   {item.version === currentVersion ? (
-                    <span className="rounded bg-[#0ea5e9]/10 px-2 py-0.5 text-xs text-[#0ea5e9]">
+                    <span className="rounded bg-accent-soft px-2 py-0.5 text-xs text-accent">
                       현재
                     </span>
                   ) : null}
                 </div>
                 <div className="flex items-center gap-4">
                   <button
-                    className="text-xs text-neutral-500 hover:text-neutral-300"
+                    className="text-xs text-muted hover:text-strong"
                     onClick={() => void toggleText(item.version)}
                     type="button"
                   >
@@ -243,7 +243,7 @@ export function VersionHistory({
                   </button>
                   {item.version !== currentVersion ? (
                     <button
-                      className="text-xs text-neutral-500 hover:text-neutral-300 disabled:cursor-not-allowed disabled:text-neutral-600"
+                      className="text-xs text-muted hover:text-strong disabled:cursor-not-allowed disabled:text-faint"
                       disabled={comparing}
                       onClick={() => void compare(item.version, currentVersion)}
                       type="button"
@@ -254,7 +254,7 @@ export function VersionHistory({
                   {/* 현재 버전에는 되돌리기를 노출하지 않는다 — 이미 그 내용이다. */}
                   {!disabled && item.version !== currentVersion ? (
                     <button
-                      className="text-xs text-neutral-500 hover:text-neutral-300 disabled:cursor-not-allowed disabled:text-neutral-600"
+                      className="text-xs text-muted hover:text-strong disabled:cursor-not-allowed disabled:text-faint"
                       disabled={restoreBlockedReason !== null}
                       onClick={() => setConfirming(item.version)}
                       type="button"
@@ -265,19 +265,19 @@ export function VersionHistory({
                 </div>
               </div>
 
-              <p className="text-xs text-neutral-500">
+              <p className="text-xs text-muted">
                 {versionAuthorLabel(item)} · {" "}
                 <time dateTime={item.created_at}>{formatDate(item.created_at)}</time>
               </p>
 
               {openVersion === item.version ? (
-                <pre className="whitespace-pre-wrap rounded border border-neutral-800 bg-[#0f0f0f] p-3 text-xs text-neutral-300">
+                <pre className="whitespace-pre-wrap rounded border border-line bg-sunken p-3 text-xs text-body">
                   {texts[item.version] === undefined ? (
                     "불러오는 중…"
                   ) : passage?.version === item.version ? (
                     <>
                       {texts[item.version].slice(0, passage.start)}
-                      <mark ref={markRef} className="bg-[#0ea5e9]/20 text-white">
+                      <mark ref={markRef} className="bg-accent-soft text-strong">
                         {texts[item.version].slice(passage.start, passage.end)}
                       </mark>
                       {texts[item.version].slice(passage.end)}
@@ -289,15 +289,15 @@ export function VersionHistory({
               ) : null}
 
               {confirming === item.version && restoreBlockedReason === null ? (
-                <div className="space-y-2 rounded border border-neutral-800 bg-[#0f0f0f] p-3">
+                <div className="space-y-2 rounded border border-line bg-sunken p-3">
                   {/* 되감기로 오해하지 않도록 새 버전이 생긴다는 것을 밝힌다 (ADR-037). */}
-                  <p className="text-xs text-neutral-400">
+                  <p className="text-xs text-muted">
                     v{item.version}의 내용으로 새 텍스트 버전을 만듭니다. 이력은 지워지지
                     않습니다.
                   </p>
                   <div className="flex items-center gap-3">
                     <button
-                      className="text-xs text-[#0ea5e9] hover:underline disabled:cursor-not-allowed disabled:text-neutral-600"
+                      className="text-xs text-accent hover:underline disabled:cursor-not-allowed disabled:text-faint"
                       disabled={busy}
                       onClick={() => void restore(item.version)}
                       type="button"
@@ -305,7 +305,7 @@ export function VersionHistory({
                       새 버전 만들기
                     </button>
                     <button
-                      className="text-xs text-neutral-500 hover:text-neutral-300"
+                      className="text-xs text-muted hover:text-strong"
                       onClick={() => setConfirming(null)}
                       type="button"
                     >

@@ -2,8 +2,7 @@
 // SPDX-License-Identifier: MIT
 "use client";
 
-import { GeistSans } from "geist/font/sans";
-import { GeistMono } from "geist/font/mono";
+import { THEME_BOOT_SCRIPT } from "@/lib/theme";
 import "./globals.css";
 
 /**
@@ -17,20 +16,23 @@ export default function GlobalError({ retry }: {
   reset: () => void;
 }): React.ReactElement {
   return (
-    <html lang="ko" className={`${GeistSans.variable} ${GeistMono.variable} h-full antialiased`}>
+    <html lang="ko" className="h-full antialiased" suppressHydrationWarning>
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: THEME_BOOT_SCRIPT }} />
+      </head>
       <body className="flex min-h-full flex-col">
         <title>OpenArchive</title>
         <main className="mx-auto w-full max-w-5xl flex-1 px-6 py-8">
           <section className="space-y-4">
-            <h1 className="text-4xl font-semibold text-white">화면을 표시하지 못했습니다</h1>
-            <p className="text-sm text-neutral-400">잠시 뒤 다시 시도하세요. 문제가 계속되면 관리자에게 알려 주세요.</p>
+            <h1 className="text-4xl font-semibold text-strong">화면을 표시하지 못했습니다</h1>
+            <p className="text-sm text-muted">잠시 뒤 다시 시도하세요. 문제가 계속되면 관리자에게 알려 주세요.</p>
             <div className="flex items-center gap-4">
               <button type="button" onClick={() => retry()}
-                className="rounded-lg bg-white px-4 py-2 text-sm font-medium text-black hover:bg-neutral-200">
+                className="rounded-lg bg-strong px-4 py-2 text-sm font-medium text-on-strong hover:bg-strong/90">
                 다시 시도
               </button>
               {/* eslint-disable-next-line @next/next/no-html-link-for-pages */}
-              <a href="/" className="text-sm text-[#0ea5e9] hover:underline">문서 목록으로 가기</a>
+              <a href="/" className="text-sm text-accent hover:underline">문서 목록으로 가기</a>
             </div>
           </section>
         </main>
