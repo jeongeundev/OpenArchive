@@ -460,11 +460,19 @@ async def test_get_document_returns_related_kind(monkeypatch, mcp_database):
     # kind 값이 CHECK 제약이 보장하는 집합에 드는지는 항상 참이라 아무것도 검증하지
     # 않는다. kind별 묶음과 그 안의 점수 내림차순이 MCP 직렬화까지 살아 오는지를
     # 단언한다 (ADR-029 — score의 척도가 kind마다 달라 전체 정렬은 성립하지 않는다).
+    # 항목 키는 서비스 RelatedDocument 그대로다 — mutual은 #278에서 더해졌다(ADR-029 2026-10-14 개정).
+    assert all(
+        set(item) == {"document_id", "title", "tags", "kind", "score", "mutual"}
+        for item in items
+    )
     kinds = [item["kind"] for item in items]
     assert kinds == sorted(kinds, key=kinds.index)
+    # 같은 kind 안에서는 서로 찾은 쌍이 먼저, 그 안에서 점수 내림차순이다.
     for kind in set(kinds):
-        scores = [item["score"] for item in items if item["kind"] == kind]
-        assert scores == sorted(scores, reverse=True)
+        keys = [
+            (not item["mutual"], -item["score"]) for item in items if item["kind"] == kind
+        ]
+        assert keys == sorted(keys)
 
 
 async def _seed_two_versions(dsn: str, **document) -> str:
