@@ -4,6 +4,7 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { AuthProvider } from "@/components/AuthProvider";
+import { RequireAuth } from "@/components/RequireAuth";
 import Home from "@/app/page";
 import type { DocumentSummary, Folder } from "@/lib/types";
 import { lastListHref } from "@/lib/urlState";
@@ -31,6 +32,7 @@ vi.mock("next/navigation", async () => {
   const { useSyncExternalStore } = await import("react");
   return {
     useRouter: () => ({ push: navigation.push, replace: navigation.replace }),
+    usePathname: () => "/",
     useSearchParams: () => useSyncExternalStore(navigation.subscribe, navigation.params),
   };
 });
@@ -218,7 +220,8 @@ describe("폴더 트리", () => {
   it("폴더를 고르면 그 폴더에 든 문서만 목록과 건수로 조회하고 문서 수를 트리에 표시한다", async () => {
     navigation.go("/?folder=folder-a");
     const fetchMock = mockFinder(1, 2, [hr]);
-    render(<AuthProvider><Home /></AuthProvider>);
+    // 실제 앱처럼 로그인 확인 뒤에 그린다 — 주소의 폴더를 폴더 목록이 오기 전에 판정하지 않는다.
+    render(<AuthProvider><RequireAuth><Home /></RequireAuth></AuthProvider>);
     expect(await screen.findByRole("heading", { name: "인사" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /인사/ })).toHaveTextContent("1");
     await waitFor(() => {
@@ -240,7 +243,8 @@ describe("폴더 트리", () => {
   it("볼 수 없는 폴더를 주소로 고르면 존재를 알리지 않고 전체 문서로 되돌린다", async () => {
     navigation.go("/?folder=hidden");
     const fetchMock = mockFinder(2, 2, [hr]);
-    render(<AuthProvider><Home /></AuthProvider>);
+    // 실제 앱처럼 로그인 확인 뒤에 그린다 — 주소의 폴더를 폴더 목록이 오기 전에 판정하지 않는다.
+    render(<AuthProvider><RequireAuth><Home /></RequireAuth></AuthProvider>);
     await waitFor(() => expect(navigation.replace).toHaveBeenCalledWith("/"));
     expect(screen.queryByText(/찾을 수 없/)).not.toBeInTheDocument();
     expect(requestedUrls(fetchMock).some(url => url.searchParams.get("folder_id") === "hidden")).toBe(false);
@@ -249,7 +253,8 @@ describe("폴더 트리", () => {
   it("빈 폴더를 고르면 폴더가 비었다고 알린다", async () => {
     navigation.go("/?folder=folder-a");
     mockFinder(0, 2, [{ ...hr, document_count: 0 }]);
-    render(<AuthProvider><Home /></AuthProvider>);
+    // 실제 앱처럼 로그인 확인 뒤에 그린다 — 주소의 폴더를 폴더 목록이 오기 전에 판정하지 않는다.
+    render(<AuthProvider><RequireAuth><Home /></RequireAuth></AuthProvider>);
     expect(await screen.findByText("이 폴더에 문서가 없습니다.")).toBeInTheDocument();
   });
 
@@ -297,7 +302,8 @@ describe("폴더 트리", () => {
         : url.pathname.endsWith("/tags") ? [] : [];
       return Promise.resolve(new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } }));
     }));
-    render(<AuthProvider><Home /></AuthProvider>);
+    // 실제 앱처럼 로그인 확인 뒤에 그린다 — 주소의 폴더를 폴더 목록이 오기 전에 판정하지 않는다.
+    render(<AuthProvider><RequireAuth><Home /></RequireAuth></AuthProvider>);
     fireEvent.click(await screen.findByRole("button", { name: "삭제" }));
     await waitFor(() => expect(navigation.push).toHaveBeenCalledWith("/"));
     await waitFor(() => expect(screen.queryByRole("button", { name: /인사/ })).not.toBeInTheDocument());

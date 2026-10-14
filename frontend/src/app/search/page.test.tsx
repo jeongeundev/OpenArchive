@@ -4,6 +4,7 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { AuthProvider } from "@/components/AuthProvider";
+import { RequireAuth } from "@/components/RequireAuth";
 import SearchPage from "./page";
 
 // 주소를 실제로 바꾸는 라우터 — 검색 화면은 제출한 조건을 주소에 두고 주소를 기준으로 검색한다.
@@ -28,6 +29,7 @@ vi.mock("next/navigation", async () => {
   const { useSyncExternalStore } = await import("react");
   return {
     useRouter: () => ({ push: navigation.push, replace: navigation.go }),
+    usePathname: () => "/search",
     useSearchParams: () => useSyncExternalStore(navigation.subscribe, navigation.params),
   };
 });
@@ -86,6 +88,19 @@ async function renderPage(): Promise<void> {
     render(
       <AuthProvider>
         <SearchPage />
+      </AuthProvider>,
+    );
+  });
+}
+
+/** 실제 앱처럼 로그인 확인 뒤에 그린다(/search는 공개 경로가 아니다) — 주소의 폴더를 폴더 목록이 오기 전에 판정하지 않는다. */
+async function renderSignedInPage(): Promise<void> {
+  await act(async () => {
+    render(
+      <AuthProvider>
+        <RequireAuth>
+          <SearchPage />
+        </RequireAuth>
       </AuthProvider>,
     );
   });
@@ -192,7 +207,7 @@ describe("검색 조건 주소", () => {
 
   it("검색하면 조건을 주소에 남긴다", async () => {
     stubFetch(true);
-    await renderPage();
+    await renderSignedInPage();
     fireEvent.change(screen.getByLabelText("태그 (쉼표로 구분)"), { target: { value: "인사, 복무" } });
     await searchFor("연차 휴가");
 
@@ -205,7 +220,7 @@ describe("검색 조건 주소", () => {
   it("주소의 조건으로 폼을 채우고 검색하지만, 답변은 다시 만들지 않는다", async () => {
     navigation.go("/search?q=장애 복구&tags=운영&type=pdf&k=20");
     const fetchMock = stubFetch(true);
-    await renderPage();
+    await renderSignedInPage();
 
     await waitFor(() => expect(searchCalls(fetchMock)).toHaveLength(1));
     expect(searchCalls(fetchMock)[0]).toMatchObject({ query: "장애 복구", tags: ["운영"], content_type: "pdf", k: 20 });
@@ -219,7 +234,7 @@ describe("검색 조건 주소", () => {
 
   it("같은 조건으로 다시 검색해도 다시 조회한다", async () => {
     const fetchMock = stubFetch(true);
-    await renderPage();
+    await renderSignedInPage();
     await searchFor("장애 복구");
     await waitFor(() => expect(searchCalls(fetchMock)).toHaveLength(1));
 
@@ -231,7 +246,7 @@ describe("검색 조건 주소", () => {
   it("주소의 폴더를 볼 수 있으면 그 폴더로 검색하고 폼에도 고른다", async () => {
     navigation.go("/search?q=채용&folder=f-hr");
     const fetchMock = stubFetch(true);
-    await renderPage();
+    await renderSignedInPage();
 
     await waitFor(() => expect(searchCalls(fetchMock)).toHaveLength(1));
     expect(searchCalls(fetchMock)[0]).toMatchObject({ folder_id: "f-hr" });
@@ -241,7 +256,7 @@ describe("검색 조건 주소", () => {
   it("주소의 폴더를 볼 수 없으면 폴더 없이 검색한다", async () => {
     navigation.go("/search?q=채용&folder=hidden");
     const fetchMock = stubFetch(true);
-    await renderPage();
+    await renderSignedInPage();
 
     await waitFor(() => expect(searchCalls(fetchMock)).toHaveLength(1));
     expect(searchCalls(fetchMock)[0]).not.toHaveProperty("folder_id");
@@ -249,7 +264,7 @@ describe("검색 조건 주소", () => {
 
   it("조건 없는 주소로 오면 폼과 결과를 비운다", async () => {
     stubFetch(true);
-    await renderPage();
+    await renderSignedInPage();
     await searchFor("장애 복구");
     expect(screen.getByRole("button", { name: "이 검색어로 답변 받기" })).toBeInTheDocument();
 
