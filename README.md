@@ -325,8 +325,8 @@ Claude Desktop / Claude Code의 MCP 설정에 stdio 서버로 등록합니다. `
 }
 ```
 
-에이전트는 `search_documents`로 발췌·출처·기준 버전을 받아 근거로 쓰고, `get_document` ·
-`list_documents`로 읽으며, `create_document`로 문서를 공급합니다. MCP 경로에서 답변 생성은 에이전트
+에이전트는 `search_documents`로 발췌·출처·기준 버전을 받아 근거로 쓰고(`folder_id`로 폴더 범위 지정), `get_document`
+(`version`으로 과거 텍스트 버전) · `list_documents`로 읽으며, `create_document`로 문서를 공급합니다. MCP 경로에서 답변 생성은 에이전트
 쪽입니다 — 플랫폼 안의 답변(웹 답변 패널·`openarchive ask`·`POST /api/ask`)은 별도 옵션입니다.
 `MCP_USER_ID`가 열람 범위와 문서 소유자를 정하므로 **실제 계정명과 정확히 같게** 적습니다
 (실존 여부는 검증되지 않습니다 — [ADR-036](docs/ADR.md)). `EMBEDDING_PROVIDER`는 `serve`에
