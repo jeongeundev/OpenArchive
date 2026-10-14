@@ -243,14 +243,14 @@ def build_server(
         based_on_version이 현재 버전과 다를 때 그 근거가 나온 버전을 확인하는 데 씁니다.
         """
         principal = resolve_principal()
+        parsed_id = UUID(document_id)
         if version is not None:
             async with connection() as conn:
                 past = await get_document_version(
-                    conn, UUID(document_id), version=version, user_id=principal.principal
+                    conn, parsed_id, version=version, user_id=principal.principal
                 )
-            return {"document_id": document_id, **_json_value(past)}
+            return {"document_id": str(parsed_id), **_json_value(past)}
         async with connection() as conn:
-            parsed_id = UUID(document_id)
             document = await get_document_service(
                 conn, parsed_id, user_id=principal.principal
             )
