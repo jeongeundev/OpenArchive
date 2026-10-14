@@ -63,7 +63,7 @@ describe("SearchResults", () => {
               document_id: "document-2",
               title: "OpenProxy 장애 대응",
               via: {
-                from_document_id: "document-1",
+                from_document_id: "document-1", from_title: "OpenSQL 운영 가이드",
                 kind: "related",
                 depth: 1,
               },
@@ -94,7 +94,7 @@ describe("SearchResults", () => {
               title: "OpenProxy 장애 대응",
               chunk_index: 4,
               based_on_version: 1,
-              via: { from_document_id: "document-1", kind: "related", depth: 1 },
+              via: { from_document_id: "document-1", from_title: "OpenSQL 운영 가이드", kind: "related", depth: 1 },
             },
             {
               ...response.items[0],
@@ -102,7 +102,7 @@ describe("SearchResults", () => {
               title: "OpenSQL 운영 가이드 이전 판",
               chunk_index: 2,
               based_on_version: 1,
-              via: { from_document_id: "document-3", kind: "revision", depth: 1 },
+              via: { from_document_id: "document-3", from_title: "OpenSQL 운영 가이드 이전 판", kind: "revision", depth: 1 },
             },
           ],
         }}
@@ -136,7 +136,7 @@ describe("SearchResults", () => {
               // 질의와의 유사도가 아니다. 음수가 그대로 노출되면 안 된다.
               score: -1.8596,
               via: {
-                from_document_id: "document-1",
+                from_document_id: "document-1", from_title: "OpenSQL 운영 가이드",
                 kind: "related",
                 depth: 1,
               },
@@ -156,7 +156,7 @@ describe("SearchResults", () => {
   it("직접 결과의 순서를 유지하고 연결 문서는 별도 영역에 한 번씩 표시한다", () => {
     const first = response.items[0];
     const linked = { ...first, document_id: "document-2", title: "장애 대응", via: {
-      from_document_id: first.document_id, kind: "related", depth: 1,
+      from_document_id: first.document_id, from_title: first.title, kind: "related", depth: 1,
     } };
     const second = { ...first, document_id: "document-3", title: "백업 가이드" };
     render(<SearchResults response={{ ...response, items: [first, second, linked,
@@ -173,12 +173,12 @@ describe("SearchResults", () => {
     expect(within(related).queryByRole("link", { name: first.title })).not.toBeInTheDocument();
   });
 
-  it("응답에 없는 출발 문서는 제목이나 링크를 추측해서 노출하지 않는다", () => {
+  it("응답 목록에 없는 출발 문서도 서버가 준 출처 제목으로 표시한다", () => {
     render(<SearchResults response={{ ...response, items: [{ ...response.items[0],
-      via: { from_document_id: "hidden-document", kind: "refers", depth: 2 },
+      via: { from_document_id: "source-document", from_title: "출처 제목", kind: "related", depth: 2 },
     }] }} loading={false} error={null} />);
-    expect(screen.getByRole("region", { name: "함께 볼 문서" })).toHaveTextContent("연결된 문서에서");
-    expect(screen.queryByRole("link", { name: "hidden-document" })).not.toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "함께 볼 문서" })).toHaveTextContent("「출처 제목」에서 「관련 있음」로 이어짐");
+    expect(screen.queryByText(/연결된 문서/)).not.toBeInTheDocument();
     expect(screen.queryByRole("region", { name: "검색 결과" })).not.toBeInTheDocument();
   });
 

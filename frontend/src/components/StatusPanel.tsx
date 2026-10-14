@@ -15,7 +15,7 @@ export function StatusPanel({ status, error }: { status: SystemStatus | null; er
             <p className="text-sm font-medium text-neutral-400">정합성 검증</p>
             <div className="mt-4 grid gap-5 md:grid-cols-2">
               <div>
-                <p className="text-sm text-neutral-500">텍스트와 청크 버전</p>
+                <p className="text-sm text-neutral-500">원본과 청크 버전</p>
                 <p data-testid="consistency-count" className={`mt-2 text-5xl font-semibold ${status.inconsistent_documents === 0 ? "text-[#22c55e]" : "text-[#a3a3a3]"}`}>{status.inconsistent_documents}</p>
                 <p className="mt-3 text-sm text-neutral-400">텍스트 버전과 청크 버전이 어긋난 문서 수. 재임베딩 중에만 증가했다가 0으로 돌아옵니다.</p>
               </div>
