@@ -476,6 +476,19 @@ async def test_get_document_hides_versions_like_the_document(monkeypatch, mcp_da
     assert (await get_document(hidden, version=1))["content"] == "연차는 15일이다"
 
 
+async def test_stdio_rejects_unknown_arguments_and_passes_known_ones(mcp_database):
+    from mcp.server.fastmcp.exceptions import ToolError
+
+    from openarchive.mcp_server.server import mcp
+
+    document_id = await _seed_two_versions(mcp_database)
+
+    with pytest.raises(ToolError, match="ver"):
+        await mcp.call_tool("get_document", {"document_id": document_id, "ver": 1})
+    result = await mcp.call_tool("get_document", {"document_id": document_id, "version": 1})
+    assert '"연차는 15일이다"' in result[0].text
+
+
 async def test_get_document_lists_original_files_without_bytes(mcp_database):
     """상세의 원본 판 목록은 메타데이터만 싣는다 — 바이트가 MCP 응답에 섞이지 않는다."""
     from openarchive.mcp_server.server import get_document
