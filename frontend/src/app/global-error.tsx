@@ -2,8 +2,7 @@
 // SPDX-License-Identifier: MIT
 "use client";
 
-import { GeistSans } from "geist/font/sans";
-import { GeistMono } from "geist/font/mono";
+import { THEME_BOOT_SCRIPT } from "@/lib/theme";
 import "./globals.css";
 
 /**
@@ -17,7 +16,10 @@ export default function GlobalError({ retry }: {
   reset: () => void;
 }): React.ReactElement {
   return (
-    <html lang="ko" className={`${GeistSans.variable} ${GeistMono.variable} h-full antialiased`}>
+    <html lang="ko" className="h-full antialiased" suppressHydrationWarning>
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: THEME_BOOT_SCRIPT }} />
+      </head>
       <body className="flex min-h-full flex-col">
         <title>OpenArchive</title>
         <main className="mx-auto w-full max-w-5xl flex-1 px-6 py-8">
