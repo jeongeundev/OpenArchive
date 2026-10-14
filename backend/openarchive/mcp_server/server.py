@@ -172,6 +172,7 @@ def build_server(
         query: str,
         tags: list[str] | None = None,
         content_type: str | None = None,
+        folder_id: str | None = None,
         k: int = 10,
     ) -> dict:
         """질의와 정형 필터에 맞는 발췌·출처·기준 버전을 반환합니다.
@@ -179,6 +180,8 @@ def build_server(
         AI가 답변 근거로 사용할 사내 문서 구절을 찾을 때 사용합니다.
         직접 결과의 passages에는 기존 벡터 후보 안의 대목을 최대 8개 제공합니다.
         첫 excerpt에 답이 없으면 이 대목들도 확인하세요. 답변 충분성을 보장하지 않습니다.
+        folder_id(get_document의 folder.id)를 주면 직접 결과를 그 폴더와 하위 폴더로 좁힙니다.
+        관계로 확장된 결과(via가 있는 항목)는 폴더 밖 문서일 수 있습니다.
         """
         principal = resolve_principal()
         async with connection() as conn:
@@ -189,6 +192,7 @@ def build_server(
                 user_id=principal.principal,
                 tags=tags,
                 content_type=content_type,
+                folder_id=UUID(folder_id) if folder_id is not None else None,
                 k=k,
             )
         return {

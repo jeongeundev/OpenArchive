@@ -155,15 +155,16 @@ async def test_unknown_arguments_are_rejected_not_ignored(remote):
     dsn, tokens, _ = remote
     async with session(tokens["write"]["token"]) as client:
         searched = await client.call_tool(
-            "search_documents", {"query": "근거", "folder_id": "00000000-0000-0000-0000-000000000000"}
+            "search_documents", {"query": "근거", "folder": "00000000-0000-0000-0000-000000000000"}
         )
         created = await client.call_tool(
             "create_document", {"title": "인자 거부", "content": "근거", "owner": "lee"}
         )
     assert searched.isError
-    assert "folder_id" in searched.content[0].text
+    # folder_id의 오타다. 받는 인자 목록에도 "folder"가 들어 있으니 거부한 인자 자리를 본다.
+    assert "없는 인자입니다: folder (" in searched.content[0].text
     assert created.isError
-    assert "owner" in created.content[0].text
+    assert "없는 인자입니다: owner (" in created.content[0].text
     assert await count_title(dsn, "인자 거부") == 0
 
 
