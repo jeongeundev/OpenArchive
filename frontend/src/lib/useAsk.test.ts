@@ -11,7 +11,8 @@ describe("useAsk", () => {
   afterEach(() => vi.unstubAllGlobals());
 
   // 생성은 수십 초 걸린다. 그 사이 새로 검색하면 검색 화면이 새로 그려진다 — 이전 검색어의 답이 늦게 와도 보이면 안 된다.
-  it("화면을 떠난 뒤 도착한 이전 답은 버리고 요청도 취소한다", async () => {
+  // 늦게 온 답이 화면에 보이지 않는지는 검색 화면 테스트(「답변을 만드는 중에 새로 검색하면…」)가 본다.
+  it("화면을 떠나면 진행 중인 답변 요청을 취소한다", async () => {
     let resolve: (response: Response) => void = () => {};
     const fetchMock = vi.fn(
       () => new Promise<Response>((done) => {
@@ -28,7 +29,6 @@ describe("useAsk", () => {
       resolve(new Response(JSON.stringify({ status: "answered", answer: "늦은 답", detail: null, sources: [], items: [] })));
     });
 
-    expect(result.current.response).toBeNull();
     expect((fetchMock.mock.calls[0] as unknown[] as [string, RequestInit])[1].signal?.aborted).toBe(true);
   });
 });

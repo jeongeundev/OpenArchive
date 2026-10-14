@@ -146,6 +146,26 @@ describe("검색 화면의 근거 기반 답변", () => {
     expect(screen.getByRole("button", { name: "이 검색어로 답변 받기" })).toBeInTheDocument();
   });
 
+  it("답변을 만드는 중에 새로 검색하면 늦게 온 이전 답을 보이지 않는다", async () => {
+    let answerLate: (response: Response) => void = () => {};
+    const fetchMock = stubFetch(true);
+    const answered = fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation((url, init) => url === "/api/ask"
+      ? new Promise<Response>((done) => { answerLate = done; })
+      : answered(url, init));
+    await renderPage();
+    await searchFor("장애 복구");
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "이 검색어로 답변 받기" }));
+    });
+
+    await searchFor("보존 기간");
+    await act(async () => answerLate(jsonResponse(askResponse)));
+
+    expect(screen.queryByTestId("answer-text")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "이 검색어로 답변 받기" })).toBeInTheDocument();
+  });
+
   it("검색 전과 로그인하지 않은 사용자에게는 답변 패널을 보이지 않는다", async () => {
     stubFetch(false);
     await renderPage();
