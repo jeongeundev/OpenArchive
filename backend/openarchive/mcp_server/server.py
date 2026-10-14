@@ -15,6 +15,7 @@ from uuid import UUID, uuid4
 
 import psycopg
 from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp.exceptions import ToolError
 
 from openarchive.config import get_settings
 from openarchive.db import close_pool, connection, get_pool, is_unavailable
@@ -22,7 +23,11 @@ from openarchive.embeddings import get_provider
 from openarchive.embeddings.base import EmbeddingProvider
 from openarchive.services.audit import set_actor
 from openarchive.services.auth import PRINCIPAL_SHARE, SCOPE_READ_WRITE
-from openarchive.services.documents import ExtractionStatus, create_text_document
+from openarchive.services.documents import (
+    ExtractionStatus,
+    create_text_document,
+    get_document_version,
+)
 from openarchive.services.documents import get_document as get_document_service
 from openarchive.services.documents import list_documents as list_documents_service
 from openarchive.services.related import find_related
@@ -134,6 +139,26 @@ def _document_payload(document: dict) -> dict:
     return payload
 
 
+class StrictArgumentsFastMCP(FastMCP):
+    """도구 스키마에 없는 인자를 거부한다.
+
+    SDK의 인자 모델은 모르는 인자를 조용히 버린다. 그러면 범위를 좁히려던 인자를 잘못 쓴
+    에이전트가 넓은 범위의 결과를 받고도 알 수 없고, 쓰기 도구는 엉뚱한 인자를 버린 채 저장한다.
+    """
+
+    async def call_tool(self, name: str, arguments: dict[str, Any]):
+        tool = self._tool_manager.get_tool(name)
+        if tool is not None:
+            known = tool.parameters.get("properties", {})
+            unknown = sorted(set(arguments) - set(known))
+            if unknown:
+                raise ToolError(
+                    f"{name}에 없는 인자입니다: {', '.join(unknown)}"
+                    f" (받는 인자: {', '.join(known)})"
+                )
+        return await super().call_tool(name, arguments)
+
+
 def build_server(
     resolve_principal: Callable[[], McpPrincipal],
     resolve_provider: Callable[[], EmbeddingProvider],
@@ -141,12 +166,13 @@ def build_server(
     lifespan=None,
     **fastmcp_settings,
 ) -> FastMCP:
-    server = FastMCP("OpenArchive", lifespan=lifespan, **fastmcp_settings)
+    server = StrictArgumentsFastMCP("OpenArchive", lifespan=lifespan, **fastmcp_settings)
     @with_backoff
     async def search_documents(
         query: str,
         tags: list[str] | None = None,
         content_type: str | None = None,
+        folder_id: str | None = None,
         k: int = 10,
     ) -> dict:
         """질의와 정형 필터에 맞는 발췌·출처·기준 버전을 반환합니다.
@@ -154,6 +180,8 @@ def build_server(
         AI가 답변 근거로 사용할 사내 문서 구절을 찾을 때 사용합니다.
         직접 결과의 passages에는 기존 벡터 후보 안의 대목을 최대 8개 제공합니다.
         첫 excerpt에 답이 없으면 이 대목들도 확인하세요. 답변 충분성을 보장하지 않습니다.
+        folder_id(get_document의 folder.id)를 주면 직접 결과를 그 폴더와 하위 폴더로 좁힙니다.
+        관계로 확장된 결과(via가 있는 항목)는 폴더 밖 문서일 수 있습니다.
         """
         principal = resolve_principal()
         async with connection() as conn:
@@ -164,6 +192,7 @@ def build_server(
                 user_id=principal.principal,
                 tags=tags,
                 content_type=content_type,
+                folder_id=UUID(folder_id) if folder_id is not None else None,
                 k=k,
             )
         return {
@@ -206,14 +235,22 @@ def build_server(
         }
 
     @with_backoff
-    async def get_document(document_id: str) -> dict:
+    async def get_document(document_id: str, version: int | None = None) -> dict:
         """문서 텍스트·텍스트 버전 목록·청크 상태를 반환합니다.
 
         검색 결과의 문서 전체 내용과 색인 기준 버전을 확인할 때 사용합니다.
+        version을 주면 그 텍스트 버전의 본문과 작성 기록만 반환합니다. 근거의
+        based_on_version이 현재 버전과 다를 때 그 근거가 나온 버전을 확인하는 데 씁니다.
         """
         principal = resolve_principal()
+        parsed_id = UUID(document_id)
+        if version is not None:
+            async with connection() as conn:
+                past = await get_document_version(
+                    conn, parsed_id, version=version, user_id=principal.principal
+                )
+            return {"document_id": str(parsed_id), **_json_value(past)}
         async with connection() as conn:
-            parsed_id = UUID(document_id)
             document = await get_document_service(
                 conn, parsed_id, user_id=principal.principal
             )

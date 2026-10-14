@@ -324,6 +324,48 @@ async def test_search_tool_matches_the_rest_endpoint_and_returns_evidence(
     assert tool_items[0]["passages"]
 
 
+async def test_search_tool_narrows_direct_hits_to_a_visible_folder(monkeypatch, mcp_database):
+    """폴더 ID는 get_document의 folder에서 얻고, 볼 수 없는 폴더는 없는 폴더와 같이 빈 결과다.
+
+    숨은 폴더에는 bob이 개별로 볼 수 있는 문서를 둔다 — 빈 폴더면 열람 검사가 없어도 빈 결과라
+    아무것도 판별하지 못한다.
+    """
+    from openarchive.mcp_server.server import get_document, search_documents
+
+    async with await psycopg.AsyncConnection.connect(mcp_database, autocommit=True) as conn:
+        folders = {}
+        for name, owner, visibility in (("인사", "alice", "public"), ("임원", "alice", "private")):
+            cur = await conn.execute(
+                "INSERT INTO folders (name, created_by, visibility) VALUES (%s, %s, %s) RETURNING id",
+                (name, owner, visibility),
+            )
+            folders[name] = (await cur.fetchone())[0]
+        inside = await insert_test_document(conn, title="휴가 규정", content="휴가 근거")
+        outside = await insert_test_document(conn, title="출장 규정", content="휴가 근거")
+        in_hidden = await insert_test_document(conn, title="개별 공개", content="휴가 근거")
+        await conn.execute(
+            "UPDATE documents SET folder_id = %s WHERE id = %s", (folders["인사"], inside)
+        )
+        await conn.execute(
+            "UPDATE documents SET folder_id = %s, follows_folder = false WHERE id = %s",
+            (folders["임원"], in_hidden),
+        )
+        await process_all_embedding_jobs(conn, FakeProvider())
+
+    monkeypatch.setenv("MCP_USER_ID", "bob")
+    get_settings.cache_clear()
+    folder_id = (await get_document(str(inside)))["folder"]["id"]
+    unfiltered = (await search_documents("휴가 근거"))["items"]
+    narrowed = (await search_documents("휴가 근거", folder_id=folder_id))["items"]
+
+    assert {item["document_id"] for item in unfiltered} == {
+        str(inside), str(outside), str(in_hidden)
+    }
+    assert {item["document_id"] for item in narrowed if item["via"] is None} == {str(inside)}
+    for hidden in (str(folders["임원"]), str(uuid4())):
+        assert (await search_documents("휴가 근거", folder_id=hidden))["items"] == []
+
+
 async def test_mcp_user_setting_controls_private_access_for_all_tools(
     monkeypatch, mcp_database
 ):
@@ -423,6 +465,71 @@ async def test_get_document_returns_related_kind(monkeypatch, mcp_database):
     for kind in set(kinds):
         scores = [item["score"] for item in items if item["kind"] == kind]
         assert scores == sorted(scores, reverse=True)
+
+
+async def _seed_two_versions(dsn: str, **document) -> str:
+    async with await psycopg.AsyncConnection.connect(dsn, autocommit=True) as conn:
+        document_id = await insert_test_document(
+            conn, title="휴가 규정", content="연차는 15일이다", **document
+        )
+        await conn.execute(
+            "UPDATE documents SET content = '연차는 20일이다', content_hash = 'v2', version = 2"
+            " WHERE id = %s",
+            (document_id,),
+        )
+    return str(document_id)
+
+
+async def test_get_document_returns_a_past_text_version(monkeypatch, mcp_database):
+    """캐시한 근거의 based_on_version이 두 판 이상 지나도 그 판의 본문을 받는다."""
+    from openarchive.mcp_server.server import get_document
+
+    document_id = await _seed_two_versions(mcp_database)
+
+    # 대문자로 넘겨도 응답 ID는 검색 결과와 같은 표준 형식이어야 캐시 대조 키가 맞는다.
+    past = await get_document(document_id.upper(), version=1)
+    current = await get_document(document_id)
+
+    assert past["document_id"] == document_id
+    assert past["version"] == 1
+    assert past["content"] == "연차는 15일이다"
+    # 과거 판 응답은 그 판의 기록만 싣는다 — 현재의 제목·태그·관련 문서를 섞으면
+    # 과거 본문이 현재 메타데이터와 한 묶음처럼 읽힌다.
+    assert "related" not in past and "title" not in past
+    assert current["content"] == "연차는 20일이다"
+    assert [v["version"] for v in current["versions"]] == [1, 2]
+
+
+async def test_get_document_hides_versions_like_the_document(monkeypatch, mcp_database):
+    """볼 수 없는 문서의 판은 없는 판과 구별되지 않는다 — 판 번호도 존재·수정 횟수를 누출한다."""
+    from openarchive.mcp_server.server import get_document
+    from openarchive.services.documents import DocumentNotFound
+
+    hidden = await _seed_two_versions(mcp_database, owner_id="alice", visibility="private")
+    visible = await _seed_two_versions(mcp_database)
+
+    monkeypatch.setenv("MCP_USER_ID", "bob")
+    get_settings.cache_clear()
+    for document_id, version in [(hidden, 1), (visible, 3)]:
+        with pytest.raises(DocumentNotFound):
+            await get_document(document_id, version=version)
+
+    monkeypatch.setenv("MCP_USER_ID", "alice")
+    get_settings.cache_clear()
+    assert (await get_document(hidden, version=1))["content"] == "연차는 15일이다"
+
+
+async def test_stdio_rejects_unknown_arguments_and_passes_known_ones(mcp_database):
+    from mcp.server.fastmcp.exceptions import ToolError
+
+    from openarchive.mcp_server.server import mcp
+
+    document_id = await _seed_two_versions(mcp_database)
+
+    with pytest.raises(ToolError, match="ver"):
+        await mcp.call_tool("get_document", {"document_id": document_id, "ver": 1})
+    result = await mcp.call_tool("get_document", {"document_id": document_id, "version": 1})
+    assert '"연차는 15일이다"' in result[0].text
 
 
 async def test_get_document_lists_original_files_without_bytes(mcp_database):
@@ -664,10 +771,11 @@ async def test_wrapped_read_tools_keep_their_argument_schema():
     tools = {tool.name: tool for tool in await mcp.list_tools()}
 
     assert set(tools["search_documents"].inputSchema["properties"]) == {
-        "query", "tags", "content_type", "k"
+        "query", "tags", "content_type", "folder_id", "k"
     }
     assert tools["search_documents"].inputSchema["required"] == ["query"]
-    assert set(tools["get_document"].inputSchema["properties"]) == {"document_id"}
+    assert set(tools["get_document"].inputSchema["properties"]) == {"document_id", "version"}
+    assert tools["get_document"].inputSchema["required"] == ["document_id"]
     assert set(tools["list_documents"].inputSchema["properties"]) == {
         "tag", "status", "extraction_status"
     }
@@ -819,8 +927,8 @@ async def test_stdio_tool_property_sets_are_unchanged():
     from openarchive.mcp_server.server import mcp
 
     assert {tool.name: set(tool.inputSchema["properties"]) for tool in await mcp.list_tools()} == {
-        "search_documents": {"query", "tags", "content_type", "k"},
-        "get_document": {"document_id"},
+        "search_documents": {"query", "tags", "content_type", "folder_id", "k"},
+        "get_document": {"document_id", "version"},
         "list_documents": {"tag", "status", "extraction_status"},
         "create_document": {
             "title", "content", "content_type", "tags", "visibility", "grant_users", "grant_groups"
@@ -883,8 +991,11 @@ async def test_injected_share_reads_only_granted_documents(mcp_database):
         assert {item["document_id"] for item in result["items"]} == {str(included)}
     detail = _injected_tool(principal, "get_document")
     assert (await detail(str(included)))["document_id"] == str(included)
+    assert (await detail(str(included), version=1))["content"] == "근거"
     with pytest.raises(DocumentNotFound):
         await detail(str(excluded))
+    with pytest.raises(DocumentNotFound):
+        await detail(str(excluded), version=1)
 
 
 @pytest.mark.parametrize("shared", [False, True])

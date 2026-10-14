@@ -150,6 +150,44 @@ async def test_read_token_cannot_create(remote):
     assert await count_title(dsn, "read 거부") == 0
 
 
+async def test_past_version_follows_the_token_owner_over_http(remote):
+    _, tokens, ids = remote
+    async with session(tokens["kim"]["token"]) as client:
+        own = payload(
+            await client.call_tool("get_document", {"document_id": str(ids["kim"]), "version": 1})
+        )
+    async with session(tokens["lee"]["token"]) as client:
+        other = await client.call_tool(
+            "get_document", {"document_id": str(ids["kim"]), "version": 1}
+        )
+        missing = await client.call_tool(
+            "get_document", {"document_id": "00000000-0000-0000-0000-000000000001", "version": 1}
+        )
+    assert own["document_id"] == str(ids["kim"]) and own["version"] == 1
+    assert own["content"] == "OpenSQL 정합성 근거"
+    # 볼 수 없는 문서의 판은 없는 문서의 판과 같은 오류여야 존재가 새지 않는다.
+    assert other.isError and missing.isError
+    assert other.content[0].text == missing.content[0].text
+
+
+async def test_unknown_arguments_are_rejected_not_ignored(remote):
+    """범위를 좁히려던 인자를 잘못 쓰면 거부된다 — 무시하면 조용히 넓은 범위로 검색·저장한다."""
+    dsn, tokens, _ = remote
+    async with session(tokens["write"]["token"]) as client:
+        searched = await client.call_tool(
+            "search_documents", {"query": "근거", "folder": "00000000-0000-0000-0000-000000000000"}
+        )
+        created = await client.call_tool(
+            "create_document", {"title": "인자 거부", "content": "근거", "owner": "lee"}
+        )
+    assert searched.isError
+    # folder_id의 오타다. 받는 인자 목록에도 "folder"가 들어 있으니 거부한 인자 자리를 본다.
+    assert "없는 인자입니다: folder (" in searched.content[0].text
+    assert created.isError
+    assert "없는 인자입니다: owner (" in created.content[0].text
+    assert await count_title(dsn, "인자 거부") == 0
+
+
 async def test_write_token_owner_rest_list_and_audit(remote):
     dsn, tokens, _ = remote
     async with session(tokens["write"]["token"]) as client:
