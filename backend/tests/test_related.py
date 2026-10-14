@@ -46,8 +46,8 @@ async def test_related_documents_are_ranked_by_score_and_exclude_the_source(
     assert result.items[0].kind in {"overlaps", "related"}
     assert source_id not in {item.document_id for item in result.items}
     for kind in {item.kind for item in result.items}:
-        scores = [item.score for item in result.items if item.kind == kind]
-        assert scores == sorted(scores, reverse=True)
+        ranking = [(item.mutual, item.score) for item in result.items if item.kind == kind]
+        assert ranking == sorted(ranking, reverse=True)
 
 
 async def test_tag_suggestions_are_sorted_by_frequency_then_name(
@@ -307,10 +307,17 @@ async def test_identical_documents_apply_visibility_even_when_indexed(
     )
     await process_all_embedding_jobs(worker_conn, provider)
 
+    await worker_conn.execute("DELETE FROM document_edges")
+    for neighbor in (public_id, own_private_id):
+        await worker_conn.execute(
+            "INSERT INTO document_edges (src_document_id, dst_document_id, kind, score) "
+            "VALUES (%s, %s, 'related', 1.0)", (source_id, neighbor),
+        )
     result = await find_related(
         related_conn, document_id=source_id, user_id="alice"
     )
 
+    assert result.items == []
     assert {item.document_id for item in result.identical} == {
         public_id,
         own_private_id,
@@ -351,6 +358,7 @@ async def test_related_documents_include_a_neighbour_that_computed_the_edge(
     assert [(item.document_id, item.kind) for item in result.items] == [
         (other_id, "related")
     ]
+    assert result.items[0].mutual is False
     assert result.items[0].score == pytest.approx(0.8)
     assert result.reason is None
 
@@ -450,3 +458,49 @@ async def test_tag_suggestions_count_a_neighbour_once_even_if_stored_in_both_dir
     result = await suggest_tags(related_conn, document_id=source_id)
 
     assert [(item.tag, item.freq) for item in result.items] == [("운영", 1)]
+
+
+@pytest.mark.parametrize("reverse_only", [False, True])
+async def test_mutual_neighbors_precede_higher_scoring_one_way_neighbors(
+    worker_conn, related_conn, reverse_only
+):
+    ids = [await insert_test_document(worker_conn, title=str(i), content=f"내용 {i}")
+           for i in range(4)]
+    source, mutual, one_way, overlap = ids
+    await process_all_embedding_jobs(worker_conn, FakeProvider())
+    await worker_conn.execute("DELETE FROM document_edges")
+    edges = [(source, mutual, "related", 0.70), (mutual, source, "related", 0.70),
+             (one_way, source, "related", 0.90) if reverse_only else
+             (source, one_way, "related", 0.90), (source, overlap, "overlaps", 0.80)]
+    for src, dst, kind, score in edges:
+        await worker_conn.execute(
+            "INSERT INTO document_edges (src_document_id, dst_document_id, kind, score) "
+            "VALUES (%s, %s, %s, %s)", (src, dst, kind, score),
+        )
+    result = await find_related(related_conn, document_id=source)
+    assert [(item.document_id, item.mutual) for item in result.items] == [
+        (overlap, False), (mutual, True), (one_way, False),
+    ]
+
+
+async def test_tag_suggestions_select_mutual_neighbor_before_the_score_cutoff(
+    worker_conn, related_conn
+):
+    source = await insert_test_document(worker_conn, title="기준", content="기준 내용")
+    neighbors = [await insert_test_document(
+        worker_conn, title=str(i), content=f"이웃 내용 {i}",
+        tags=["mutual" if i == 10 else "one-way"],
+    ) for i in range(11)]
+    await process_all_embedding_jobs(worker_conn, FakeProvider())
+    await worker_conn.execute("DELETE FROM document_edges")
+    for i, neighbor in enumerate(neighbors):
+        await worker_conn.execute(
+            "INSERT INTO document_edges (src_document_id, dst_document_id, kind, score) "
+            "VALUES (%s, %s, 'related', %s)", (source, neighbor, 0.9 - i * 0.01),
+        )
+    await worker_conn.execute(
+        "INSERT INTO document_edges (src_document_id, dst_document_id, kind, score) "
+        "VALUES (%s, %s, 'related', 0.8)", (neighbors[-1], source),
+    )
+    result = await suggest_tags(related_conn, document_id=source)
+    assert [(item.tag, item.freq) for item in result.items] == [("one-way", 9), ("mutual", 1)]

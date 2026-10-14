@@ -106,6 +106,7 @@ def test_related_does_not_leak_another_users_private_candidates(
     content = "기밀 접근통제 운영"
     source_id = upload(db_client, filename="source.txt", content=content)
     public_id = upload(db_client, filename="public.txt", content=content)
+    related_id = upload(db_client, filename="related.txt", content=content + " 안내")
     private_id = upload(
         db_client,
         filename="private.txt",
@@ -125,7 +126,7 @@ def test_related_does_not_leak_another_users_private_candidates(
     login_as(db_client, "alice")
     body = db_client.get(f"/api/documents/{source_id}/related").json()
 
-    assert {item["document_id"] for item in body["items"]} == {public_id}
+    assert {item["document_id"] for item in body["items"]} == {related_id}
     assert {item["document_id"] for item in body["identical"]} == {public_id}
     assert private_id not in {
         item["document_id"] for item in body["items"] + body["identical"]
