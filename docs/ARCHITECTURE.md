@@ -1163,7 +1163,7 @@ walk_targets AS (                    -- ④' 문서·대상 청크 단위로 접
     SELECT DISTINCT ON (document_id, COALESCE(target_chunk_index, -1)) … FROM walk_ids WHERE depth > 0
 ),
 walk AS (                            -- ④'' 접힌 행에서만 발췌 청크를 고른다 (ADR-011 보강 6)
-    SELECT … FROM direct_ranked
+    SELECT … FROM candidates
     UNION ALL
     SELECT … FROM walk_targets w
     JOIN LATERAL (SELECT … FROM document_chunks WHERE document_id = w.document_id
