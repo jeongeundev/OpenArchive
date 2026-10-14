@@ -386,6 +386,7 @@ class SearchVia(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     from_document_id: UUID
+    from_title: str
     kind: str
     depth: int
 
@@ -459,6 +460,7 @@ class RelatedDocumentItem(BaseModel):
     tags: list[str]
     kind: str
     score: float
+    mutual: bool
 
 
 class IdenticalDocumentItem(BaseModel):

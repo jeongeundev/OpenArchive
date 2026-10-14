@@ -14,6 +14,7 @@ const related: RelatedResponse = {
       tags: ["OpenSQL", "운영"],
       kind: "related",
       score: 0.8123,
+      mutual: false,
     },
   ],
   identical: [],
@@ -89,19 +90,21 @@ describe("RelatedDocuments", () => {
     expect(screen.queryByText("임베딩이 완료되면 표시됩니다.")).not.toBeInTheDocument();
   });
 
-  it("관계 종류별로 묶고 각 그룹 안에서만 점수순으로 정렬한다", () => {
+  it("관계 종류별로 묶되 서로 찾은 항목 우선인 서버 순서를 유지한다", () => {
     render(
       <RelatedDocuments
         response={{
           ...related,
+          based_on_version: 1,
           items: [
-            { ...related.items[0], document_id: "related-low", title: "관련 낮음", score: 0.2 },
+            { ...related.items[0], document_id: "related-low", title: "관련 낮음", score: 0.7, mutual: true },
             {
               ...related.items[0],
               document_id: "overlap-low",
               title: "겹침 낮음",
               kind: "overlaps",
               score: 0.1,
+              mutual: true,
             },
             { ...related.items[0], document_id: "related-high", title: "관련 높음", score: 0.9 },
             {
@@ -121,15 +124,24 @@ describe("RelatedDocuments", () => {
     const overlapGroup = screen.getByRole("heading", { name: "여러 대목에서 만난다" })
       .parentElement;
     const relatedGroup = screen.getByRole("heading", { name: "관련 있음" }).parentElement;
+    expect(screen.getByText("0.700")).toBeInTheDocument();
+    expect(screen.getAllByText("v1 기준")).toHaveLength(4);
+    expect(screen.getAllByText("서로 찾음")).toHaveLength(2);
+    for (const title of ["관련 낮음", "겹침 낮음"]) {
+      expect(screen.getByRole("link", { name: title }).closest("li")).toHaveTextContent("서로 찾음");
+    }
+    for (const title of ["관련 높음", "겹침 높음"]) {
+      expect(screen.getByRole("link", { name: title }).closest("li")).not.toHaveTextContent("서로 찾음");
+    }
     expect(overlapGroup).not.toBeNull();
     expect(relatedGroup).not.toBeNull();
     expect(within(overlapGroup!).getAllByRole("link").map((link) => link.textContent)).toEqual([
-      "겹침 높음",
       "겹침 낮음",
+      "겹침 높음",
     ]);
     expect(within(relatedGroup!).getAllByRole("link").map((link) => link.textContent)).toEqual([
-      "관련 높음",
       "관련 낮음",
+      "관련 높음",
     ]);
   });
 });

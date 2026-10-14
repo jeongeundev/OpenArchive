@@ -55,10 +55,6 @@ export function SearchResults({
     );
   }
 
-  const titlesById = new Map(
-    response.items.map((item) => [item.document_id, item.title]),
-  );
-
   const direct = response.items.filter((item) => item.via === null);
   const directIds = new Set(direct.map((item) => item.document_id));
   const seenRelated = new Set<string>();
@@ -86,14 +82,10 @@ export function SearchResults({
           <section key={group.id} aria-labelledby={group.id} className="space-y-3">
             <h2 id={group.id} className="font-medium text-white">{group.title}</h2>
             {group.id === "related-search-results" ? (
-              <p className="text-sm text-neutral-400">검색 결과와 연결된 문서입니다. 각 문서의 연결 이유를 확인하세요.</p>
+              <p className="text-sm text-neutral-400">검색 결과에서 관계로 이어진 문서입니다. 각 문서의 연결 이유를 확인하세요.</p>
             ) : null}
             {group.items.map((item) => {
-              const sourceTitle = item.via === null
-                ? null
-                : titlesById.has(item.via.from_document_id)
-                  ? `「${titlesById.get(item.via.from_document_id)}」`
-                  : "연결된 문서";
+              const sourceTitle = item.via === null ? null : `「${item.via.from_title}」`;
               return (
                 <article
                   key={`${item.document_id}:${item.based_on_version}:${item.chunk_index}`}

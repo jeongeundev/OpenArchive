@@ -1,5 +1,6 @@
 # Copyright 2026 jeongeundev
 # SPDX-License-Identifier: MIT
+import psycopg
 import pytest
 from conftest import login_as, run_embedding_worker, upload_document
 from fastapi.testclient import TestClient
@@ -52,15 +53,18 @@ def test_related_returns_ranked_items_and_chunk_version(
     body = response.json()
     assert closest_id in {item["document_id"] for item in body["items"]}
     assert source_id not in {item["document_id"] for item in body["items"]}
+    assert all(type(item["mutual"]) is bool for item in body["items"])
     # score의 척도가 kind마다 다르므로(overlaps는 매칭 비율, related는 1-최소거리)
-    # 전체 정렬은 성립하지 않는다. 같은 kind 안에서만 내림차순이고, kind는 섞이지 않고
+    # 전체 정렬은 성립하지 않는다. 같은 kind 안에서 상호 여부·점수 순이고, kind는 섞이지 않고
     # 붙어 나와야 한다 (ADR-029). kind가 CHECK 제약으로 이미 보장되는 값인지가 아니라
     # 이 순서가 응답까지 살아 오는지를 단언한다.
     kinds = [item["kind"] for item in body["items"]]
     assert kinds == sorted(kinds, key=kinds.index)
     for kind in set(kinds):
-        scores = [item["score"] for item in body["items"] if item["kind"] == kind]
-        assert scores == sorted(scores, reverse=True)
+        ranking = [
+            (item["mutual"], item["score"]) for item in body["items"] if item["kind"] == kind
+        ]
+        assert ranking == sorted(ranking, reverse=True)
     assert body["based_on_version"] == 1
     assert body["reason"] is None
 
@@ -106,6 +110,7 @@ def test_related_does_not_leak_another_users_private_candidates(
     content = "기밀 접근통제 운영"
     source_id = upload(db_client, filename="source.txt", content=content)
     public_id = upload(db_client, filename="public.txt", content=content)
+    related_id = upload(db_client, filename="related.txt", content=content + " 안내")
     private_id = upload(
         db_client,
         filename="private.txt",
@@ -125,7 +130,7 @@ def test_related_does_not_leak_another_users_private_candidates(
     login_as(db_client, "alice")
     body = db_client.get(f"/api/documents/{source_id}/related").json()
 
-    assert {item["document_id"] for item in body["items"]} == {public_id}
+    assert {item["document_id"] for item in body["items"]} == {related_id}
     assert {item["document_id"] for item in body["identical"]} == {public_id}
     assert private_id not in {
         item["document_id"] for item in body["items"] + body["identical"]
@@ -199,3 +204,34 @@ def test_tag_suggestions_reject_limit_outside_supported_range(
     )
 
     assert response.status_code == 422
+
+
+def test_related_response_prioritizes_mutual_and_separates_identical(
+    db_client: TestClient, migrated_db: str
+):
+    source = upload(db_client, filename="source.txt", content="기준 문서 텍스트")
+    mutual = upload(db_client, filename="mutual.txt", content="서로 찾은 이웃")
+    one_way = upload(db_client, filename="one-way.txt", content="한쪽만 찾은 이웃")
+    identical = upload(db_client, filename="copy.txt", content="기준 문서 텍스트")
+    run_embedding_worker(migrated_db)
+    with psycopg.connect(migrated_db, autocommit=True) as conn:
+        conn.execute("DELETE FROM document_edges")
+        for src, dst, score in [
+            (source, mutual, 0.7),
+            (mutual, source, 0.7),
+            (source, one_way, 0.9),
+            (source, identical, 1.0),
+        ]:
+            conn.execute(
+                "INSERT INTO document_edges (src_document_id, dst_document_id, kind, score) "
+                "VALUES (%s, %s, 'related', %s)",
+                (src, dst, score),
+            )
+    response = db_client.get(f"/api/documents/{source}/related")
+    assert response.status_code == 200
+    body = response.json()
+    assert [(item["document_id"], item["mutual"]) for item in body["items"]] == [
+        (mutual, True),
+        (one_way, False),
+    ]
+    assert body["identical"] == [{"document_id": identical, "title": "copy"}]

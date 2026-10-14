@@ -161,7 +161,7 @@ def test_evidence_excludes_revision_and_graph_results_and_reports_empty_search_a
     from openarchive.services.search import SearchVia
 
     evidence = [{"source": "운영", "text": "예전 동작"}]
-    revision = _hit("운영", content="예전 동작", preview="예전 동작", via=SearchVia(D2, "revision", 1))
+    revision = _hit("운영", content="예전 동작", preview="예전 동작", via=SearchVia(D2, "revision", 1, "운영"))
     for hits in [[], [revision]]:
         result = grade_evidence(hits, evidence)
         assert all(not metric["complete"] and metric["matched"] == 0 for metric in result.values())
@@ -284,7 +284,7 @@ def test_preview_diagnosis_does_not_join_passages_or_use_another_document():
     good = _hit("운영", content="앞 뒤", preview="앞 뒤", passages=(SearchPassage(1, "앞 뒤", 1, .6),))
     assert diagnose_preview([partial, good], evidence)["reason"] == "missing"
     assert diagnose_preview([], evidence)["reason"] == "missing"
-    good = replace(good, via=SearchVia(D2, "revision", 1))
+    good = replace(good, via=SearchVia(D2, "revision", 1, "운영"))
     assert diagnose_preview([good], evidence)["reason"] == "missing"
     assert diagnose_preview([], None) is None
 
@@ -339,7 +339,7 @@ def test_find_leaks_reports_forbidden_text_anywhere_in_results_including_graph_h
     assert find_leaks([_hit("운영", preview="2026.9.1  1.21392")], absent) == ["2026.9.1\t1.21392"]
     passage = _hit("운영", passages=(SearchPassage(3, "국내총책 A씨 구속", 1, .5),))
     assert find_leaks([passage], absent) == ["국내총책 A씨"]
-    graph = _hit("운영", content="국내총책 A씨", via=SearchVia(D2, "revision", 1))
+    graph = _hit("운영", content="국내총책 A씨", via=SearchVia(D2, "revision", 1, "운영"))
     assert find_leaks([graph], absent) == ["국내총책 A씨"]
     assert find_leaks([], None) == []
 
@@ -401,7 +401,7 @@ def test_current_only_leaks_ignore_labeled_revisions_and_report_where_the_past_i
     from openarchive.services.search import SearchVia
 
     past = ["2026.9.1\t1.21392"]
-    revision = _hit("계수", content="2026.9.1 1.21392", via=SearchVia(D1, "revision", 1))
+    revision = _hit("계수", content="2026.9.1 1.21392", via=SearchVia(D1, "revision", 1, "계수"))
     current = _hit("계수", content="2026.10.1 1.21169")
     assert find_leaks([current, revision], past, current_only=True) == []
     assert find_leaks([current, revision], past) == past

@@ -188,6 +188,17 @@ def test_a_share_token_sees_only_the_shared_documents(db_client: TestClient, sce
     assert search.status_code == 200
     found = collect_document_ids(search.json(), all_ids)
     assert found and found <= inside_ids
+    narrowed = db_client.post(
+        "/api/search", json={"query": QUERY, "k": 1}, headers=headers
+    )
+    assert narrowed.status_code == 200
+    titles = {item["id"]: item["title"] for item in listed.json()}
+    expanded = [item for item in narrowed.json()["items"] if item["via"] is not None]
+    assert expanded
+    for item in expanded:
+        via = item["via"]
+        assert via["from_document_id"] in inside_ids
+        assert via["from_title"] == titles[via["from_document_id"]]
     assert listed.status_code == 200
     assert {item["id"] for item in listed.json()} == inside_ids
     assert progress.status_code == 200

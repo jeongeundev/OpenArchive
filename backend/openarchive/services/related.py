@@ -17,19 +17,25 @@ NEIGHBOR_LIMIT = 10
 
 _NEIGHBOR_CTE = """
 WITH neighbors AS (
-    SELECT e.dst_document_id AS document_id, e.kind, e.score
+    SELECT e.dst_document_id AS document_id, e.kind, e.score, 1 AS direction
     FROM document_edges e
     WHERE e.src_document_id = %(id)s
     UNION ALL
     -- 역방향 — 남이 발견한 관계도 이 문서의 관련 문서다 (ADR-029 개정, 저장은 단방향이 된다).
-    SELECT e.src_document_id, e.kind, e.score
+    SELECT e.src_document_id, e.kind, e.score, 2 AS direction
     FROM document_edges e
     WHERE e.dst_document_id = %(id)s
 ),
+mutual_neighbors AS (
+    SELECT document_id, count(DISTINCT direction) = 2 AS mutual
+    FROM neighbors
+    GROUP BY document_id
+),
 best AS (
     -- 같은 이웃은 overlaps를 우선하고, 같은 종류에서는 높은 점수를 남긴다.
-    SELECT DISTINCT ON (document_id) document_id, kind, score
+    SELECT DISTINCT ON (document_id) document_id, kind, score, mutual
     FROM neighbors
+    JOIN mutual_neighbors USING (document_id)
     ORDER BY document_id,
              CASE kind WHEN 'overlaps' THEN 0 WHEN 'related' THEN 1 ELSE 2 END,
              score DESC
@@ -38,11 +44,12 @@ best AS (
 
 RELATED_SQL = f"""
 {_NEIGHBOR_CTE}
-SELECT d.id, d.title, d.tags, b.kind, b.score
+SELECT d.id, d.title, d.tags, b.kind, b.score, b.mutual
 FROM best b
 JOIN documents d ON d.id = b.document_id
 WHERE {VISIBLE_TO_USER}
-ORDER BY b.kind, b.score DESC, d.id
+  AND d.content_hash IS DISTINCT FROM (SELECT content_hash FROM documents WHERE id = %(id)s)
+ORDER BY b.kind, b.mutual DESC, b.score DESC, d.id
 LIMIT %(k)s
 """
 
@@ -63,7 +70,7 @@ selected_neighbors AS (
   FROM best b
   JOIN documents d ON d.id = b.document_id
   WHERE {VISIBLE_TO_USER}
-  ORDER BY b.kind, b.score DESC, d.id
+  ORDER BY b.kind, b.mutual DESC, b.score DESC, d.id
   LIMIT {NEIGHBOR_LIMIT}
 )
 SELECT t.tag, count(*) AS freq
@@ -82,6 +89,7 @@ class RelatedDocument:
     tags: list[str]
     kind: str
     score: float
+    mutual: bool
 
 
 @dataclass(frozen=True)
@@ -167,6 +175,7 @@ async def find_related(
                 tags=row[2],
                 kind=row[3],
                 score=float(row[4]),
+                mutual=row[5],
             )
             for row in rows
         ],

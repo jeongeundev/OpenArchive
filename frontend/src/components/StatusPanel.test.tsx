@@ -49,9 +49,9 @@ describe("StatusPanel", () => {
 
   it("두 수가 무엇을 세는지 레이블로 구분한다", () => {
     render(<StatusPanel status={{ ...status, inconsistent_documents: 2, stale_edge_documents: 4 }} error={null} />);
-    expect(screen.getByText("텍스트와 청크 버전")).toBeInTheDocument();
+    expect(screen.getByText("원본과 청크 버전")).toBeInTheDocument();
+    expect(screen.queryByText("텍스트와 청크 버전")).not.toBeInTheDocument();
     expect(screen.getByText(/텍스트 버전과 청크 버전이 어긋난 문서 수/)).toBeInTheDocument();
-    expect(screen.getByTestId("consistency-count").parentElement?.textContent).not.toMatch(/원본/);
     expect(screen.getByText("관계")).toBeInTheDocument();
     expect(screen.getByTestId("consistency-count")).toHaveTextContent("2");
     expect(screen.getByTestId("stale-edge-count")).toHaveTextContent("4");

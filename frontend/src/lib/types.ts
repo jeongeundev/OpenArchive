@@ -214,6 +214,7 @@ export interface SearchResult {
 
 export interface SearchVia {
   from_document_id: string;
+  from_title: string;
   kind: string;
   depth: number;
 }
@@ -245,6 +246,7 @@ export interface AskResponse {
 }
 
 export interface RelatedDocument {
+  mutual: boolean;
   document_id: string;
   title: string;
   tags: string[];
