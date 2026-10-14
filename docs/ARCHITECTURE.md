@@ -1131,6 +1131,14 @@ WITH RECURSIVE candidates AS (       -- ① 벡터 후보 (k * 5). 필터를 여
     ORDER BY c.embedding <=> %(qvec)s::vector
     LIMIT %(k)s * 5
 ),
+direct_ranked AS (                   -- 문서당 최고 청크, 직접 결과와 같은 정렬 키
+    SELECT … FROM ( … DISTINCT ON (document_id), 거리·청크 번호순 … ) c
+    JOIN documents d ON d.id = c.document_id
+    ORDER BY <제목 우선순위>, <번호 제목 우선순위>, c.dist, c.document_id, c.chunk_index
+),
+direct_documents AS (                -- 실제 표시될 직접 상위 k 문서만 확장에서 제외
+    SELECT document_id FROM direct_ranked LIMIT %(k)s
+),
 resolved_links AS (                  -- ② 위키링크를 열람 범위에서 edge로 해석 (ADR-030)
     SELECT l.src_document_id, d.id AS dst_document_id, 'refers'::text AS kind, …
     FROM document_links l
@@ -1149,13 +1157,13 @@ walk_ids AS (                        -- ④ 깊이 2까지 순회. 한 단계마
     UNION ALL
     SELECT e.dst_document_id, w.dist + 2.0, …, w.depth + 1, e.dst_chunk_index
     FROM walk_ids w JOIN traversal_edges e ON e.src_document_id = w.document_id
-    …                                             -- path 배열로 순환을 막는다.
+    …                                             -- path 배열로 순환을 막고 direct_documents 목적지는 제외한다.
 ),                                                --   문서 id·거리만 나른다 — 청크는 아직 고르지 않는다
 walk_targets AS (                    -- ④' 문서·대상 청크 단위로 접는다 (가장 가까운 경로, <kind 순서>)
     SELECT DISTINCT ON (document_id, COALESCE(target_chunk_index, -1)) … FROM walk_ids WHERE depth > 0
 ),
 walk AS (                            -- ④'' 접힌 행에서만 발췌 청크를 고른다 (ADR-011 보강 6)
-    SELECT … FROM candidates
+    SELECT … FROM direct_ranked
     UNION ALL
     SELECT … FROM walk_targets w
     JOIN LATERAL (SELECT … FROM document_chunks WHERE document_id = w.document_id
@@ -1169,7 +1177,7 @@ expanded AS (                        -- ⑤ 직전 텍스트 버전을 revision�
 ),
 deduplicated AS ( … ),               -- ⑥ 문서·버전·청크 단위로 1건
 selected AS (                        -- ⑦ 직접 결과와 확장 결과를 각각 LIMIT k
-    (SELECT * FROM deduplicated WHERE depth = 0 ORDER BY <제목 우선순위>, dist, … LIMIT %(k)s)
+    (SELECT * FROM direct_ranked LIMIT %(k)s)
     UNION ALL
     (SELECT * FROM deduplicated WHERE depth > 0 ORDER BY dist, <kind 순서>, … LIMIT %(k)s)
 )
@@ -1183,6 +1191,10 @@ COMMIT;
 > 실제 쿼리는 `services/search.py`의 `SEARCH_SQL` **한 곳에만** 존재하며 REST API와 MCP 서버가 공유한다. 위는 단계 구조만 옮긴 것이다 — 컬럼 목록과 순환 방지 `path` 배열은 코드를 보라. **문서에 전체 SQL을 복사해 두지 않는다**: 쿼리가 길어진 뒤로는 복사본이 조용히 낡아 잘못된 근거가 된다.
 
 정형 필터·권한 술어·벡터 정렬·관계 순회가 한 쿼리에 결합된다(가산점 포인트).
+
+`direct_documents`는 후보 전체가 아니라 직접 구역에 표시될 상위 k 문서다. 직접 선택도 같은 `direct_ranked`를 사용한다.
+후보 안의 상위 k 밖 문서는 관계로 이어지면 「함께 볼 문서」에 나올 수 있다. `via.from_title`은 열람 가능한 출처 문서의
+현재 제목이며, 출처가 결과 목록 밖이어도 연결 경로에 표시한다(#278). MCP 응답 키는 유지한다.
 
 **직접 결과의 제목 우선순위:** 질문 전체가 제목과 같거나, 질문에 단일 발행 판본(`2022판`·`2022년판`)과 문서명이 있고 제목 끝에도 같은 `(2022판)`이 있으면 기존 벡터 후보 안에서 먼저 표시한다. 날짜 없는 제목을 최신판으로 추정하지 않으며, 여러 판본을 비교하는 질문에는 판본 우선순위를 적용하지 않는다. 유사도 점수·발췌 선택·관계 결과 정렬은 그대로다. 그다음 우선순위로, 단일 ADR·조항 번호와 정확한 문서명을 함께 지정한 질문은 해당 문서명을 제목에 가진 직접 후보를 먼저 표시한다. 번호 제목만으로 ADR 원문을 무조건 우선하지 않는다 — 실측·근거 변경을 요청한 질문에서 조사 문서를 밀어내는 문제가 확인됐다. 후보 밖 문서를 새로 가져오지 않고, 권한·태그·유형 필터를 통과한 직접 후보의 순서만 바꾼다.
 
@@ -1313,8 +1325,11 @@ OpenProxy는 `query_parser_read_write_splitting` 활성 시 **트랜잭션 밖�
 **2. `kind`를 섞어 `score`로 정렬하지 않는다**
 
 ```sql
-ORDER BY b.kind, b.score DESC, d.id     -- kind로 묶은 뒤 그 안에서 점수순 (b = 양방향 이웃을 접은 best CTE)
+ORDER BY b.kind, b.mutual DESC, b.score DESC, d.id     -- kind → 서로 찾음 → 점수순 (b = 양방향 이웃을 접은 best CTE)
 ```
+
+같은 kind 안에서는 두 방향 저장 행이 모두 있는 `mutual` 쌍을 먼저 보이고, 그다음 점수와 문서 id로 정렬한다.
+태그 추천도 같은 순서다. 동일 텍스트는 관련 문서 `items`에서 제외해 `identical`에만 표시한다(#278).
 
 `score`의 **척도가 `kind`마다 다르기** 때문이다 — `overlaps`는 매칭 비율, `related`·`points_to`는 `1.0 - 최소거리`다 (`006_edges_tables.sql`). 섞어서 정렬하면 서로 다른 단위의 숫자를 한 줄에 세우게 된다. 화면도 `kind`별로 묶어 보여준다.
 
@@ -1364,24 +1379,29 @@ ORDER BY d.created_at, d.id;
 
 -- 3) 저장된 관계 — 벡터 정렬 없이 edge를 읽기만 한다. 저장이 단방향이라 양쪽에서 읽는다
 WITH neighbors AS (
-    SELECT e.dst_document_id AS document_id, e.kind, e.score
+    SELECT e.dst_document_id AS document_id, e.kind, e.score, 1 AS direction
     FROM document_edges e WHERE e.src_document_id = %(id)s
     UNION ALL                                  -- 역방향 — 남이 발견한 관계도 이 문서의 관련 문서다
-    SELECT e.src_document_id, e.kind, e.score
+    SELECT e.src_document_id, e.kind, e.score, 2 AS direction
     FROM document_edges e WHERE e.dst_document_id = %(id)s
 ),
+mutual_neighbors AS (
+    SELECT document_id, count(DISTINCT direction) = 2 AS mutual
+    FROM neighbors GROUP BY document_id
+),
 best AS (                                      -- 같은 이웃이 양쪽에 있으면 overlaps 우선, 같은 kind면 높은 점수
-    SELECT DISTINCT ON (document_id) document_id, kind, score
-    FROM neighbors
+    SELECT DISTINCT ON (document_id) document_id, kind, score, mutual
+    FROM neighbors JOIN mutual_neighbors USING (document_id)
     ORDER BY document_id,
              CASE kind WHEN 'overlaps' THEN 0 WHEN 'related' THEN 1 ELSE 2 END,
              score DESC
 )
-SELECT d.id, d.title, d.tags, b.kind, b.score
+SELECT d.id, d.title, d.tags, b.kind, b.score, b.mutual
 FROM best b
 JOIN documents d ON d.id = b.document_id
 WHERE ( … services/visibility.py의 VISIBLE_TO_USER … )   -- ★ 열람 범위는 조회 시점에
-ORDER BY b.kind, b.score DESC, d.id
+  AND d.content_hash IS DISTINCT FROM (SELECT content_hash FROM documents WHERE id = %(id)s)
+ORDER BY b.kind, b.mutual DESC, b.score DESC, d.id
 LIMIT %(k)s;
 
 COMMIT;
@@ -1421,13 +1441,14 @@ COMMIT;
 BEGIN;  -- plain BEGIN (ADR-010). 관련 문서와 같은 이유로 SET LOCAL이 없다
 
 WITH neighbors AS ( … ),       -- 관련 문서와 같은 CTE: src ∪ dst 양방향
+mutual_neighbors AS ( … ),     -- 두 방향 행이 모두 있으면 mutual=true
 best AS ( … ),                 -- 같은 이웃은 overlaps 우선 1건
 selected_neighbors AS (        -- 저장된 관계에서 이웃 10건 (NEIGHBOR_LIMIT)
   SELECT b.document_id
   FROM best b
   JOIN documents d ON d.id = b.document_id
   WHERE ( … services/visibility.py의 VISIBLE_TO_USER … )
-  ORDER BY b.kind, b.score DESC, d.id      -- 관련 문서와 같은 정렬 (공통 규칙 2)
+  ORDER BY b.kind, b.mutual DESC, b.score DESC, d.id      -- 관련 문서와 같은 정렬 (공통 규칙 2)
   LIMIT 10
 )
 SELECT t.tag, count(*) AS freq

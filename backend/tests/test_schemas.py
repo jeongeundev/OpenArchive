@@ -22,7 +22,7 @@ def test_related_response_accepts_service_dataclasses():
     related_id = uuid4()
     identical_id = uuid4()
     result = RelatedResult(
-        items=[RelatedDocument(related_id, "관련", ["opensql"], "related", 0.75)],
+        items=[RelatedDocument(related_id, "관련", ["opensql"], "related", 0.75, False)],
         identical=[IdenticalDocument(identical_id, "동일")],
         based_on_version=2,
         reason=None,

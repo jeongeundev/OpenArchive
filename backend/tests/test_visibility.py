@@ -418,8 +418,10 @@ async def test_owner_related_includes_own_private_document(
         visibility_conn, document_id=public_id, user_id="alice"
     )
 
-    assert [item.document_id for item in result.items] == [alice_private_id]
-    assert len(result.items) == 1
+    # 같은 텍스트라 관련 목록이 아니라 동일 텍스트로 보인다(#278 D6-b). 다른 텍스트의 소유 비공개 문서가
+    # 관련 목록에 보이는 것은 test_related.py가 고정한다.
+    assert result.items == []
+    assert [item.document_id for item in result.identical] == [alice_private_id]
 
 
 async def test_tag_suggestions_do_not_leave_private_placeholders(
