@@ -90,6 +90,7 @@ def test_search_response_exposes_the_relation_it_arrived_through(
     expanded = [item for item in items if item["via"] is not None]
     assert [item["document_id"] for item in expanded] == [neighbor_id]
     assert expanded[0]["via"]["from_document_id"] == entry_id
+    assert expanded[0]["via"]["from_title"] == "직접 진입점"
     assert expanded[0]["via"]["kind"] in {"overlaps", "related"}
     assert expanded[0]["via"]["depth"] == 1
 
