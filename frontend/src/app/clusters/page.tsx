@@ -106,7 +106,7 @@ export default function ClustersPage(): React.ReactElement {
                   tabIndex={0}
                 >
                   <circle
-                    className={selected?.name === cluster.name ? "fill-accent stroke-line-strong" : "fill-card stroke-line-strong"}
+                    className={selected?.name === cluster.name ? "fill-accent-soft stroke-accent" : "fill-card stroke-line-strong"}
                     cx={position.x}
                     cy={position.y}
                     r={radius}
