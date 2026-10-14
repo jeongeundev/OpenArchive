@@ -160,9 +160,14 @@ async def test_past_version_follows_the_token_owner_over_http(remote):
         other = await client.call_tool(
             "get_document", {"document_id": str(ids["kim"]), "version": 1}
         )
+        missing = await client.call_tool(
+            "get_document", {"document_id": "00000000-0000-0000-0000-000000000001", "version": 1}
+        )
     assert own["document_id"] == str(ids["kim"]) and own["version"] == 1
     assert own["content"] == "OpenSQL 정합성 근거"
-    assert other.isError
+    # 볼 수 없는 문서의 판은 없는 문서의 판과 같은 오류여야 존재가 새지 않는다.
+    assert other.isError and missing.isError
+    assert other.content[0].text == missing.content[0].text
 
 
 async def test_unknown_arguments_are_rejected_not_ignored(remote):
