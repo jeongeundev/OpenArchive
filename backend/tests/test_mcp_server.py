@@ -325,7 +325,11 @@ async def test_search_tool_matches_the_rest_endpoint_and_returns_evidence(
 
 
 async def test_search_tool_narrows_direct_hits_to_a_visible_folder(monkeypatch, mcp_database):
-    """폴더 ID는 get_document의 folder에서 얻고, 볼 수 없는 폴더는 없는 폴더와 같이 빈 결과다."""
+    """폴더 ID는 get_document의 folder에서 얻고, 볼 수 없는 폴더는 없는 폴더와 같이 빈 결과다.
+
+    숨은 폴더에는 bob이 개별로 볼 수 있는 문서를 둔다 — 빈 폴더면 열람 검사가 없어도 빈 결과라
+    아무것도 판별하지 못한다.
+    """
     from openarchive.mcp_server.server import get_document, search_documents
 
     async with await psycopg.AsyncConnection.connect(mcp_database, autocommit=True) as conn:
@@ -338,8 +342,13 @@ async def test_search_tool_narrows_direct_hits_to_a_visible_folder(monkeypatch, 
             folders[name] = (await cur.fetchone())[0]
         inside = await insert_test_document(conn, title="휴가 규정", content="휴가 근거")
         outside = await insert_test_document(conn, title="출장 규정", content="휴가 근거")
+        in_hidden = await insert_test_document(conn, title="개별 공개", content="휴가 근거")
         await conn.execute(
             "UPDATE documents SET folder_id = %s WHERE id = %s", (folders["인사"], inside)
+        )
+        await conn.execute(
+            "UPDATE documents SET folder_id = %s, follows_folder = false WHERE id = %s",
+            (folders["임원"], in_hidden),
         )
         await process_all_embedding_jobs(conn, FakeProvider())
 
@@ -349,7 +358,9 @@ async def test_search_tool_narrows_direct_hits_to_a_visible_folder(monkeypatch, 
     unfiltered = (await search_documents("휴가 근거"))["items"]
     narrowed = (await search_documents("휴가 근거", folder_id=folder_id))["items"]
 
-    assert {item["document_id"] for item in unfiltered} == {str(inside), str(outside)}
+    assert {item["document_id"] for item in unfiltered} == {
+        str(inside), str(outside), str(in_hidden)
+    }
     assert {item["document_id"] for item in narrowed if item["via"] is None} == {str(inside)}
     for hidden in (str(folders["임원"]), str(uuid4())):
         assert (await search_documents("휴가 근거", folder_id=hidden))["items"] == []
@@ -475,7 +486,8 @@ async def test_get_document_returns_a_past_text_version(monkeypatch, mcp_databas
 
     document_id = await _seed_two_versions(mcp_database)
 
-    past = await get_document(document_id, version=1)
+    # 대문자로 넘겨도 응답 ID는 검색 결과와 같은 표준 형식이어야 캐시 대조 키가 맞는다.
+    past = await get_document(document_id.upper(), version=1)
     current = await get_document(document_id)
 
     assert past["document_id"] == document_id

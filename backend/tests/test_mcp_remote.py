@@ -150,6 +150,21 @@ async def test_read_token_cannot_create(remote):
     assert await count_title(dsn, "read 거부") == 0
 
 
+async def test_past_version_follows_the_token_owner_over_http(remote):
+    _, tokens, ids = remote
+    async with session(tokens["kim"]["token"]) as client:
+        own = payload(
+            await client.call_tool("get_document", {"document_id": str(ids["kim"]), "version": 1})
+        )
+    async with session(tokens["lee"]["token"]) as client:
+        other = await client.call_tool(
+            "get_document", {"document_id": str(ids["kim"]), "version": 1}
+        )
+    assert own["document_id"] == str(ids["kim"]) and own["version"] == 1
+    assert own["content"] == "OpenSQL 정합성 근거"
+    assert other.isError
+
+
 async def test_unknown_arguments_are_rejected_not_ignored(remote):
     """범위를 좁히려던 인자를 잘못 쓰면 거부된다 — 무시하면 조용히 넓은 범위로 검색·저장한다."""
     dsn, tokens, _ = remote
