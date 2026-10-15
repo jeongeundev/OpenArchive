@@ -1329,7 +1329,9 @@ def _markdown_with_frontmatter(document: dict) -> str:
 
 async def _export(dsn: str, folder: Path, *, username: str) -> tuple[int, int]:
     written = skipped = 0
-    async with await _connect(dsn, autocommit=True) as conn:
+    async with await _connect(dsn, autocommit=True) as conn, conn.transaction():
+        # plain 트랜잭션 하나로 읽는다 — OpenProxy는 트랜잭션 밖 SELECT를 Replica로 보내, 복제 지연
+        # 창에서 방금 고친 텍스트 대신 옛 텍스트를 내보낸다(2026-10-15 HA 실측, ADR-010).
         await _require_user(conn, username)
         # 목록은 열람 범위(공개 + 소유)다. 그중 소유 문서만 내보낸다 — 남의 공개 문서를
         # 다시 넣으면 넣은 사람의 소유가 되어 소유자가 조용히 바뀐다.
