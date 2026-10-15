@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "openarchive-server"
-version = "0.1.0"
+version = "0.2.0"
 description = "OpenArchive — PostgreSQL·OpenSQL에 설치하는 AI 문서관리 플랫폼 (API·임베딩 워커·MCP 서버·웹 UI)"
 requires-python = ">=3.12"
 # PyPI 페이지(#95). 저장소 루트 README는 상대경로 이미지·링크가 PyPI에서 깨지므로 따로 둔다.
