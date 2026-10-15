@@ -117,8 +117,8 @@ export function SharesSection(): React.ReactElement {
         <h2 className="text-sm font-medium text-muted">외부 공유</h2>
         <p className="mt-2 text-sm text-muted">
           계정이 없는 외부 협업자에게 문서 일부를 엽니다. 공유 토큰은 읽기 전용이며, 그 토큰으로는
-          공유에 넣은 문서만 보이고 나머지 문서는 존재하지 않는 것처럼 보입니다. 접속은 REST API로
-          합니다.
+          공유에 넣은 문서만 보이고 나머지 문서는 존재하지 않는 것처럼 보입니다. 접속은 REST API나
+          원격 MCP(/mcp)로 합니다.
         </p>
         <p className="mt-2 text-sm text-muted">
           조직 공개 문서도 공유에 넣으면 외부에 열립니다. 문서는 문서 상세의 「열람 범위」 패널에서,

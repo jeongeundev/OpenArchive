@@ -613,7 +613,7 @@ def _ensure_admin(dsn: str, username: str) -> bool | None:
     try:
         asyncio.run(_create_account(dsn, username, password, is_admin=True))
     except UserAlreadyExists:
-        print(f"'{username}'은 이미 일반 계정이 쓰고 있어 관리자로 만들지 않았습니다.")
+        print(f"이미 일반 계정이 쓰는 이름이라 관리자로 만들지 않았습니다: '{username}'")
         print("  --admin-username으로 다른 이름을 주어 다시 실행하십시오.")
         return None
     except InvalidUsername as error:
@@ -624,7 +624,7 @@ def _ensure_admin(dsn: str, username: str) -> bool | None:
         # 빈 비밀번호와 같은 길이다 — 설치는 성공으로 끝내고 계정 생성을 다음 단계로 넘긴다.
         print(f"{error} 관리자 계정을 만들지 않았습니다.")
         return False
-    print(f"관리자 '{username}'을 만들었습니다.")
+    print(f"관리자를 만들었습니다: '{username}'")
     return True
 
 
@@ -770,7 +770,7 @@ def run_create_user(*, dsn: str | None, username: str, is_admin: bool) -> int:
     except (PasswordTooShort, InvalidUsername) as error:
         print(f"{error} 계정을 만들지 않았습니다.")
         return 2
-    print(f"사용자 '{username}'을 생성했습니다.")
+    print(f"사용자를 생성했습니다: '{username}'")
     return 0
 
 

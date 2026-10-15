@@ -134,7 +134,7 @@ function actionDescription(entry: AuditEntry): string | null {
 function actorLabel(entry: AuditEntry): string {
   if (entry.actor) return entry.actor;
   if (entry.actor_via === "share") return `공유: ${text(entry.detail.share_name)}`;
-  if (entry.actor_via === "worker") return "시스템(텍스트 인식)";
+  if (entry.actor_via === "worker") return "시스템(워커)";
   if (entry.actor_via === "cli") return "운영자 CLI";
   return `직접 접속(${entry.db_role})`;
 }
