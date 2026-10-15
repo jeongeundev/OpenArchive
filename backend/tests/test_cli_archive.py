@@ -721,11 +721,13 @@ def test_export_reads_inside_one_plain_transaction(
         archive_db,
         lambda conn: create_text_document(conn, title="메모", content="본문", owner_id="alice"),
     )
-    seen: list[tuple[str, TransactionStatus]] = []
+    seen: list[tuple[str, TransactionStatus, str]] = []
 
     def recording(name: str, real):
         async def wrapper(conn, *args, **kwargs):
-            seen.append((name, conn.info.transaction_status))
+            # BEGIN READ ONLY도 INTRANS지만 OpenProxy가 Replica로 보낸다 — plain BEGIN인지도 본다.
+            read_only = (await (await conn.execute("SHOW transaction_read_only")).fetchone())[0]
+            seen.append((name, conn.info.transaction_status, read_only))
             return await real(conn, *args, **kwargs)
 
         return wrapper
@@ -735,8 +737,9 @@ def test_export_reads_inside_one_plain_transaction(
 
     assert main(["export", str(tmp_path / "out"), "--user", "alice", "--dsn", archive_db]) == 0
 
-    assert [name for name, _ in seen] == ["list", "get"]
-    assert all(status == TransactionStatus.INTRANS for _, status in seen)
+    assert [name for name, _, _ in seen] == ["list", "get"]
+    assert all(status == TransactionStatus.INTRANS for _, status, _ in seen)
+    assert all(read_only == "off" for _, _, read_only in seen)
 
 
 def test_export_keeps_every_document_when_titles_collide_or_contain_separators(
