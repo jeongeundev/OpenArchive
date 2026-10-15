@@ -300,42 +300,44 @@ MCP 경로에서 답변 생성은 에이전트 쪽이 합니다. Claude Desktop 
 ## 아키텍처
 
 핵심은 **DB 안에 있는 것과 밖에 있는 것의 경계**입니다. 문서를 저장하면 트리거가 같은 트랜잭션에서 임베딩 작업·버전
-이력·위키링크를 기록하고, 벡터 반영 뒤에는 관계 작업도 트리거가 만듭니다. 워커는 텍스트 추출·OCR·청킹·임베딩을
-실행하고, 관계 판정은 DB 함수를 호출합니다. 워커가 중단돼도 커밋된 작업은 DB에 남으며, 처리 중 작업은 lease 만료 후
+이력·위키링크를 기록하고, 벡터 반영 뒤에는 관계 작업도 트리거가 만듭니다. 워커는 텍스트 추출·OCR·청킹·임베딩과
+미리보기 변환을 실행하고, 관계 판정은 DB 함수를 호출합니다. 워커가 중단돼도 커밋된 작업은 DB에 남으며, 처리 중 작업은 lease 만료 후
 회수됩니다.
 
 ```
- ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐
- │  Web UI      │  │  REST API    │  │  MCP Server  │  │  운영자 CLI    │   인터페이스
- │  (정적 빌드)   │  │ (+사용자 CLI) │  │ (stdio·HTTP) │  │  (DB 직결)    │
- └──────┬───────┘  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘
-        └─────────────────┴────────┬────────┴─────────────────┘
-                                   ▼
-              backend/openarchive/services/
-              모든 인터페이스가 공유하는 단일 진입점 · 열람 술어 하나
-                          │  documents INSERT/UPDATE만 — 임베딩 호출 없음
-                          ▼
-        ┌──────────────────────────────────────────┐
-        │  OpenProxy (VIP:6432)                    │
-        │  커넥션 풀 · Primary 추적 · 재연결            │
-        └────────────────────┬─────────────────────┘
-                             ▼
- ┌──────────────────────────────────────────────────────┐
- │  OpenSQL — PostgreSQL 17.8 + pgvector 0.8.1          │
- │                                                      │
- │   documents ──AFTER trigger──▶ document_versions     │  ← 같은 트랜잭션
- │        │                  └──▶ embedding_jobs        │     (아웃박스)
- │        └──AFTER trigger─────▶ document_links         │
- │                                                      │
- │   document_chunks (vector(1024), HNSW)               │
- │        └─ready 전이 트리거─▶ embedding_jobs(kind=edges) │
- │   관계 워커 ──별도 트랜잭션의 DB 함수─▶ document_edges     │
- └───────────────────────┬──────────────────────────────┘
-                         │  5초 폴링(주 경로) + NOTIFY(최적화)
-                         ▼
-              Embedding Worker — 무상태 실행기
-              SKIP LOCKED claim → 청킹 → 임베딩 →
-              해시 재확인 + 청크 교체 + job done (단일 트랜잭션)
+  Web UI          REST API          MCP Server        운영자 CLI
+  (정적 빌드)       (+ 사용자 CLI)     (stdio · HTTP)    (DB 직결)
+     │                 │                 │                 │
+     └─────────────────┴────────┬────────┴─────────────────┘
+                                ▼
+  backend/openarchive/services/ — 모든 입구가 공유하는 단일 진입점 · 열람 술어 하나
+                                │  문서·원본 INSERT/UPDATE만 (임베딩 호출 없음)
+                                ▼
+  OpenProxy (VIP:6432) — 커넥션 풀 · Primary 추적 · 재연결
+                                │
+                                ▼
+┌─ OpenSQL — PostgreSQL 17.8 + pgvector 0.8.1 ─────────────────────────
+│
+│  documents ──AFTER 트리거──┬─▶ document_versions   ┐
+│                            ├─▶ embedding_jobs      │ 같은 트랜잭션
+│                            ├─▶ document_links      │ (아웃박스)
+│                            └─▶ audit_log           ┘
+│  document_files (원본 판) ──AFTER 트리거──▶ embedding_jobs(preview) · audit_log
+│  audit_log — 행의 수정·삭제는 DB 트리거가 거부
+│
+│  embedding_jobs.kind = extract · embed · edges · preview
+│  document_chunks (vector(1024), HNSW)
+│     └─ ready 전이 트리거 ─▶ edges 잡 ─▶ DB 함수 ─▶ document_edges
+│
+└─────────────────────────────┬────────────────────────────────────────
+                              │  5초 폴링(주 경로) + NOTIFY(최적화)
+                              ▼
+  Worker — 무상태 실행기, SKIP LOCKED로 잡을 집는다
+    extract   스캔 쪽 OCR(tesseract) → 문서 텍스트
+    embed     청킹 → 임베딩 → 해시 재확인 + 청크 교체 + 잡 완료 (단일 트랜잭션)
+    edges     관계 판정 DB 함수 호출 (별도 트랜잭션)
+    preview   한글·오피스 원본 → 격리된 변환기(bubblewrap) → PDF
+    + 보존 기간이 지난 휴지통 문서 영구 삭제
 ```
 
 이 그림을 떠받치는 설계 결정은 셋입니다.
