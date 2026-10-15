@@ -48,7 +48,7 @@ VIP, 앱 여러 벌, 대량 이관)은 실측하지 않았습니다 — [운영 
 | 백업·복원 (Barman, 2026-10-04) | PITR: 복원본이 복원 지점과 같음(지점 뒤에 지운 문서 5건이 되살아나고 지점 뒤 업로드 10건은 없음), 쓰기 가능까지 161초 · 전체 복원: Barman 수신을 끊기 전 응답 성공한 업로드 120건 유실 0, 쓰기 가능까지 166초 | [운영 가이드 「복원 재현」](docs/OPERATIONS.md#복원-재현--scriptsdr_restorepy) |
 | 원본-벡터 정합성 | 위 HA 장애 전 회차에서 텍스트 버전과 청크 버전이 어긋난 문서 수가 0으로 수렴 | [OpenSQL 환경 구축 §16](docs/SETUP_OPENSQL.md#16-ha-3노드-구성-110) |
 | 검색 품질 (형식별 실문서 10개·질문 24개, #167) | 정답 문서 첫 결과 18/20 · 상위 5 20/20 · MRR 0.950 · 다른 계정의 비공개 문서 누출 0 | [검색 품질 검증 #167](docs/SEARCH_QUALITY_VALIDATION.md#형식별-실문서-기준선-167) |
-| 검색 성능 (20,000 청크, 2026-10-15 재측정) | 15개 계획 모두 HNSW 사용, 제품 SQL 중앙값 광범위 358ms · 태그 920ms · 유형 155ms. 태그는 10/3의 142ms에서 느려졌다 — 열람 범위가 좁은 사용자의 recall을 위해 넣은 iterative_scan(10/6)의 비용으로 본다 | [성능 검증](docs/PERFORMANCE_VALIDATION.md#실제-opensql-재측정--2026-10-15) |
+| 검색 성능 (20,000 청크, 2026-10-15 재측정) | 15개 계획 모두 HNSW 사용, 제품 SQL 중앙값 광범위 358ms · 태그 920ms · 유형 155ms. 태그는 10/3의 142ms에서 느려져 정확한 거리 계산(770ms)보다도 느리다 — 열람 범위가 좁은 사용자의 recall을 위해 넣은 iterative_scan(10/6)의 비용으로 추정하며, 분리 측정은 하지 않았다 | [성능 검증](docs/PERFORMANCE_VALIDATION.md#실제-opensql-재측정--2026-10-15) |
 | OpenProxy — `BEGIN READ ONLY` | `BEGIN READ ONLY` 트랜잭션 안의 SELECT는 Replica로 간다(10회 중 10회, 2026-09-26). 검색은 plain `BEGIN`으로 Primary에서 읽는다 | [OpenSQL 조사 §6](docs/OPENSQL_RESEARCH.md#6-읽기쓰기-분리와-복제-지연-확정--이-프로젝트에-결정적) |
 | OpenProxy — 세션 상태 초기화 | 풀 백엔드를 넘길 때 `RESET ALL`만 하고 `DISCARD ALL`은 하지 않아 임시 테이블·`LISTEN` 등록이 다음 클라이언트로 샌다. 임시 테이블을 쓰지 않는다 | [OpenSQL 조사 §5-2](docs/OPENSQL_RESEARCH.md#5-2-실측--백엔드를-넘길-때-세션-상태를-부분만-초기화한다-실측-2026-08-05) |
 | OpenProxy — 서버 명령문 누적 × assert 빌드 | 트랜잭션 안 `select 1`이 4ms → 126ms. 앱은 파라미터를 클라이언트에서 바인딩한다 | [OpenSQL 조사 §18](docs/OPENSQL_RESEARCH.md#18-openproxy-서버-명령문-누적--assert-빌드--쓸수록-모든-문장이-느려진다-실측-2026-10-07) |
