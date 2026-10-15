@@ -238,6 +238,26 @@ DSN을 확인한 뒤 `~/.openarchive/.env`(`--env-file`로 바꾼 경우 그 파
 건너뛰어도 API 서버가 startup에서 같은 마이그레이션을 적용하므로(ADR-012), init은 **필수가 아니라
 사전 점검**입니다.
 
+#### 판 올리기 — PyPI 0.1.0에서
+
+`serve`를 멈추고 패키지를 올린 뒤 `init`으로 남은 마이그레이션을 적용하고 다시 띄웁니다. 데이터를 옮기거나 다시 임베딩하지 않습니다.
+
+```bash
+pipx upgrade openarchive-server            # pip라면 pip install -U "openarchive-server[local]"
+openarchive init --dsn "<지금 쓰는 DSN>" --yes
+EMBEDDING_PROVIDER=local openarchive serve
+```
+
+2026-10-15 실측(깨끗한 venv, 로컬 pgvector): 0.1.0으로 `init`(마이그레이션 024까지) → 예제 64건 + 원본 파일 문서 1건(텍스트 2판) →
+같은 venv에 현재 판을 설치하고 `init` → **25~46번 22개 적용**, 잡 대기·버전 불일치 0. 문서 65건의 제목·내용·버전 해시와 청크·원본
+파일·텍스트 버전 수가 올리기 전과 같았고, 로그인·문서 상세(원본 1판·텍스트 2판)·원본 내려받기·검색·관련 문서·휴지통 이동과 복원·
+폴더 만들기가 동작했다.
+
+- 0.1.0에는 사용자 CLI가 없다 — `openarchive login`은 `invalid choice: 'login'`으로 끝난다. 현재 판부터 `login`·`whoami`·`doc`·`ask`가 있다(아래 「사용자 CLI」).
+- **0.1.0을 지금 새로 설치하면 웹 화면이 빈 응답이 된다.** 함께 깔리는 Starlette 1.8의 정적 파일 응답이 0.1.0의 재시도
+  미들웨어가 보내는 가짜 연결 끊김에 멈추기 때문이다 — 같은 날 새 venv에서 `/`·`/login`·`/favicon.ico`가 200인데 본문 0바이트, API는 정상이었다.
+  현재 판에서 고쳤다(#283). 0.1.0을 쓰고 있다면 올린다.
+
 ### `openarchive serve`
 
 API 서버와 임베딩 워커를 함께 띄웁니다. **워커를 따로 켜는 것을 잊을 수 없게 하는 것**이
@@ -1045,6 +1065,27 @@ WHERE document_id = '<문서 ID>' ORDER BY id;
 psql에 붙어도 「감사 로그는 고치거나 지울 수 없습니다.」로 거부된다. 다만 **테이블 소유자·슈퍼유저가 트리거를 끄거나
 테이블을 바꾸는 것은 막지 않는다** — DB 관리자로부터의 위변조 방지는 범위 밖이다 (ADR-055 트레이드오프 1).
 
+**DB 관리자 행위를 서버 로그에 남기기 — pgaudit (선택)** — OpenSQL 배포판은 `pgaudit`를 미리 적재해 두지만 기록은 꺼져 있다
+(`pgaudit.log = none`). 슈퍼유저가 **앱 롤 하나에만** DDL·권한 변경 기록을 켜면, 감사 테이블의 트리거를 끄거나 권한을 바꾸는 시도가
+**DB 밖 서버 로그**에 한 줄씩 남는다. 클러스터 공식 설정(`patroni.yml`)은 바꾸지 않는다. 막는 장치가 아니라 남기는 장치이며,
+슈퍼유저 자신의 행위나 로그 파일 조작까지 막지는 않는다.
+
+```sql
+-- Primary에서 슈퍼유저(postgres)로. 끌 때는 ALTER ROLE openarchive RESET pgaudit.log
+ALTER ROLE openarchive SET pgaudit.log = 'ddl, role';
+```
+
+2026-10-15 OpenSQL HA 3노드 실측:
+
+- 앱 롤로 `BEGIN; ALTER TABLE audit_log DISABLE TRIGGER …; ROLLBACK`을 해도 Leader의 서버 로그(`~/logs/patroni.log`)에
+  `AUDIT: SESSION,…,DDL,ALTER TABLE,…`이 남는다. `GRANT`는 `ROLE,GRANT`로 남는다. 일반 검색·업로드는 기록 대상이 아니다.
+- 롤 설정은 카탈로그라 Replica에도 그대로 있고 switchover 뒤 새 Leader에서도 유지된다. **서버 로그는 노드마다 따로** 쌓이므로
+  기록을 볼 때는 그 시점 Leader였던 노드들의 로그를 모아 본다.
+- **이미 열려 있는 OpenProxy 풀 백엔드에는 적용되지 않는다** — 롤 설정은 세션을 열 때 읽힌다. 새로 열리는 백엔드부터 적용되므로
+  켠 뒤 확인은 `BEGIN; SHOW pgaudit.log; COMMIT`을 몇 번 해 본다. 앱 백엔드를 `pg_terminate_backend`로 끊어 앞당기면 OpenProxy가
+  끊긴 연결을 클라이언트에 넘겨 그 수만큼 요청이 실패했다(유휴 5개 → 5회 연속 오류) — 한가한 시간에 하거나 자연 교체를 기다린다.
+- 검색·업로드 지연은 켜기 전과 잡음 범위 안에서 같았다(검색 p50 619 → 670·621ms, 텍스트 업로드 76 → 71·67ms).
+
 - **보존 정책이 없어 테이블은 계속 자란다.** 크기는 `SELECT pg_size_pretty(pg_total_relation_size('audit_log'))`로 본다.
 - **PITR 복원은 감사 기록도 그 시점으로 되돌린다.** 같은 DB에 있으므로 복원 지점 뒤의 기록은 복원본에 없다 (ADR-055
   트레이드오프 3). 복원 전 기록이 필요하면 운영 DB에서 먼저 내보낸다.
@@ -1060,6 +1101,7 @@ psql에 붙어도 「감사 로그는 고치거나 지울 수 없습니다.」�
 |---|---|---|---|
 | 검증한 구성은 앱(API·워커) 한 호스트에 한 벌입니다. 이중화와 장애 전환 실측은 DB 계층(Patroni·OpenProxy VIP)의 것입니다 | 앱 호스트가 멈추면 DB가 살아 있어도 서비스가 멈춥니다 | `openarchive serve`는 API나 워커 한쪽이 멈추면 둘 다 내리므로 감독자(systemd 등)가 되살리게 둡니다. 세션은 DB(`sessions`)에 있고 워커는 `SKIP LOCKED`로 잡을 집으므로 구조상 여러 벌을 막는 요소는 없지만, 여러 벌 구성은 실측하지 않았습니다 | ADR-038 |
 | HA 장애 시험의 부하는 순차 업로드 약 2건/초·검색·100ms 쓰기 probe입니다 | 쓰기 중단 범위·유실·원본 일치를 판정한 시험이며, 처리량 한계 시험은 아닙니다 | 수치는 [SETUP_OPENSQL §16](SETUP_OPENSQL.md#16-ha-3노드-구성-110)의 조건과 함께 인용합니다 | ADR-020 |
+| HA 실측의 VIP는 같은 L2의 VRRP VIP뿐입니다. 클라우드(국내 공공 클라우드 포함)에서는 VRRP 대신 배포판 `opensql_cloud`의 CSP별 VIP 전환 스크립트를 쓰는데, 이 구성은 실측하지 않았습니다 | 클라우드에서 장애 전환 시간·재연결 동작이 위 수치와 다를 수 있습니다 | 앱은 VIP 단일 DSN만 쓰므로 바꿀 것은 없습니다. 도입 전에 그 환경에서 `scripts/ha_failover.py`로 switchover 한 번을 재 봅니다 | ADR-006·020 |
 | `openarchive import`로 수백~수천 건을 넣는 대량 적재의 처리량 수치가 없습니다 | 초기 이관에 걸리는 시간을 미리 말할 수 없습니다 | 지금 있는 수치는 지속 유입·수렴과 큰 파일 측정입니다([PERFORMANCE_VALIDATION](PERFORMANCE_VALIDATION.md)) | — |
 | 단어(키워드) 검색 채널이 없습니다. 하이브리드는 정형 필터 + 벡터 + 관계 확장을 한 SQL로 합친 것입니다 | 제품 코드·오류 코드 같은 정확 일치 질의의 순위는 벡터에만 기댑니다 | 키워드 RRF는 실측 뒤 채택하지 않았습니다 | ADR-016 |
 | OpenSQL 번들 확장 OpenCrypto(ARIA)를 쓰지 않습니다 | 컬럼 암호화가 없습니다 | 미채택 근거와 실측은 [OPENSQL_RESEARCH 「opencrypto」](OPENSQL_RESEARCH.md#opencrypto--ariaseed-실측-실측-2026-08-10)에 있습니다 | — |
