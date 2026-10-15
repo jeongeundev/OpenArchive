@@ -77,13 +77,18 @@ async def _buffer_body(receive: Receive) -> bytes:
     return b"".join(chunks)
 
 
-def _replay(body: bytes) -> Receive:
+def _replay(body: bytes, client: Receive) -> Receive:
+    """버퍼한 본문을 한 번 흘린 뒤에는 실제 클라이언트의 receive()로 넘긴다.
+
+    본문 뒤에 `http.disconnect`를 지어내면 끊김을 지켜보는 응답(Starlette 1.8의 FileResponse,
+    StreamingResponse)이 바로 멈춰 본문이 비어 나간다 — 정적 화면 전체가 0바이트였다(10/15 실측).
+    """
     delivered = False
 
     async def receive() -> Message:
         nonlocal delivered
         if delivered:
-            return {"type": "http.disconnect"}
+            return await client()
         delivered = True
         return {"type": "http.request", "body": body, "more_body": False}
 
@@ -116,9 +121,10 @@ class RetryOnUnavailable:
             return
 
         retryable = is_retryable(scope)
+        client = receive
         if retryable:
-            body = await _buffer_body(receive)
-            receive = _replay(body)
+            body = await _buffer_body(client)
+            receive = _replay(body, client)
         responded = False
 
         async def tracking_send(message: Message) -> None:
@@ -133,7 +139,7 @@ class RetryOnUnavailable:
                 # 응답이 이미 나가기 시작했으면 되돌릴 수 없다.
                 if not retryable or responded or not is_unavailable(error):
                     raise
-                await self.app(scope, _replay(body), tracking_send)
+                await self.app(scope, _replay(body, client), tracking_send)
         except Exception as error:
             if responded or not is_unavailable(error):
                 raise
