@@ -239,6 +239,8 @@ async def test_replayed_request_does_not_tell_the_response_the_client_left(kind,
     """재생한 요청이 본문 뒤에 가짜 http.disconnect를 돌려주면, 끊김을 지켜보는 응답이 바로 멈춰
     본문이 비어 나간다 — Starlette 1.8의 FileResponse에서 정적 화면 전체가 0바이트였다(10/15 실측).
     본문을 넘긴 뒤의 receive()는 실제 클라이언트의 것이어야 한다."""
+    import asyncio
+
     from fastapi.responses import FileResponse, StreamingResponse
 
     payload = "화면".encode() * 4000
@@ -254,6 +256,8 @@ async def test_replayed_request_does_not_tell_the_response_the_client_left(kind,
 
         async def chunks():
             for start in range(0, len(payload), 1024):
+                # 양보 지점이 없으면 끊김 감시가 취소를 걸 틈 없이 끝까지 보내 판별하지 못한다.
+                await asyncio.sleep(0)
                 yield payload[start : start + 1024]
 
         return StreamingResponse(chunks())
