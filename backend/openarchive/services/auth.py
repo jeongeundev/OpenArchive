@@ -198,7 +198,7 @@ async def create_user(
             (username, hash_password(password), is_admin),
         )
     except psycopg.errors.UniqueViolation as error:
-        raise UserAlreadyExists(f"사용자명 '{username}'은 이미 존재합니다.") from error
+        raise UserAlreadyExists(f"이미 존재하는 사용자명입니다: '{username}'") from error
     return await cur.fetchone()
 
 

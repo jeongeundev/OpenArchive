@@ -175,7 +175,8 @@ describe("감사 로그 화면", () => {
     render(<AuthProvider><AuditPage /></AuthProvider>);
 
     expect(await screen.findByText("공유: B사 협업")).toBeInTheDocument();
-    expect(screen.getByText("시스템(텍스트 인식)")).toBeInTheDocument();
+    // 워커는 텍스트 인식만이 아니라 휴지통 자동 영구 삭제도 남긴다 (services/trash.py)
+    expect(screen.getByText("시스템(워커)")).toBeInTheDocument();
     expect(screen.getByText("운영자 CLI")).toBeInTheDocument();
     expect(screen.getByText("직접 접속(openarchive)")).toBeInTheDocument();
   });
