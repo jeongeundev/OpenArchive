@@ -417,10 +417,9 @@ bash scripts/check.sh                                  # 저장소 루트에서 
 
 ## 프로젝트 상태
 
-오픈소스 개발자 대회 지정과제에서 출발한 1인 개발 프로젝트이며, 상용 지원은 없습니다. 실측한 구성은 OpenSQL 17.8 HA
-3노드(같은 L2의 VRRP VIP, Rocky Linux 9 VM)와 Barman 백업 서버 위에 앱(API·워커) 한 벌입니다. 그 밖의 구성(클라우드
-VIP, 앱 여러 벌, 대량 이관)은 실측하지 않았습니다 — [운영 가이드 「알려진 한계」](docs/OPERATIONS.md#알려진-한계).
-발전 경로와 하지 않는 것은 [로드맵](docs/ROADMAP.md)에 있습니다.
+1인이 개발·유지보수하며, 상용 지원은 없습니다. 실측한 구성은 OpenSQL 17.8 HA 3노드(같은 L2의 VRRP VIP)와 Barman 백업 서버
+위에 앱 한 벌이고, 그 밖의 구성(클라우드 VIP, 앱 여러 벌, 대량 이관)은 실측하지 않았습니다 —
+[알려진 한계](docs/OPERATIONS.md#알려진-한계) · [로드맵](docs/ROADMAP.md).
 
 ---
 
