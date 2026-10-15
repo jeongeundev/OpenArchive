@@ -841,6 +841,67 @@ def test_create_user_refuses_to_overwrite_an_existing_username(
     assert verify_password("first-secret", stored)
 
 
+def _has_fixed_particle(out: str, name: str) -> bool:
+    """이름 뒤에 받침을 가정한 조사를 고정으로 붙였는지 — 「'lee'을」·「'lee'은」은 틀린 한국어다."""
+    return f"'{name}'을" in out or f"'{name}'은" in out
+
+
+def test_create_user_reports_a_vowel_final_name_without_a_wrong_particle(
+    migrated_db: str, monkeypatch, capsys
+):
+    monkeypatch.setenv("ADMIN_PASSWORD", "environment-secret")
+
+    exit_code = main(["create-user", "lee", "--dsn", migrated_db])
+
+    out = capsys.readouterr().out
+    assert exit_code == 0
+    assert "'lee'" in out
+    assert not _has_fixed_particle(out, "lee")
+
+
+def test_create_user_reports_a_taken_vowel_final_name_without_a_wrong_particle(
+    migrated_db: str, monkeypatch, capsys
+):
+    _insert_user(migrated_db, "lee", "first-secret")
+    monkeypatch.setenv("ADMIN_PASSWORD", "replacement-secret")
+
+    exit_code = main(["create-user", "lee", "--dsn", migrated_db])
+
+    out = capsys.readouterr().out
+    assert exit_code == 1
+    assert "이미 존재" in out and "'lee'" in out
+    assert not _has_fixed_particle(out, "lee")
+
+
+def test_init_reports_a_taken_vowel_final_admin_name_without_a_wrong_particle(
+    migrated_db: str, monkeypatch, capsys, tmp_path
+):
+    _insert_user(migrated_db, "lee", "original")
+    monkeypatch.setenv("ADMIN_PASSWORD", "another-secret")
+
+    exit_code = main(
+        ["init", "--dsn", migrated_db, "--yes", "--admin-username", "lee", "--env-file", str(tmp_path / ".env")]
+    )
+
+    out = capsys.readouterr().out
+    assert exit_code == 1
+    assert "'lee'" in out
+    assert not _has_fixed_particle(out, "lee")
+
+
+def test_init_reports_a_vowel_final_admin_name_without_a_wrong_particle(
+    clean_db: str, monkeypatch, tmp_path, capsys
+):
+    monkeypatch.setenv("ADMIN_PASSWORD", "bootstrap-secret")
+
+    main(["init", "--dsn", clean_db, "--yes", "--admin-username", "lee", "--env-file", str(tmp_path / ".env")])
+
+    out = capsys.readouterr().out
+    assert accounts(clean_db) == [("lee", True)]
+    assert "'lee'" in out.split("관리자", 1)[1]
+    assert not _has_fixed_particle(out, "lee")
+
+
 @pytest.mark.parametrize("answer", ["", None], ids=["empty", "closed-stdin"])
 def test_create_user_refuses_an_empty_password(migrated_db: str, monkeypatch, answer):
     if answer is not None:

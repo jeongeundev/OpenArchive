@@ -80,6 +80,8 @@ describe("외부 공유 절", () => {
     expect(screen.getByText(/공유에 넣은 문서만/)).toBeInTheDocument();
     expect(screen.getByText(/조직 공개 문서도 공유에 넣으면 외부에 열립니다/)).toBeInTheDocument();
     expect(screen.getByText(/문서 상세의 「열람 범위」/)).toBeInTheDocument();
+    // 공유 토큰은 REST와 원격 MCP 둘 다 받는다 (mcp_server/http.py) — REST만이라고 적으면 틀린 안내다
+    expect(screen.getByText(/REST API나 원격 MCP/)).toBeInTheDocument();
   });
 
   it("이름으로 공유를 만들면 목록에 나타난다", async () => {
