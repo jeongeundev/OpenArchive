@@ -278,9 +278,9 @@ async def test_ignores_non_sql_files_and_subdirectories(clean_db: str, tmp_path:
 
 
 def test_the_built_wheel_carries_the_licenses_of_bundled_frontend_components(built_wheel: Path):
-    """정적 빌드(static/)에 번들된 Next.js·React·JSZip 코드와 Geist 글꼴의 라이선스 본문을 함께 싣는다.
+    """정적 빌드(static/)에 번들된 Next.js·React·JSZip 코드의 라이선스 본문을 함께 싣는다.
 
-    MIT는 저작권 고지와 본문을, SIL OFL 1.1은 글꼴을 재배포할 때 라이선스 동봉을 요구한다 (NOTICE.md).
+    MIT는 저작권 고지와 본문을 함께 재배포하라고 요구한다 (NOTICE.md).
     """
     with zipfile.ZipFile(built_wheel) as archive:
         names = {name.rsplit(".dist-info/licenses/", 1)[1] for name in archive.namelist()
@@ -288,5 +288,5 @@ def test_the_built_wheel_carries_the_licenses_of_bundled_frontend_components(bui
 
     licenses_dir = Path(openarchive.__file__).resolve().parent.parent / "licenses"
     expected = {f"licenses/{path.name}" for path in licenses_dir.iterdir()}
-    assert "licenses/geist-OFL-1.1.txt" in expected and "licenses/jszip-license.txt" in expected
+    assert "licenses/jszip-license.txt" in expected and "licenses/next-license.txt" in expected
     assert names >= expected

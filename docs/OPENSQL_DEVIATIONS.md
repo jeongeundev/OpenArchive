@@ -34,7 +34,7 @@
 | 설정 | 설치기 출력 | 현재 (= 문서·HA 템플릿) | 근거 |
 |---|---|---|---|
 | OpenProxy 풀 모드·라우팅 | `session` · 파서 끔 · `default_role=primary` | `[general.etcd]` · `transaction` · `query_parser_read_write_splitting` · 서버 `Auto` · `use_patroni` | HA 템플릿 "etcd 연동 (HA 환경 필수)". 설치기 값으로는 쓰기 10건 중 6~8건 "읽기 전용" 실패 (§16 교정 3) |
-| 앱 접속 계정 | 풀 사용자가 `postgres` 슈퍼유저 하나 | 앱 전용 롤·DB·풀 `openarchive`(비슈퍼유저, `server_username` 명시). `postgres` 풀은 운영 접속용으로 남김 | HA 템플릿의 `app_user` 예시, `SETUP_OPENSQL.md` §10과 같은 형태. #150 전까지 HA 측정은 전부 슈퍼유저로 했다 — 권한 경로가 검증에서 빠졌다 |
+| 앱 접속 계정 | 풀 사용자가 `postgres` 슈퍼유저 하나 | 앱 전용 롤·DB·풀 `openarchive`(비슈퍼유저, `server_username` 명시). 설치기 풀 `opensql`(사용자 `postgres`)은 운영 접속용으로 남김 | HA 템플릿의 `app_user` 예시, `SETUP_OPENSQL.md` §10과 같은 형태. #150 전까지 HA 측정은 전부 슈퍼유저로 했다 — 권한 경로가 검증에서 빠졌다 |
 | 클라이언트 인증 | 지정 없음 → `md5`(OpenProxy 기본) | `auth_type = "scram-sha-256"` | HA 템플릿·문서 HA 예시 |
 | `worker_threads` | 지정 없음 → 4(자동) | 2 | HA 템플릿 "DB와 같은 노드면 CPU 코어 수의 절반" — VM 4코어 |
 | VIP (`[general.virtual_router]`) | 만들지 않음(`--owldb`에서만) | node2(우선순위 100)·node3(90), `unicast_peers`, `advert_int = 3` | 문서 「가상 IP 다중화」. 앱은 단일 엔드포인트로만 붙는다(ADR-006). `advert_int` 3은 그 페이지 예시값(HA 템플릿 주석 예시는 1) |
@@ -67,7 +67,8 @@
 ## 점검하는 법
 
 ```bash
-# Patroni DCS — 설치기 bootstrap.dcs에 1절의 keepalive 4개만 더해져 있어야 한다
+# Patroni DCS — 설치기 bootstrap.dcs에 1절의 keepalive 4개와 Barman 영구 슬롯(slots.barman, 2절)만 더해져 있어야 한다
+# (동기 모드를 켰다 끈 클러스터는 synchronous_mode: false도 보인다)
 sudo -u opensql /home/opensql/bin/patronictl -c /home/opensql/etc/patroni/patroni.yml show-config
 # OpenProxy가 실제로 적용한 설정(etcd 공유 설정 + 노드 파일)
 sudo -u opensql /home/opensql/bin/openproxy --log-target file /home/opensql/etc/openproxy/openproxy.toml show --full
