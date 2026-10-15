@@ -706,6 +706,39 @@ def test_export_writes_only_owned_documents_as_markdown_with_frontmatter(
     assert "내보냄 2건" in capsys.readouterr().out
 
 
+def test_export_reads_inside_one_plain_transaction(
+    archive_db: str, tmp_path: Path, monkeypatch
+):
+    """HA의 OpenProxy는 트랜잭션 밖 SELECT를 Replica로 보낸다 — 10/15 실측에서 export의 읽기가
+    Replica 두 대로만 갔다. 비동기 복제 지연 창에서는 방금 고친 텍스트 대신 옛 텍스트가 나간다.
+    검색과 같이 plain 트랜잭션 하나 안에서 읽어 Primary에서 읽게 한다 (ADR-010).
+    """
+    from psycopg.pq import TransactionStatus
+
+    from openarchive import cli
+
+    seed(
+        archive_db,
+        lambda conn: create_text_document(conn, title="메모", content="본문", owner_id="alice"),
+    )
+    seen: list[tuple[str, TransactionStatus]] = []
+
+    def recording(name: str, real):
+        async def wrapper(conn, *args, **kwargs):
+            seen.append((name, conn.info.transaction_status))
+            return await real(conn, *args, **kwargs)
+
+        return wrapper
+
+    monkeypatch.setattr(cli, "list_documents", recording("list", cli.list_documents))
+    monkeypatch.setattr(cli, "get_document", recording("get", cli.get_document))
+
+    assert main(["export", str(tmp_path / "out"), "--user", "alice", "--dsn", archive_db]) == 0
+
+    assert [name for name, _ in seen] == ["list", "get"]
+    assert all(status == TransactionStatus.INTRANS for _, status in seen)
+
+
 def test_export_keeps_every_document_when_titles_collide_or_contain_separators(
     archive_db: str, tmp_path: Path
 ):
