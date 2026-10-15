@@ -196,3 +196,66 @@ def test_unrelated_errors_are_not_retried():
         client.get("/api/documents")
 
     assert len(seen) == 1
+
+
+async def _serve_like_uvicorn(app, path: str) -> bytes:
+    """uvicorn처럼 ASGI spec 2.3 범위로 GET 하나를 보내고 받은 본문을 모은다.
+
+    TestClient는 spec 2.4라 Starlette가 끊김 감시를 건너뛴다 — 실제 서버 경로를 타려면 직접 부른다.
+    클라이언트는 응답을 다 받을 때까지 끊지 않는다: 본문 다음의 receive()는 응답이 끝나야 풀린다.
+    """
+    import asyncio
+
+    done = asyncio.Event()
+    delivered = False
+    body = bytearray()
+
+    async def receive() -> dict:
+        nonlocal delivered
+        if not delivered:
+            delivered = True
+            return {"type": "http.request", "body": b"", "more_body": False}
+        await done.wait()
+        return {"type": "http.disconnect"}
+
+    async def send(message: dict) -> None:
+        if message["type"] == "http.response.body":
+            body.extend(message.get("body", b""))
+            if not message.get("more_body", False):
+                done.set()
+
+    scope = {
+        "type": "http", "asgi": {"version": "3.0", "spec_version": "2.3"}, "http_version": "1.1",
+        "method": "GET", "scheme": "http", "path": path, "raw_path": path.encode(),
+        "root_path": "", "query_string": b"", "headers": [], "server": ("127.0.0.1", 80),
+        "client": ("127.0.0.1", 1),
+    }
+    await asyncio.wait_for(app(scope, receive, send), timeout=5)
+    return bytes(body)
+
+
+@pytest.mark.parametrize("kind", ["file", "stream"])
+async def test_replayed_request_does_not_tell_the_response_the_client_left(kind, tmp_path):
+    """재생한 요청이 본문 뒤에 가짜 http.disconnect를 돌려주면, 끊김을 지켜보는 응답이 바로 멈춰
+    본문이 비어 나간다 — Starlette 1.8의 FileResponse에서 정적 화면 전체가 0바이트였다(10/15 실측).
+    본문을 넘긴 뒤의 receive()는 실제 클라이언트의 것이어야 한다."""
+    from fastapi.responses import FileResponse, StreamingResponse
+
+    payload = "화면".encode() * 4000
+    page = tmp_path / "page.html"
+    page.write_bytes(payload)
+    app = FastAPI()
+    app.add_middleware(RetryOnUnavailable)
+
+    @app.get("/page")
+    async def endpoint():
+        if kind == "file":
+            return FileResponse(page)
+
+        async def chunks():
+            for start in range(0, len(payload), 1024):
+                yield payload[start : start + 1024]
+
+        return StreamingResponse(chunks())
+
+    assert await _serve_like_uvicorn(app, "/page") == payload
