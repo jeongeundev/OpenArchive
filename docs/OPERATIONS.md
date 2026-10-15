@@ -241,7 +241,6 @@ DSN을 확인한 뒤 `~/.openarchive/.env`(`--env-file`로 바꾼 경우 그 파
 #### 판 올리기 — PyPI 0.1.0에서 0.2.0으로
 
 `serve`를 멈추고 패키지를 올린 뒤 `init`으로 남은 마이그레이션을 적용하고 다시 띄웁니다. 데이터를 옮기거나 다시 임베딩하지 않습니다.
-아래 `upgrade`는 0.2.0이 PyPI에 게시된 뒤에 동작합니다 — 그 전에는 소스 체크아웃에서 `pip install ./backend`로 같은 판을 설치합니다.
 
 ```bash
 pipx upgrade openarchive-server            # pip라면 pip install -U "openarchive-server[local]"
@@ -254,7 +253,7 @@ EMBEDDING_PROVIDER=local openarchive serve
 파일·텍스트 버전 수가 올리기 전과 같았고, 로그인·문서 상세(원본 1판·텍스트 2판)·원본 내려받기·검색·관련 문서·휴지통 이동과 복원·
 폴더 만들기가 동작했다.
 
-- 0.1.0에는 사용자 CLI가 없다 — `openarchive login`은 `invalid choice: 'login'`으로 끝난다. 0.2.0부터 `login`·`whoami`·`doc`·`ask`가 있다(아래 「사용자 CLI」).
+- 0.1.0에는 사용자 CLI가 없다 — `openarchive login`은 `invalid choice: 'login'`으로 끝난다. 0.2.0부터 사용자 CLI(`login`·`whoami`·`doc`, `--user` 없는 `search`·`ask` — 아래 「사용자 CLI」)와 운영자 명령 `ask`·`rebuild-previews`가 있다.
 - **0.1.0을 지금 새로 설치하면 웹 화면이 빈 응답이 된다.** 함께 깔리는 Starlette 1.8의 정적 파일 응답이 0.1.0의 재시도
   미들웨어가 보내는 가짜 연결 끊김에 멈추기 때문이다 — 같은 날 새 venv에서 `/`·`/login`·`/favicon.ico`가 200인데 본문 0바이트, API는 정상이었다.
   0.2.0에서 고쳤다(#283). 0.1.0을 쓰고 있다면 0.2.0으로 올린다.
@@ -913,6 +912,27 @@ stdio MCP 서버는 HTTP를 거치지 않고 서비스를 직접 호출하므로
 함께 전달해야 하고, MCP 서버는 마이그레이션을 실행하지 않으므로 스키마가 적용된 상태여야
 합니다 (ADR-012·036).
 
+Claude Desktop·Claude Code의 MCP 설정 예시입니다. `command`는 pipx 설치본의 Python입니다 — `<PIPX_VENVS>`는
+`pipx environment --value PIPX_LOCAL_VENVS`가 알려주는 경로로 바꿉니다(소스 설치라면 그 가상환경의 `bin/python`).
+`DATABASE_URL`은 `~/.openarchive/.env`와 같은 값이고, `EMBEDDING_PROVIDER`는 `serve`에 준 값과 같아야 합니다 — 다르면
+에러 없이 검색 결과만 무의미해집니다.
+
+```json
+{
+  "mcpServers": {
+    "openarchive": {
+      "command": "<PIPX_VENVS>/openarchive-server/bin/python",
+      "args": ["-m", "openarchive.mcp_server.server"],
+      "env": {
+        "DATABASE_URL": "postgresql://openarchive:openarchive@localhost:5433/openarchive",
+        "EMBEDDING_PROVIDER": "local",
+        "MCP_USER_ID": "admin"
+      }
+    }
+  }
+}
+```
+
 > ⚠️ **`MCP_USER_ID`는 실존 계정인지 검증되지 않습니다.** 미설정·빈 값·공백은 거부되지만, 그
 > 검사를 통과한 이름은 `users` 테이블에 없어도 그대로 문서 소유자가 됩니다 (ADR-036). 실제
 > 계정명과 정확히 같게 적어야 `create_document`로 만든 문서가 Web UI에서 자기 문서로 보입니다.
@@ -1122,8 +1142,7 @@ ALTER ROLE <앱 롤> SET pgaudit.log = 'ddl, role';
 | 한계 | 영향 | 대응·우회 | 관련 |
 |---|---|---|---|
 | 내용이 바뀐 파일을 다시 `openarchive import`하면 기존 문서의 새 텍스트 버전이 아니라 **새 문서**가 생깁니다. 건너뛰는 것은 원본 바이트나 텍스트가 같은 파일뿐입니다 | 옛 문서와 새 문서가 함께 검색됩니다 | 기존 문서를 고치려면 사용자 CLI `openarchive doc edit <ID> --file <파일>`이나 웹 편집을 씁니다. import는 동기화 도구가 아닙니다 | — |
-| MCP `search_documents`에 폴더 필터가 없습니다(REST·웹 검색에는 `folder_id`가 있습니다) | 에이전트가 폴더 단위로 좁혀 찾을 수 없습니다 | 태그·유형 필터로 좁히거나 REST `POST /api/search`를 씁니다 | ADR-056 |
-| REST·MCP 검색 응답에서 관계로 찾은 항목(`via`가 있음)의 `score`는 정렬용 값이라 음수일 수 있고, `k=3`이면 직접 3건 + 관계 확장 최대 3건이 옵니다 | `score`로 임계를 거르는 외부 프로그램은 관계 확장 결과를 잘못 버립니다 | `via`가 있는 항목은 `score`를 유사도로 쓰지 않습니다. 웹·CLI는 점수를 보이지 않습니다 | [ARCHITECTURE 「검색 데이터 흐름」](ARCHITECTURE.md#검색-데이터-흐름) |
+| REST·MCP 검색 응답에서 관계로 찾은 항목(`via`가 있음)의 `score`는 정렬용 값이라 음수일 수 있고, `k=3`이면 직접 3건 + 관계 확장 최대 3건이 옵니다 | `score`로 임계를 거르는 외부 프로그램은 관계 확장 결과를 잘못 버립니다 | `via`가 있는 항목은 `score`를 유사도로 쓰지 않습니다. 웹·CLI는 관계로 찾은 결과에는 점수를 보이지 않습니다 | [ARCHITECTURE 「검색 데이터 흐름」](ARCHITECTURE.md#검색-데이터-흐름) |
 | 편집 직후 재임베딩이 끝나기 전에 근거 답변(`ask`)을 하면 이전 텍스트 버전 근거가 섞여, 답에 두 값이 나란히 나올 수 있습니다 | 근거 카드에는 「v2 기준 · 현재 v3」처럼 표시되지만 답변 문장은 버전을 구분하지 않습니다 | 문서 상태가 `ready`로 돌아온 뒤(재임베딩이 끝난 뒤) 질문합니다 | ADR-015·043 |
 | 관계 판정 함수(`rebuild_document_edges`)에 `hnsw.iterative_scan`이 없습니다 | 청크가 매우 촘촘한 큰 문서는 자기 쪽에서 계산한 이웃을 잃을 수 있습니다 — 합성 벡터 250청크 문서에서 재현됐고, 실코퍼스의 가장 큰 문서(184청크)에서는 재현되지 않았습니다 | 저장은 단방향이고 읽기는 `src ∪ dst`라, 작은 쪽 문서가 계산한 관계는 남습니다 | ADR-029 |
 | 휴지통에 「비우기」와 여러 항목 선택이 없습니다 | 많이 지운 뒤 복원하려면 한 건씩 눌러야 합니다 | 보존 기간(`TRASH_RETENTION_DAYS`, 기본 30일)이 지나면 워커가 영구 삭제합니다 | ADR-060 |

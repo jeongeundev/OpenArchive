@@ -31,8 +31,10 @@
 애플리케이션 코드는 바뀌지 않는다. `ADR-006`이 DSN을 환경변수로만 주입하도록 정해두었다.
 
 ```bash
-DATABASE_URL="postgresql://postgres:pg_password@<VM_IP>:6432/opensql"
+DATABASE_URL="postgresql://openarchive:<비밀번호>@<VM_IP 또는 VIP>:6432/openarchive"
 ```
+
+앱 전용 롤·풀은 §10 「새 DB와 새 풀」, HA는 §16 교정 7에서 만든다.
 
 ---
 
@@ -79,7 +81,7 @@ sed -i 's|^LICENSE_NAME=.*|LICENSE_NAME="OpenSQL_Trial_opensql-dev_<만료일>.x
     ~/Tmax_OpenSQL_3.17.8.7_rockylinux9.7_buildtime20260720/opensql-installer/config/common.env
 ```
 
-이어서 §15 「인스턴스를 켤 때마다」의 기동 순서(Patroni → OpenProxy)로 띄우고 `patronictl list`가 `Leader · running`이면 통과다. PG 로그에 라이선스 메시지는 따로 찍히지 않는다 — preload 확장이라 서버가 뜬 것 자체가 검증이다.
+이어서 §15 「인스턴스를 켤 때마다」(EC2 기록이지만 같은 명령)의 기동 순서(Patroni → OpenProxy)로 띄우고 `patronictl list`가 `Leader · running`이면 통과다. PG 로그에 라이선스 메시지는 따로 찍히지 않는다 — preload 확장이라 서버가 뜬 것 자체가 검증이다.
 
 교체 전에 새 XML의 `identified_by_host`가 VM hostname과 같은지, `limit_cpu`가 VM 코어 수 이상인지 확인한다. hostname이 다르면 `hostnamectl set-hostname`과 `/etc/hosts`를 맞춘다 — Patroni의 `NODE_NAME`은 hostname과 무관하므로 그것까지 바꿀 필요는 없다.
 
@@ -486,7 +488,7 @@ database = "openarchive"
 
 풀 추가도 위 교정과 같은 이유로 `reload`가 아니라 **restart**를 쓴다(`bash $OPENSQL_HOME/scripts/restart_openproxy.sh`).
 DSN의 데이터베이스 자리에는 풀 이름을 적는다 — `postgresql://openarchive:<비밀번호>@<OpenProxy 호스트>:6432/openarchive`.
-HA 구성(etcd 공유 설정)이면 파일이 아니라 `openproxy edit` 또는 etcd 키로 바꾼다(§16).
+HA 구성(etcd 공유 설정)이면 `openproxy edit` 또는 etcd 키로 바꾸고, 각 노드의 로컬 파일에도 같은 블록을 넣는다 — 로컬 파일은 폴백 판이다(§16 교정 3·7, #231).
 
 **③ `pool_size`는 앱이 여는 연결 수보다 커야 한다.** `session` 모드에서는 클라이언트 연결 하나가 백엔드
 하나를 끝까지 쥔다. 앱이 기동만으로 여는 연결은 다음과 같다(2026-09-29 로컬 실측, `pg_stat_activity`).
@@ -891,7 +893,7 @@ python3 opensql_remote_installer.py --mode 3node
    ```
    - `[general]`에 `worker_threads = 2` — HA 템플릿 권고(DB와 같은 노드면 코어 수의 절반, VM 4코어). 반영은 재시작
    - `auth_type`을 지정하지 않으면 OpenProxy 기본 `md5`다. HA 템플릿은 `scram-sha-256`이다(2026-09-30 맞춤, #150)
-   - 먼저 뜬 노드가 자기 파일을 etcd `/service/opensql/openproxy/config/current`에 **초기 설정으로 올리고**, 이후 노드는 etcd 판을 읽는다. 그래서 두 파일은 `virtual_router`의 `priority`·`unicast_peers`만 다르게 둔다
+   - 먼저 뜬 노드가 자기 파일을 etcd `/service/opensql/openproxy/config/current`에 **초기 설정으로 올리고**, 이후 노드는 etcd 판을 읽는다. 그래서 두 파일은 노드 전용 절 — `virtual_router`의 `priority`·`unicast_peers`와 `[general.etcd] endpoints` — 만 다르게 둔다
    - ⚠️ **로컬 파일은 폴백 판이다 — 공유 설정의 `[pools.*]`와 늘 같게 둔다(`600`).** OpenProxy는 Patroni가 응답하지 않으면 로컬 파일로 대체해 뜨고, 그 판을 공유 설정에 저장할 수 있다 — 로컬 파일에 풀이 빠져 있으면 앱 접속이 끊긴다(#231, 원리는 OPENSQL_RESEARCH §20). 공유 설정을 바꾸면(`openproxy edit`) 두 파일도 같이 고친다. 노드 전용 절(`[general]`·`[general.etcd]`·`[general.virtual_router]`)은 남기고 `[pools.*]`를 etcd 판에서 가져오되 서버 역할은 `Auto`로 둔다
    - etcd 모드에서는 **파일 autoreload가 꺼진다.** 공유 설정 변경은 `openproxy edit` 또는 etcd 키로 한다
    - 역할 감지가 30초 폴링(`Patroni role refresh … 30 second interval`)에서 **etcd leader·members watch**로 바뀐다
@@ -1014,7 +1016,7 @@ python3 opensql_remote_installer.py --mode 3node
    patroni_port = "8008"
    ```
    - 그다음 `openarchive init --dsn "postgresql://openarchive:<비밀번호>@192.168.64.200:6432/openarchive"`. 2026-09-30 실측: 비슈퍼유저로 23개 마이그레이션 적용·관리자 생성, 업로드→임베딩→검색, switchover 뒤 재시작 없이 업로드 3건·검색 정상. 틀린 비밀번호는 `invalid client proof`로 거부
-   - `postgres` 풀은 운영 접속(`psql`, 측정 도구의 노드 대조)용으로 남긴다
+   - 설치기 풀 `opensql`(사용자 `postgres`)은 운영 접속(`psql`)용으로 남긴다. 측정 도구의 노드 대조는 풀이 아니라 각 노드 5432에 앱 롤로 직접 붙는다
 
 ### 검증 (2026-09-26 실측)
 
@@ -1079,12 +1081,12 @@ VIP·node2·node3 직접 모두 같은 결과다.
 
 **etcd 과반 상실 (h165-etcdq)**: node3 Patroni가 `Error communicating with DCS` 뒤 `continue to run as a leader because failsafe mode is enabled and all members are accessible`를 남기고 Primary를 지켰다. etcd 감시 모드의 OpenProxy도 기존 역할로 계속 라우팅해 쓰기 중단·실패 0. 이 구간에는 **새 failover가 일어날 수 없다** — 이 상태에서 Primary까지 죽으면 etcd가 돌아올 때까지 쓰기가 멈춘다(복합 장애, 검증하지 않음).
 
-**재현 명령** — 저장소 루트에서, API·워커(`openarchive serve`)를 VIP DSN으로 띄우고 측정 계정을 만든 뒤:
+**재현 명령** — 저장소 루트에서, API·워커(`openarchive serve --port 8010`)를 VIP DSN으로 띄우고 측정 계정을 만든 뒤:
 
 ```bash
 export DATABASE_URL=postgresql://openarchive:…@192.168.64.200:6432/openarchive HA_API=http://127.0.0.1:8010/api HA_USER=… HA_PASSWORD=…
 H="--nodes 192.168.64.201,192.168.64.202,192.168.64.203 --out <결과 폴더>"
-SSH="ssh -F notes/ha110/ssh_config"; U=/Applications/UTM.app/Contents/MacOS/utmctl
+SSH="ssh <node1~3에 붙는 ssh 옵션>"; U=/Applications/UTM.app/Contents/MacOS/utmctl
 P=/home/opensql/bin/patronictl; C=/home/opensql/etc/patroni/patroni.yml
 python scripts/ha_failover.py run s1 $H --load 150 --inject "$SSH <Leader> 'sudo kill -9 \$(sudo head -1 /home/opensql/data/pgsql/postmaster.pid)'"
 python scripts/ha_failover.py run sw $H --load 120 --inject "$SSH <Leader> 'sudo -iu opensql $P -c $C switchover --leader <현> --candidate <새> --force'"
@@ -1158,7 +1160,8 @@ S4a/b 기록은 etcd 상태를 기록하기 전(#214)에 잰 것이라, 지금 �
 U=/Applications/UTM.app/Contents/MacOS/utmctl
 $U clone opensql-ha-base --name node4      # 설치기 실행 전 베이스. MAC은 UTM 편집 화면에서 Random으로 재생성
 $U start node4; $U ip-address node4        # DHCP 주소로 들어가
-ssh <DHCP 주소> 'bash -s 4' < notes/ha110/02_personalize.sh   # hostname node4 · 192.168.64.204
+# 클론 개인화 — machine-id·SSH 호스트 키 재생성, hostname node4, 고정 IP 192.168.64.204
+# (§16 「VM 준비」와 같은 절차. 메인테이너는 로컬 notes/ha110/02_personalize.sh로 했다)
 ```
 
 **2. 배포판에서 PG 유틸리티와 Barman 설치** — 배포판 중 `barman`·`barman_agent`·`postgresql`·`scripts`만 옮긴다(122MB).

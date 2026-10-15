@@ -33,6 +33,8 @@ npm run test       # vitest
 npm run build
 ```
 
+프론트를 고쳤다면 `npm run build:static`으로 `backend/openarchive/static/`을 갱신해 함께 커밋합니다 — 일반 `build`는 동봉 산출물을 바꾸지 않고, CI는 어긋남을 실패로만 알립니다.
+
 저장소 전체 검증은 루트에서 `bash scripts/check.sh`입니다 (백엔드 lint·test까지 함께 돕니다).
 
 ## 더 읽을 것

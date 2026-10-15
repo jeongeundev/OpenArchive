@@ -35,7 +35,7 @@ backend/.venv/bin/python scripts/benchmark_search.py --out benchmark-results/sea
 변경하지 않는다. 종료 시 성공·실패 모두 rollback한다.
 OpenProxy에서 누수되는 임시 테이블이나 세션 단위 search_path 설정은 사용하지 않는다.
 
-검색에는 제품의 `SEARCH_SQL`, `hnsw.ef_search=200`, `random_page_cost=1.1`, `jit=off`를
+검색에는 제품의 `SEARCH_SQL`, `hnsw.ef_search=200`, `random_page_cost=1.1`, `jit=off`, `hnsw.iterative_scan=strict_order`(제품 `apply_vector_search_settings`와 같다)를
 사용한다. HNSW를 강제로 선택하지 않는다. 광범위 검색·태그·파일 유형 조건에서 실행 계획과
 직접 결과 개수, 비공개 문서 누출 여부를 기록한다. 실제 관계 그래프를 만들지는 않으므로
 관계가 많은 전체 검색 비용까지 대표하지 않는다.

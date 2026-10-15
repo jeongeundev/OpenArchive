@@ -1,7 +1,7 @@
 # 서드파티 고지 (Third-Party Notices)
 
 OpenArchive는 MIT 라이선스(`LICENSE`)로 배포된다. 이 문서는 OpenArchive가 의존하거나 함께 쓰는 서드파티
-구성 요소와 그 라이선스를 적는다. 버전은 2026-10-12 기준 개발 환경에 설치된 것이며, 설치 시점에 따라 달라질 수 있다.
+구성 요소와 그 라이선스를 적는다. 버전은 2026-10-15 기준 개발 환경에 설치된 것이며, 설치 시점에 따라 달라질 수 있다.
 
 ## 1. 배포물에 함께 들어가는 것
 
@@ -22,7 +22,6 @@ OpenArchive는 MIT 라이선스(`LICENSE`)로 배포된다. 이 문서는 OpenAr
 | Next.js가 넣는 폴리필 `events` · `process` · `stream-browserify` | Next 16.3.0 동봉판 | MIT | `next-compiled-events-license.txt` · `next-compiled-process-license.txt` · `next-compiled-stream-browserify-license.txt` |
 | Next.js가 넣는 구형 브라우저 폴리필(`@next/polyfill-nomodule`): core-js · whatwg-fetch · object-assign | 3.38.1 · 3.0.0 · 4.1.1 | MIT | `core-js-license.txt` · `whatwg-fetch-license.txt` · `object-assign-license.txt` |
 | @swc/helpers (Next.js 컴파일 결과가 쓰는 모듈 도우미) | 0.5.15 | Apache-2.0 | `swc-helpers-license.txt` |
-| Geist · Geist Mono 글꼴(`geist` 패키지) | 1.7.2 | SIL Open Font License 1.1 | `geist-OFL-1.1.txt` |
 
 **확인 방법** — 목록은 `frontend/package-lock.json`의 비개발 의존성 트리(`npm ls --omit=dev --all`)와 정적 청크
 (`backend/openarchive/static/_next/static/chunks/*.js`)에 남은 식별 문자열을 대조해 정했다(예: `pako deflate`,

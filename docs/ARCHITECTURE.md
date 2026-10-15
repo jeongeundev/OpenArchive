@@ -27,15 +27,15 @@
                           └────────────────────────────┘
 ```
 
-> **다섯 구분으로 읽기 (설명용 개념 모델, ADR-031)**: 위 다이어그램에서 Next.js UI·MCP
-> Server·REST API가 **Interface**(같은 services를 소비하는 대등한 인터페이스), 업로드
-> API에서 `create_document`까지가 **Ingestion**, 트리거와 Embedding Worker가 **Processing**,
-> openSQL 클러스터가 **Storage**, 검색·관계 조회 서비스가 **Retrieval**이다. 공식 용어가
+> **다섯 구분으로 읽기 (설명용 개념 모델, ADR-031)**: 위 그림에서 Web UI·REST API(사용자 CLI 포함)·
+> MCP(stdio·HTTP)·운영자 CLI가 **Interface**(같은 services를 소비하는 대등한 인터페이스), 업로드·텍스트
+> 공급에서 `create_document`까지가 **Ingestion**, 트리거와 Worker가 **Processing**, OpenSQL HA 클러스터(백업은
+> Barman)가 **Storage**, services 안의 검색·관계 조회가 **Retrieval**이다. 공식 용어가
 > 아니며 기존 "DB 계층"·커밋 스코프 어휘를 대체하지 않는다.
 
 **관계는 두 갈래로 만들어지고 시점이 다르다.** `document_links`는 본문이 바뀌는 즉시 트리거가 만들고(벡터 불필요), `document_edges`는 임베딩이 끝난 뒤 트리거가 기록한 **관계 잡**(`embedding_jobs.kind = 'edges'`)을 워커가 **별도 트랜잭션**에서 처리해 만든다. 둘 다 잡 생성도 판정도 **DB 계층**에 있고 애플리케이션은 읽기만 한다 — 관련 문서·태그 추천이 조회 시점 벡터 계산을 그만둔 근거다 (ADR-029 결정 3 개정·결정 5, ADR-030).
 
-핵심 프레이밍: **잡 생성·코얼레싱·삭제 정합성은 전부 DB 안**(트리거 함수, 파셜 유니크 인덱스, FK CASCADE)에서 보장된다. 워커는 "DB가 만들어 둔 잡을 집어가는 무상태 실행기"이며, 텍스트 추출·OCR·청킹·임베딩은 DB 밖에서 실행한다. 관계 판정 규칙은 DB 함수가 소유한다.
+핵심 프레이밍: **잡 생성·코얼레싱·삭제 정합성은 전부 DB 안**(트리거 함수, 파셜 유니크 인덱스, FK CASCADE)에서 보장된다. 워커는 "DB가 만들어 둔 잡을 집어가는 무상태 실행기"이며, 텍스트 추출·OCR·청킹·임베딩·미리보기 PDF 변환은 DB 밖에서 실행한다. 관계 판정 규칙은 DB 함수가 소유한다.
 
 > **기동(전달) 방식은 정합성의 일부가 아니다.** 워커가 잡을 언제 집어가든 — NOTIFY로 즉시든 폴링으로 5초 뒤든 — 잡이 유실되거나 중복 처리되지 않는 것은 아웃박스 테이블과 `SKIP LOCKED`가 보장한다. 그래서 `LISTEN`/`NOTIFY`가 OpenProxy를 통과하지 못해도 이 설계의 핵심 주장은 무너지지 않는다 (ADR-009).
 
@@ -52,8 +52,11 @@ OpenArchive/
 │   │                             #   python-docx, olefile, openpyxl, python-pptx, python-multipart, networkx, pyyaml / [dev]: pytest, ruff 등 / [local]: sentence-transformers
 │   ├── openarchive/              # 설치되는 최상위 패키지 하나 (배포 이름 openarchive-server)
 │   │   ├── main.py               # FastAPI 앱 조립
+│   │   ├── frontend.py           # 동봉한 정적 프론트를 API와 같은 오리진에서 서빙 (ADR-041)
+│   │   ├── static/               # npm run build:static 산출물(커밋 대상)
+│   │   ├── vectors.py            # pgvector 리터럴 변환(워커·검색 공용)
 │   │   ├── config.py             # pydantic-settings — $OPENARCHIVE_HOME/.env(기본 ~/.openarchive/.env)
-│   │   ├── db.py                 # AsyncConnectionPool만 — import 시 부작용 없음
+│   │   ├── db.py                 # 앱 풀·풀 밖 연결(connect/connect_sync)·일시 불가용 판정 — import 시 부작용 없음
 │   │   ├── migrations/           # __init__.py = 러너(API startup과 `openarchive init`이 호출)
 │   │   │                         #   + SQL(패키지 안이라 wheel에 실린다) 001~046: extensions, tables, triggers, indexes,
 │   │   │                         #   trgm, edges(006~008), auth(009), links(010~012), token(013),
@@ -80,14 +83,14 @@ OpenArchive/
 │   │   │                         #   사용자 CLI `login`·`whoami`·`doc …`, 그리고 `--user` 없는 `search`·`ask`는 user_cli.py·client.py로
 │   │   │                         #   REST에 본인 API 토큰으로만 붙고 DB·DSN을 쓰지 않는다 (ADR-057, #189)
 │   │   ├── api/                  # 라우터: documents, search, ask, system, auth, admin, groups(+principals),
-│   │   │                         #   shares, admin_shares.py(관리자 공유 조회·토큰 폐기), audit(감사 로그 조회·CSV), folders(폴더), diagnostics, clusters / 미들웨어 retry (+ deps, schemas)
+│   │   │                         #   shares, admin_shares.py(관리자 공유 조회·토큰 폐기), audit(감사 로그 조회·CSV), folders(폴더), diagnostics, clusters / 미들웨어 retry·security_headers (+ deps, schemas)
 │   │   ├── services/             # parsing, chunking, documents, search, related,
 │   │   │                         #   links, diagnostics, clusters, auth, system, visibility,
 │   │   │                         #   grants(그룹·부여), shares(외부 공유), folders(폴더 트리·범위, ADR-054), audit(행위자 전달·조회, ADR-055), answer(근거 조립·답변 생성, ADR-043),
 │   │   │                         #   organize(정리 추천, ADR-064), preview(원본 판 PDF 변환, ADR-058), textdiff(텍스트 버전 비교, #190), trash(휴지통, ADR-060)
 │   │   ├── answers/              # 답변 생성 프로바이더: fake·ollama (ADR-043)
 │   │   ├── embeddings/           # base.py(Protocol), local.py(bge-m3), fake.py
-│   │   ├── worker.py             # 워커 진입점 — 임베딩 잡과 관계 잡을 같은 큐에서 처리
+│   │   ├── worker.py             # 워커 진입점 — 임베딩·관계·추출(OCR)·미리보기 변환 잡을 같은 큐에서 처리
 │   │   ├── demo.py · demo_corpus/ # `openarchive demo` 예제 문서
 │   │   ├── mcp_server/server.py  # FastMCP 도구 4개 — stdio 인스턴스·build_server
 │   │   └── mcp_server/http.py    # Bearer 인증·원격 Streamable HTTP
@@ -98,8 +101,7 @@ OpenArchive/
         │                         #   /diagnostics, /clusters, /organize, /trash, /admin/status, /admin/users, /admin/groups,
         │                         #   /admin/audit, /admin/shares
         ├── components/
-        ├── types/
-        └── lib/                  # API 클라이언트 (fetch 래퍼)
+        └── lib/                  # API 클라이언트(fetch 래퍼·백오프)·데이터 훅·types.ts
 ```
 
 `services/visibility.py`의 `VISIBLE_TO_USER`는 **모든 조회 경로가 공유하는 단일 열람 술어**다. 검색·관련 문서·그래프 순회·집계·위키링크 해석이 각자 조건을 쓰면 한 곳만 빠져도 비공개 문서가 새어 나간다 (ADR-018, ADR-027). 규칙은 사용자에게 "public이거나, 소유자이거나, 본인·본인 그룹에 부여가 있다"이고, `share:<공유 uuid>` 주체에게는 "그 공유에 부여가 있거나, 공유에 넣은 폴더와 그 하위 폴더 안의 「폴더 범위 따름」 문서다"뿐이며(ADR-044, 폴더 판정은 아래 폴더 분기와 같은 상관 재귀 조각 — #206), 테이블과 주체 값 하나만 참조하는 순수 SQL이라 바인딩을 `current_setting('app.principal')`로 바꾸면 그대로 RLS 정책이 된다. 쓰기 경로의 존재 판정(`_load_for_write`)도 이 술어를 쓴다 — 보이는 사람의 쓰기는 403, 안 보이는 사람은 404.
@@ -117,6 +119,8 @@ API 토큰(위임·공유)의 해석은 `services/auth.py`의 `validate_token` �
 `POST /api/search`도 같은 근거 필드(`filename`·`based_on_version`)를 함께 내려준다. 서비스가 하나여도 두 경로의 응답 스키마가 갈라지면 "REST와 MCP의 결과가 같다"가 깨진다 — `tests/test_mcp_server.py`가 두 응답을 직접 비교해 이를 지킨다.
 
 ## DB 스키마
+
+아래 블록은 설계를 읽기 위한 발췌다 — 인덱스·일부 CHECK·`created_at` 칼럼은 생략했고, 정본은 `backend/openarchive/migrations/`다.
 
 ```sql
 -- documents: 정형 메타데이터 + 버전 + 권한 (하이브리드 활용의 절반)
@@ -144,6 +148,7 @@ CREATE TABLE documents (
   -- 그대로 통과하는데, 텍스트 레이어 없는 PDF의 추출 결과가 정확히 그 형태다 (M1에서 실측).
   CONSTRAINT documents_content_not_blank
     CHECK (extraction_status <> 'done' OR length(btrim(content, E' \t\r\n\f')) > 0),
+  CONSTRAINT documents_content_length CHECK (length(content) <= 500000),  -- 009. API의 400과 이중 방어
   -- 030 (ADR-054): 폴더와 범위 상속. 기존 문서는 folder_id NULL이라 자기 범위 그대로다
   folder_id      uuid REFERENCES folders(id) ON DELETE RESTRICT,   -- 빈 폴더만 지운다
   follows_folder boolean NOT NULL DEFAULT true,  -- true = 「폴더 범위 따름」, false = 「개별 지정」
@@ -247,7 +252,7 @@ CREATE TABLE folders (
   id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   parent_id  uuid REFERENCES folders(id) ON DELETE RESTRICT,
   name       text NOT NULL,        -- 공백뿐이 아니고 '/'를 포함하지 않는다 (CHECK)
-  created_by text NOT NULL,        -- 사용자명. 이 계정은 삭제를 거부한다
+  created_by text NOT NULL,        -- 사용자명. 이전 대상(transfer_to) 없이는 이 계정의 삭제를 거부한다 (#200)
   visibility text,                 -- public | private — 최상위만
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
@@ -727,7 +732,7 @@ COMMIT;
 
 > **`finished_at`은 `now()`가 아니라 `clock_timestamp()`다.** `now()`는 트랜잭션 시작 시각이라, 같은 트랜잭션 안에서 도는 관계 생성 트리거의 시간이 잡 소요에서 통째로 빠졌다 — #93에서 잡 시간으로 트리거 비용을 추정하다 10배 넘게 틀렸다. 관계 판정이 잡으로 분리된 지금(016·017) 임베딩 잡에는 그 왜곡 자체가 없지만, **관계 잡의 마감도 같은 이유로 `clock_timestamp()`를 쓴다** — 판정 시간이 그 잡의 소요에 들어가야 한다. `fail_job`·마감 경로의 `finished_at`도 같다.
 
-   **관계 잡(`kind='edges'`)은 2·3번을 타지 않는다.** 본문을 읽지도, 임베딩 모델을 부르지도 않는다. 자기 트랜잭션에서 `documents`를 `FOR NO KEY UPDATE`로 잠그고 — 판정 도중 청크가 교체되면 방금 계산한 관계가 사라진 청크 번호를 가리킨다 — `SELECT rebuild_document_edges(...)` 한 줄을 부르고 잡을 `done`으로 마감한다. 워커는 판정 규칙을 복제하지 않는다: 판정은 DB 함수 하나이고, 그 함수를 부르는 곳도 관계 잡 하나다 — `openarchive rebuild-edges`의 전량 재계산은 잡을 걸 뿐이다(027, #156). 판정이 성공하면 같은 문서의 `error`로 격리된 관계 잡을 함께 마감한다 — 판정은 문서의 관계를 통째로 교체하므로 격리된 잡이 요구한 일을 했다. 함수는 첫 문장에서 같은 문서 행을 `FOR NO KEY UPDATE`로 잠가, 한 문서의 재계산이 둘 겹치면(워커 여럿) 차례로 돈다(024) — 전량 재계산이 잡을 거치지 않던 때는 문서를 잠그지 않아 워커와 겹치면 교착했다. `FOR UPDATE`가 아닌 이유는 이 문서를 가리키는 관계 INSERT의 FK 검사(`FOR KEY SHARE`)와 충돌하지 않게 하려는 것이다. 서로의 이웃인 두 문서를 동시에 계산해도 교착하지 않는다. 판정을 건너뛰는 경우는 **문서가 이미 삭제됐을 때 하나뿐이다**(위 「관계 생성」 절).
+   **관계 잡(`kind='edges'`)은 2·3번을 타지 않는다.** 본문을 읽지도, 임베딩 모델을 부르지도 않는다. 자기 트랜잭션에서 `documents`를 `FOR NO KEY UPDATE`로 잠그고 — 판정 도중 청크가 교체되면 방금 계산한 관계가 사라진 청크 번호를 가리킨다 — `SELECT rebuild_document_edges(...)` 한 줄을 부르고 잡을 `done`으로 마감한다. 워커는 판정 규칙을 복제하지 않는다: 판정은 DB 함수 하나이고, 그 함수를 부르는 곳도 관계 잡 하나다 — `openarchive rebuild-edges`의 전량 재계산은 잡을 걸 뿐이다(027, #156). 판정이 성공하면 같은 문서의 `error`로 격리된 관계 잡을 함께 마감한다 — 판정은 문서의 관계를 통째로 교체하므로 격리된 잡이 요구한 일을 했다. 함수는 첫 문장에서 같은 문서 행을 `FOR NO KEY UPDATE`로 잠가, 한 문서의 재계산이 둘 겹치면(워커 여럿) 차례로 돈다(024) — 전량 재계산이 잡을 거치지 않던 때는 문서를 잠그지 않아 워커와 겹치면 교착했다. `FOR UPDATE`가 아닌 이유는 이 문서를 가리키는 관계 INSERT의 FK 검사(`FOR KEY SHARE`)와 충돌하지 않게 하려는 것이다. 서로의 이웃인 두 문서를 동시에 계산해도 교착하지 않는다. 판정을 건너뛰는 경우는 **문서가 이미 삭제됐을 때**(위 「관계 생성」 절)와 **잡을 잃었을 때**(`lock_owned_job`, 아래 5번)뿐이다.
 
    **추출 잡(`kind='extract'`)도 2·3번을 타지 않는다.** 최신 원본 판을 OCR해 문서 텍스트를 쓰는 데서 끝나고, 그 UPDATE가 발화시킨 새 `embed` 잡이 2·3번을 탄다(위 「추출 잡」 절). 인식 결과가 비었거나 너무 커도 잡은 `done`으로 마감하고 문서만 `failed`로 표시한다.
 
@@ -846,7 +851,7 @@ DATABASE_URL="postgresql://app@<vip>:6432/<pool_name>"
 
 ### 애플리케이션이 담당하는 복구 로직
 
-- **API**: `psycopg_pool.AsyncConnectionPool(check=AsyncConnectionPool.check_connection)` — 죽은 연결을 대여 시점에 감지·폐기·재수립. 처리 도중 끊긴 요청은 미들웨어가 **1회 재시도**하되 대상은 **읽기 전용 요청**뿐이다(`GET`·`HEAD`·`POST /api/search`·`POST /api/ask` — ask는 DB 단계가 생성 전에 끝나 재시도가 생성을 두 번 돌리지 않는다). 쓰기는 커밋 도달 여부를 구분할 수 없어 재시도 시 중복 생성 위험이 있다 (ADR-023).
+- **API**: `psycopg_pool.AsyncConnectionPool(check=AsyncConnectionPool.check_connection)` — 죽은 연결을 대여 시점에 감지·폐기·재수립. 처리 도중 끊긴 요청은 미들웨어가 **1회 재시도**한다. 대상은 **읽기 요청**(`GET`·`HEAD`·`POST /api/search`·`POST /api/ask` — ask는 DB 단계가 생성 전에 끝나 재시도가 생성을 두 번 돌리지 않는다)과 **`Idempotency-Key`가 있는 문서 생성**(`POST /api/documents`·`/api/documents/text`, ADR-047)뿐이다. 그 밖의 쓰기는 커밋 도달 여부를 구분할 수 없어 재시도 시 중복 생성 위험이 있다 (ADR-023).
 - **일시 불가용은 503 + `Retry-After`**: 기다리면 풀리는 DB 오류를 `openarchive.db.is_unavailable` 하나로 가른다 — 연결 유실·풀 대여 시간 초과(SQLSTATE 없는 `OperationalError`), 연결 예외 `08xxx`, OpenProxy `AllServersDown`과 서버 소켓 오류가 올라오는 `58000`, 서버 종료·기동 중인 `57P01`·`57P02`·`57P03`, 승격 직후 쓰기가 replica로 간 `25006`. **나열한 것만** 일시 불가용이다 — `OperationalError`에는 디스크 가득 참(`53100`)·인증 실패(`28P01`)·statement timeout(`57014`)처럼 기다려도 풀리지 않는 것도 섞여 있어, 그것을 503으로 주면 결함이 가려진다. 한계: 잘못된 DSN·비밀번호는 풀에서 `PoolTimeout`으로 보여 장애와 구별되지 않는다. 미들웨어(`api/retry.py`)의 즉시 1회 재시도도 이 기준을 따르고, 끝내 풀리지 않으면 **503 + `Retry-After: 1`**로 응답한다. 쓰기도 503은 받지만 즉시 재시도는 `Idempotency-Key`가 있는 문서 생성(`POST /api/documents`·`/api/documents/text`)만 한다 — 다른 쓰기는 헤더가 붙어 와도 키를 지키지 않는다. 그 밖의 오류는 500이며, 500은 코드 결함에만 남는다. #110 B에서는 장애 구간 응답이 전부 500이었다(B-5) (ADR-048 결정 3).
 - **긴 재시도는 클라이언트가 한다**: 즉시 1회로는 7~42초 중단을 덮지 못한다. 웹 UI(`lib/api.ts`)의 읽기와 업로드, MCP 도구 4개(읽기 3개와 `create_document`)가 503·네트워크 오류(MCP는 분류된 DB 오류)를 **지수 백오프(1초 시작·상한 8초) + 전체 지터, 총 60초**로 다시 시도한다. 웹 UI는 503의 `Retry-After`보다 일찍 보내지 않는다 — 간격은 `max(Retry-After, 지터 백오프)`이고, 알린 값이 남은 예산을 넘으면 바로 포기한다(RFC 9110 §10.2.3). stdio·원격 MCP 도구는 REST를 거치지 않고 서비스를 직접 부르며 같은 `with_backoff`를 쓴다. 도구 내부의 DB 실패는 MCP 오류로 전달된다. DB 불가용을 HTTP 503으로 받는 것은 토큰 인증 단계뿐이며 `RetryOnUnavailable`이 변환한다(매니저 미기동도 별도로 503). 쓰기는 멱등키가 있는 것만 재시도한다 — 웹 UI는 업로드 동작마다, MCP는 `create_document` 호출마다 키를 하나 만들어 그 요청의 모든 재시도에 쓴다(ADR-047). 편집·태그·삭제 등 다른 쓰기는 재시도하지 않는다. REST 서버는 긴 백오프 동안 요청을 붙잡지 않는다. 원격 MCP는 예외로 공유 도구 본체가 서버 안에서 백오프하므로 장애 구간의 도구 응답은 그동안 기다린다 — MCP 도구 호출에는 클라이언트가 멱등키를 실을 자리가 없어 같은 키로 재시도할 수 있는 곳이 서버뿐이고, 대기는 연결을 반납한 뒤라 풀을 묶지 않는다 (ADR-048 결정 4·「2026-10-07 개정」, ADR-056 구현 결정 7).
 - **워커 (잡 처리)**: 동일한 풀 정책. 처리 중 연결이 끊기면 트랜잭션이 롤백되고, 잡은 `processing` 상태로 남았다가 좀비 회수 스윕이 `pending`으로 되돌린다.
@@ -934,7 +939,7 @@ OpenSQL `patroni.yml`의 PostgreSQL 파라미터는 `max_connections: 100`이다
 | `PUT /api/documents/{id}/file` | **원본 교체.** multipart `file` + `current_version`. 새 판을 쌓고(이전 판 보존), 추출 텍스트가 달라졌을 때만 새 텍스트 버전(트리거가 이력·잡 생성). 새 원본이 OCR 대상이면 텍스트를 쓰지 않고 추출 잡으로 넘긴다. 최신 판과 같은 바이트면 아무것도 바꾸지 않는다. 버전 불일치·추출 중 409 · 추출 실패 400 · 상한 초과 413 |
 | `POST /api/documents/{id}/reextract` | **재추출.** `{current_version}`. 최신 판에서 다시 추출해 결과가 다르면 새 텍스트 버전, 같으면 무변경(`changed: false`). 새 판은 만들지 않는다. 최신 판이 OCR 대상이면 추출 잡으로 넘기고 `changed: false`와 `extraction_status: "pending"`으로 응답한다. 원본 없는 문서·추출 중 문서는 409 |
 | `PUT /api/documents/{id}` | 편집된 문서 텍스트(`{content, version}` JSON) → `version`+1, `content`, `content_hash` UPDATE. **버전 이력 기록과 재임베딩 잡 생성은 트리거가 수행.** 요청의 `version`이 현재 버전과 다르면 **409** (아래) |
-| `GET /api/documents/{id}/versions/{version}` | 그 텍스트 버전의 본문과 `version`·`created_at`·nullable `author`·`author_via`. 열람 술어를 같은 SQL에 넣어 조회하며 없거나 볼 수 없으면 404 (ADR-037) |
+| `GET /api/documents/{id}/versions/{version}` | 그 텍스트 버전의 본문과 `version`·`created_at`·nullable `author`·`author_via`. 선택 `?chunk=n`이면 그 청크 대목의 위치 `passage_start`·`passage_end`(UTF-16 단위)를 더한다 — 답변 인용 링크용(#96 b). 열람 술어를 같은 SQL에 넣어 조회하며 없거나 볼 수 없으면 404 (ADR-037) |
 | `GET /api/documents/{id}/versions/{base}/diff/{target}` | **텍스트 버전 비교.** 서버가 줄 단위로 비교한다(`services/textdiff.py` — Myers O((N+M)D), git의 기본 알고리즘, 새 의존성 없음). 응답 `{base, target, identical, too_large, hunks: [{lines: [{op: equal\|added\|removed, text}]}]}` — 바뀐 곳 앞뒤 **3줄**만 맥락으로 싣고(`difflib.get_grouped_opcodes(3)`와 같은 묶음), `text`에는 줄 끝 개행을 넣지 않는다. `identical`은 두 텍스트가 문자열로 완전히 같을 때만 true이고 그때 `hunks`는 빈 배열. **작업량 예산**: 대각선 하나·직진한 줄 하나·역추적 기록 한 칸을 작업 1로 세다가 `MAX_DIFF_WORK`(500만)를 넘으면 그 자리에서 멈추고 `too_large: true`·빈 `hunks`로 답한다 — 쓴 작업량은 예산 + 2 + min(N, M)을 넘지 않는다(jsdiff `maxEditLength`와 같은 방식). 2026-10-08 실측(크기 4.8K~20K줄 × 반복도 × 고친 곳 10~3,000 × 흩어짐/몰림 × 전체 교체): 작업 100만당 **0.12~0.15초·기록 3.8MB**로 일정해 예산이 최악 약 0.75초·19MB를 보장한다. 작업량은 문서 크기가 아니라 바뀐 줄 수(D)에 따라 늘어 대략 D²이며, 고친 줄이 약 1,100줄을 넘으면 too_large다. 실제 규정 2022판↔현행판 21쌍은 최대 6만 작업·8ms다. 처음 쓴 표준 `difflib`(autojunk 끔)는 같은 줄의 짝 수 × 바뀐 대목 수에 비례해, 빈 줄로 나눈 마크다운 2,000문단을 10문단마다 고치면 23.6초였다(같은 입력 Myers 20ms) — 짝 수로 미리 거르는 상한은 바뀐 대목 수 축에서 깨져 버렸다. 계산은 이벤트 루프 밖 스레드에서 돈다. 두 버전 중 하나라도 없거나 볼 수 없으면 404, 공유 토큰은 403 (#190) |
 | `POST /api/documents/{id}/versions/{v}/restore` `{current_version}` | **되돌리기.** 그 텍스트 버전의 내용으로 **새 텍스트 버전**을 만든다(되감기가 아니다). 편집과 같은 경로라 버전 이력 기록·재임베딩 잡 생성은 트리거가 하고, 쓰기 권한(세션 또는 `read_write` 토큰)이 필요하다. `current_version`이 현재 버전과 다르거나 추출 중이면 409, 없거나 볼 수 없는 버전은 404 (ADR-037) |
 | `PUT /api/documents/{id}/tags` | `{tags: string[]}`로 태그 전체 교체. 트리거는 `UPDATE OF content_hash`에만 걸려 있으므로 **재임베딩을 유발하지 않는다** |
@@ -972,7 +977,7 @@ OpenSQL `patroni.yml`의 PostgreSQL 파라미터는 `max_connections: 100`이다
 | `PUT /api/shares/{id}/documents/{document_id}` · `DELETE /api/shares/{id}/documents/{document_id}` | 공유에 내 문서 넣기·빼기(멱등 204). 세션 전용 |
 | `PUT /api/shares/{id}/folders/{folder_id}` · `DELETE /api/shares/{id}/folders/{folder_id}` | 공유에 폴더 넣기·빼기(멱등 204). 세션 전용. **그 폴더의 최상위 폴더를 만든 사람만**(관리자 예외 없음) — 아니면 403, 폴더가 안 보이면 404. 하위의 「폴더 범위 따름」 문서가 소유자와 무관하게 포함된다 (#206) |
 | `POST /api/shares/{id}/tokens` `{name}` · `DELETE /api/shares/{id}/tokens/{token_id}` | 공유 토큰 발급(원문 1회)·폐기. 세션 전용 |
-| `GET /api/system/status` | **로그인 필요 · 운영/데모 전용**: `inet_server_addr()`(현재 접속 노드), pending/processing/error **임베딩** 잡 수(`kind='embed'`), 임베딩 프로바이더명, **정합성 검증 쿼리 결과**(`c.version <> d.version` 건수), **관계 미반영 문서 수**(`kind='edges'` 잡이 `done`이 아닌 문서), **텍스트 인식 대기·실패 문서 수**(`extraction_status`가 `pending`·`failed`), **미리보기 변환 판 수**(`preview_pending`·`preview_failed`·`preview_unavailable` — `document_file_previews.status`별). `/admin/status`가 소비하며 사용자 화면은 호출하지 않는다. SQL과 결과 모델은 `services/system.py`에 있고 라우터는 인증과 응답 변환만 맡는다 |
+| `GET /api/system/status` | **로그인 필요 · 운영/데모 전용**: `inet_server_addr()`(현재 접속 노드), pending/processing/error **임베딩** 잡 수(`kind='embed'`, lease가 만료된 `processing`은 `recovery_pending`으로 따로)·`job_lease_seconds`·`last_job_finished_at`, 임베딩 프로바이더명, **정합성 검증 쿼리 결과**(`c.version <> d.version` 건수), **관계 미반영 문서 수**(`kind='edges'` 잡이 `done`이 아닌 문서), **텍스트 인식 대기·실패 문서 수**(`extraction_status`가 `pending`·`failed`), **미리보기 변환 판 수**(`preview_pending`·`preview_failed`·`preview_unavailable` — `document_file_previews.status`별). `/admin/status`가 소비하며 사용자 화면은 호출하지 않는다. SQL과 결과 모델은 `services/system.py`에 있고 라우터는 인증과 응답 변환만 맡는다 |
 
 > **공유 API(#97 c)** — 남의 공유 id는 404, 추가할 문서가 안 보이면 404, 보이는 남의 문서면 403이다. 공유 토큰은 ADR-044 「공유」 결정 5의 읽기 허용 목록만 통과하며 나머지는 403이다. MCP는 바꾸지 않는다.
 
@@ -1068,7 +1073,7 @@ PUT /api/documents/{id}
 `ask`는 **검색 → 근거 조립 → 프롬프트 → 생성 → 응답**의 고정 파이프라인으로 기존 검색을 소비한다.
 검색 SQL·열람 술어·DB 스키마는 변경하지 않고 답을 저장하거나 MCP에 추가하지 않는다.
 
-본문은 `{query, tags?, content_type?, k=5}`이며 빈 질의는 400이다. 로그인 사용자의 세션·위임 토큰을
+본문은 `{query, tags?, content_type?, folder_id?, k=5}`이며 빈 질의는 400이다. 로그인 사용자의 세션·위임 토큰을
 허용하고 공유 주체는 403으로 막는다(ADR-044 공유 허용 목록). 인증·검색·현재 버전 조회는 커넥션 한 번
 대여 안에서 끝낸다. `services/answer.py`의 `gather_evidence`가 `Evidence(hits, sources, system, prompt)`를
 반환하면 **커넥션을 반납한 뒤** `generate_answer`를 부른다. 요청 끝까지 연결을 쥐는 `Connection` 의존성을
@@ -1301,7 +1306,7 @@ OpenProxy는 `query_parser_read_write_splitting` 활성 시 **트랜잭션 밖�
 
 > **2026-08-11에 방식이 바뀌었다.** 원래는 대상 문서의 `avg(embedding)`을 질의 시점에 계산해 이웃을 찾았다. 그 방식을 고른 근거는 *"조회 시점 계산이라 항상 현재 청크를 따른다"*였고, 저장된 관계로 바꿀 때의 근거는 관계 edge를 **청크 교체와 같은 트랜잭션에서** 만드는 트리거라 최신성 차이가 없다는 것이었다. **그 근거는 016·017로 관계 판정이 잡으로 분리되면서 사라졌다** — 청크 교체와 관계 반영 사이에 다시 시차가 있다 (ADR-029 결정 3 개정). 그래도 저장된 관계를 읽는 선택은 유지한다: 이 제품이 약속한 보장은 원래 버전 일관성 + 최신 수렴이고(ADR-015), 아직 반영되지 않은 문서 수는 `/api/system/status`가 세어 관측할 수 있다. 문서 대표 벡터를 컬럼으로 저장하지 않는다는 원래 판단도 그대로다 — edge는 벡터가 아니라 관계다.
 >
-> 따라서 이 절의 두 쿼리에는 **벡터 연산이 없고, `SET LOCAL` 두 줄도 필요 없다.** 벡터 정렬은 청크가 바뀐 뒤 관계 잡이 한 번 수행하며 그 구조는 「자동 임베딩 파이프라인」의 관계 생성 절에 있다.
+> 따라서 이 절의 두 쿼리에는 **벡터 연산이 없고, `SET LOCAL`(`apply_vector_search_settings`)도 필요 없다.** 벡터 정렬은 청크가 바뀐 뒤 관계 잡이 한 번 수행하며 그 구조는 「자동 임베딩 파이프라인」의 관계 생성 절에 있다.
 
 ### 세 가지 공통 규칙
 
@@ -1311,7 +1316,7 @@ OpenProxy는 `query_parser_read_write_splitting` 활성 시 **트랜잭션 밖�
 열람 부여를, 공유 주체에게는 해당 공유에 지정된 문서만 허용한다. 공개/소유자 조건만 복사하면
 열람 부여와 공유 경로의 정책이 검색과 달라진다.
 
-빠뜨리면 관련 문서가 private 문서를 노출하고, 태그 추천이 private 문서의 태그를 흘린다. 대상 문서 자체도 서비스가 `ensure_visible`로 검증한다. 현재 이 검증은 `find_related`·`suggest_tags`·`resolve_links`·`find_backlinks` 네 함수에 걸려 있어 HTTP를 거치지 않는 호출에도 같은 404 의미의 `DocumentNotFound`가 적용된다.
+빠뜨리면 관련 문서가 private 문서를 노출하고, 태그 추천이 private 문서의 태그를 흘린다. 대상 문서 자체도 서비스가 `ensure_visible`로 검증한다. 현재 이 검증은 `find_related`·`suggest_tags`·`resolve_links`·`find_backlinks`·`suggest_folder`·`get_original_file`에 걸려 있어 HTTP를 거치지 않는 호출에도 같은 404 의미의 `DocumentNotFound`가 적용된다.
 
 **2. `kind`를 섞어 `score`로 정렬하지 않는다**
 
@@ -1322,7 +1327,7 @@ ORDER BY b.kind, b.mutual DESC, b.score DESC, d.id     -- kind → 서로 찾음
 같은 kind 안에서는 두 방향 저장 행이 모두 있는 `mutual` 쌍을 먼저 보이고, 그다음 점수와 문서 id로 정렬한다.
 태그 추천도 같은 순서다. 동일 텍스트는 관련 문서 `items`에서 제외해 `identical`에만 표시한다(#278).
 
-`score`의 **척도가 `kind`마다 다르기** 때문이다 — `overlaps`는 매칭 비율, `related`·`points_to`는 `1.0 - 최소거리`다 (`006_edges_tables.sql`). 섞어서 정렬하면 서로 다른 단위의 숫자를 한 줄에 세우게 된다. 화면도 `kind`별로 묶어 보여준다.
+`score`의 **척도가 `kind`마다 다르기** 때문이다 — `overlaps`는 매칭 비율, `related`는 `1.0 - 최소거리`다 (`006_edges_tables.sql`, 008이 `points_to`를 `related`로 합쳤다). 섞어서 정렬하면 서로 다른 단위의 숫자를 한 줄에 세우게 된다. 화면도 `kind`별로 묶어 보여준다.
 
 > 벡터 정렬 후보를 `DISTINCT ON`으로 줄이는 순서 규칙(ADR-011 보강 1)은 이 절에 더 이상 해당하지 않는다 — 여기에는 벡터 정렬이 없다. 그 규칙이 살아 있는 곳은 **검색 쿼리**이며 「검색 데이터 흐름」 절에 있다.
 
@@ -1349,13 +1354,13 @@ GET /api/documents/{id}/tag-suggestions
 - **404·400이 아니라 200이다.** 문서는 존재하고 요청도 유효하다. "아직 색인 전"은 오류가 아니라 상태다
 - 분기 기준은 `embedding_status`가 **아니라 청크 존재 여부**다. 재임베딩 중(`processing`)에도 이전 청크가 남아 있으므로 정상 응답해야 하며, 이는 검색이 재임베딩 중 이전 벡터로 동작하는 정책과 일치한다
 - `based_on_version`은 `document_chunks.version`을 그대로 쓴다. UI에 "v2 기준"으로 표시되어 **버전 일관성 보장을 화면에서 뒷받침한다**
-- 발생 상황: 최초 업로드 직후(`pending`), 최초 임베딩 실패(`error`)
+- 발생 상황: 최초 업로드 직후(`pending`), 최초 임베딩 실패(`error`), 텍스트 인식 중·인식 실패(`extraction_status` `pending`·`failed`)
 - `/related`의 `identical`은 벡터가 아니라 `content_hash`로 계산하므로, 청크가 없는 `not_indexed` 상태에서도 반환된다
 
 ### 관련 문서
 
 ```sql
-BEGIN;  -- plain BEGIN (ADR-010). 벡터 연산이 없어 SET LOCAL 두 줄은 걸지 않는다
+BEGIN;  -- plain BEGIN (ADR-010). 벡터 연산이 없어 SET LOCAL은 걸지 않는다
 
 -- 1) 청크 상태 — not_indexed 분기와 based_on_version을 함께 얻는다
 SELECT count(*), min(version) FROM document_chunks WHERE document_id = %(id)s;
@@ -1405,9 +1410,9 @@ COMMIT;
 | `kind` | `score`의 의미 | 계산 |
 |---|---|---|
 | `overlaps` | 자기 대목 중 상대 문서에서 최근접 이웃을 찾은 **비율**(판정은 양쪽 비율 모두 ≥ 0.8이어야 하지만 저장값은 계산 주체 쪽이다) | `overlap_ratio` |
-| `related` · `points_to` | 가장 가까운 청크 쌍의 **유사도** | `1.0 - 최소거리` |
+| `related` | 가장 가까운 청크 쌍의 **유사도** | `1.0 - 최소거리` |
 
-`014_edges_triggers.sql`의 `CASE WHEN is_overlaps THEN overlap_ratio ELSE 1.0 - min_dist END`가 그 자리다. **비율과 거리는 같은 줄에 세울 수 없으므로 `kind`를 섞어 정렬하지 않는다**(공통 규칙 2).
+`rebuild_document_edges`(014, 현재 정의는 024)의 `CASE WHEN is_overlaps THEN overlap_ratio ELSE 1.0 - min_dist END`가 그 자리다. **비율과 거리는 같은 줄에 세울 수 없으므로 `kind`를 섞어 정렬하지 않는다**(공통 규칙 2).
 
 > **`overlaps`를 "같은 내용"으로 읽으면 안 된다.** 이웃 판정이 순위 기반이라 절대 거리 임계가 없고, 주제가 가까운 문서끼리는 모든 대목이 서로 최근접이 되어 비율이 1.0에 붙는다 — 실 BGE-M3 실측에서 `PRD`↔`UI 디자인 가이드`가 1.00이었다 (`OPENSQL_RESEARCH.md` §14). 화면 어휘를 「여러 대목에서 만난다」로 두고 대목 수만 달리 말하는 이유다 (`UI_GUIDE.md`).
 
@@ -1497,7 +1502,7 @@ class EmbeddingProvider(Protocol):
 - **읽기 요청은 503·네트워크 오류를 백오프로 기다린다**(`lib/api.ts`). 읽기 함수는 `signal`을 받고, 훅과 화면 진입 시 조회는 마운트 동안 `AbortController` 하나로 묶어 **화면을 떠나면 진행 중인 요청과 백오프 대기를 함께 취소한다** — 쓸 곳 없는 재시도가 서버에 부하를 더하거나 재시도 안내가 다른 화면에 남지 않게 한다. 새 검색은 이전 검색을 취소한다. 사용자 동작으로 시작한 읽기(버전 본문 열기, 발급·생성 뒤 목록 다시 받기)도 `useUnmountSignal`로 같은 규칙을 따른다 — 앞선 쓰기 요청은 이미 커밋됐을 수 있어 취소하지 않는다. 기다리는 동안에만 `RetryNotice`가 「연결이 원활하지 않아 다시 시도하는 중입니다.」를 보이고 성공하면 사라진다. 무엇이 멈췄는지는 말하지 않는다. `/admin/status`의 `GET /api/system/status`만은 백오프하지 않는다 — 장애를 바로 드러내야 하는 관측 채널이고, 2초 폴링 자체가 재시도다 (ADR-048 결정 4, UI_GUIDE 원칙 3).
 - 관리 화면: `/admin/status` — `GET /api/system/status`를 폴링해 접속 노드·잡 수·프로바이더 표시. **페일오버 데모의 증거 채널**이다. 처음에는 내비게이션에 노출하지 않았으나 #190에서 관리자 메뉴 「시스템 상태」로 노출했다(관리자에게만 보인다). `/admin/users` — 계정 발급·삭제 (ADR-028). `/admin/groups` — 그룹 생성·삭제와 구성원 관리 (ADR-044). `/admin/shares` — 외부 공유 전수 조회와 토큰 비상 폐기 (ADR-061 결정 3). `/admin/audit` — 감사 로그 조회·CSV 내보내기 (ADR-055)
 - 화면은 모두 Client Component다. 로그인 세션 확인과 목록·상세·관리 화면의 폴링 때문이다
-- API 연동은 `next.config.js` rewrites로 FastAPI 프록시
+- API 연동: 개발 서버(`npm run dev`)는 `next.config.ts` rewrites로 `/api/*`를 FastAPI에 프록시한다. 배포는 `STATIC_EXPORT=1` 정적 export를 백엔드 패키지에 동봉해 `frontend.py`가 같은 오리진에서 서빙하므로 프록시가 없다 (ADR-041)
 
 ## 상태 관리
 

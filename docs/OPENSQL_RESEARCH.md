@@ -119,7 +119,7 @@ etcd는 이 구간에 아무 일도 겪지 않았다. `leader` 값은 한 번도
 
 앱이 받은 예외는 `psycopg.errors.SystemError`이고 MRO가
 `SystemError → OperationalError → DatabaseError → Error`라 **ADR-023의 재시도가 실제로 이
-경로를 탄다.** `backend/app/api/retry.py`가 `psycopg.OperationalError`를 잡으므로 코드와도
+경로를 탄다.** (당시) `backend/app/api/retry.py`가 `psycopg.OperationalError`를 잡으므로 — 현재는 `backend/openarchive/api/retry.py`가 `db.is_unavailable`로 판정한다 — 코드와도
 일치한다. 5432 직결 쪽은 `OperationalError: connection failed: ... Connection refused`다.
 
 **시나리오 ①-재측정 — `46 ms`는 대표값이 아니다** [실측 2026-08-22]
@@ -311,7 +311,7 @@ ERROR: "/home/opensql/lib/postgis-3.so" 라이브러리를 불러 올 수 없음
 
 1. `pgcrypto`와 `digest`가 충돌하므로 같은 스키마에 공존할 수 없다. 별도 스키마에서는 가능하다.
 2. `public.gen_random_uuid()`를 코어 함수와 중복 정의한다. 이 함수는
-   `backend/app/migrations/002_tables.sql:12`에서 문서 ID 기본값으로 사용한다.
+   `backend/openarchive/migrations/002_tables.sql:14`에서 문서 ID 기본값으로 사용한다.
 3. 로컬 `pgvector/pgvector:pg17` 컨테이너와 PGDG에 모두 없다. #28의 Dockerfile 해법이 통하지 않는
    첫 확장이다.
 4. 국산 해시인 HAS-160·LSH는 없고 블록암호만 제공한다.
@@ -452,7 +452,7 @@ $ grep OPENSQL_RUST_TOOLCHAIN scripts/install.sh
 
 ### OpenSQL이 실제로 배포하는 `patroni.yml` **[확정]**
 
-파일 위치: `$OPENSQL_HOME/etc/patroni.yml` (기본 템플릿)
+파일 위치: `$OPENSQL_HOME/etc/patroni/patroni.yml` (문서 표기는 `etc/patroni.yml` — 실측 경로는 `SETUP_OPENSQL.md` §10)
 
 `bootstrap.dcs`:
 
@@ -576,7 +576,7 @@ use_patroni = true
 |---|---|---|
 | `host` | `0.0.0.0` | |
 | `port` | `6432` | ⚠️ 다른 문서 페이지에서는 기본 5432로 서술 — **상충. 실측 필요** |
-| `worker_threads` | 5 | |
+| `worker_threads` | 5 | 실 배포판은 미지정 시 4(자동) — `OPENSQL_DEVIATIONS.md` 2절 |
 | `connect_timeout` | 1000 ms | |
 | `idle_timeout` | 600000 ms (10분) | |
 | `server_lifetime` | 3600000 ms (1시간) | 서버 커넥션 최대 수명 |
@@ -600,7 +600,7 @@ vip_addresses = ["178.176.0.200/24"]
 ### 운영 스크립트 **[확정]**
 
 ```bash
-bash $OPENSQL_HOME/scripts/start_openproxy.sh    # 설정: $OPENSQL_HOME/etc/openproxy.toml
+bash $OPENSQL_HOME/scripts/start_openproxy.sh    # 설정: $OPENSQL_HOME/etc/openproxy/openproxy.toml
 bash $OPENSQL_HOME/scripts/stop_openproxy.sh     # SIGTERM
 bash $OPENSQL_HOME/scripts/restart_openproxy.sh
 bash $OPENSQL_HOME/scripts/reload_openproxy.sh   # SIGHUP, 재시작 없이 설정 반영
