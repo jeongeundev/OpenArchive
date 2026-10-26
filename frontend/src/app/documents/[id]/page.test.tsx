@@ -1,6 +1,6 @@
 // Copyright 2026 jeongeundev
 // SPDX-License-Identifier: MIT
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { DocumentAccess, DocumentDetail } from "@/lib/types";
@@ -346,11 +346,9 @@ describe("문서 상세의 열람 범위 패널", () => {
     fireEvent.click(await screen.findByRole("radio", { name: "제한" }));
     fireEvent.click(screen.getByRole("button", { name: "열람 범위 저장" }));
 
-    await waitFor(() =>
-      expect(screen.getByText("열람 범위", { selector: "dt" }).nextElementSibling).toHaveTextContent(
-        "제한",
-      ),
-    );
+    // 열람 범위는 머리글 메타 한 줄이 보인다 — 저장하면 그 줄이 새 범위로 바뀐다.
+    await waitFor(() => expect(screen.getByTestId("document-header-meta")).toHaveTextContent("제한"));
+    expect(screen.getByTestId("document-header-meta")).not.toHaveTextContent("조직 공개");
   });
 
   it("소유자가 아니면 패널을 보이지 않고 열람 범위를 조회하지도 않는다", async () => {
@@ -464,5 +462,99 @@ describe("목록으로 돌아가기", () => {
     stubFetch(() => jsonResponse(detail));
     await renderPage();
     expect(screen.getByRole("link", { name: "← 목록으로 돌아가기" })).toHaveAttribute("href", "/");
+  });
+});
+
+// D9 — 왼쪽 본문 열·오른쪽 기둥·접힌 「문서 관리」.
+describe("문서 상세의 2단 배치", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function stubLayoutFetch(username: string | null, document: DocumentDetail = detail) {
+    vi.stubGlobal("fetch", vi.fn((url: string) => {
+      if (url === "/api/auth/me") {
+        return Promise.resolve(jsonResponse(
+          username === null
+            ? { authenticated: false, username: null, is_admin: false }
+            : { authenticated: true, username, is_admin: false },
+        ));
+      }
+      if (url.endsWith("/links")) return Promise.resolve(jsonResponse([]));
+      if (url.endsWith("/backlinks")) return Promise.resolve(jsonResponse([{ document_id: "source-1", title: "출발 문서" }]));
+      if (url.endsWith("/related")) return Promise.resolve(jsonResponse(related));
+      if (url.endsWith("/tag-suggestions")) return Promise.resolve(jsonResponse(suggestions));
+      if (url === "/api/shares") return Promise.resolve(jsonResponse([]));
+      if (url === "/api/folders") return Promise.resolve(jsonResponse([]));
+      if (url === "/api/principals") return Promise.resolve(jsonResponse({ users: ["alice", "bob"], groups: [] }));
+      if (url.endsWith("/access")) return Promise.resolve(jsonResponse({ visibility: "public", users: [], groups: [] }));
+      return Promise.resolve(jsonResponse(document));
+    }));
+  }
+
+  it("본문 열에는 텍스트·백링크·버전 이력을, 오른쪽 기둥에는 폴더·관련 문서·원본·태그·문서 정보를 둔다", async () => {
+    stubLayoutFetch("alice");
+    await renderPage();
+    await screen.findByRole("link", { name: "출발 문서" });
+
+    const columns = screen.getByTestId("document-columns");
+    const side = within(columns).getByTestId("document-side");
+    for (const name of ["추출 텍스트", "이 문서를 가리키는 문서", "텍스트 버전 이력"]) {
+      const heading = within(columns).getByRole("heading", { name });
+      expect(side).not.toContainElement(heading);
+    }
+    for (const name of ["관련 문서", "원본 파일", "태그", "태그 추천", "문서 정보"]) {
+      expect(within(side).getByRole("heading", { name })).toBeInTheDocument();
+    }
+    expect(within(side).getByLabelText("폴더")).toBeInTheDocument();
+    // 제목·메타 줄은 2단 위에 있다.
+    expect(columns).not.toContainElement(screen.getByRole("heading", { level: 1 }));
+  });
+
+  it("관리 동작은 접힌 「문서 관리」 안에 두고, 소유자에게만 열람 범위·소유자 이전을 넣는다", async () => {
+    stubLayoutFetch("alice");
+    await renderPage();
+
+    const manage = screen.getByText("문서 관리", { selector: "summary" }).closest("details");
+    expect(manage).not.toBeNull();
+    expect(manage).not.toHaveAttribute("open");
+    expect(within(manage!).getByRole("button", { name: "삭제", hidden: true })).toBeInTheDocument();
+    expect(within(manage!).getByRole("heading", { name: "열람 범위", hidden: true })).toBeInTheDocument();
+    expect(within(manage!).getByRole("button", { name: "소유자 이전", hidden: true })).toBeInTheDocument();
+    // TC 245의 문서 정보와 폴더 옮기기는 접힌 곳에 숨기지 않는다.
+    expect(manage).not.toContainElement(screen.getByRole("heading", { name: "문서 정보" }));
+    expect(manage).not.toContainElement(screen.getByLabelText("폴더"));
+    expect(manage).not.toContainElement(screen.getByTestId("document-columns"));
+  });
+
+  it("임베딩 오류 문서는 재임베딩이 보이도록 「문서 관리」를 펼쳐 둔다", async () => {
+    stubLayoutFetch("alice", { ...detail, embedding_status: "error" });
+    await renderPage();
+
+    const manage = screen.getByText("문서 관리", { selector: "summary" }).closest("details");
+    expect(manage).toHaveAttribute("open");
+    expect(within(manage!).getByRole("button", { name: "재임베딩" })).toBeInTheDocument();
+  });
+
+  it("소유자가 아니면 「문서 관리」에 열람 범위·소유자 이전이 없다", async () => {
+    stubLayoutFetch("bob");
+    await renderPage();
+
+    const manage = screen.getByText("문서 관리", { selector: "summary" }).closest("details");
+    expect(within(manage!).getByRole("button", { name: "삭제", hidden: true })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "열람 범위", hidden: true })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "소유자 이전", hidden: true })).not.toBeInTheDocument();
+  });
+
+  it("로그인하지 않았으면 「문서 관리」도 태그 편집도 없다", async () => {
+    stubLayoutFetch(null);
+    await act(async () => {
+      render(<AuthProvider><DocumentDetailView /></AuthProvider>);
+    });
+    await screen.findByRole("link", { name: "출발 문서" });
+
+    expect(screen.queryByText("문서 관리")).not.toBeInTheDocument();
+    expect(screen.queryByRole("textbox", { name: "태그" })).not.toBeInTheDocument();
+    expect(within(screen.getByTestId("document-side")).getByRole("heading", { name: "문서 정보" })).toBeInTheDocument();
   });
 });
