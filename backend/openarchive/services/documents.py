@@ -54,7 +54,8 @@ EFFECTIVE_VISIBILITY = (
 
 # 목록·요약 응답이 쓰는 컬럼. 네 곳에서 같은 나열을 반복하지 않도록 한 곳에 둔다.
 SUMMARY_COLUMNS = """id, title, filename, content_type, version, owner_id, visibility, tags,
-                     embedding_status, extraction_status, created_at, updated_at, """ + (
+                     embedding_status, extraction_status, created_at, updated_at,
+                     (folder_id IS NOT NULL AND follows_folder) AS follows_folder, """ + (
     EFFECTIVE_VISIBILITY
 )
 

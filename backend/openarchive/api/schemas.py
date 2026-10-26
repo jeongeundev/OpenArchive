@@ -72,6 +72,7 @@ class MoveDocumentRequest(BaseModel):
 
 
 class DocumentSummary(BaseModel):
+    follows_folder: bool = False
     id: UUID
     title: str
     filename: str | None

@@ -28,6 +28,7 @@ const detail: DocumentDetail = {
   owner_id: "alice",
   visibility: "public",
   effective_visibility: "public",
+  follows_folder: false,
   tags: ["OpenSQL"],
   embedding_status: "ready",
   extraction_status: "done",

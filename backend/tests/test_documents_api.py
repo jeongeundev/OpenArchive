@@ -2317,3 +2317,35 @@ def test_token_edit_records_version_author(db_client: TestClient):
     assert response.status_code == 200
     version = db_client.get(f"/api/documents/{document_id}/versions/2", headers=headers).json()
     assert (version["author"], version["author_via"]) == ("alice", "token")
+
+
+@pytest.mark.parametrize("scope", ["folder", "individual", "outside"])
+def test_document_responses_normalize_folder_scope(db_client, migrated_db, scope):
+    login_as(db_client, "bob")
+    login_as(db_client, "alice")
+    folder = db_client.post("/api/folders", json={"name": "팀"}).json()
+    payload = {"title": "범위", "content": "문서 텍스트", "content_type": "txt"}
+    if scope != "outside":
+        payload["folder_id"] = folder["id"]
+    created = db_client.post("/api/documents/text", json=payload)
+    assert created.status_code == 201
+    doc_id = created.json()["id"]
+    if scope == "individual":
+        response = db_client.put(
+            f"/api/documents/{doc_id}/access",
+            json={"follows_folder": False, "visibility": "private", "users": ["bob"], "groups": []},
+        )
+        assert response.status_code == 200
+    if scope == "outside":
+        with psycopg.connect(migrated_db) as conn:
+            assert conn.execute(
+                "SELECT follows_folder FROM documents WHERE id=%s", (doc_id,)
+            ).fetchone() == (True,)
+    login_as(db_client, "bob")
+    listing = db_client.get("/api/documents")
+    detail = db_client.get(f"/api/documents/{doc_id}")
+    assert listing.status_code == detail.status_code == 200
+    summary = next(row for row in listing.json() if row["id"] == doc_id)
+    for body in (summary, detail.json()):
+        assert body["follows_folder"] is (scope == "folder")
+        assert not ({"users", "groups", "grant_users", "grant_groups"} & body.keys())

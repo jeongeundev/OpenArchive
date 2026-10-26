@@ -92,6 +92,7 @@ export interface ShareSummary {
 }
 
 export interface DocumentSummary {
+  follows_folder: boolean;
   id: string;
   title: string;
   filename: string | null;

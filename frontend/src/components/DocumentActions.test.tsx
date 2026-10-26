@@ -18,6 +18,7 @@ const document: DocumentSummary = {
   owner_id: "alice",
   visibility: "public",
   effective_visibility: "public",
+  follows_folder: false,
   tags: [],
   embedding_status: "ready",
   extraction_status: "done",
