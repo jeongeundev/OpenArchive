@@ -13,6 +13,11 @@ function versionLabel(source: AnswerSource): string {
     : `v${source.based_on_version} 기준`;
 }
 
+/** 검색 결과의 메타 줄과 같은 규칙 — 빈 값은 빼고 ` · `로 잇는다. */
+function sourceMeta(parts: (string | null | undefined)[]): string {
+  return parts.filter(Boolean).join(" · ");
+}
+
 /** 답의 `[번호]`를 근거 링크로 바꾼다. 근거에 없는 번호는 모델이 지어낸 것이라 글자 그대로 둔다. */
 function AnswerText({ answer, sources }: { answer: string; sources: AnswerSource[] }): React.ReactElement {
   const byLabel = new Map(sources.map((source) => [source.label, source]));
@@ -101,6 +106,9 @@ export function AnswerPanel({
                       {versionLabel(source)}
                     </span>
                   </div>
+                  <p className="mt-1 break-words text-xs text-muted">
+                    {sourceMeta([source.content_type?.toUpperCase(), source.folder_path?.join(" › "), source.owner])}
+                  </p>
                   <p className="mt-1 line-clamp-3 whitespace-pre-wrap text-xs text-muted">{source.content}</p>
                 </li>
               ))}
@@ -117,6 +125,9 @@ export function AnswerPanel({
                       [{source.label}] {source.title}
                     </Link>
                     <span className="ml-2 text-xs text-muted">{versionLabel(source)}</span>
+                    <span className="ml-2 text-xs text-muted">
+                      {sourceMeta([source.content_type?.toUpperCase(), source.owner])}
+                    </span>
                   </li>
                 ))}
               </ul>

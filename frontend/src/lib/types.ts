@@ -239,6 +239,9 @@ export interface AnswerSource {
   revised: boolean;
   content: string;
   cited: boolean;
+  content_type?: ContentType | null;
+  folder_path?: string[] | null;
+  owner?: string | null;
 }
 
 export interface AskResponse {
