@@ -1,6 +1,7 @@
 // Copyright 2026 jeongeundev
 // SPDX-License-Identifier: MIT
-import { VISIBILITY_LABEL, type DocumentDetail } from "@/lib/types";
+import { scopeSummary } from "@/lib/scope";
+import type { DocumentDetail } from "@/lib/types";
 import { DocumentStatusBadge } from "./StatusBadge";
 
 function formatDate(value: string): string {
@@ -42,7 +43,7 @@ export function DocumentMeta({
         <div>
           <dt className="text-muted">열람 범위</dt>
           <dd className="mt-1 text-body">
-            {VISIBILITY_LABEL[document.effective_visibility]}
+            {scopeSummary(document)}
           </dd>
         </div>
         <div>

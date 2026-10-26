@@ -70,6 +70,17 @@ describe("DocumentMeta", () => {
     expect(screen.queryByText("제한")).not.toBeInTheDocument();
   });
 
+  it("폴더 범위를 따르는 문서는 범위 뒤에 「폴더 범위 따름」을 붙인다 (D3 — 부여 대상 이름은 없다)", () => {
+    const { rerender } = render(
+      <DocumentMeta document={{ ...document, effective_visibility: "private", follows_folder: true }} />,
+    );
+    expect(screen.getByText("제한 · 폴더 범위 따름")).toBeInTheDocument();
+
+    rerender(<DocumentMeta document={{ ...document, effective_visibility: "public", follows_folder: true }} />);
+    expect(screen.getByText("조직 공개 · 폴더 범위 따름")).toBeInTheDocument();
+    expect(screen.queryByText("조직 공개")).not.toBeInTheDocument();
+  });
+
   it("편집기와 중복되지 않도록 태그를 표시하지 않는다", () => {
     render(<DocumentMeta document={document} />);
 

@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: MIT
 import Link from "next/link";
 
-import { VISIBILITY_LABEL, type DocumentSummary } from "@/lib/types";
+import { scopeSummary } from "@/lib/scope";
+import type { DocumentSummary } from "@/lib/types";
 import { DocumentStatusBadge } from "./StatusBadge";
 
 const DATE_FORMATTER = new Intl.DateTimeFormat("ko-KR", {
@@ -60,7 +61,7 @@ export function DocumentTable({
                 </td>
                 <td className="px-4 py-3 text-muted">{document.owner_id}</td>
                 <td className="px-4 py-3">
-                  {VISIBILITY_LABEL[document.effective_visibility]}
+                  {scopeSummary(document)}
                 </td>
                 <td className="px-4 py-3">
                   <DocumentStatusBadge document={document} />

@@ -93,4 +93,19 @@ describe("DocumentTable", () => {
     expect(screen.getByText("조직 공개")).toBeInTheDocument();
     expect(screen.queryByText("제한")).not.toBeInTheDocument();
   });
+
+  it("폴더 범위를 따르는 문서는 범위 뒤에 「폴더 범위 따름」을 붙인다 (D3 — 부여 대상 이름은 없다)", () => {
+    render(
+      <DocumentTable
+        documents={[
+          { ...documents[0], effective_visibility: "public", follows_folder: true },
+          { ...documents[1], effective_visibility: "private", follows_folder: true, owner_id: "bob" },
+        ]}
+      />,
+    );
+    expect(screen.getByRole("cell", { name: "조직 공개 · 폴더 범위 따름" })).toBeInTheDocument();
+    expect(screen.getByRole("cell", { name: "제한 · 폴더 범위 따름" })).toBeInTheDocument();
+    expect(screen.queryByText("제한")).not.toBeInTheDocument();
+    expect(screen.queryByText("조직 공개")).not.toBeInTheDocument();
+  });
 });
