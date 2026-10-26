@@ -111,6 +111,35 @@ describe("AnswerPanel", () => {
     expect(within(list).getByText("PDF · 이영호")).toBeInTheDocument();
   });
 
+  // #288 step 9 — 근거 목록을 펼친 채 lg에서 2열로 놓고, 대목은 공백을 접어 2줄로 줄인다.
+  it("인용한 근거 목록을 lg에서 2열 격자로 놓는다", () => {
+    renderPanel(answered("답 [1]", [source({ label: 1 })]));
+
+    expect(screen.getByRole("list", { name: "인용한 근거" })).toHaveClass("lg:grid-cols-2");
+  });
+
+  it("인용한 근거의 대목을 펼친 채 공백을 접어 2줄로 보인다 (명세서 288)", () => {
+    renderPanel(
+      answered("답 [1]", [source({ label: 1, content: "  장애 시\n\nOpenProxy가   새 프라이머리로\n연결한다.  " })]),
+    );
+
+    const list = screen.getByRole("list", { name: "인용한 근거" });
+    const passage = within(list).getByText("장애 시 OpenProxy가 새 프라이머리로 연결한다.");
+    expect(passage.textContent).toBe("장애 시 OpenProxy가 새 프라이머리로 연결한다.");
+    expect(passage.closest("details")).toBeNull();
+    expect(passage).toHaveClass("line-clamp-2");
+    expect(passage).not.toHaveClass("whitespace-pre-wrap");
+  });
+
+  it("인용한 근거의 메타 줄은 형식 · 위치 · 소유자 순서다", () => {
+    renderPanel(
+      answered("답 [1]", [source({ label: 1, content_type: "docx", folder_path: ["재무"], owner: "최수진" })]),
+    );
+
+    const list = screen.getByRole("list", { name: "인용한 근거" });
+    expect(within(list).getByText("DOCX · 재무 · 최수진")).toBeInTheDocument();
+  });
+
   it("인용하지 않은 근거에도 형식·소유자를 보인다", () => {
     renderPanel(
       answered("답 [1]", [

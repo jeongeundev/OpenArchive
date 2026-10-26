@@ -94,7 +94,7 @@ export function AnswerPanel({
           {cited.length > 0 ? (
             <div className="space-y-3 border-t border-line pt-4">
             <h3 id="answer-cited" className="text-sm font-medium text-strong">인용한 근거</h3>
-            <ol aria-labelledby="answer-cited" className="space-y-3">
+            <ol aria-labelledby="answer-cited" className="grid gap-x-6 gap-y-3 lg:grid-cols-2">
               {cited.map((source) => (
                 <li key={source.label} className="text-sm">
                   <div className="flex flex-wrap items-baseline gap-2">
@@ -109,7 +109,7 @@ export function AnswerPanel({
                   <p className="mt-1 break-words text-xs text-muted">
                     {sourceMeta([source.content_type?.toUpperCase(), source.folder_path?.join(" › "), source.owner])}
                   </p>
-                  <p className="mt-1 line-clamp-3 whitespace-pre-wrap text-xs text-muted">{source.content}</p>
+                  <p className="mt-1 line-clamp-2 text-xs text-muted">{source.content.replace(/\s+/g, " ").trim()}</p>
                 </li>
               ))}
             </ol>
