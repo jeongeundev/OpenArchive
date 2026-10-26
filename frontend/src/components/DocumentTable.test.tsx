@@ -108,4 +108,18 @@ describe("DocumentTable", () => {
     expect(screen.queryByText("제한")).not.toBeInTheDocument();
     expect(screen.queryByText("조직 공개")).not.toBeInTheDocument();
   });
+
+  it("유형·열람 범위·상태·수정일 칸은 줄바꿈하지 않고 제목 칸은 줄바꿈을 허용한다 (1920 폭에서 세로 쪼개짐 방지)", () => {
+    render(<DocumentTable documents={[documents[0]]} />);
+
+    const headers = screen.getAllByRole("columnheader");
+    const cells = screen.getAllByRole("cell");
+    const index = (name: string) => headers.findIndex((header) => header.textContent === name);
+    for (const name of ["유형", "열람 범위", "상태", "수정일"]) {
+      expect(headers[index(name)]).toHaveClass("whitespace-nowrap");
+      expect(cells[index(name)]).toHaveClass("whitespace-nowrap");
+    }
+    expect(headers[index("제목")]).not.toHaveClass("whitespace-nowrap");
+    expect(cells[index("제목")]).not.toHaveClass("whitespace-nowrap");
+  });
 });

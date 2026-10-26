@@ -27,12 +27,12 @@ export function DocumentTable({
         <thead className="border-b border-line text-xs text-muted">
           <tr>
             <th className="px-4 py-3 font-medium" scope="col">제목</th>
-            <th className="px-4 py-3 font-medium" scope="col">유형</th>
+            <th className="whitespace-nowrap px-4 py-3 font-medium" scope="col">유형</th>
             <th className="px-4 py-3 font-medium" scope="col">태그</th>
             <th className="px-4 py-3 font-medium" scope="col">소유자</th>
-            <th className="px-4 py-3 font-medium" scope="col">열람 범위</th>
-            <th className="px-4 py-3 font-medium" scope="col">상태</th>
-            <th className="px-4 py-3 font-medium" scope="col">수정일</th>
+            <th className="whitespace-nowrap px-4 py-3 font-medium" scope="col">열람 범위</th>
+            <th className="whitespace-nowrap px-4 py-3 font-medium" scope="col">상태</th>
+            <th className="whitespace-nowrap px-4 py-3 font-medium" scope="col">수정일</th>
           </tr>
         </thead>
         <tbody className="divide-y divide-line">
@@ -53,17 +53,17 @@ export function DocumentTable({
                     {document.title}
                   </Link>
                 </td>
-                <td className="px-4 py-3 uppercase text-muted">
+                <td className="whitespace-nowrap px-4 py-3 uppercase text-muted">
                   {document.content_type}
                 </td>
                 <td className="px-4 py-3 text-muted">
                   {document.tags.length > 0 ? document.tags.join(", ") : "—"}
                 </td>
                 <td className="px-4 py-3 text-muted">{document.owner_id}</td>
-                <td className="px-4 py-3">
+                <td className="whitespace-nowrap px-4 py-3">
                   {scopeSummary(document)}
                 </td>
-                <td className="px-4 py-3">
+                <td className="whitespace-nowrap px-4 py-3">
                   <DocumentStatusBadge document={document} />
                 </td>
                 <td className="whitespace-nowrap px-4 py-3 text-muted">

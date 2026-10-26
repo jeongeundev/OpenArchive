@@ -22,7 +22,7 @@ export default function GlobalError({ retry }: {
       </head>
       <body className="flex min-h-full flex-col">
         <title>OpenArchive</title>
-        <main className="mx-auto w-full max-w-5xl flex-1 px-6 py-8">
+        <main className="mx-auto w-full max-w-7xl flex-1 px-6 py-8">
           <section className="space-y-4">
             <h1 className="text-4xl font-semibold text-strong">화면을 표시하지 못했습니다</h1>
             <p className="text-sm text-muted">잠시 뒤 다시 시도하세요. 문제가 계속되면 관리자에게 알려 주세요.</p>

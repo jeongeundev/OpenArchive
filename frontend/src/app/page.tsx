@@ -4,7 +4,7 @@
 
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { Suspense, useCallback, useEffect, useId, useMemo, useState } from "react";
 
 import { DocumentFilters } from "@/components/DocumentFilters";
 import { createFolder, listDocumentTags, type DocumentFilters as Filters } from "@/lib/api";
@@ -47,6 +47,9 @@ function HomeView(): React.ReactElement {
   const folderId = selectedFolder?.id ?? null;
   const [tags, setTags] = useState<string[]>([]);
   const [tagsRevision, setTagsRevision] = useState(0);
+  // 업로드 폼은 접어 두고 목록을 먼저 보인다. 올린 뒤에도 이어서 올릴 수 있게 펼친 채로 둔다.
+  const [uploadOpen, setUploadOpen] = useState(false);
+  const uploadRegionId = useId();
   const { documents, total, loading, error, refresh } = useDocuments({
     ...filters,
     folderId: folderId ?? undefined,
@@ -134,7 +137,18 @@ function HomeView(): React.ReactElement {
           onChanged={refreshFolders} onDeleted={onFolderDeleted} onAccessSaved={onFolderAccessSaved} />
       ) : null}
 
-      {auth.authenticated ? <UploadDropzone onUploaded={onUploaded} folders={folders} defaultFolderId={folderId} /> : null}
+      {auth.authenticated ? (
+        <div className="space-y-4">
+          <button type="button" aria-expanded={uploadOpen} aria-controls={uploadRegionId}
+            onClick={() => setUploadOpen(open => !open)}
+            className="rounded-lg bg-strong px-4 py-2 text-sm font-medium text-on-strong hover:bg-strong/90">
+            {uploadOpen ? "업로드 닫기" : "문서 올리기"}
+          </button>
+          <div id={uploadRegionId}>
+            {uploadOpen ? <UploadDropzone onUploaded={onUploaded} folders={folders} defaultFolderId={folderId} /> : null}
+          </div>
+        </div>
+      ) : null}
 
       <DocumentFilters value={filters} tags={tags} onChange={onFiltersChanged} />
 

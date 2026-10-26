@@ -198,6 +198,7 @@ describe("목록 찾기", () => {
       return Promise.resolve(new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } }));
     }));
     render(<AuthProvider><Home /></AuthProvider>);
+    fireEvent.click(await screen.findByRole("button", { name: "문서 올리기" }));
     fireEvent.change(await screen.findByLabelText("업로드할 파일"), {
       target: { files: [new File(["본문"], "new.md", { type: "text/markdown" })] },
     });
