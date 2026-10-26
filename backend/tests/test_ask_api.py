@@ -42,6 +42,7 @@ def test_ask_returns_answer_sources_and_search_items(db_client, evidence, monkey
         "label": 1, "document_id": evidence[0], "title": "정합성 규정",
         "chunk_index": 0, "based_on_version": 1, "current_version": 1,
         "revised": False, "content": "OpenSQL 정합성 트리거 운영 규정", "cited": True,
+        "content_type": expected[0]["content_type"], "folder_path": None, "owner": "alice",
     }
 
 

@@ -446,6 +446,9 @@ class AskSource(BaseModel):
     revised: bool
     content: str
     cited: bool = False
+    content_type: str | None = None
+    folder_path: list[str] | None = None
+    owner: str | None = None
 
 
 class AskResponse(BaseModel):

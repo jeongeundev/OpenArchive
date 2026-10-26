@@ -296,3 +296,21 @@ async def test_gather_evidence_forwards_folder_filter(conn, monkeypatch):
     evidence = await gather(conn, folder_id=folder_id)
     assert received == [folder_id]
     assert evidence.hits == [] and evidence.sources == []
+
+
+@pytest.mark.parametrize("folder_visible", [True, False])
+async def test_sources_copy_search_metadata_without_changing_prompt(conn, folder_visible):
+    cursor = await conn.execute(
+        "INSERT INTO folders (name, created_by, visibility) VALUES (%s, 'bob', %s) RETURNING id",
+        ("출처 폴더", "public" if folder_visible else "private"),
+    )
+    folder_id = (await cursor.fetchone())[0]
+    document_id = await seed(conn, title="근거", content="정합성 근거", content_type="md")
+    await conn.execute("UPDATE documents SET folder_id=%s, follows_folder=false WHERE id=%s", (folder_id, document_id))
+    evidence = await gather(conn)
+    hit = next(hit for hit in evidence.hits if hit.document_id == document_id)
+    source = next(source for source in evidence.sources if source.document_id == document_id)
+    assert source.content_type == hit.content_type == "md"
+    assert source.owner == hit.owner == "alice"
+    assert source.folder_path == hit.folder_path == (("출처 폴더",) if folder_visible else None)
+    assert evidence.prompt == "[1] 근거 · v1 기준\n정합성 근거\n\n질문: 정합성 근거"

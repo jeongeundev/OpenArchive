@@ -37,6 +37,9 @@ class AnswerSource:
     revised: bool
     content: str
     cited: bool = False
+    content_type: str | None = None
+    folder_path: tuple[str, ...] | None = None
+    owner: str | None = None
 
 
 @dataclass(frozen=True)
@@ -174,7 +177,8 @@ async def gather_evidence(
             label=len(sources) + 1, document_id=hit.document_id, title=hit.title,
             chunk_index=passage.chunk_index, based_on_version=passage.based_on_version,
             current_version=current, revised=passage.based_on_version < current,
-            content=content,
+            content=content, content_type=hit.content_type,
+            folder_path=hit.folder_path, owner=hit.owner,
         ))
     system = (
         '주어진 근거만 사용해 한국어로 답하세요. 근거에 없으면 '
