@@ -57,7 +57,11 @@ def test_search_returns_a_matching_document(db_client: TestClient, migrated_db: 
 
     assert response.status_code == 200
     assert response.json()["items"][0]["document_id"] == matching_id
-    passage = response.json()["items"][0]["passages"][0]
+    item = response.json()["items"][0]
+    assert item["folder_path"] is None
+    assert item["owner"] == "alice"
+    assert item["updated_at"]
+    passage = item["passages"][0]
     assert passage["content"] == "OpenSQL 정합성 트리거 운영 규정"
     assert passage["chunk_index"] == 0
     assert passage["based_on_version"] == 1

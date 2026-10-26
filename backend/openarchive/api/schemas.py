@@ -416,6 +416,10 @@ class SearchResult(BaseModel):
     preview: str | None = None
     passages: list[SearchPassage] = Field(default_factory=list)
 
+    folder_path: list[str] | None = None
+    owner: str | None = None
+    updated_at: datetime | None = None
+
 
 class SearchResponse(BaseModel):
     items: list[SearchResult]

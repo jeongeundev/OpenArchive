@@ -5,6 +5,7 @@
 import asyncio
 import re
 from dataclasses import dataclass
+from datetime import datetime
 from uuid import UUID
 
 import psycopg
@@ -325,6 +326,9 @@ class SearchHit:
     via: SearchVia | None
     preview: str | None = None
     passages: tuple[SearchPassage, ...] = ()
+    folder_path: tuple[str, ...] | None = None
+    owner: str | None = None
+    updated_at: datetime | None = None
 
 
 def _merge_passages(items: list) -> tuple[SearchPassage, ...]:
@@ -460,6 +464,27 @@ async def search_documents(
         await apply_vector_search_settings(conn)
         cur = await conn.execute(SEARCH_SQL, params)
         rows = await cur.fetchall()
+        cur = await conn.execute(
+            f"""WITH RECURSIVE selected AS (
+                SELECT d.id, d.owner_id, d.updated_at, f.id AS folder_id
+                FROM documents d
+                LEFT JOIN folders f ON f.id = d.folder_id AND ({FOLDER_VISIBLE_TO_USER})
+                WHERE d.id = ANY(%(ids)s::uuid[])
+            ), path AS (
+                SELECT s.id AS document_id, f.id, f.parent_id, f.name, 0 AS depth
+                FROM selected s JOIN folders f ON f.id = s.folder_id
+                UNION ALL
+                SELECT c.document_id, f.id, f.parent_id, f.name, c.depth + 1
+                FROM path c JOIN folders f ON f.id = c.parent_id
+            )
+            SELECT s.id, s.owner_id, s.updated_at,
+                (SELECT array_agg(p.name ORDER BY p.depth DESC)
+                 FROM path p JOIN folders f ON f.id = p.id
+                 WHERE p.document_id = s.id AND ({FOLDER_VISIBLE_TO_USER}))
+            FROM selected s""",
+            {"ids": list({row[0] for row in rows}), "user": user_id},
+        )
+        metadata = {row[0]: row[1:] for row in await cur.fetchall()}
 
     # 이미 선택된 문서·버전의 주변 청크만 사용한다. 열람 범위와 문서 순위는 SQL이 결정한다.
     identifier = params["identifier"]
@@ -498,6 +523,12 @@ async def search_documents(
     return [
         SearchHit(
             document_id=row[0],
+            owner=metadata[row[0]][0] if row[0] in metadata else None,
+            updated_at=metadata[row[0]][1] if row[0] in metadata else None,
+            folder_path=(
+                tuple(metadata[row[0]][2])
+                if row[0] in metadata and metadata[row[0]][2] is not None else None
+            ),
             title=row[1],
             filename=row[2],
             tags=row[3],
