@@ -288,3 +288,57 @@ it("검색된 본문 대목은 원래 공백과 줄바꿈을 보존한다", () =
   expect(passage.textContent).toBe(content);
   expect(passage).toHaveClass("whitespace-pre-wrap");
 });
+
+describe("검색 결과 배치", () => {
+  const linked = {
+    ...response.items[0],
+    document_id: "document-2",
+    title: "OpenProxy 장애 대응",
+    content: "연결 문서의 본문 발췌입니다.",
+    preview: "연결 문서의 미리보기입니다.",
+    folder_path: ["운영"],
+    owner: "kim",
+    updated_at: "2026-10-26T03:00:00Z",
+    via: { from_document_id: "document-1", from_title: "OpenSQL 운영 가이드", kind: "related", depth: 1 },
+  };
+
+  it("함께 볼 문서가 있으면 넓은 화면에서 두 단으로 놓고 함께 볼 문서를 두 번째 단에 둔다", () => {
+    render(<SearchResults response={{ ...response, items: [response.items[0], linked] }} loading={false} error={null} />);
+
+    const columns = screen.getByTestId("search-result-columns");
+    expect(columns).toHaveClass("grid", "lg:grid-cols-[minmax(0,1fr)_340px]");
+    const [first, second] = Array.from(columns.children);
+    expect(first).toContainElement(screen.getByRole("region", { name: "검색 결과" }));
+    expect(second).toContainElement(screen.getByRole("region", { name: "함께 볼 문서" }));
+  });
+
+  it("함께 볼 문서가 없으면 한 단으로 놓는다", () => {
+    render(<SearchResults response={response} loading={false} error={null} />);
+
+    expect(screen.getByTestId("search-result-columns")).not.toHaveClass("lg:grid-cols-[minmax(0,1fr)_340px]");
+  });
+
+  it("함께 볼 문서는 발췌 없이 형식·제목·메타·연결 이유만 보인다", () => {
+    render(<SearchResults response={{ ...response, items: [response.items[0], linked] }} loading={false} error={null} />);
+
+    const related = screen.getByRole("region", { name: "함께 볼 문서" });
+    expect(within(related).queryByText(/연결 문서의 미리보기입니다/)).not.toBeInTheDocument();
+    expect(within(related).queryByText(/연결 문서의 본문 발췌입니다/)).not.toBeInTheDocument();
+    expect(within(related).queryByRole("button", { name: "발췌 더보기" })).not.toBeInTheDocument();
+    const meta = within(related).getByRole("link", { name: "OpenProxy 장애 대응" }).nextElementSibling;
+    expect(meta?.textContent).toBe("MD · 운영 · kim · 2026년 10월 26일 · OpenSQL, 운영");
+    expect(related).toHaveTextContent("「OpenSQL 운영 가이드」에서 「관련 있음」로 이어짐");
+    expect(related).toHaveTextContent("검색 결과에서 관계로 이어진 문서입니다. 각 문서의 연결 이유를 확인하세요.");
+  });
+
+  it("실행된 SQL 보기는 검색 결과 단 안, 결과 목록 아래에 있다", () => {
+    render(<SearchResults response={{ ...response, items: [response.items[0], linked] }} loading={false} error={null} />);
+
+    const [first] = Array.from(screen.getByTestId("search-result-columns").children);
+    const button = screen.getByRole("button", { name: "실행된 SQL 보기" });
+    expect(first).toContainElement(button);
+    const direct = screen.getByRole("region", { name: "검색 결과" });
+    expect(direct.compareDocumentPosition(button) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(direct).not.toContainElement(button);
+  });
+});
