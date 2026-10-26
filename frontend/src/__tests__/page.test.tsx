@@ -1,6 +1,6 @@
 // Copyright 2026 jeongeundev
 // SPDX-License-Identifier: MIT
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { AuthProvider } from "@/components/AuthProvider";
@@ -134,12 +134,86 @@ function mockFinder(total: number, globalTotal: number, folders: Folder[] = []) 
       : url.pathname === "/api/folders" ? folders
       : url.pathname.endsWith("/progress") ? { extracting: 0, extraction_failed: 0, pending: 0, processing: 0, ready: globalTotal, error: 0 }
       : url.pathname.endsWith("/count") ? { total }
-      : url.pathname.endsWith("/tags") ? ["보안"] : total === 0 ? [] : documents;
+      : url.pathname.endsWith("/tags") ? ["보안"]
+      : url.pathname.endsWith("/related") || url.pathname.endsWith("/tag-suggestions") ? { items: [], identical: [], based_on_version: null, reason: null }
+      : url.pathname.startsWith("/api/documents/document-") ? detailOf(url.pathname.split("/").at(-1) ?? "")
+      : total === 0 ? [] : documents;
     return Promise.resolve(new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } }));
   });
   vi.stubGlobal("fetch", fetchMock);
   return fetchMock;
 }
+
+// 정보 창이 읽는 상세 응답 — 본문은 비워 둔다.
+function detailOf(id: string) {
+  const summary = documents.find((document) => document.id === id) ?? documents[0];
+  return { ...summary, folder: null, content: "", versions: [], files: [], chunk_count: 0, chunk_version: null };
+}
+
+function infoButton(title: string): HTMLElement {
+  const row = screen.getByRole("link", { name: title }).closest("li") as HTMLElement;
+  return within(row).getByRole("button", { name: "정보" });
+}
+
+describe("목록 정보 창", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("행을 고르면 「문서 정보」 창이 열린다", async () => {
+    mockFinder(2, 2);
+    render(<AuthProvider><Home /></AuthProvider>);
+
+    await screen.findByRole("link", { name: "정합성 점검표" });
+    expect(screen.queryByRole("complementary", { name: "문서 정보" })).not.toBeInTheDocument();
+    fireEvent.click(infoButton("정합성 점검표"));
+
+    const pane = screen.getByRole("complementary", { name: "문서 정보" });
+    expect(await within(pane).findByRole("link", { name: "문서 열기" })).toHaveAttribute("href", "/documents/document-2");
+  });
+
+  it("폴더를 바꾸면 정보 창이 닫힌다", async () => {
+    mockFinder(2, 2, [hr]);
+    render(<AuthProvider><Home /></AuthProvider>);
+
+    await screen.findByRole("link", { name: "OpenSQL 운영 가이드" });
+    fireEvent.click(infoButton("OpenSQL 운영 가이드"));
+    expect(screen.getByRole("complementary", { name: "문서 정보" })).toBeInTheDocument();
+
+    fireEvent.click(await screen.findByRole("button", { name: /인사/ }));
+    await waitFor(() => expect(screen.queryByRole("complementary", { name: "문서 정보" })).not.toBeInTheDocument());
+  });
+
+  it("넓은 화면 배치는 고르면 정보 창 열을 더하고, 고르지 않으면 트리와 목록 두 열이다", async () => {
+    mockFinder(2, 2, [hr]);
+    render(<AuthProvider><Home /></AuthProvider>);
+
+    await screen.findByRole("button", { name: /인사/ });
+    await screen.findByRole("link", { name: "OpenSQL 운영 가이드" });
+    const layout = screen.getByTestId("document-layout");
+    expect(layout).toHaveClass("lg:grid-cols-[13rem_minmax(0,1fr)]");
+    expect(layout).not.toHaveClass("lg:grid-cols-[13rem_minmax(0,1fr)_400px]");
+
+    fireEvent.click(infoButton("OpenSQL 운영 가이드"));
+    expect(layout).toHaveClass("lg:grid-cols-[13rem_minmax(0,1fr)_400px]");
+    expect(screen.getByRole("complementary", { name: "문서 정보" })).toHaveClass("lg:sticky", "lg:top-6");
+  });
+
+  it("로그인하지 않아도 목록과 정보 창이 동작한다", async () => {
+    mockFinder(2, 2);
+    render(<Home />);
+
+    await screen.findByRole("link", { name: "OpenSQL 운영 가이드" });
+    const layout = screen.getByTestId("document-layout");
+    expect(layout.className).not.toMatch(/lg:grid-cols/);
+
+    fireEvent.click(infoButton("OpenSQL 운영 가이드"));
+    const pane = screen.getByRole("complementary", { name: "문서 정보" });
+    expect(layout).toHaveClass("lg:grid-cols-[minmax(0,1fr)_400px]");
+    expect(await within(pane).findByRole("link", { name: "문서 열기" })).toHaveAttribute("href", "/documents/document-1");
+
+    fireEvent.click(within(pane).getByRole("button", { name: "닫기" }));
+    expect(screen.queryByRole("complementary", { name: "문서 정보" })).not.toBeInTheDocument();
+  });
+});
 
 describe("목록 찾기", () => {
   afterEach(() => vi.unstubAllGlobals());

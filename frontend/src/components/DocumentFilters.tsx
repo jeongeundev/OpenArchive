@@ -7,7 +7,7 @@ import { useEffect, useState } from "react";
 import type { DocumentFilters as Filters, DocumentSort } from "@/lib/api";
 import { SUPPORTED_CONTENT_TYPES, type ContentType } from "@/lib/types";
 
-const INPUT_CLASS = "mt-2 w-full rounded-lg border border-line bg-card px-4 py-3 text-strong";
+const INPUT_CLASS = "mt-1 w-full rounded-lg border border-line bg-card px-3 py-1.5 text-sm text-strong";
 
 export function DocumentFilters({ value, tags, onChange }: {
   value: Filters;
@@ -34,7 +34,7 @@ export function DocumentFilters({ value, tags, onChange }: {
   }, [query, value, onChange]);
 
   return (
-    <div className="grid gap-4 rounded-lg border border-line bg-card p-6 md:grid-cols-4">
+    <div className="grid gap-3 rounded-lg border border-line bg-card p-3 md:grid-cols-4">
       <label className="block text-sm text-body">
         제목 검색
         <input className={INPUT_CLASS} value={query} onChange={(event) => setQuery(event.target.value)} />
