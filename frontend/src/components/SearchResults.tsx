@@ -10,16 +10,22 @@ import { relationLabel } from "@/lib/relations";
 import type { SearchResponse } from "@/lib/types";
 
 const EXCERPT_LENGTH = 300;
+const DATE_FORMATTER = new Intl.DateTimeFormat("ko-KR", {
+  year: "numeric",
+  month: "short",
+  day: "numeric",
+});
 
 function SearchExcerpt({ content, preview }: { content: string; preview?: string | null }): React.ReactElement {
   const [expanded, setExpanded] = useState(false);
   const id = useId();
   const collapsed = preview ?? (content.length > EXCERPT_LENGTH ? `${content.slice(0, EXCERPT_LENGTH)}…` : content);
-  const long = content !== collapsed;
+  const compact = collapsed.replace(/\s+/g, " ").trim();
+  const long = content !== compact;
   return (
     <>
-      <p id={id} className="mt-4 whitespace-pre-wrap text-sm leading-relaxed text-body">
-        {expanded ? content : collapsed}
+      <p id={id} className={`mt-4 text-sm leading-relaxed text-body ${expanded ? "whitespace-pre-wrap" : "line-clamp-3"}`}>
+        {expanded ? content : compact}
       </p>
       {long ? (
         <button type="button" aria-expanded={expanded} aria-controls={id}
@@ -91,26 +97,20 @@ export function SearchResults({
                   key={`${item.document_id}:${item.based_on_version}:${item.chunk_index}`}
                   className="rounded-lg border border-line bg-card p-6"
                 >
-                  <div className="flex items-start justify-between gap-4">
-                    <div>
-                      {/* 함께 볼 문서는 문서로만 간다 — 이전 판 결과의 chunk_index는 현재 판 번호라
-                          based_on_version의 대목이 아니다. */}
-                      <Link href={item.via === null ? passageHref(item) : `/documents/${item.document_id}`} className="font-medium text-strong hover:text-accent">
-                        {item.title}
-                      </Link>
-                      <p className="mt-2 text-xs text-muted">
-                        {item.content_type.toUpperCase()}
-                        {item.tags.length > 0 ? ` · ${item.tags.join(", ")}` : ""}
-                      </p>
-                    </div>
-                    {/* 확장 결과의 score는 진입점까지의 거리에 단계 페널티를 더한 값이라
-                        질의와의 유사도가 아니다. 직접 매칭과 같은 축에 세우면 안 된다. */}
-                    {item.via === null ? (
-                      <span className="shrink-0 text-sm font-medium text-accent">
-                        유사도 {item.score.toFixed(3)}
-                      </span>
-                    ) : null}
-                  </div>
+                  {/* 함께 볼 문서는 이전 판의 청크 번호가 현재 판 기준일 수 있어 문서로 연결한다. */}
+                  <Link href={item.via === null ? passageHref(item) : `/documents/${item.document_id}`} className="break-words font-medium text-strong hover:text-accent">
+                    {item.title}
+                  </Link>
+                  <p className="mt-2 break-words text-xs text-muted">
+                    {[
+                      item.content_type.toUpperCase(),
+                      item.folder_path?.join(" › "),
+                      item.owner,
+                      item.updated_at ? DATE_FORMATTER.format(new Date(item.updated_at)) : null,
+                      item.tags.length > 0 ? item.tags.join(", ") : null,
+                    ].filter(Boolean).join(" · ")}
+                    {item.via === null ? <> · <span className="text-muted">유사도 {item.score.toFixed(3)}</span></> : null}
+                  </p>
                   {item.via !== null ? (
                     <p className="mt-3 text-xs text-muted">
                       {sourceTitle}에서 「{relationLabel(item.via.kind)}」로 이어짐

@@ -209,6 +209,9 @@ export interface SearchResult {
   score: number;
   based_on_version: number;
   via: SearchVia | null;
+  folder_path?: string[] | null;
+  owner?: string | null;
+  updated_at?: string | null;
   preview?: string | null;
   passages?: SearchPassage[];
 }

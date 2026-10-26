@@ -250,3 +250,41 @@ it("추가 대목이 비었으면 불필요한 펼치기를 표시하지 않는�
   render(<SearchResults response={{ ...response, items: [{ ...response.items[0], passages: [] }] }} loading={false} error={null} />);
   expect(screen.queryByText(/검색된 본문 대목/)).not.toBeInTheDocument();
 });
+
+it("제목 아래 메타를 형식·폴더·소유자·수정일·태그·흐린 유사도 순서로 표시한다", () => {
+  const item = { ...response.items[0], content_type: "hwpx" as const, folder_path: ["IT전략실", "통합유지보수"], owner: "IT전략실_김민준", updated_at: "2026-10-26T03:00:00Z" };
+  render(<SearchResults response={{ ...response, items: [item] }} loading={false} error={null} />);
+  const title = screen.getByRole("link", { name: item.title });
+  const meta = title.nextElementSibling;
+  expect(meta?.textContent).toBe("HWPX · IT전략실 › 통합유지보수 · IT전략실_김민준 · 2026년 10월 26일 · OpenSQL, 운영 · 유사도 0.877");
+  expect(meta).toHaveClass("text-xs", "text-muted");
+  expect(screen.getByText(/유사도 0.877/)).not.toHaveClass("text-accent");
+});
+
+it("폴더가 없는 연결 문서는 빈 자리 없이 같은 메타와 연결 경로를 표시한다", () => {
+  render(<SearchResults response={{ ...response, items: [{ ...response.items[0], content_type: "hwpx", folder_path: null, owner: "IT전략실_김민준", updated_at: "2026-10-26T03:00:00Z", via: { from_document_id: "source", from_title: "출처", kind: "related", depth: 1 } }] }} loading={false} error={null} />);
+  const meta = screen.getByRole("link", { name: response.items[0].title }).nextElementSibling;
+  expect(meta?.textContent).toBe("HWPX · IT전략실_김민준 · 2026년 10월 26일 · OpenSQL, 운영");
+  expect(screen.getByText(/이어짐/)).toHaveTextContent("「출처」에서 「관련 있음」로 이어짐");
+});
+
+it("접힌 발췌만 공백을 접어 세 줄로 제한하고 펼치면 줄바꿈을 보존한다", () => {
+  const content = "첫 줄\n\n둘째   줄\t설명";
+  render(<SearchResults response={{ ...response, items: [{ ...response.items[0], content }] }} loading={false} error={null} />);
+  const excerpt = screen.getByText("첫 줄 둘째 줄 설명");
+  expect(excerpt.textContent).toBe("첫 줄 둘째 줄 설명");
+  expect(excerpt).toHaveClass("line-clamp-3");
+  fireEvent.click(screen.getByRole("button", { name: "발췌 더보기" }));
+  expect(excerpt.textContent).toBe(content);
+  expect(excerpt).toHaveClass("whitespace-pre-wrap");
+  expect(excerpt).not.toHaveClass("line-clamp-3");
+});
+
+it("검색된 본문 대목은 원래 공백과 줄바꿈을 보존한다", () => {
+  const content = "첫 줄\n\n둘째   줄";
+  render(<SearchResults response={{ ...response, items: [{ ...response.items[0], passages: [{ chunk_index: 1, content, based_on_version: 2, score: 0.7 }] }] }} loading={false} error={null} />);
+  fireEvent.click(screen.getByText("검색된 본문 대목 1개"));
+  const passage = screen.getByText("첫 줄 둘째 줄");
+  expect(passage.textContent).toBe(content);
+  expect(passage).toHaveClass("whitespace-pre-wrap");
+});
