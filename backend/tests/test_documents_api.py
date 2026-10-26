@@ -2349,3 +2349,50 @@ def test_document_responses_normalize_folder_scope(db_client, migrated_db, scope
     for body in (summary, detail.json()):
         assert body["follows_folder"] is (scope == "folder")
         assert not ({"users", "groups", "grant_users", "grant_groups"} & body.keys())
+
+
+def test_list_items_carry_only_the_visible_folder_path(db_client):
+    """목록의 folder_path는 문서 상세의 folder.path와 같은 판정이다 — 볼 수 없는 폴더는 이름도 없다."""
+    login_as(db_client, "bob")
+    login_as(db_client, "alice")
+    root = db_client.post("/api/folders", json={"name": "IT전략실"}).json()
+    child = db_client.post(
+        "/api/folders", json={"name": "통합유지보수", "parent_id": root["id"]}
+    ).json()
+    filed = db_client.post(
+        "/api/documents/text", json={"title": "폴더 안", "content": "본문", "folder_id": child["id"]}
+    ).json()["id"]
+    unfiled = db_client.post(
+        "/api/documents/text", json={"title": "폴더 밖", "content": "본문", "visibility": "public"}
+    ).json()["id"]
+    secret = db_client.post("/api/folders", json={"name": "비밀기획실"}).json()
+    assert db_client.put(
+        f"/api/folders/{secret['id']}/access", json={"visibility": "private"}
+    ).status_code == 200
+    hidden = db_client.post(
+        "/api/documents/text", json={"title": "개별 부여", "content": "본문", "folder_id": secret["id"]}
+    ).json()["id"]
+    assert db_client.put(
+        f"/api/documents/{hidden}/access",
+        json={"visibility": "private", "users": ["bob"], "follows_folder": False},
+    ).status_code == 200
+
+    def paths(user):
+        login_as(db_client, user)
+        response = db_client.get("/api/documents")
+        assert response.status_code == 200
+        items = {item["id"]: item for item in response.json()}
+        for document_id, item in items.items():
+            folder = db_client.get(f"/api/documents/{document_id}").json()["folder"]
+            expected = [p["name"] for p in folder["path"]] if folder else None
+            assert item["folder_path"] == expected
+        return response.text, {key: item["folder_path"] for key, item in items.items()}
+
+    _, alice = paths("alice")
+    assert alice[filed] == ["IT전략실", "통합유지보수"]
+    assert alice[unfiled] is None
+    assert alice[hidden] == ["비밀기획실"]
+    body, bob = paths("bob")
+    assert hidden in bob and bob[hidden] is None
+    assert bob[filed] == ["IT전략실", "통합유지보수"]
+    assert "비밀기획실" not in body

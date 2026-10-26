@@ -12,6 +12,7 @@ import psycopg
 
 from openarchive.embeddings.base import EmbeddingProvider
 from openarchive.services.chunking import chunk_text
+from openarchive.services.folders import DOCUMENT_FOLDER_PATHS_SQL
 from openarchive.services.visibility import FOLDER_VISIBLE_TO_USER, VISIBLE_TO_USER
 from openarchive.vectors import to_pgvector_literal
 
@@ -465,24 +466,7 @@ async def search_documents(
         cur = await conn.execute(SEARCH_SQL, params)
         rows = await cur.fetchall()
         cur = await conn.execute(
-            f"""WITH RECURSIVE selected AS (
-                SELECT d.id, d.owner_id, d.updated_at, f.id AS folder_id
-                FROM documents d
-                LEFT JOIN folders f ON f.id = d.folder_id AND ({FOLDER_VISIBLE_TO_USER})
-                WHERE d.id = ANY(%(ids)s::uuid[])
-            ), path AS (
-                SELECT s.id AS document_id, f.id, f.parent_id, f.name, 0 AS depth
-                FROM selected s JOIN folders f ON f.id = s.folder_id
-                UNION ALL
-                SELECT c.document_id, f.id, f.parent_id, f.name, c.depth + 1
-                FROM path c JOIN folders f ON f.id = c.parent_id
-            )
-            SELECT s.id, s.owner_id, s.updated_at,
-                (SELECT array_agg(p.name ORDER BY p.depth DESC)
-                 FROM path p JOIN folders f ON f.id = p.id
-                 WHERE p.document_id = s.id AND ({FOLDER_VISIBLE_TO_USER}))
-            FROM selected s""",
-            {"ids": list({row[0] for row in rows}), "user": user_id},
+            DOCUMENT_FOLDER_PATHS_SQL, {"ids": list({row[0] for row in rows}), "user": user_id}
         )
         metadata = {row[0]: row[1:] for row in await cur.fetchall()}
 

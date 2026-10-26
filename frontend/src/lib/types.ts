@@ -108,6 +108,8 @@ export interface DocumentSummary {
   extraction_status: ExtractionStatus;
   created_at: string;
   updated_at: string;
+  /** 볼 수 있는 폴더 경로(최상위부터). 폴더가 없거나 볼 수 없으면 null. 목록 API만 싣는다. */
+  folder_path?: string[] | null;
 }
 
 /** 열람 범위 안 문서의 파이프라인 단계별 수. 인식이 끝난 문서만 임베딩 단계로 센다 (ADR-052). */

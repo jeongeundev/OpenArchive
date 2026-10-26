@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: MIT
 """폴더 열람·관리. 범위 요약의 부여 대상 이름은 폴더를 보는 사용자에게 공개한다."""
 
+from collections.abc import Sequence
 from uuid import UUID
 
 import psycopg
@@ -82,6 +83,40 @@ async def folder_path(conn, folder_id: UUID) -> list[dict]:
         (folder_id,),
     )
     return await cur.fetchall()
+
+
+# 문서별 폴더 경로 보강 조회. 문서의 폴더가 보일 때만, 보이는 폴더 이름만 싣는다.
+# 검색 보강도 이 SQL 하나로 소유자·수정 시각을 같이 읽는다 — 보강은 문장 하나다.
+DOCUMENT_FOLDER_PATHS_SQL = f"""WITH RECURSIVE selected AS (
+    SELECT d.id, d.owner_id, d.updated_at, f.id AS folder_id
+    FROM documents d
+    LEFT JOIN folders f ON f.id = d.folder_id AND ({FOLDER_VISIBLE_TO_USER})
+    WHERE d.id = ANY(%(ids)s::uuid[])
+), path AS (
+    SELECT s.id AS document_id, f.id, f.parent_id, f.name, 0 AS depth
+    FROM selected s JOIN folders f ON f.id = s.folder_id
+    UNION ALL
+    SELECT c.document_id, f.id, f.parent_id, f.name, c.depth + 1
+    FROM path c JOIN folders f ON f.id = c.parent_id
+)
+SELECT s.id, s.owner_id, s.updated_at,
+    (SELECT array_agg(p.name ORDER BY p.depth DESC)
+     FROM path p JOIN folders f ON f.id = p.id
+     WHERE p.document_id = s.id AND ({FOLDER_VISIBLE_TO_USER}))
+FROM selected s"""
+
+
+async def visible_folder_paths(
+    conn, document_ids: Sequence[UUID], *, user_id: str | None
+) -> dict[UUID, list[str] | None]:
+    """문서별로 보이는 폴더 경로(최상위부터). 폴더가 없거나 볼 수 없으면 None.
+
+    결과 집합을 거르지 않는다 — 호출자가 이미 열람을 확인한 id를 넘긴다 (D1·D2).
+    """
+    cur = await conn.execute(
+        DOCUMENT_FOLDER_PATHS_SQL, {"ids": list(document_ids), "user": user_id}
+    )
+    return {row[0]: row[3] for row in await cur.fetchall()}
 
 
 async def _insert_grants(conn, folder_id, user_ids, group_ids):

@@ -88,6 +88,8 @@ class DocumentSummary(BaseModel):
     extraction_status: Literal["pending", "failed", "done"]
     created_at: datetime
     updated_at: datetime
+    # 볼 수 있는 폴더 경로(최상위부터). 폴더가 없거나 볼 수 없으면 None
+    folder_path: list[str] | None = None
 
 
 class TrashItem(BaseModel):

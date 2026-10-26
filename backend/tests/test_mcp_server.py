@@ -366,6 +366,27 @@ async def test_search_tool_narrows_direct_hits_to_a_visible_folder(monkeypatch, 
         assert (await search_documents("휴가 근거", folder_id=hidden))["items"] == []
 
 
+async def test_list_tool_does_not_carry_the_api_folder_path(monkeypatch, mcp_database):
+    """폴더 경로는 웹 목록 API 응답에만 붙는다 — MCP 목록 출력은 바뀌지 않는다."""
+    from openarchive.mcp_server.server import list_documents
+
+    async with await psycopg.AsyncConnection.connect(mcp_database, autocommit=True) as conn:
+        cur = await conn.execute(
+            "INSERT INTO folders (name, created_by, visibility) VALUES ('인사', 'alice', 'public') "
+            "RETURNING id"
+        )
+        folder = (await cur.fetchone())[0]
+        inside = await insert_test_document(conn, title="휴가 규정", content="휴가 근거")
+        await conn.execute("UPDATE documents SET folder_id = %s WHERE id = %s", (folder, inside))
+
+    monkeypatch.setenv("MCP_USER_ID", "alice")
+    get_settings.cache_clear()
+    items = (await list_documents())["items"]
+
+    assert str(inside) in {item["document_id"] for item in items}
+    assert all("folder_path" not in item for item in items)
+
+
 async def test_mcp_user_setting_controls_private_access_for_all_tools(
     monkeypatch, mcp_database
 ):

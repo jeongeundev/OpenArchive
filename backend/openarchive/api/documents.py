@@ -55,6 +55,7 @@ from openarchive.api.schemas import (
 from openarchive.config import get_settings
 from openarchive.services import documents as service
 from openarchive.services import organize, trash
+from openarchive.services.folders import visible_folder_paths
 from openarchive.services.links import find_backlinks, resolve_links
 from openarchive.services.parsing import SUPPORTED_CONTENT_TYPES, UnsupportedFileType
 from openarchive.services.related import find_related, suggest_tags
@@ -177,7 +178,15 @@ async def list_documents(
         limit=limit,
         offset=offset,
     )
-    return [DocumentSummary.model_validate(document) for document in documents]
+    folder_paths = await visible_folder_paths(
+        conn, [document["id"] for document in documents], user_id=user_id
+    )
+    return [
+        DocumentSummary.model_validate(
+            {**document, "folder_path": folder_paths.get(document["id"])}
+        )
+        for document in documents
+    ]
 
 
 # `/{document_id}`보다 먼저 등록해야 한다 — 뒤에 두면 'progress'가 UUID 검증에 걸린다.
