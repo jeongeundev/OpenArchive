@@ -116,7 +116,7 @@ describe("관계 지도 배치", () => {
     }
   });
 
-  it("이름이 24자를 넘으면 24자와 「…」로 줄이고 전체 이름은 title과 aria-label에 남긴다", async () => {
+  it("이름이 24자를 넘으면 앞 12자와 끝 12자 사이를 「…」로 줄이고 전체 이름은 title과 aria-label에 남긴다", async () => {
     const longName = "가나다라마바사아자차카타파하가나다라마바사아자차카타";
     stubClusters([{ name: longName, size: 2 }, { name: "짧은 이름", size: 1 }]);
 
@@ -124,9 +124,25 @@ describe("관계 지도 배치", () => {
 
     const group = await screen.findByRole("button", { name: `${longName} 덩어리` });
     const texts = Array.from(group.querySelectorAll("text")).map((text) => text.textContent);
-    expect(texts).toContain(`${longName.slice(0, 24)}…`);
+    expect(texts).toContain(`${longName.slice(0, 12)}…${longName.slice(-12)}`);
     expect(texts).not.toContain(longName);
     expect(group.querySelector("title")?.textContent).toBe(longName);
+  });
+
+  it("앞부분이 같고 끝만 다른 긴 이름도 줄인 뒤 서로 구분된다", async () => {
+    const proposal = "2024-2026년도 정보시스템 통합유지보수 용역 제안요청서";
+    const description = "2024-2026년도 정보시스템 통합유지보수 용역 용역설명서";
+    stubClusters([{ name: proposal, size: 6 }, { name: description, size: 4 }]);
+
+    render(<ClustersPage />);
+
+    const nameOf = (group: HTMLElement) =>
+      Array.from(group.querySelectorAll("text")).map((text) => text.textContent).find((text) => text?.includes("…"));
+    const first = nameOf(await screen.findByRole("button", { name: `${proposal} 덩어리` }));
+    const second = nameOf(screen.getByRole("button", { name: `${description} 덩어리` }));
+    expect(first).toMatch(/제안요청서$/);
+    expect(second).toMatch(/용역설명서$/);
+    expect(first).not.toBe(second);
   });
 
   it("덩어리가 2개면 좌우로 놓는다", async () => {

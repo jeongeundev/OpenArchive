@@ -433,6 +433,31 @@ describe("폴더 트리", () => {
     expect(await screen.findByText("부여받은 문서가 없습니다.")).toBeInTheDocument();
   });
 
+  it("「부여받은 문서」에서는 건수 줄이 전체가 아니라 이 목록의 건수다", async () => {
+    navigation.go("/?granted=1");
+    mockFinder(2, 10, [hr]);
+    render(<AuthProvider><Home /></AuthProvider>);
+    expect(await screen.findByText("이 목록 2건")).toBeInTheDocument();
+    expect(screen.queryByText("문서 10건")).not.toBeInTheDocument();
+  });
+
+  it("폴더를 고르면 건수 줄이 그 폴더 목록의 건수다", async () => {
+    navigation.go("/?folder=folder-a");
+    mockFinder(2, 10, [hr]);
+    // 실제 앱처럼 로그인 확인 뒤에 그린다 — 주소의 폴더를 폴더 목록이 오기 전에 판정하지 않는다.
+    render(<AuthProvider><RequireAuth><Home /></RequireAuth></AuthProvider>);
+    expect(await screen.findByRole("heading", { name: "인사" })).toBeInTheDocument();
+    expect(await screen.findByText("이 목록 2건")).toBeInTheDocument();
+    expect(screen.queryByText("문서 10건")).not.toBeInTheDocument();
+  });
+
+  it("전체 문서에서는 건수 줄이 열람 범위 전체의 처리 현황이다", async () => {
+    mockFinder(2, 10, [hr]);
+    render(<AuthProvider><Home /></AuthProvider>);
+    expect(await screen.findByText("문서 10건")).toBeInTheDocument();
+    expect(screen.queryByText("이 목록 2건")).not.toBeInTheDocument();
+  });
+
   it("「부여받은 문서」에서 올리면 업로드 폴더 기본값은 「폴더 없음」이다", async () => {
     navigation.go("/?granted=1");
     mockFinder(2, 2, [hr]);
