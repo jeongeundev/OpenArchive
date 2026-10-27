@@ -42,6 +42,7 @@ function HomeView(): React.ReactElement {
   const query = searchParams?.toString() ?? "";
   const listState = useMemo(() => listStateFromParams(new URLSearchParams(query)), [query]);
   const { filters, page } = listState;
+  const granted = listState.granted === true;
   const folderParam = listState.folderId;
   // 받은 목록에 있는 폴더만 고른다. 서버가 볼 수 없는 폴더를 이미 뺐으므로 없으면 전체 문서로 되돌린다.
   const selectedFolder = folderParam === null ? null : folders.find(folder => folder.id === folderParam) ?? null;
@@ -54,6 +55,7 @@ function HomeView(): React.ReactElement {
   const { documents, total, loading, error, refresh } = useDocuments({
     ...filters,
     folderId: folderId ?? undefined,
+    granted: granted || undefined,
     limit: PAGE_SIZE,
     offset: page * PAGE_SIZE,
   });
@@ -81,6 +83,10 @@ function HomeView(): React.ReactElement {
     router.push(listHref({ folderId: id, filters, page: 0 }));
   }, [router, filters]);
 
+  const selectGranted = useCallback(() => {
+    router.push(listHref({ folderId: null, filters, page: 0, granted: true }));
+  }, [router, filters]);
+
   const setPage = useCallback((next: number) => {
     router.replace(listHref({ ...listState, page: next }));
   }, [router, listState]);
@@ -106,11 +112,12 @@ function HomeView(): React.ReactElement {
   }, [tagsRevision]);
 
   const onFiltersChanged = useCallback((value: Filters) => {
-    router.replace(listHref({ folderId: folderParam, filters: value, page: 0 }));
-  }, [router, folderParam]);
+    router.replace(listHref({ folderId: folderParam, filters: value, page: 0, granted }));
+  }, [router, folderParam, granted]);
   const hasConditions = Boolean(filters.q?.trim() || filters.contentType || filters.tag);
   const emptyMessage = hasConditions ? "조건에 맞는 문서가 없습니다."
-    : folderId !== null ? "이 폴더에 문서가 없습니다." : undefined;
+    : folderId !== null ? "이 폴더에 문서가 없습니다."
+    : granted ? "부여받은 문서가 없습니다." : undefined;
 
   const onUploaded = useCallback(() => {
     refresh();
@@ -142,7 +149,8 @@ function HomeView(): React.ReactElement {
       }`}>
       {auth.authenticated ? (
         <aside>
-          <FolderTree folders={folders} selectedId={folderId} onSelect={selectFolder} onCreate={onCreateFolder} />
+          <FolderTree folders={folders} selectedId={folderId} granted={granted}
+            onSelect={selectFolder} onSelectGranted={selectGranted} onCreate={onCreateFolder} />
           <Link href="/trash" className="mt-6 block px-2 text-sm text-muted hover:text-strong">휴지통</Link>
         </aside>
       ) : null}

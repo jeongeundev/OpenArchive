@@ -47,13 +47,17 @@ export function FolderNameForm({ label, initial = "", submitLabel, onSubmit, onC
   );
 }
 
-export function FolderTree({ folders, selectedId, onSelect, onCreate }: {
+export function FolderTree({ folders, selectedId, granted = false, onSelect, onSelectGranted, onCreate }: {
   folders: Folder[];
   selectedId: string | null;
+  /** 「부여받은 문서」 보기 중인지. 그때는 「전체 문서」가 현재 위치가 아니다. */
+  granted?: boolean;
   onSelect: (id: string | null) => void;
+  onSelectGranted?: () => void;
   onCreate: (name: string, parentId: string | null) => Promise<void>;
 }): React.ReactElement {
   const [creating, setCreating] = useState(false);
+  const allSelected = selectedId === null && !granted;
   const ids = new Set(folders.map(folder => folder.id));
   const roots = folders.filter(folder => folder.parent_id === null || !ids.has(folder.parent_id))
     .sort((a, b) => a.name.localeCompare(b.name, "ko"));
@@ -80,10 +84,18 @@ export function FolderTree({ folders, selectedId, onSelect, onCreate }: {
 
   return (
     <nav aria-label="폴더" className="space-y-3">
-      <button type="button" onClick={() => onSelect(null)} aria-current={selectedId === null ? "true" : undefined}
-        className={`w-full rounded px-2 py-1 text-left text-sm ${selectedId === null ? "bg-sunken text-strong" : "text-body hover:text-strong"}`}>
-        전체 문서
-      </button>
+      <div className="space-y-1">
+        <button type="button" onClick={() => onSelect(null)} aria-current={allSelected ? "true" : undefined}
+          className={`w-full rounded px-2 py-1 text-left text-sm ${allSelected ? "bg-sunken text-strong" : "text-body hover:text-strong"}`}>
+          전체 문서
+        </button>
+        {onSelectGranted ? (
+          <button type="button" onClick={onSelectGranted} aria-current={granted ? "true" : undefined}
+            className={`w-full rounded px-2 py-1 text-left text-sm ${granted ? "bg-sunken text-strong" : "text-body hover:text-strong"}`}>
+            부여받은 문서
+          </button>
+        ) : null}
+      </div>
       {roots.length > 0 ? <ul className="space-y-1">{roots.map(item)}</ul> : null}
       {creating ? (
         <FolderNameForm label="새 폴더 이름" submitLabel="만들기" onCancel={() => setCreating(false)}

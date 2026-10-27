@@ -61,4 +61,27 @@ describe("FolderTree", () => {
     fireEvent.click(screen.getByRole("button", { name: "전체 문서" }));
     expect(onSelect).toHaveBeenLastCalledWith(null);
   });
+
+  it("「전체 문서」 바로 아래 「부여받은 문서」를 두고, 누르면 그 보기를 알린다 (D20)", () => {
+    const onSelect = vi.fn();
+    const onSelectGranted = vi.fn();
+    render(<FolderTree folders={[folder("a", "인사", null, 2)]} selectedId={null} granted={false}
+      onSelect={onSelect} onSelectGranted={onSelectGranted} onCreate={vi.fn()} />);
+    const all = screen.getByRole("button", { name: "전체 문서" });
+    const granted = screen.getByRole("button", { name: "부여받은 문서" });
+    expect(all.nextElementSibling).toBe(granted);
+    expect(granted).toHaveTextContent(/^부여받은 문서$/);
+    fireEvent.click(granted);
+    expect(onSelectGranted).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("button", { name: /인사/ }));
+    expect(onSelect).toHaveBeenLastCalledWith("a");
+  });
+
+  it("「부여받은 문서」를 보는 중이면 그 항목만 현재 위치다", () => {
+    render(<FolderTree folders={[folder("a", "인사", null)]} selectedId={null} granted
+      onSelect={vi.fn()} onSelectGranted={vi.fn()} onCreate={vi.fn()} />);
+    expect(screen.getByRole("button", { name: "부여받은 문서" })).toHaveAttribute("aria-current", "true");
+    expect(screen.getByRole("button", { name: "전체 문서" })).not.toHaveAttribute("aria-current");
+    expect(screen.getByRole("button", { name: /인사/ })).not.toHaveAttribute("aria-current");
+  });
 });
