@@ -132,6 +132,6 @@ describe("업로드 폼 접기", () => {
   });
 });
 
-it("홈도 같은 목록 화면을 내보낸다", () => {
-  expect(RootPage).toBe(Home);
+it("문서 목록은 새 홈과 별도 화면으로 제공한다", () => {
+  expect(RootPage).not.toBe(Home);
 });
