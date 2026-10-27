@@ -101,6 +101,15 @@ describe("부서 화면", () => {
     expect(within(access).queryByText("관리 부서")).not.toBeInTheDocument();
   });
 
+  it("부모가 보이지 않는 하위 폴더는 최상위 카드로 올리지 않는다 — 홈과 같은 parent_id 기준", () => {
+    state.folders = [hr, folder("f-rfp-only", "RFP", "f-biz", 3, { scope: bizScope })];
+    render(<DepartmentsPage />);
+
+    expect(cardOf("인사팀")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /RFP/ })).toBeNull();
+    expect(screen.queryByText("공용 폴더")).toBeNull();
+  });
+
   it("관리자에게만 그룹 관리 링크를 보인다", () => {
     state.folders = [hr];
     const { unmount } = render(<DepartmentsPage />);

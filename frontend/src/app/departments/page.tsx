@@ -21,8 +21,7 @@ export default function DepartmentsPage(): React.ReactElement {
   const { folders, loading, error } = useFolders(true);
   const [picked, setPicked] = useState<string | null>(null);
 
-  const ids = new Set(folders.map(folder => folder.id));
-  const roots = folders.filter(folder => folder.parent_id === null || !ids.has(folder.parent_id))
+  const roots = folders.filter(folder => folder.parent_id === null)
     .sort((a, b) => a.name.localeCompare(b.name, "ko"));
   const descendants = (folder: Folder): Folder[] =>
     folderChildren(folders, folder.id).flatMap(child => [child, ...descendants(child)]);

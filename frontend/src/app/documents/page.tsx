@@ -97,7 +97,7 @@ function HomeView(): React.ReactElement {
 
   useEffect(() => {
     const controller = new AbortController();
-    Promise.all(SUPPORTED_CONTENT_TYPES.filter(type => type !== "jpeg").map(async type => ({ type, count: await countDocuments({ contentType: type }, controller.signal) })))
+    Promise.all(SUPPORTED_CONTENT_TYPES.map(async type => ({ type, count: await countDocuments({ contentType: type }, controller.signal) })))
       .then(results => { if (!controller.signal.aborted) setTypes(results.filter(item => item.count > 0).map(item => item.type)); }).catch(() => {});
     return () => controller.abort();
   }, [tagsRevision]);

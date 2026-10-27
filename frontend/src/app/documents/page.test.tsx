@@ -10,6 +10,7 @@ const auth = vi.hoisted(() => ({ value: { authenticated: true, username: "alice"
 const location = vi.hoisted(() => ({ search: "" }));
 const progressState = vi.hoisted(() => ({ value: null as import("@/lib/types").DocumentProgress | null }));
 const folderList = vi.hoisted(() => ({ value: [] as import("@/lib/types").Folder[] }));
+const typeCounts = vi.hoisted(() => ({ value: {} as Record<string, number> }));
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn(), replace: vi.fn() }),
@@ -30,7 +31,7 @@ vi.mock("@/lib/useDocumentProgress", () => ({
 vi.mock("@/lib/api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/api")>()),
   listDocumentTags: () => Promise.resolve([]),
-  countDocuments: () => Promise.resolve(0),
+  countDocuments: (filters: { contentType?: string }) => Promise.resolve(typeCounts.value[filters.contentType ?? ""] ?? 0),
 }));
 // 업로드는 자기 테스트가 있다. 부여 대상 조회 같은 요청을 끌어오지 않게 뺀다.
 // 펼침 여부만 보면 되므로 표지 요소 하나로 둔다.
@@ -45,6 +46,20 @@ afterEach(() => {
   location.search = "";
   folderList.value = [];
   progressState.value = null;
+  typeCounts.value = {};
+});
+
+describe("유형 칩", () => {
+  it("데이터에 있는 유형만 칩으로 보이고 jpeg도 빼지 않는다", async () => {
+    typeCounts.value = { pdf: 2, jpeg: 1 };
+
+    render(<Home />);
+
+    const group = screen.getByRole("group", { name: "문서 유형" });
+    expect(await within(group).findByRole("button", { name: "JPEG" })).toBeInTheDocument();
+    expect(within(group).getByRole("button", { name: "PDF" })).toBeInTheDocument();
+    expect(within(group).queryByRole("button", { name: "JPG" })).toBeNull();
+  });
 });
 
 describe("폴더 주소", () => {
