@@ -36,6 +36,15 @@ describe("RelatedDocuments", () => {
     expect(screen.queryByText(/중복/)).not.toBeInTheDocument();
   });
 
+  it("항목마다 관계 라벨·점수·제목을 한 카드에 담는다 (검색 「함께 볼 문서」와 같은 모양)", () => {
+    render(<RelatedDocuments response={related} />);
+
+    const card = screen.getByRole("link", { name: "OpenSQL 운영 가이드" }).closest("li");
+    expect(card).toHaveClass("rounded-xl", "border", "border-line", "bg-card");
+    expect(within(card!).getByText("관련 있음")).toBeInTheDocument();
+    expect(within(card!).getByText("0.812")).toBeInTheDocument();
+  });
+
   it("색인 전에는 안내만 표시한다", () => {
     render(
       <RelatedDocuments

@@ -65,10 +65,10 @@ export function DocumentFolderSection({ documentId, folder, hiddenFolder = false
   }
 
   return (
-    <section className="space-y-3">
+    <section className="space-y-3 rounded-xl border border-line bg-card p-5">
+      <h2 className="text-sm font-semibold text-strong">폴더</h2>
       {folder !== null ? (
         <p className="text-sm text-muted">
-          <span className="mr-2 text-muted">폴더</span>
           {folder.path.map((item, index) => (
             <Fragment key={item.id}>
               {index > 0 ? <span className="text-faint">/</span> : null}
@@ -80,7 +80,6 @@ export function DocumentFolderSection({ documentId, folder, hiddenFolder = false
         </p>
       ) : hiddenFolder ? (
         <p className="text-sm text-muted">
-          <span className="mr-2 text-muted">폴더</span>
           <span>볼 수 없는 폴더</span>
         </p>
       ) : null}

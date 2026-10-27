@@ -113,8 +113,8 @@ export function OriginalFiles({
   }
 
   return (
-    <section className="space-y-4">
-      <h2 className="text-sm font-medium text-muted">원본 파일</h2>
+    <section className="space-y-4 rounded-xl border border-line bg-card p-5">
+      <h2 className="text-sm font-semibold text-strong">원본 파일</h2>
 
       {hasOriginal ? (
         <ol className="divide-y divide-line rounded-lg border border-line bg-card px-5">

@@ -13,8 +13,8 @@ export function TagSuggestions({
   textMissing?: boolean;
 }): React.ReactElement {
   return (
-    <section className="space-y-4">
-      <h2 className="text-sm font-medium text-muted">태그 추천</h2>
+    <section className="space-y-4 rounded-xl border border-line bg-card p-5">
+      <h2 className="text-sm font-semibold text-strong">태그 추천</h2>
       {response.reason === "not_indexed" ? (
         <p className="text-sm text-muted">
           {textMissing

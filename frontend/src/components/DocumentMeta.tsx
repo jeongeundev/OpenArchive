@@ -24,8 +24,8 @@ export function DocumentMeta({
   document: DocumentDetail;
 }): React.ReactElement {
   return (
-    <section className="rounded-lg border border-line bg-card p-4">
-      <h2 className="text-sm font-medium text-muted">문서 정보</h2>
+    <section className="rounded-xl border border-line bg-card p-5">
+      <h2 className="text-sm font-semibold text-strong">문서 정보</h2>
 
       <dl className="mt-3 space-y-3 text-sm">
         <div>

@@ -45,7 +45,7 @@ describe("DocumentHeader", () => {
     expect(screen.getByText("완료")).toBeInTheDocument();
   });
 
-  it("메타 한 줄을 위치 · 형식 · 소유자 · 열람 범위 · 수정 일시 순으로 보인다", () => {
+  it("형식은 제목 옆 칩으로, 메타 한 줄은 위치 · 소유자 · 열람 범위 · 수정 일시 순으로 보인다", () => {
     render(
       <DocumentHeader
         document={{
@@ -67,28 +67,31 @@ describe("DocumentHeader", () => {
     );
 
     expect(metaLine()).toHaveTextContent(
-      `IT전략실 › 통합유지보수 · HWPX · IT전략실_김민준 · 제한 · 폴더 범위 따름 · ${formatDate(document.updated_at)}`,
+      `IT전략실 › 통합유지보수 · IT전략실_김민준 · 제한 · 폴더 범위 따름 · ${formatDate(document.updated_at)}`,
     );
     expect(metaLine()).toHaveClass("text-sm", "text-muted");
+    expect(screen.getByTestId("document-format")).toHaveTextContent("HWPX");
+    expect(screen.getByTestId("document-scope")).toHaveTextContent("제한 · 폴더 범위 따름");
   });
 
   it("소유자에 부서가 있으면 `이름(부서)`로 보인다 (D16)", () => {
     render(<DocumentHeader document={{ ...document, owner_id: "김민준", owner_department: { name: "IT전략실", folder_id: "f1" } }} />);
 
-    expect(metaLine()).toHaveTextContent(`MD · 김민준(IT전략실) · 조직 공개 · ${formatDate(document.updated_at)}`);
+    expect(metaLine()).toHaveTextContent(`김민준(IT전략실) · 조직 공개 · ${formatDate(document.updated_at)}`);
     expect(screen.getByRole("link", { name: "IT전략실" })).toHaveAttribute("href", "/documents?folder=f1");
   });
 
   it("폴더 밖 문서는 위치 칸을 통째로 뺀다", () => {
     render(<DocumentHeader document={document} />);
 
-    expect(metaLine().textContent).toBe(`MD · alice · 조직 공개 · ${formatDate(document.updated_at)}`);
+    expect(metaLine().textContent).toBe(`alice · 조직 공개 · ${formatDate(document.updated_at)}`);
+    expect(screen.getByTestId("document-format")).toHaveTextContent("MD");
   });
 
   it("볼 수 없는 폴더 안 문서는 폴더 이름도 자물쇠도 보이지 않는다", () => {
     render(<DocumentHeader document={{ ...document, hidden_folder: true }} />);
 
-    expect(metaLine().textContent).toBe(`MD · alice · 조직 공개 · ${formatDate(document.updated_at)}`);
+    expect(metaLine().textContent).toBe(`alice · 조직 공개 · ${formatDate(document.updated_at)}`);
     expect(metaLine().textContent).not.toContain("🔒");
     expect(screen.queryByText("볼 수 없는 폴더")).not.toBeInTheDocument();
   });
