@@ -1,26 +1,24 @@
 1:"$Sreact.fragment"
-2:I[90464,["/_next/static/chunks/3v085mwczs22l.js"],"AuthProvider"]
-3:I[36852,["/_next/static/chunks/3v085mwczs22l.js"],"SiteHeader"]
-4:I[45051,["/_next/static/chunks/3v085mwczs22l.js"],"RetryNotice"]
-5:I[54149,["/_next/static/chunks/3v085mwczs22l.js"],"RequireAuth"]
-6:I[39756,["/_next/static/chunks/3v085mwczs22l.js"],"default"]
-7:I[58298,["/_next/static/chunks/3v085mwczs22l.js","/_next/static/chunks/2nif17y-7lm63.js"],"default"]
-8:I[37457,["/_next/static/chunks/3v085mwczs22l.js"],"default"]
-9:I[22016,["/_next/static/chunks/3v085mwczs22l.js"],""]
-a:I[47257,["/_next/static/chunks/3v085mwczs22l.js"],"ClientPageRoot"]
-b:I[13399,["/_next/static/chunks/3v085mwczs22l.js","/_next/static/chunks/2fo1yemjr-7kn.js"],"default"]
-e:I[97367,["/_next/static/chunks/3v085mwczs22l.js"],"OutletBoundary"]
-f:"$Sreact.suspense"
-12:I[97367,["/_next/static/chunks/3v085mwczs22l.js"],"ViewportBoundary"]
-14:I[97367,["/_next/static/chunks/3v085mwczs22l.js"],"MetadataBoundary"]
-16:I[63491,["/_next/static/chunks/3v085mwczs22l.js","/_next/static/chunks/3t4z6_3logt9r.js"],"default"]
-:HL["/_next/static/chunks/3wkce7j2u4yf5.css","style"]
-11:X
-0:{"P":null,"c":["","settings"],"q":"","i":false,"f":[[["",{"children":["settings",{"children":["__PAGE__",{},"$undefined","$undefined",4608]},"$undefined","$undefined",4608]},"$undefined","$undefined",4624],[["$","$1","c",{"children":[[["$","link","0",{"rel":"stylesheet","href":"/_next/static/chunks/3wkce7j2u4yf5.css","precedence":"next","crossOrigin":"$undefined","nonce":"$undefined"}],["$","script","script-0",{"src":"/_next/static/chunks/3v085mwczs22l.js","async":true,"nonce":"$undefined"}]],["$","html",null,{"lang":"ko","className":"h-full antialiased","suppressHydrationWarning":true,"children":[["$","head",null,{"children":["$","script",null,{"dangerouslySetInnerHTML":{"__html":"(function(){var s=null;try{s=localStorage.getItem('openarchive-theme')}catch(e){}try{var t=s==='light'||s==='dark'?s:(window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light');document.documentElement.dataset.theme=t}catch(e){}})();"}}]}],["$","body",null,{"className":"flex min-h-full flex-col","children":["$","$L2",null,{"children":[["$","$L3",null,{}],["$","main",null,{"className":"mx-auto w-full max-w-[96rem] flex-1 px-6 py-8","children":[["$","$L4",null,{}],["$","$L5",null,{"children":["$","$L6",null,{"parallelRouterKey":"children","error":"$7","errorStyles":[],"errorScripts":[["$","script","script-0",{"src":"/_next/static/chunks/2nif17y-7lm63.js","async":true}]],"template":["$","$L8",null,{}],"templateStyles":"$undefined","templateScripts":"$undefined","notFound":[["$","section",null,{"className":"space-y-4","children":[["$","h1",null,{"className":"text-4xl font-semibold text-strong","children":"페이지를 찾을 수 없습니다"}],["$","p",null,{"className":"text-sm text-muted","children":"주소가 잘못되었거나 없는 화면입니다."}],["$","$L9",null,{"href":"/","className":"inline-block text-sm text-accent hover:underline","children":"문서 목록으로 가기"}]]}],[]],"forbidden":"$undefined","unauthorized":"$undefined"}]}]]}],["$","footer",null,{"className":"border-t border-line","children":["$","p",null,{"className":"mx-auto max-w-[96rem] px-6 py-4 text-xs text-muted","children":"본 제품은 한컴의 HWP 문서 파일(.hwp) 공개 문서를 참고하여 개발하였습니다."}]}]]}]}]]}]]}],{"children":[["$","$1","c",{"children":[null,["$","$L6",null,{"parallelRouterKey":"children","error":"$undefined","errorStyles":"$undefined","errorScripts":"$undefined","template":["$","$L8",null,{}],"templateStyles":"$undefined","templateScripts":"$undefined","notFound":"$undefined","forbidden":"$undefined","unauthorized":"$undefined"}]]}],{"children":[["$","$1","c",{"children":[["$","$La",null,{"Component":"$b","serverProvidedParams":{"searchParams":{},"params":{},"promises":["$@c","$@d"]}}],[["$","script","script-0",{"src":"/_next/static/chunks/2fo1yemjr-7kn.js","async":true,"nonce":"$undefined"}]],["$","$Le",null,{"children":["$","$f",null,{"name":"Next.MetadataOutlet","children":"$@10"}]}]]}],{},null,false,null]},null,false,"$11"]},null,false,null],["$","$1","h",{"children":[null,["$","$L12",null,{"children":"$L13"}],["$","div",null,{"hidden":true,"children":["$","$L14",null,{"children":["$","$f",null,{"name":"Next.Metadata","children":"$L15"}]}]}],null]}],false]],"m":"$undefined","G":["$16",[["$","link","0",{"rel":"stylesheet","href":"/_next/static/chunks/3wkce7j2u4yf5.css","precedence":"next","crossOrigin":"$undefined","nonce":"$undefined"}]]],"S":true,"h":null,"r":"$undefined","s":"$undefined","a":"$undefined","l":"$undefined","p":"$undefined","d":"$undefined","b":"openarchive"}
-11:C
-c:{}
-d:"$0:f:0:1:1:children:1:children:0:props:children:0:props:serverProvidedParams:params"
-13:[["$","meta","0",{"charSet":"utf-8"}],["$","meta","1",{"name":"viewport","content":"width=device-width, initial-scale=1"}]]
-17:I[27201,["/_next/static/chunks/3v085mwczs22l.js"],"IconMark"]
-10:null
-15:[["$","title","0",{"children":"OpenArchive"}],["$","meta","1",{"name":"description","content":"OpenSQL 기반 AI 문서관리 플랫폼"}],["$","link","2",{"rel":"icon","href":"/favicon.ico?favicon.2vob68tjqpejf.ico","sizes":"256x256","type":"image/x-icon"}],["$","$L17","3",{}]]
+2:I[90464,["/_next/static/chunks/3ncz79en7yvkn.js"],"AuthProvider"]
+3:I[49830,["/_next/static/chunks/3ncz79en7yvkn.js"],"AppShell"]
+4:I[39756,["/_next/static/chunks/3ncz79en7yvkn.js"],"default"]
+5:I[58298,["/_next/static/chunks/3ncz79en7yvkn.js","/_next/static/chunks/3d4y928nva68_.js"],"default"]
+6:I[37457,["/_next/static/chunks/3ncz79en7yvkn.js"],"default"]
+7:I[22016,["/_next/static/chunks/3ncz79en7yvkn.js"],""]
+8:I[47257,["/_next/static/chunks/3ncz79en7yvkn.js"],"ClientPageRoot"]
+9:I[13399,["/_next/static/chunks/3ncz79en7yvkn.js","/_next/static/chunks/3s2xsqccquy1s.js"],"default"]
+c:I[97367,["/_next/static/chunks/3ncz79en7yvkn.js"],"OutletBoundary"]
+d:"$Sreact.suspense"
+10:I[97367,["/_next/static/chunks/3ncz79en7yvkn.js"],"ViewportBoundary"]
+12:I[97367,["/_next/static/chunks/3ncz79en7yvkn.js"],"MetadataBoundary"]
+14:I[63491,["/_next/static/chunks/3ncz79en7yvkn.js","/_next/static/chunks/2m3103aw3z-y4.js"],"default"]
+:HL["/_next/static/chunks/1c-d39lpmb9z-.css","style"]
+f:X
+0:{"P":null,"c":["","settings"],"q":"","i":false,"f":[[["",{"children":["settings",{"children":["__PAGE__",{},"$undefined","$undefined",4608]},"$undefined","$undefined",4608]},"$undefined","$undefined",4624],[["$","$1","c",{"children":[[["$","link","0",{"rel":"stylesheet","href":"/_next/static/chunks/1c-d39lpmb9z-.css","precedence":"next","crossOrigin":"$undefined","nonce":"$undefined"}],["$","script","script-0",{"src":"/_next/static/chunks/3ncz79en7yvkn.js","async":true,"nonce":"$undefined"}]],["$","html",null,{"lang":"ko","className":"h-full antialiased","suppressHydrationWarning":true,"children":[["$","head",null,{"children":["$","script",null,{"dangerouslySetInnerHTML":{"__html":"(function(){var s=null;try{s=localStorage.getItem('openarchive-theme')}catch(e){}try{var t=s==='light'||s==='dark'?s:(window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light');document.documentElement.dataset.theme=t}catch(e){}})();"}}]}],["$","body",null,{"className":"flex min-h-full flex-col","children":["$","$L2",null,{"children":["$","$L3",null,{"children":["$","$L4",null,{"parallelRouterKey":"children","error":"$5","errorStyles":[],"errorScripts":[["$","script","script-0",{"src":"/_next/static/chunks/3d4y928nva68_.js","async":true}]],"template":["$","$L6",null,{}],"templateStyles":"$undefined","templateScripts":"$undefined","notFound":[["$","section",null,{"className":"space-y-4","children":[["$","h1",null,{"className":"text-4xl font-semibold text-strong","children":"페이지를 찾을 수 없습니다"}],["$","p",null,{"className":"text-sm text-muted","children":"주소가 잘못되었거나 없는 화면입니다."}],["$","$L7",null,{"href":"/documents","className":"inline-block text-sm text-accent hover:underline","children":"문서 목록으로 가기"}]]}],[]],"forbidden":"$undefined","unauthorized":"$undefined"}]}]}]}]]}]]}],{"children":[["$","$1","c",{"children":[null,["$","$L4",null,{"parallelRouterKey":"children","error":"$undefined","errorStyles":"$undefined","errorScripts":"$undefined","template":["$","$L6",null,{}],"templateStyles":"$undefined","templateScripts":"$undefined","notFound":"$undefined","forbidden":"$undefined","unauthorized":"$undefined"}]]}],{"children":[["$","$1","c",{"children":[["$","$L8",null,{"Component":"$9","serverProvidedParams":{"searchParams":{},"params":{},"promises":["$@a","$@b"]}}],[["$","script","script-0",{"src":"/_next/static/chunks/3s2xsqccquy1s.js","async":true,"nonce":"$undefined"}]],["$","$Lc",null,{"children":["$","$d",null,{"name":"Next.MetadataOutlet","children":"$@e"}]}]]}],{},null,false,null]},null,false,"$f"]},null,false,null],["$","$1","h",{"children":[null,["$","$L10",null,{"children":"$L11"}],["$","div",null,{"hidden":true,"children":["$","$L12",null,{"children":["$","$d",null,{"name":"Next.Metadata","children":"$L13"}]}]}],null]}],false]],"m":"$undefined","G":["$14",[["$","link","0",{"rel":"stylesheet","href":"/_next/static/chunks/1c-d39lpmb9z-.css","precedence":"next","crossOrigin":"$undefined","nonce":"$undefined"}]]],"S":true,"h":null,"r":"$undefined","s":"$undefined","a":"$undefined","l":"$undefined","p":"$undefined","d":"$undefined","b":"openarchive"}
+f:C
+a:{}
+b:"$0:f:0:1:1:children:1:children:0:props:children:0:props:serverProvidedParams:params"
+11:[["$","meta","0",{"charSet":"utf-8"}],["$","meta","1",{"name":"viewport","content":"width=device-width, initial-scale=1"}]]
+15:I[27201,["/_next/static/chunks/3ncz79en7yvkn.js"],"IconMark"]
+e:null
+13:[["$","title","0",{"children":"OpenArchive"}],["$","meta","1",{"name":"description","content":"OpenSQL 기반 AI 문서관리 플랫폼"}],["$","link","2",{"rel":"icon","href":"/favicon.ico?favicon.2vob68tjqpejf.ico","sizes":"256x256","type":"image/x-icon"}],["$","$L15","3",{}]]
