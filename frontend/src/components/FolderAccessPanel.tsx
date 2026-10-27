@@ -5,7 +5,7 @@
 import { useEffect, useState } from "react";
 
 import { GranteePicker } from "./GranteePicker";
-import { ApiError, getFolderAccess, listPrincipals, setFolderAccess } from "@/lib/api";
+import { ApiError, getFolderAccess, listPrincipals, setFolderAccess, setFolderDepartment } from "@/lib/api";
 import { VISIBILITY_LABEL, type Folder, type FolderScope, type Principals, type Visibility } from "@/lib/types";
 
 /**
@@ -114,6 +114,61 @@ export function FolderAccessPanel({ folder, onSaved }: {
       </button>
       {error !== null ? <p className="text-sm text-failed" role="alert">{error}</p> : null}
       {message !== null ? <p className="text-sm text-muted">{message}</p> : null}
+      {folder.can_change_access ? (
+        <FolderDepartmentSelect folder={folder} groups={principals.groups} onSaved={onSaved} />
+      ) : null}
     </section>
+  );
+}
+
+/**
+ * 부서 폴더 지정(D15). 만든 사람에게만 그린다. 고를 수 있는 그룹을 따로 묻는 API가 없어 전체 그룹을 보이고,
+ * 구성원이 아니거나 열람 범위가 부서에 닿지 않으면 서버 거부 문구를 그대로 보인다.
+ */
+function FolderDepartmentSelect({ folder, groups, onSaved }: {
+  folder: Folder;
+  groups: string[];
+  onSaved: () => void;
+}): React.ReactElement {
+  const [group, setGroup] = useState(folder.department?.name ?? "");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
+  const options = group !== "" && !groups.includes(group) ? [group, ...groups] : groups;
+
+  async function save(): Promise<void> {
+    if (saving) return;
+    setSaving(true);
+    setError(null);
+    setMessage(null);
+    try {
+      await setFolderDepartment(folder.id, group === "" ? null : group);
+      setMessage("부서 폴더를 저장했습니다.");
+      onSaved();
+    } catch (reason: unknown) {
+      setError(reason instanceof ApiError ? reason.detail : "부서 폴더를 저장하지 못했습니다.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="space-y-2 border-t border-line pt-4">
+      <label className="flex flex-wrap items-center gap-2 text-sm text-body">
+        <span className="font-medium text-muted">부서 폴더</span>
+        <select value={group} disabled={saving} onChange={event => setGroup(event.target.value)}
+          className="rounded-lg border border-line bg-card px-2 py-1 text-sm text-body">
+          <option value="">지정 안 함</option>
+          {options.map(name => <option key={name} value={name}>{name}</option>)}
+        </select>
+      </label>
+      <p className="text-sm text-muted">그 부서 구성원이 볼 수 있는 최상위 폴더만 부서 폴더가 됩니다. 부서마다 하나입니다.</p>
+      <button type="button" disabled={saving} onClick={() => void save()}
+        className="rounded-lg border border-line px-4 py-2 text-sm text-body hover:bg-sunken disabled:text-faint">
+        {saving ? "저장 중…" : "부서 폴더 저장"}
+      </button>
+      {error !== null ? <p className="text-sm text-failed" role="alert">{error}</p> : null}
+      {message !== null ? <p className="text-sm text-muted">{message}</p> : null}
+    </div>
   );
 }

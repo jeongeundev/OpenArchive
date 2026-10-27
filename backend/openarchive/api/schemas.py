@@ -26,6 +26,11 @@ class UpdateDepartmentRequest(BaseModel):
     group_id: UUID | None
 
 
+class UpdateFolderDepartmentRequest(BaseModel):
+    # 그룹 이름 — 폴더 열람 범위처럼 일반 사용자가 아는 것은 이름뿐이다
+    group: str | None
+
+
 class Folder(BaseModel):
     department: Department | None = None
     id: UUID

@@ -8,6 +8,7 @@ import { useId, useState } from "react";
 import { passageHref } from "@/lib/passageLink";
 import { relationLabel } from "@/lib/relations";
 import type { SearchResponse } from "@/lib/types";
+import { joinMeta, OwnerLabel } from "./OwnerLabel";
 
 const EXCERPT_LENGTH = 300;
 const DATE_FORMATTER = new Intl.DateTimeFormat("ko-KR", {
@@ -91,13 +92,13 @@ export function SearchResults({
               {item.title}
             </Link>
             <p className="mt-2 break-words text-xs text-muted">
-              {[
+              {joinMeta([
                 item.content_type.toUpperCase(),
                 item.folder_path?.join(" › "),
-                item.owner,
+                item.owner ? <OwnerLabel owner={item.owner} department={item.owner_department} /> : null,
                 item.updated_at ? DATE_FORMATTER.format(new Date(item.updated_at)) : null,
                 item.tags.length > 0 ? item.tags.join(", ") : null,
-              ].filter(Boolean).join(" · ")}
+              ])}
               {item.via === null ? <> · <span className="text-muted">유사도 {item.score.toFixed(3)}</span></> : null}
             </p>
             {item.via !== null ? (

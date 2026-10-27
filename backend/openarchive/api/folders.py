@@ -21,8 +21,8 @@ from openarchive.api.schemas import (
     RenameFolderRequest,
     SharedFolder,
     TransferOwnerRequest,
-    UpdateDepartmentRequest,
     UpdateFolderAccessRequest,
+    UpdateFolderDepartmentRequest,
 )
 from openarchive.services import folders as service
 from openarchive.services.visibility import SHARE_PRINCIPAL_PREFIX
@@ -146,16 +146,21 @@ async def transfer_owner(
 @router.put("/{folder_id}/department", response_model=Folder)
 async def set_folder_department(
     folder_id: UUID,
-    body: UpdateDepartmentRequest,
+    body: UpdateFolderDepartmentRequest,
     conn: Connection,
     user: Annotated[dict, Depends(require_session_user)],
 ) -> Folder:
-    from openarchive.services.grants import GroupNotFound
+    from openarchive.services.grants import GroupNotFound, UnknownGrantee, resolve_grantees
 
     try:
+        group_id = None
+        if body.group is not None:
+            _, (group_id,) = await resolve_grantees(conn, users=[], groups=[body.group])
         await service.set_folder_department(
-            conn, folder_id, user_id=user["username"], group_id=body.group_id
+            conn, folder_id, user_id=user["username"], group_id=group_id
         )
+    except UnknownGrantee as error:
+        raise HTTPException(status_code=404, detail="그룹을 찾을 수 없습니다.") from error
     except GroupNotFound as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
     except ValueError as error:

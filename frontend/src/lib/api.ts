@@ -783,6 +783,13 @@ export function setFolderAccess(id: string, scope: FolderScope): Promise<FolderS
   });
 }
 
+/** 최상위 폴더를 부서 폴더로 지정하거나(그룹 이름) 해제한다(null). 만든 사람만, 세션으로만 (D15). */
+export function setFolderDepartment(id: string, group: string | null): Promise<Folder> {
+  return request<Folder>(`/api/folders/${encodeURIComponent(id)}/department`, {
+    method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ group }),
+  });
+}
+
 export function moveDocument(id: string, folderId: string | null): Promise<DocumentDetail> {
   return request<DocumentDetail>(`/api/documents/${encodeURIComponent(id)}/folder`, {
     method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ folder_id: folderId }),

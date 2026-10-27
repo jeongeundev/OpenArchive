@@ -6,16 +6,18 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import Home from "./page";
 
 const auth = vi.hoisted(() => ({ value: { authenticated: true, username: "alice", is_admin: false } }));
+const location = vi.hoisted(() => ({ search: "" }));
+const folderList = vi.hoisted(() => ({ value: [] as import("@/lib/types").Folder[] }));
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn(), replace: vi.fn() }),
-  useSearchParams: () => new URLSearchParams(),
+  useSearchParams: () => new URLSearchParams(location.search),
 }));
 vi.mock("@/components/AuthProvider", () => ({
   useAuth: () => ({ auth: auth.value, loading: false, setAuth: vi.fn() }),
 }));
 vi.mock("@/lib/useFolders", () => ({
-  useFolders: () => ({ folders: [], loading: false, error: null, refresh: vi.fn() }),
+  useFolders: () => ({ folders: folderList.value, loading: false, error: null, refresh: vi.fn() }),
 }));
 vi.mock("@/lib/useDocuments", () => ({
   useDocuments: () => ({ documents: [], total: 0, loading: false, error: null, refresh: vi.fn() }),
@@ -37,6 +39,23 @@ vi.mock("@/components/UploadDropzone", () => ({
 
 afterEach(() => {
   auth.value = { authenticated: true, username: "alice", is_admin: false };
+  location.search = "";
+  folderList.value = [];
+});
+
+describe("폴더 주소", () => {
+  it("`/?folder=<id>`로 들어오면 그 폴더가 열린 상태다 — 부서 링크가 이 경로를 쓴다 (D16)", () => {
+    location.search = "folder=f1";
+    folderList.value = [{
+      id: "f1", parent_id: null, name: "IT전략실", created_by: "kim", document_count: 0,
+      scope: { visibility: "public", users: [], groups: [] }, inherited: false,
+      can_manage: false, can_change_access: false, can_share: false,
+    }];
+
+    render(<Home />);
+
+    expect(screen.getByRole("heading", { level: 2, name: "IT전략실" })).toBeInTheDocument();
+  });
 });
 
 describe("문서 화면 사이드바", () => {

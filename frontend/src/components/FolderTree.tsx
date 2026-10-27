@@ -65,7 +65,12 @@ export function FolderTree({ folders, selectedId, onSelect, onCreate }: {
       <li key={folder.id}>
         <button type="button" onClick={() => onSelect(folder.id)} aria-current={selected ? "true" : undefined}
           className={`flex w-full justify-between gap-2 rounded px-2 py-1 text-left text-sm ${selected ? "bg-sunken text-strong" : "text-body hover:text-strong"}`}>
-          <span className="truncate">{folder.name}</span>
+          <span className="min-w-0">
+            <span className="block truncate">{folder.name}</span>
+            {folder.department ? (
+              <span className="block truncate text-xs text-muted">부서 폴더 · {folder.department.name}</span>
+            ) : null}
+          </span>
           <span className="text-muted">{folder.document_count}</span>
         </button>
         {children.length > 0 ? <ul className="ml-3 border-l border-line pl-2">{children.map(item)}</ul> : null}

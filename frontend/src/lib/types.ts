@@ -19,7 +19,15 @@ export interface FolderScope {
   groups: string[];
 }
 
+/** 소유자의 소속 부서. 부서 폴더는 볼 수 있을 때만 id가 온다 (D16). */
+export interface OwnerDepartment {
+  name: string;
+  folder_id: string | null;
+}
+
 export interface Folder {
+  /** 이 폴더가 부서 폴더면 그 부서 — 최상위 폴더만 지정된다 (D15). */
+  department?: { id: string; name: string } | null;
   id: string;
   parent_id: string | null;
   name: string;
@@ -92,7 +100,7 @@ export interface ShareSummary {
 }
 
 export interface DocumentSummary {
-  owner_department?: { name: string; folder_id: string | null } | null;
+  owner_department?: OwnerDepartment | null;
   follows_folder: boolean;
   id: string;
   title: string;
@@ -202,7 +210,7 @@ export interface SearchPassage {
 }
 
 export interface SearchResult {
-  owner_department?: { name: string; folder_id: string | null } | null;
+  owner_department?: OwnerDepartment | null;
   document_id: string;
   title: string;
   filename: string | null;
@@ -234,7 +242,7 @@ export interface SearchResponse {
 
 /** 근거 기반 답변의 근거 하나 — 모델에 준 대목이며 `cited`가 실제 인용 여부다 (ADR-043). */
 export interface AnswerSource {
-  owner_department?: { name: string; folder_id: string | null } | null;
+  owner_department?: OwnerDepartment | null;
   label: number;
   document_id: string;
   title: string;
@@ -336,7 +344,7 @@ export interface SystemStatus {
 }
 
 export interface AuthStatus {
-  department?: { name: string; folder_id: string | null } | null;
+  department?: OwnerDepartment | null;
   authenticated: boolean;
   username: string | null;
   is_admin: boolean;

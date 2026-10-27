@@ -44,6 +44,13 @@ describe("FolderTree", () => {
     expect(screen.getByRole("button", { name: /인사/ })).toHaveTextContent("3");
   });
 
+  it("부서 폴더에는 「부서 폴더 · 부서」를 작게 표시하고 다른 폴더에는 없다 (D15)", () => {
+    render(<FolderTree folders={[{ ...folder("a", "IT전략실 문서", null, 2), department: { id: "g1", name: "IT전략실" } }, folder("b", "인사", null)]}
+      selectedId={null} onSelect={vi.fn()} onCreate={vi.fn()} />);
+    expect(screen.getByRole("button", { name: /IT전략실 문서/ })).toHaveTextContent("부서 폴더 · IT전략실");
+    expect(screen.getByRole("button", { name: /인사/ })).not.toHaveTextContent("부서 폴더");
+  });
+
   it("폴더를 누르면 그 폴더를, 「전체 문서」를 누르면 선택 해제를 알린다", () => {
     const onSelect = vi.fn();
     render(<FolderTree folders={[folder("a", "인사", null)]} selectedId="a" onSelect={onSelect} onCreate={vi.fn()} />);

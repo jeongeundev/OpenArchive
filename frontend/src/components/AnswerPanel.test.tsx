@@ -140,6 +140,21 @@ describe("AnswerPanel", () => {
     expect(within(list).getByText("DOCX · 재무 · 최수진")).toBeInTheDocument();
   });
 
+  it("근거의 소유자에 부서가 있으면 `이름(부서)`로 보인다 (D16)", () => {
+    renderPanel(
+      answered("답 [1]", [
+        source({ label: 1, content_type: "docx", folder_path: ["재무"], owner: "최수진", owner_department: { name: "IT전략실", folder_id: "f1" } }),
+        source({ label: 2, title: "참고만 한 문서", document_id: "document-2", cited: false, content_type: "hwpx", folder_path: null, owner: "박민수", owner_department: { name: "운영팀", folder_id: null } }),
+      ]),
+    );
+
+    const list = screen.getByRole("list", { name: "인용한 근거" });
+    expect(within(list).getByText((_, node) => node?.tagName === "P" && node.textContent === "DOCX · 재무 · 최수진(IT전략실)")).toBeInTheDocument();
+    expect(within(list).getByRole("link", { name: "IT전략실" })).toHaveAttribute("href", "/?folder=f1");
+    expect(screen.getByText((_, node) => node?.tagName === "SPAN" && node.textContent === "HWPX · 박민수(운영팀)")).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "운영팀" })).not.toBeInTheDocument();
+  });
+
   it("인용하지 않은 근거에도 형식·소유자를 보인다", () => {
     renderPanel(
       answered("답 [1]", [

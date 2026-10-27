@@ -261,6 +261,15 @@ it("제목 아래 메타를 형식·폴더·소유자·수정일·태그·흐린
   expect(screen.getByText(/유사도 0.877/)).not.toHaveClass("text-accent");
 });
 
+it("소유자에 부서가 있으면 `이름(부서)`로 보인다 — 직접 결과와 함께 볼 문서 모두 (D16)", () => {
+  const direct = { ...response.items[0], content_type: "hwpx" as const, folder_path: null, owner: "김민준", owner_department: { name: "IT전략실", folder_id: "f1" }, updated_at: "2026-10-26T03:00:00Z" };
+  const linked = { ...direct, document_id: "linked", title: "이어진 문서", owner_department: { name: "IT전략실", folder_id: null }, via: { from_document_id: direct.document_id, from_title: direct.title, kind: "related", depth: 1 } };
+  render(<SearchResults response={{ ...response, items: [direct, linked] }} loading={false} error={null} />);
+  expect(screen.getByRole("link", { name: direct.title }).nextElementSibling?.textContent).toBe("HWPX · 김민준(IT전략실) · 2026년 10월 26일 · OpenSQL, 운영 · 유사도 0.877");
+  expect(screen.getByRole("link", { name: "이어진 문서" }).nextElementSibling?.textContent).toBe("HWPX · 김민준(IT전략실) · 2026년 10월 26일 · OpenSQL, 운영");
+  expect(screen.getAllByRole("link", { name: "IT전략실" })).toHaveLength(1);
+});
+
 it("폴더가 없는 연결 문서는 빈 자리 없이 같은 메타와 연결 경로를 표시한다", () => {
   render(<SearchResults response={{ ...response, items: [{ ...response.items[0], content_type: "hwpx", folder_path: null, owner: "IT전략실_김민준", updated_at: "2026-10-26T03:00:00Z", via: { from_document_id: "source", from_title: "출처", kind: "related", depth: 1 } }] }} loading={false} error={null} />);
   const meta = screen.getByRole("link", { name: response.items[0].title }).nextElementSibling;

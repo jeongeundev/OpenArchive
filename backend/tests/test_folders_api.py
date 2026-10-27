@@ -396,14 +396,14 @@ def test_department_admin_and_folder_api(db_client, migrated_db):
     token = db_client.post(
         "/api/auth/tokens", json={"name": "department", "scope": "read_write"}
     ).json()["token"]
-    assert (
-        db_client.put(fp, json={"group_id": group["id"]}, headers=bearer(token)).status_code == 403
-    )
-    assert db_client.put(fp, json={"group_id": group["id"]}).status_code == 200
+    assert db_client.put(fp, json={"group": "개발"}, headers=bearer(token)).status_code == 403
+    # 폴더 쪽은 열람 범위 API처럼 그룹 이름으로 지정한다 — 일반 사용자는 그룹 id를 볼 길이 없다
+    assert db_client.put(fp, json={"group": "없는 그룹"}).status_code == 404
+    assert db_client.put(fp, json={"group": "개발"}).status_code == 200
     assert db_client.get("/api/folders").json()[0]["department"] == user["department"]
-    assert db_client.put(fp, json={"group_id": None}).status_code == 200
+    assert db_client.put(fp, json={"group": None}).status_code == 200
     login_admin(db_client, migrated_db)
-    assert db_client.put(fp, json={"group_id": group["id"]}).status_code == 403
+    assert db_client.put(fp, json={"group": "개발"}).status_code == 403
     with psycopg.connect(migrated_db) as conn:
         rows = conn.execute(
             """SELECT actor, actor_via, action, detail->>'change' FROM audit_log

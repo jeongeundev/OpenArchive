@@ -72,6 +72,13 @@ describe("DocumentHeader", () => {
     expect(metaLine()).toHaveClass("text-sm", "text-muted");
   });
 
+  it("소유자에 부서가 있으면 `이름(부서)`로 보인다 (D16)", () => {
+    render(<DocumentHeader document={{ ...document, owner_id: "김민준", owner_department: { name: "IT전략실", folder_id: "f1" } }} />);
+
+    expect(metaLine()).toHaveTextContent(`MD · 김민준(IT전략실) · 조직 공개 · ${formatDate(document.updated_at)}`);
+    expect(screen.getByRole("link", { name: "IT전략실" })).toHaveAttribute("href", "/?folder=f1");
+  });
+
   it("폴더 밖 문서는 위치 칸을 통째로 뺀다", () => {
     render(<DocumentHeader document={document} />);
 

@@ -34,6 +34,16 @@ describe("ErrorDocuments", () => {
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/documents/doc-1/reembed", expect.objectContaining({ method: "POST" })));
   });
 
+  it("소유자에 부서가 있으면 `이름(부서)`로 보인다 (D16)", async () => {
+    renderDocuments(vi.fn((url: string) => Promise.resolve(
+      url === "/api/auth/me"
+        ? response({ authenticated: true, username: "alice", is_admin: false })
+        : response([{ ...document, owner_id: "김민준", owner_department: { name: "IT전략실", folder_id: "f1" } }]),
+    )));
+    expect(await screen.findByRole("link", { name: "IT전략실" })).toHaveAttribute("href", "/?folder=f1");
+    expect(screen.getByRole("link", { name: "IT전략실" }).closest("td")).toHaveTextContent(/^김민준\(IT전략실\)$/);
+  });
+
   it("재임베딩 403 응답의 detail을 표시한다", async () => {
     renderDocuments(vi.fn((url: string) => Promise.resolve(
       url === "/api/auth/me"

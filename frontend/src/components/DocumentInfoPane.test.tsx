@@ -146,6 +146,15 @@ describe("DocumentInfoPane", () => {
     expect(values[4]).toBe("계획-v2.hwpx");
   });
 
+  it("소유자에 부서가 있으면 `이름(부서)`로 보인다 (D16)", async () => {
+    setup({ ...detail, owner_id: "김민준", owner_department: { name: "IT전략실", folder_id: "f1" } });
+    render(<DocumentInfoPane documentId="document-1" onClose={vi.fn()} />);
+
+    await screen.findByRole("link", { name: "문서 열기" });
+    expect(screen.getAllByRole("definition")[1].textContent).toBe("김민준(IT전략실)");
+    expect(screen.getByRole("link", { name: "IT전략실" })).toHaveAttribute("href", "/?folder=f1");
+  });
+
   it("폴더·원본 파일이 없으면 위치·파일 항목이 빠진다", async () => {
     setup({ ...detail, folder: null, filename: null, files: [] });
     render(<DocumentInfoPane documentId="document-1" onClose={vi.fn()} />);

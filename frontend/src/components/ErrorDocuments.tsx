@@ -7,6 +7,7 @@ import { useState } from "react";
 import { useAuth } from "@/components/AuthProvider";
 import { ApiError, reembedDocument } from "@/lib/api";
 import { useDocuments } from "@/lib/useDocuments";
+import { OwnerLabel } from "./OwnerLabel";
 
 export function ErrorDocuments(): React.ReactElement {
   const { documents, loading, error, refresh } = useDocuments({ status: "error" });
@@ -37,7 +38,7 @@ export function ErrorDocuments(): React.ReactElement {
       ) : (
         <div className="overflow-x-auto rounded-lg border border-line bg-card">
           <table className="w-full text-left text-sm"><thead className="border-b border-line text-muted"><tr><th className="px-4 py-3 font-medium">제목</th><th className="px-4 py-3 font-medium">소유자</th><th className="px-4 py-3 font-medium">수정일</th><th className="px-4 py-3 font-medium"><span className="sr-only">작업</span></th></tr></thead>
-            <tbody>{documents.map((document) => <tr key={document.id} className="border-b border-line last:border-0"><td className="px-4 py-3"><Link className="text-strong hover:text-accent" href={`/documents/${document.id}`}>{document.title}</Link></td><td className="px-4 py-3 text-body">{document.owner_id}</td><td className="px-4 py-3 text-muted">{new Date(document.updated_at).toLocaleString("ko-KR")}</td><td className="px-4 py-3 text-right">{!anonymous ? <button type="button" disabled={requestingId === document.id} onClick={() => void reembed(document.id)} className="rounded-lg bg-strong px-3 py-2 text-xs font-medium text-on-strong hover:bg-strong/90 disabled:cursor-not-allowed disabled:opacity-40">재임베딩</button> : null}</td></tr>)}</tbody>
+            <tbody>{documents.map((document) => <tr key={document.id} className="border-b border-line last:border-0"><td className="px-4 py-3"><Link className="text-strong hover:text-accent" href={`/documents/${document.id}`}>{document.title}</Link></td><td className="px-4 py-3 text-body"><OwnerLabel owner={document.owner_id} department={document.owner_department} /></td><td className="px-4 py-3 text-muted">{new Date(document.updated_at).toLocaleString("ko-KR")}</td><td className="px-4 py-3 text-right">{!anonymous ? <button type="button" disabled={requestingId === document.id} onClick={() => void reembed(document.id)} className="rounded-lg bg-strong px-3 py-2 text-xs font-medium text-on-strong hover:bg-strong/90 disabled:cursor-not-allowed disabled:opacity-40">재임베딩</button> : null}</td></tr>)}</tbody>
           </table>
         </div>
       )}

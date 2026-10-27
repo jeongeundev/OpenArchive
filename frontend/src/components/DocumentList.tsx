@@ -6,6 +6,7 @@ import Link from "next/link";
 
 import { scopeSummary } from "@/lib/scope";
 import type { DocumentSummary } from "@/lib/types";
+import { OwnerLabel } from "./OwnerLabel";
 import { DocumentStatusBadge } from "./StatusBadge";
 
 const DATE_FORMATTER = new Intl.DateTimeFormat("ko-KR", {
@@ -45,9 +46,9 @@ export function DocumentList({
       {documents.map((document) => {
         const selected = document.id === selectedId;
         const location = document.folder_path?.length ? document.folder_path.join(" › ") : null;
-        const meta: { key: string; text: string; strong?: boolean; wrap?: boolean }[] = [
+        const meta: { key: string; text: React.ReactNode; strong?: boolean; wrap?: boolean }[] = [
           ...(location !== null ? [{ key: "location", text: location, strong: true }] : []),
-          { key: "owner", text: document.owner_id },
+          { key: "owner", text: <OwnerLabel owner={document.owner_id} department={document.owner_department} /> },
           { key: "scope", text: scopeSummary(document) },
           { key: "updated", text: DATE_FORMATTER.format(new Date(document.updated_at)) },
           ...(document.tags.length > 0 ? [{ key: "tags", text: document.tags.join(", "), wrap: true }] : []),

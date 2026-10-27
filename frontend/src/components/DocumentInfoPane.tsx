@@ -9,6 +9,7 @@ import { relationLabel } from "@/lib/relations";
 import { scopeSummary } from "@/lib/scope";
 import { useDocument } from "@/lib/useDocument";
 import { useRelated } from "@/lib/useRelated";
+import { OwnerLabel } from "./OwnerLabel";
 import { DocumentStatusBadge } from "./StatusBadge";
 
 const RELATED_LIMIT = 4;
@@ -70,9 +71,9 @@ export function DocumentInfoPane({
     (latest, file) => (latest === null || file.file_version > latest.file_version ? file : latest),
     null,
   );
-  const info: [string, string][] = [
+  const info: [string, React.ReactNode][] = [
     ...(location !== null ? [["위치", location] as [string, string]] : []),
-    ["소유자", document.owner_id],
+    ["소유자", <OwnerLabel key="owner" owner={document.owner_id} department={document.owner_department} />],
     ["열람 범위", scopeSummary(document)],
     ["수정", `${DATE_FORMATTER.format(new Date(document.updated_at))} · 텍스트 v${document.version}`],
     ...(document.filename !== null ? [["파일", document.filename] as [string, string]] : []),

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 import { scopeSummary } from "@/lib/scope";
 import type { DocumentDetail } from "@/lib/types";
+import { joinMeta, OwnerLabel } from "./OwnerLabel";
 import { DocumentStatusBadge } from "./StatusBadge";
 
 function formatDate(value: string): string {
@@ -20,13 +21,13 @@ export function DocumentHeader({
 }: {
   document: DocumentDetail;
 }): React.ReactElement {
-  const meta = [
+  const meta = joinMeta([
     document.folder?.path.map((item) => item.name).join(" › "),
     document.content_type.toUpperCase(),
-    document.owner_id,
+    <OwnerLabel key="owner" owner={document.owner_id} department={document.owner_department} />,
     scopeSummary(document),
     formatDate(document.updated_at),
-  ].filter((item): item is string => item !== undefined && item !== "");
+  ]);
 
   return (
     <header className="space-y-2">
@@ -35,7 +36,7 @@ export function DocumentHeader({
         <DocumentStatusBadge document={document} />
       </div>
       <p className="break-words text-sm text-muted" data-testid="document-header-meta">
-        {meta.join(" · ")}
+        {meta}
       </p>
     </header>
   );
