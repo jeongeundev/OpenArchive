@@ -1,11 +1,8 @@
 // Copyright 2026 jeongeundev
 // SPDX-License-Identifier: MIT
+import { AppShell } from "@/components/AppShell";
 import type { Metadata } from "next";
-import { SiteHeader } from "@/components/SiteHeader";
-import { SiteFooter } from "@/components/SiteFooter";
 import { AuthProvider } from "@/components/AuthProvider";
-import { RequireAuth } from "@/components/RequireAuth";
-import { RetryNotice } from "@/components/RetryNotice";
 import { THEME_BOOT_SCRIPT } from "@/lib/theme";
 import "./globals.css";
 
@@ -24,12 +21,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       </head>
       <body className="flex min-h-full flex-col">
         <AuthProvider>
-          <SiteHeader />
-          <main className="mx-auto w-full max-w-[96rem] flex-1 px-6 py-8">
-            <RetryNotice />
-            <RequireAuth>{children}</RequireAuth>
-          </main>
-          <SiteFooter />
+          <AppShell>{children}</AppShell>
         </AuthProvider>
       </body>
     </html>
