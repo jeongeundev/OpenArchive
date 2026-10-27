@@ -415,6 +415,21 @@ export interface AuditPage {
   next_before_id: number | null;
 }
 
+/** 문서 한 건의 활동 기록. 열람자는 변경, 소유자는 열람 기록까지 받는다 (ADR-055 결정 7). */
+export interface DocumentActivityEntry {
+  id: number;
+  occurred_at: string;
+  action: AuditAction;
+  actor: string | null;
+  actor_via: string | null;
+  detail: Record<string, unknown>;
+}
+
+export interface DocumentActivityPage {
+  items: DocumentActivityEntry[];
+  next_before_id: number | null;
+}
+
 /** 열람 부여 대상으로 고를 수 있는 이름들. 로그인한 사용자 누구나 받는다 (ADR-044). */
 export interface Principals {
   users: string[];
