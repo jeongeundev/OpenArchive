@@ -63,6 +63,34 @@ async def test_search_folder_includes_deep_descendants_and_outside_relations(wor
     )
     assert {hit.document_id for hit in hits if hit.via is None} == inside
     assert any(hit.document_id == outside and hit.via is not None for hit in hits)
+    from openarchive.services.documents import get_document
+
+    recorder = RecordingConnection(worker_conn)
+    repeated = await search_documents(
+        recorder, provider, query="폴더 검색", user_id="alice", folder_id=folders[0]
+    )
+    assert [(h.document_id, h.score) for h in repeated] == [(h.document_id, h.score) for h in hits]
+    async with worker_conn.transaction():
+        from openarchive.services.search import apply_vector_search_settings
+        await apply_vector_search_settings(worker_conn)
+        cur = await worker_conn.execute(SEARCH_SQL, {
+            "query": "폴더 검색", "identifier": None, "edition": None,
+            "qvec": to_pgvector_literal(provider.embed(["폴더 검색"])[0]),
+            "tags": None, "ctype": None, "folder": folders[0], "user": "alice", "k": 10,
+        })
+        raw = await cur.fetchall()
+    assert [(h.document_id, h.score) for h in hits] == [(r[0], float(r[7])) for r in raw]
+    assert recorder.statements[-1] != SEARCH_SQL
+    assert len(recorder.statements) == 7  # BEGIN, 네 설정, 검색, 보강
+
+    for hit in hits:
+        detail = await get_document(worker_conn, hit.document_id, user_id="alice")
+        expected = tuple(p["name"] for p in detail["folder"]["path"]) if detail["folder"] else None
+        assert hit.folder_path == expected
+        cur = await worker_conn.execute(
+            "SELECT owner_id, updated_at FROM documents WHERE id=%s", (hit.document_id,)
+        )
+        assert (hit.owner, hit.updated_at) == await cur.fetchone()
 
     from openarchive.api.schemas import SearchRequest
     from openarchive.api.search import search
@@ -71,6 +99,8 @@ async def test_search_folder_includes_deep_descendants_and_outside_relations(wor
     assert body.folder_id == folders[0]
     response = await search(body, worker_conn, provider, "alice")
     assert {hit.document_id for hit in response.items if hit.via is None} == inside
+    assert any(hit.folder_path == ["인사", "채용", "신입"] for hit in response.items)
+    assert all(hit.owner == "alice" and hit.updated_at is not None for hit in response.items)
 
 
 async def test_search_hidden_folder_excludes_individually_visible_docs(worker_conn):
@@ -85,9 +115,9 @@ async def test_search_hidden_folder_excludes_individually_visible_docs(worker_co
         "UPDATE documents SET folder_id = %s, follows_folder = false WHERE id = %s", (folder, doc)
     )
     await process_all_embedding_jobs(worker_conn, provider)
-    assert any(hit.document_id == doc for hit in await search_documents(
-        worker_conn, provider, query="폴더 검색", user_id="alice"
-    ))
+    hits = await search_documents(worker_conn, provider, query="폴더 검색", user_id="alice")
+    assert next(hit for hit in hits if hit.document_id == doc).folder_path is None
+    assert "숨김" not in repr(hits)
     for selected in (folder, UUID(int=0)):
         assert await search_documents(
             worker_conn, provider, query="폴더 검색", user_id="alice", folder_id=selected
@@ -138,7 +168,7 @@ async def test_search_narrow_visibility_fills_k_with_iterative_scan(worker_conn)
         "user": "viewer", "folder": folder, "k": 10,
     }
     async with worker_conn.transaction():
-        for statement in recorder.statements[1:-1]:
+        for statement in recorder.statements[1:5]:
             await worker_conn.execute(statement)
         cur = await worker_conn.execute("EXPLAIN " + SEARCH_SQL, params)
         plan = "\n".join(row[0] for row in await cur.fetchall())
@@ -202,7 +232,7 @@ async def test_search_trash_candidates_fill_k_with_iterative_scan(worker_conn):
         "user": "viewer", "folder": folder, "k": 10,
     }
     async with worker_conn.transaction():
-        for statement in recorder.statements[1:-1]:
+        for statement in recorder.statements[1:5]:
             await worker_conn.execute(statement)
         cur = await worker_conn.execute("EXPLAIN " + SEARCH_SQL, params)
         plan = "\n".join(row[0] for row in await cur.fetchall())
@@ -1362,3 +1392,40 @@ async def test_vector_candidate_outside_displayed_direct_results_can_expand(work
             assert [hit.document_id for hit in expanded] == [ids[1]]
             assert expanded[0].via.from_document_id == ids[0]
             assert expanded[0].via.from_title == "휴가 기준"
+
+
+async def test_search_shared_folder_metadata(worker_conn):
+    from openarchive.services.documents import get_document
+
+    cur = await worker_conn.execute(
+        "INSERT INTO users (username, password_hash) VALUES ('alice', 'unused') RETURNING id"
+    )
+    user = (await cur.fetchone())[0]
+    cur = await worker_conn.execute(
+        "INSERT INTO shares (owner_user_id, name) VALUES (%s, '공유') RETURNING id", (user,)
+    )
+    share = (await cur.fetchone())[0]
+    parent = None
+    for name in ("IT전략실", "통합유지보수"):
+        cur = await worker_conn.execute(
+            "INSERT INTO folders (parent_id, name, created_by, visibility) "
+            "VALUES (%s, %s, 'alice', %s) RETURNING id",
+            (parent, name, None if parent else "public"),
+        )
+        parent = (await cur.fetchone())[0]
+    doc = await insert_test_document(worker_conn, title="메타 문서", content="메타 검색")
+    await worker_conn.execute("UPDATE documents SET folder_id=%s WHERE id=%s", (parent, doc))
+    await worker_conn.execute(
+        "INSERT INTO share_folders (share_id, folder_id) VALUES (%s, %s)", (share, parent)
+    )
+    provider = FakeProvider()
+    await process_all_embedding_jobs(worker_conn, provider)
+    for principal, expected in (
+        ("alice", ("IT전략실", "통합유지보수")),
+        (f"share:{share}", ("통합유지보수",)),
+    ):
+        hits = await search_documents(worker_conn, provider, query="메타 검색", user_id=principal)
+        hit = next(hit for hit in hits if hit.document_id == doc and hit.via is None)
+        detail = await get_document(worker_conn, doc, user_id=principal)
+        assert hit.folder_path == expected
+        assert hit.folder_path == tuple(p["name"] for p in detail["folder"]["path"])

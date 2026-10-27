@@ -1,6 +1,6 @@
 // Copyright 2026 jeongeundev
 // SPDX-License-Identifier: MIT
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { AuthProvider } from "@/components/AuthProvider";
@@ -54,6 +54,7 @@ const documents: DocumentSummary[] = [
     owner_id: "alice",
     visibility: "public",
     effective_visibility: "public",
+    follows_folder: false,
     tags: ["OpenSQL"],
     embedding_status: "ready",
     extraction_status: "done",
@@ -69,6 +70,7 @@ const documents: DocumentSummary[] = [
     owner_id: "alice",
     visibility: "private",
     effective_visibility: "private",
+    follows_folder: false,
     tags: ["정합성"],
     embedding_status: "pending",
     extraction_status: "done",
@@ -132,12 +134,86 @@ function mockFinder(total: number, globalTotal: number, folders: Folder[] = []) 
       : url.pathname === "/api/folders" ? folders
       : url.pathname.endsWith("/progress") ? { extracting: 0, extraction_failed: 0, pending: 0, processing: 0, ready: globalTotal, error: 0 }
       : url.pathname.endsWith("/count") ? { total }
-      : url.pathname.endsWith("/tags") ? ["보안"] : total === 0 ? [] : documents;
+      : url.pathname.endsWith("/tags") ? ["보안"]
+      : url.pathname.endsWith("/related") || url.pathname.endsWith("/tag-suggestions") ? { items: [], identical: [], based_on_version: null, reason: null }
+      : url.pathname.startsWith("/api/documents/document-") ? detailOf(url.pathname.split("/").at(-1) ?? "")
+      : total === 0 ? [] : documents;
     return Promise.resolve(new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } }));
   });
   vi.stubGlobal("fetch", fetchMock);
   return fetchMock;
 }
+
+// 정보 창이 읽는 상세 응답 — 본문은 비워 둔다.
+function detailOf(id: string) {
+  const summary = documents.find((document) => document.id === id) ?? documents[0];
+  return { ...summary, folder: null, content: "", versions: [], files: [], chunk_count: 0, chunk_version: null };
+}
+
+function infoButton(title: string): HTMLElement {
+  const row = screen.getByRole("link", { name: title }).closest("li") as HTMLElement;
+  return within(row).getByRole("button", { name: "정보" });
+}
+
+describe("목록 정보 창", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("행을 고르면 「문서 정보」 창이 열린다", async () => {
+    mockFinder(2, 2);
+    render(<AuthProvider><Home /></AuthProvider>);
+
+    await screen.findByRole("link", { name: "정합성 점검표" });
+    expect(screen.queryByRole("complementary", { name: "문서 정보" })).not.toBeInTheDocument();
+    fireEvent.click(infoButton("정합성 점검표"));
+
+    const pane = screen.getByRole("complementary", { name: "문서 정보" });
+    expect(await within(pane).findByRole("link", { name: "문서 열기" })).toHaveAttribute("href", "/documents/document-2");
+  });
+
+  it("폴더를 바꾸면 정보 창이 닫힌다", async () => {
+    mockFinder(2, 2, [hr]);
+    render(<AuthProvider><Home /></AuthProvider>);
+
+    await screen.findByRole("link", { name: "OpenSQL 운영 가이드" });
+    fireEvent.click(infoButton("OpenSQL 운영 가이드"));
+    expect(screen.getByRole("complementary", { name: "문서 정보" })).toBeInTheDocument();
+
+    fireEvent.click(await screen.findByRole("button", { name: /인사/ }));
+    await waitFor(() => expect(screen.queryByRole("complementary", { name: "문서 정보" })).not.toBeInTheDocument());
+  });
+
+  it("넓은 화면 배치는 고르면 정보 창 열을 더하고, 고르지 않으면 트리와 목록 두 열이다", async () => {
+    mockFinder(2, 2, [hr]);
+    render(<AuthProvider><Home /></AuthProvider>);
+
+    await screen.findByRole("button", { name: /인사/ });
+    await screen.findByRole("link", { name: "OpenSQL 운영 가이드" });
+    const layout = screen.getByTestId("document-layout");
+    expect(layout).toHaveClass("lg:grid-cols-[13rem_minmax(0,1fr)]");
+    expect(layout).not.toHaveClass("lg:grid-cols-[13rem_minmax(0,1fr)_400px]");
+
+    fireEvent.click(infoButton("OpenSQL 운영 가이드"));
+    expect(layout).toHaveClass("lg:grid-cols-[13rem_minmax(0,1fr)_400px]");
+    expect(screen.getByRole("complementary", { name: "문서 정보" })).toHaveClass("lg:sticky", "lg:top-6");
+  });
+
+  it("로그인하지 않아도 목록과 정보 창이 동작한다", async () => {
+    mockFinder(2, 2);
+    render(<Home />);
+
+    await screen.findByRole("link", { name: "OpenSQL 운영 가이드" });
+    const layout = screen.getByTestId("document-layout");
+    expect(layout.className).not.toMatch(/lg:grid-cols/);
+
+    fireEvent.click(infoButton("OpenSQL 운영 가이드"));
+    const pane = screen.getByRole("complementary", { name: "문서 정보" });
+    expect(layout).toHaveClass("lg:grid-cols-[minmax(0,1fr)_400px]");
+    expect(await within(pane).findByRole("link", { name: "문서 열기" })).toHaveAttribute("href", "/documents/document-1");
+
+    fireEvent.click(within(pane).getByRole("button", { name: "닫기" }));
+    expect(screen.queryByRole("complementary", { name: "문서 정보" })).not.toBeInTheDocument();
+  });
+});
 
 describe("목록 찾기", () => {
   afterEach(() => vi.unstubAllGlobals());
@@ -196,6 +272,7 @@ describe("목록 찾기", () => {
       return Promise.resolve(new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } }));
     }));
     render(<AuthProvider><Home /></AuthProvider>);
+    fireEvent.click(await screen.findByRole("button", { name: "문서 올리기" }));
     fireEvent.change(await screen.findByLabelText("업로드할 파일"), {
       target: { files: [new File(["본문"], "new.md", { type: "text/markdown" })] },
     });
@@ -310,11 +387,93 @@ describe("폴더 트리", () => {
     vi.restoreAllMocks();
   });
 
+  it("「부여받은 문서」를 누르면 부여받은 문서만 목록·건수로 조회하고 주소에 남긴다 (D20)", async () => {
+    navigation.go("/?folder=folder-a");
+    const fetchMock = mockFinder(2, 2, [hr]);
+    render(<AuthProvider><RequireAuth><Home /></RequireAuth></AuthProvider>);
+    expect(await screen.findByRole("heading", { name: "인사" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "부여받은 문서" }));
+
+    expect(navigation.push).toHaveBeenLastCalledWith("/?granted=1");
+    await waitFor(() => expect(screen.queryByRole("heading", { name: "인사" })).not.toBeInTheDocument());
+    expect(screen.getByRole("button", { name: "부여받은 문서" })).toHaveAttribute("aria-current", "true");
+    expect(screen.getByRole("button", { name: /인사/ })).not.toHaveAttribute("aria-current");
+    await waitFor(() => {
+      const urls = requestedUrls(fetchMock);
+      expect(urls.some(url => url.pathname === "/api/documents" && url.searchParams.get("granted") === "true" && !url.searchParams.has("folder_id"))).toBe(true);
+      expect(urls.some(url => url.pathname === "/api/documents/count" && url.searchParams.get("granted") === "true" && !url.searchParams.has("folder_id"))).toBe(true);
+    });
+  });
+
+  it("「부여받은 문서」에서 폴더를 고르면 그 보기를 벗어난다", async () => {
+    navigation.go("/?granted=1");
+    mockFinder(2, 2, [hr]);
+    render(<AuthProvider><Home /></AuthProvider>);
+    fireEvent.click(await screen.findByRole("button", { name: /인사/ }));
+    expect(navigation.push).toHaveBeenLastCalledWith("/?folder=folder-a");
+    expect(screen.getByRole("button", { name: "부여받은 문서" })).not.toHaveAttribute("aria-current");
+  });
+
+  it("「부여받은 문서」에서 조건·쪽을 바꿔도 그 보기에 머문다", async () => {
+    navigation.go("/?granted=1");
+    mockFinder(120, 300, [hr]);
+    render(<AuthProvider><Home /></AuthProvider>);
+    await screen.findByText("120건 중 1–50");
+    fireEvent.change(screen.getByLabelText("정렬"), { target: { value: "title" } });
+    expect(navigation.replace).toHaveBeenLastCalledWith("/?granted=1&sort=title");
+    fireEvent.click(screen.getByRole("button", { name: "다음" }));
+    expect(navigation.replace).toHaveBeenLastCalledWith("/?granted=1&sort=title&page=2");
+  });
+
+  it("부여받은 문서가 없으면 그렇게 알린다", async () => {
+    navigation.go("/?granted=1");
+    mockFinder(0, 2, [hr]);
+    render(<AuthProvider><Home /></AuthProvider>);
+    expect(await screen.findByText("부여받은 문서가 없습니다.")).toBeInTheDocument();
+  });
+
+  it("「부여받은 문서」에서는 건수 줄이 전체가 아니라 이 목록의 건수다", async () => {
+    navigation.go("/?granted=1");
+    mockFinder(2, 10, [hr]);
+    render(<AuthProvider><Home /></AuthProvider>);
+    expect(await screen.findByText("이 목록 2건")).toBeInTheDocument();
+    expect(screen.queryByText("문서 10건")).not.toBeInTheDocument();
+  });
+
+  it("폴더를 고르면 건수 줄이 그 폴더 목록의 건수다", async () => {
+    navigation.go("/?folder=folder-a");
+    mockFinder(2, 10, [hr]);
+    // 실제 앱처럼 로그인 확인 뒤에 그린다 — 주소의 폴더를 폴더 목록이 오기 전에 판정하지 않는다.
+    render(<AuthProvider><RequireAuth><Home /></RequireAuth></AuthProvider>);
+    expect(await screen.findByRole("heading", { name: "인사" })).toBeInTheDocument();
+    expect(await screen.findByText("이 목록 2건")).toBeInTheDocument();
+    expect(screen.queryByText("문서 10건")).not.toBeInTheDocument();
+  });
+
+  it("전체 문서에서는 건수 줄이 열람 범위 전체의 처리 현황이다", async () => {
+    mockFinder(2, 10, [hr]);
+    render(<AuthProvider><Home /></AuthProvider>);
+    expect(await screen.findByText("문서 10건")).toBeInTheDocument();
+    expect(screen.queryByText("이 목록 2건")).not.toBeInTheDocument();
+  });
+
+  it("「부여받은 문서」에서 올리면 업로드 폴더 기본값은 「폴더 없음」이다", async () => {
+    navigation.go("/?granted=1");
+    mockFinder(2, 2, [hr]);
+    render(<AuthProvider><Home /></AuthProvider>);
+    await screen.findByRole("button", { name: /인사/ });
+    fireEvent.click(await screen.findByRole("button", { name: "문서 올리기" }));
+    const select = await screen.findByRole("combobox", { name: "폴더" });
+    expect((select as HTMLSelectElement).selectedOptions[0]).toHaveTextContent("폴더 없음");
+  });
+
   it("로그인하지 않으면 폴더 트리를 그리지 않는다", async () => {
     mockFinder(2, 2, [hr]);
     render(<Home />);
     await screen.findByRole("link", { name: "OpenSQL 운영 가이드" });
     expect(screen.queryByRole("button", { name: "전체 문서" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "부여받은 문서" })).not.toBeInTheDocument();
   });
 });
 

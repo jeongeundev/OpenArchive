@@ -79,6 +79,94 @@ describe("관계 지도 화면", () => {
   });
 });
 
+function stubClusters(clusters: { name: string; size: number }[]) {
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(
+    JSON.stringify({
+      clusters: clusters.map((cluster) => ({ ...cluster, documents: [] })),
+      connections: [],
+    }),
+    { status: 200, headers: { "Content-Type": "application/json" } },
+  )));
+}
+
+function circleOf(group: HTMLElement) {
+  const circle = group.querySelector("circle")!;
+  return {
+    cx: Number(circle.getAttribute("cx")),
+    cy: Number(circle.getAttribute("cy")),
+    r: Number(circle.getAttribute("r")),
+  };
+}
+
+describe("관계 지도 배치", () => {
+  it("덩어리 이름은 원 아래에, 문서 수는 원 안에 그린다", async () => {
+    stubClusters([{ name: "검색", size: 3 }, { name: "운영", size: 1 }, { name: "보안", size: 2 }]);
+
+    render(<ClustersPage />);
+
+    for (const name of ["검색", "운영", "보안"]) {
+      const group = await screen.findByRole("button", { name: `${name} 덩어리` });
+      const { cy, r } = circleOf(group);
+      const label = Array.from(group.querySelectorAll("text")).find((text) => text.textContent === name)!;
+      expect(Number(label.getAttribute("y"))).toBeGreaterThan(cy + r);
+      const count = Array.from(group.querySelectorAll("text")).find((text) => text.textContent?.endsWith("개"))!;
+      const countY = Number(count.getAttribute("y"));
+      expect(countY).toBeGreaterThanOrEqual(cy - r);
+      expect(countY).toBeLessThanOrEqual(cy + r);
+    }
+  });
+
+  it("이름이 24자를 넘으면 앞 12자와 끝 12자 사이를 「…」로 줄이고 전체 이름은 title과 aria-label에 남긴다", async () => {
+    const longName = "가나다라마바사아자차카타파하가나다라마바사아자차카타";
+    stubClusters([{ name: longName, size: 2 }, { name: "짧은 이름", size: 1 }]);
+
+    render(<ClustersPage />);
+
+    const group = await screen.findByRole("button", { name: `${longName} 덩어리` });
+    const texts = Array.from(group.querySelectorAll("text")).map((text) => text.textContent);
+    expect(texts).toContain(`${longName.slice(0, 12)}…${longName.slice(-12)}`);
+    expect(texts).not.toContain(longName);
+    expect(group.querySelector("title")?.textContent).toBe(longName);
+  });
+
+  it("앞부분이 같고 끝만 다른 긴 이름도 줄인 뒤 서로 구분된다", async () => {
+    const proposal = "2024-2026년도 정보시스템 통합유지보수 용역 제안요청서";
+    const description = "2024-2026년도 정보시스템 통합유지보수 용역 용역설명서";
+    stubClusters([{ name: proposal, size: 6 }, { name: description, size: 4 }]);
+
+    render(<ClustersPage />);
+
+    const nameOf = (group: HTMLElement) =>
+      Array.from(group.querySelectorAll("text")).map((text) => text.textContent).find((text) => text?.includes("…"));
+    const first = nameOf(await screen.findByRole("button", { name: `${proposal} 덩어리` }));
+    const second = nameOf(screen.getByRole("button", { name: `${description} 덩어리` }));
+    expect(first).toMatch(/제안요청서$/);
+    expect(second).toMatch(/용역설명서$/);
+    expect(first).not.toBe(second);
+  });
+
+  it("덩어리가 2개면 좌우로 놓는다", async () => {
+    stubClusters([{ name: "왼쪽", size: 2 }, { name: "오른쪽", size: 1 }]);
+
+    render(<ClustersPage />);
+
+    const first = circleOf(await screen.findByRole("button", { name: "왼쪽 덩어리" }));
+    const second = circleOf(screen.getByRole("button", { name: "오른쪽 덩어리" }));
+    expect(first.cy).toBe(second.cy);
+    expect(first.cx).not.toBe(second.cx);
+  });
+
+  it("그래프는 폭을 채우되 높이 상한을 둔다", async () => {
+    stubClusters([{ name: "검색", size: 2 }, { name: "운영", size: 1 }]);
+
+    render(<ClustersPage />);
+
+    const svg = await screen.findByRole("img", { name: "문서 덩어리와 덩어리 사이 연결" });
+    expect(svg).toHaveClass("w-full");
+    expect(svg).toHaveClass("max-h-[560px]");
+  });
+});
+
 // 응답하지 않는 서버 — 화면을 떠날 때 요청이 취소되는지만 본다.
 function pendingFetch() {
   return vi.fn((_input: RequestInfo | URL, _init?: RequestInit) => new Promise<Response>(() => {}));

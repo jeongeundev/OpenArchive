@@ -5,8 +5,9 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException
 
 from openarchive.api.deps import Connection, get_embedding_provider, require_reader
-from openarchive.api.schemas import SearchRequest, SearchResponse
+from openarchive.api.schemas import SearchRequest, SearchResponse, SearchResult
 from openarchive.embeddings.base import EmbeddingProvider
+from openarchive.services.folders import owner_departments
 from openarchive.services.search import SEARCH_SQL, search_documents
 
 router = APIRouter(prefix="/api/search", tags=["search"])
@@ -32,4 +33,12 @@ async def search(
         folder_id=body.folder_id,
         k=body.k,
     )
-    return SearchResponse(items=items, sql=SEARCH_SQL)
+    departments = await owner_departments(
+        conn, (item.owner for item in items if item.owner), user_id=user_id
+    )
+    return SearchResponse(items=[
+        SearchResult.model_validate(
+            SearchResult.model_validate(item).model_dump()
+            | {"owner_department": departments.get(item.owner)}
+        ) for item in items
+    ], sql=SEARCH_SQL)

@@ -58,6 +58,9 @@ export function FolderHeader({ folder, folders, onChanged, onDeleted, onAccessSa
       <h2 className="text-lg font-semibold text-strong">{folderPath(folder, folders)}</h2>
       <p className="text-sm text-muted">
         <span>열람 범위</span> · <span className="text-body">{label}</span>
+        {folder.department ? (
+          <> · <span className="whitespace-nowrap">부서 폴더 · {folder.department.name}</span></>
+        ) : null}
       </p>
       <div className="flex flex-wrap items-center gap-3 text-sm">
         <button type="button" onClick={() => { setMode("child"); setError(null); }} className="text-muted hover:text-strong">하위 폴더</button>

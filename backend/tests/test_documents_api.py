@@ -659,6 +659,39 @@ def test_finder_sort_title_and_default_updated(db_client: TestClient, migrated_d
         assert [item["id"] for item in response.json()] == expected
 
 
+def test_finder_granted_lists_only_others_restricted_documents(
+    db_client: TestClient, migrated_db: str
+):
+    login_as(db_client, "alice")
+    granted = upload(
+        db_client, user_id="bob",
+        data={"title": "받은 제한", "tags": "보안", "visibility": "private"},
+    ).json()["id"]
+    upload(db_client, user_id="bob", data={"title": "받지 않은 제한", "visibility": "private"})
+    upload(db_client, user_id="bob", data={"title": "밥 공개", "visibility": "public"})
+    own = upload(db_client, data={"title": "내 제한", "visibility": "private"}).json()["id"]
+    with psycopg.connect(migrated_db) as conn:
+        conn.execute(
+            "INSERT INTO document_grants (document_id, user_id) "
+            "SELECT %s, id FROM users WHERE username = 'alice'",
+            (granted,),
+        )
+    login_as(db_client, "alice")
+
+    for params, expected in [({"granted": "true"}, [granted]),
+                             ({"granted": "true", "tag": "보안"}, [granted]),
+                             ({"granted": "true", "tag": "기타"}, [])]:
+        listing = db_client.get("/api/documents", params=params)
+        count = db_client.get("/api/documents/count", params=params)
+        assert listing.status_code == count.status_code == 200
+        assert [item["id"] for item in listing.json()] == expected
+        assert count.json() == {"total": len(expected)}
+
+    everything = {item["id"] for item in db_client.get("/api/documents").json()}
+    assert {granted, own} <= everything and len(everything) == 3
+    assert db_client.get("/api/documents/count").json() == {"total": 3}
+
+
 @pytest.mark.parametrize("path,params", [
     ("", {"sort": "bogus"}), ("", {"content_type": "exe"}),
     ("/count", {"content_type": "exe"}),
@@ -2317,3 +2350,112 @@ def test_token_edit_records_version_author(db_client: TestClient):
     assert response.status_code == 200
     version = db_client.get(f"/api/documents/{document_id}/versions/2", headers=headers).json()
     assert (version["author"], version["author_via"]) == ("alice", "token")
+
+
+@pytest.mark.parametrize("scope", ["folder", "individual", "outside"])
+def test_document_responses_normalize_folder_scope(db_client, migrated_db, scope):
+    login_as(db_client, "bob")
+    login_as(db_client, "alice")
+    folder = db_client.post("/api/folders", json={"name": "팀"}).json()
+    payload = {"title": "범위", "content": "문서 텍스트", "content_type": "txt"}
+    if scope != "outside":
+        payload["folder_id"] = folder["id"]
+    created = db_client.post("/api/documents/text", json=payload)
+    assert created.status_code == 201
+    doc_id = created.json()["id"]
+    if scope == "individual":
+        response = db_client.put(
+            f"/api/documents/{doc_id}/access",
+            json={"follows_folder": False, "visibility": "private", "users": ["bob"], "groups": []},
+        )
+        assert response.status_code == 200
+    if scope == "outside":
+        with psycopg.connect(migrated_db) as conn:
+            assert conn.execute(
+                "SELECT follows_folder FROM documents WHERE id=%s", (doc_id,)
+            ).fetchone() == (True,)
+    login_as(db_client, "bob")
+    listing = db_client.get("/api/documents")
+    detail = db_client.get(f"/api/documents/{doc_id}")
+    assert listing.status_code == detail.status_code == 200
+    summary = next(row for row in listing.json() if row["id"] == doc_id)
+    for body in (summary, detail.json()):
+        assert body["follows_folder"] is (scope == "folder")
+        assert not ({"users", "groups", "grant_users", "grant_groups"} & body.keys())
+
+
+def test_list_items_carry_only_the_visible_folder_path(db_client):
+    """목록의 folder_path는 문서 상세의 folder.path와 같은 판정이다 — 볼 수 없는 폴더는 이름도 없다."""
+    login_as(db_client, "bob")
+    login_as(db_client, "alice")
+    root = db_client.post("/api/folders", json={"name": "IT전략실"}).json()
+    child = db_client.post(
+        "/api/folders", json={"name": "통합유지보수", "parent_id": root["id"]}
+    ).json()
+    filed = db_client.post(
+        "/api/documents/text", json={"title": "폴더 안", "content": "본문", "folder_id": child["id"]}
+    ).json()["id"]
+    unfiled = db_client.post(
+        "/api/documents/text", json={"title": "폴더 밖", "content": "본문", "visibility": "public"}
+    ).json()["id"]
+    secret = db_client.post("/api/folders", json={"name": "비밀기획실"}).json()
+    assert db_client.put(
+        f"/api/folders/{secret['id']}/access", json={"visibility": "private"}
+    ).status_code == 200
+    hidden = db_client.post(
+        "/api/documents/text", json={"title": "개별 부여", "content": "본문", "folder_id": secret["id"]}
+    ).json()["id"]
+    assert db_client.put(
+        f"/api/documents/{hidden}/access",
+        json={"visibility": "private", "users": ["bob"], "follows_folder": False},
+    ).status_code == 200
+
+    def paths(user):
+        login_as(db_client, user)
+        response = db_client.get("/api/documents")
+        assert response.status_code == 200
+        items = {item["id"]: item for item in response.json()}
+        for document_id, item in items.items():
+            folder = db_client.get(f"/api/documents/{document_id}").json()["folder"]
+            expected = [p["name"] for p in folder["path"]] if folder else None
+            assert item["folder_path"] == expected
+        return response.text, {key: item["folder_path"] for key, item in items.items()}
+
+    _, alice = paths("alice")
+    assert alice[filed] == ["IT전략실", "통합유지보수"]
+    assert alice[unfiled] is None
+    assert alice[hidden] == ["비밀기획실"]
+    body, bob = paths("bob")
+    assert hidden in bob and bob[hidden] is None
+    assert bob[filed] == ["IT전략실", "통합유지보수"]
+    assert "비밀기획실" not in body
+
+
+def test_owner_department_web_metadata_and_hidden_folder(db_client, migrated_db):
+    from test_search_api import seed_documents
+
+    login_as(db_client, "alice")
+    with psycopg.connect(migrated_db) as conn:
+        group = conn.execute("INSERT INTO groups(name) VALUES ('연구부') RETURNING id").fetchone()[0]
+        conn.execute("INSERT INTO group_members SELECT %s, id FROM users WHERE username='alice'", (group,))
+        conn.execute("UPDATE users SET department_group_id=%s WHERE username='alice'", (group,))
+        folder = conn.execute("INSERT INTO folders(name,created_by,visibility,department_group_id) VALUES ('숨은서가','alice','private',%s) RETURNING id", (group,)).fetchone()[0]
+        conn.execute("INSERT INTO folder_grants(folder_id,group_id) VALUES (%s,%s)", (folder, group))
+    ids = seed_documents(migrated_db, [{"title": "공개 자료", "content": "공개 연구 자료"}])
+    expected = {"name": "연구부", "folder_id": str(folder)}
+    assert db_client.get('/api/auth/me').json()['department'] == expected
+    for viewer, department in [('alice', expected), ('bob', {"name": "연구부", "folder_id": None})]:
+        login_as(db_client, viewer)
+        responses = [db_client.get('/api/documents'), db_client.get(f'/api/documents/{ids[0]}'), db_client.post('/api/search', json={"query": "연구"}), db_client.post('/api/ask', json={"query": "연구"})]
+        for response in responses:
+            assert response.status_code == 200
+            body = response.json()
+            items = body if isinstance(body, list) else body.get('items', [body])
+            assert items
+            assert all(item['owner_department'] == department for item in items)
+            if 'sources' in body:
+                assert body['sources']
+                assert all(source['owner_department'] == department for source in body['sources'])
+            if viewer == 'bob':
+                assert str(folder) not in response.text
+                assert '숨은서가' not in response.text

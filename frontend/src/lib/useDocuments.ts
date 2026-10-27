@@ -26,6 +26,7 @@ export function useDocuments(params?: DocumentFilters & {
   const contentType = params?.contentType;
   const tag = params?.tag;
   const sort = params?.sort;
+  const granted = params?.granted;
   const limit = params?.limit;
   const offset = params?.offset;
   const intervalMs = params?.intervalMs ?? DEFAULT_INTERVAL_MS;
@@ -42,7 +43,7 @@ export function useDocuments(params?: DocumentFilters & {
     if (controller === null || inFlightRef.current) return;
 
     inFlightRef.current = true;
-    const filters = { folderId, status, q, contentType, tag };
+    const filters = { folderId, status, q, contentType, tag, granted };
     void Promise.allSettled([
       listDocuments({ ...filters, sort, limit, offset }, controller.signal),
       countDocuments(filters, controller.signal),
@@ -59,7 +60,7 @@ export function useDocuments(params?: DocumentFilters & {
         inFlightRef.current = false;
         setLoading(false);
       });
-  }, [folderId, status, q, contentType, tag, sort, limit, offset]);
+  }, [folderId, status, q, contentType, tag, granted, sort, limit, offset]);
 
   useEffect(() => {
     const controller = new AbortController();

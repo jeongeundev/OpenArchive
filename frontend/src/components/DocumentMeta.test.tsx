@@ -17,6 +17,7 @@ const document: DocumentDetail = {
   owner_id: "alice",
   visibility: "public",
   effective_visibility: "public",
+  follows_folder: false,
   tags: ["OpenSQL", "운영"],
   embedding_status: "ready",
   extraction_status: "done",
@@ -28,12 +29,49 @@ const document: DocumentDetail = {
   chunk_version: 3,
 };
 
+function formatDate(value: string): string {
+  return new Intl.DateTimeFormat("ko-KR", { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
+}
+
+function detailOf(term: string): HTMLElement | null {
+  return screen.getByText(term, { selector: "dt" }).nextElementSibling as HTMLElement | null;
+}
+
 describe("DocumentMeta", () => {
+  it("「문서 정보」 상자에 파일명·생성 일시·수정 일시를 한 열로 보인다", () => {
+    render(<DocumentMeta document={document} />);
+
+    expect(screen.getByRole("heading", { level: 2, name: "문서 정보" })).toBeInTheDocument();
+    expect(Array.from(window.document.querySelectorAll("dt")).map((node) => node.textContent)).toEqual([
+      "파일명",
+      "생성 일시",
+      "수정 일시",
+    ]);
+    expect(detailOf("파일명")).toHaveTextContent("guide.md");
+    expect(detailOf("생성 일시")).toHaveTextContent(formatDate(document.created_at));
+    expect(detailOf("수정 일시")).toHaveTextContent(formatDate(document.updated_at));
+  });
+
+  it("제목·배지·형식·소유자·열람 범위는 머리글이 맡으므로 싣지 않는다", () => {
+    render(<DocumentMeta document={document} />);
+
+    expect(screen.queryByRole("heading", { level: 1 })).not.toBeInTheDocument();
+    expect(screen.queryByText("완료")).not.toBeInTheDocument();
+    expect(screen.queryByText("alice")).not.toBeInTheDocument();
+    expect(screen.queryByText("조직 공개")).not.toBeInTheDocument();
+    expect(screen.queryByText("유형", { selector: "dt" })).not.toBeInTheDocument();
+  });
+
+  it("원본 파일이 없는 문서는 파일명을 「—」로 보인다", () => {
+    render(<DocumentMeta document={{ ...document, filename: null }} />);
+
+    expect(detailOf("파일명")).toHaveTextContent("—");
+  });
+
   it("현재 버전으로 색인된 청크 수를 표시한다", () => {
     render(<DocumentMeta document={document} />);
 
     expect(screen.getByText("청크 4개 · 현재 버전(v3) 기준")).toBeInTheDocument();
-    expect(screen.getByText("완료")).toBeInTheDocument();
   });
 
   it("이전 버전 청크로 검색 중인 상태를 오류 없이 표시한다", () => {
@@ -54,39 +92,11 @@ describe("DocumentMeta", () => {
     );
   });
 
-  it("열람 범위를 조직 공개·제한으로 표시한다", () => {
-    const { rerender } = render(<DocumentMeta document={document} />);
-    expect(screen.getByText("조직 공개")).toBeInTheDocument();
-
-    rerender(<DocumentMeta document={{ ...document, visibility: "private", effective_visibility: "private" }} />);
-    expect(screen.getByText("제한")).toBeInTheDocument();
-  });
-
-  it("폴더 범위를 따르는 문서는 자기 범위가 아니라 실제로 적용되는 범위를 표시한다", () => {
-    // 폴더로 만든 문서의 자기 범위는 「제한」으로 닫혀 있다 — 조직 공개 폴더 안이면 조직 전체가 본다.
-    render(<DocumentMeta document={{ ...document, visibility: "private", effective_visibility: "public" }} />);
-    expect(screen.getByText("조직 공개")).toBeInTheDocument();
-    expect(screen.queryByText("제한")).not.toBeInTheDocument();
-  });
-
   it("편집기와 중복되지 않도록 태그를 표시하지 않는다", () => {
     render(<DocumentMeta document={document} />);
 
     expect(screen.queryByText("OpenSQL")).not.toBeInTheDocument();
     expect(screen.queryByText("운영")).not.toBeInTheDocument();
   });
-
-  it("텍스트 인식 중이면 임베딩 상태 대신 인식 중 배지를 보인다", () => {
-    render(<DocumentMeta document={{ ...document, extraction_status: "pending", embedding_status: "pending" }} />);
-
-    expect(screen.getByText("텍스트 인식 중")).toBeInTheDocument();
-    expect(screen.queryByText("대기 중")).not.toBeInTheDocument();
-  });
-
-  it("텍스트 인식에 실패하면 실패 배지를 보인다", () => {
-    render(<DocumentMeta document={{ ...document, extraction_status: "failed", embedding_status: "ready" }} />);
-
-    expect(screen.getByText("텍스트 인식 실패")).toBeInTheDocument();
-    expect(screen.queryByText("완료")).not.toBeInTheDocument();
-  });
 });
+

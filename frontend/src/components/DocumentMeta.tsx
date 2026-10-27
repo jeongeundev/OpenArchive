@@ -1,7 +1,6 @@
 // Copyright 2026 jeongeundev
 // SPDX-License-Identifier: MIT
-import { VISIBILITY_LABEL, type DocumentDetail } from "@/lib/types";
-import { DocumentStatusBadge } from "./StatusBadge";
+import type { DocumentDetail } from "@/lib/types";
 
 function formatDate(value: string): string {
   return new Intl.DateTimeFormat("ko-KR", {
@@ -18,36 +17,20 @@ function indexStatus(document: DocumentDetail): string {
   return `청크 ${document.chunk_count}개 · v${document.chunk_version} 기준 — 재임베딩 중입니다`;
 }
 
+/** 「문서 정보」 상자 — 제목·배지·형식·소유자·열람 범위는 머리글(DocumentHeader)이 맡는다. */
 export function DocumentMeta({
   document,
 }: {
   document: DocumentDetail;
 }): React.ReactElement {
   return (
-    <section className="rounded-lg border border-line bg-card p-6">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <h1 className="text-4xl font-semibold text-strong">{document.title}</h1>
-        <DocumentStatusBadge document={document} />
-      </div>
+    <section className="rounded-lg border border-line bg-card p-4">
+      <h2 className="text-sm font-medium text-muted">문서 정보</h2>
 
-      <dl className="mt-6 grid gap-4 text-sm sm:grid-cols-2">
+      <dl className="mt-3 space-y-3 text-sm">
         <div>
           <dt className="text-muted">파일명</dt>
-          <dd className="mt-1 text-body">{document.filename ?? "—"}</dd>
-        </div>
-        <div>
-          <dt className="text-muted">유형</dt>
-          <dd className="mt-1 uppercase text-body">{document.content_type}</dd>
-        </div>
-        <div>
-          <dt className="text-muted">열람 범위</dt>
-          <dd className="mt-1 text-body">
-            {VISIBILITY_LABEL[document.effective_visibility]}
-          </dd>
-        </div>
-        <div>
-          <dt className="text-muted">소유자</dt>
-          <dd className="mt-1 text-body">{document.owner_id}</dd>
+          <dd className="mt-1 break-words text-body">{document.filename ?? "—"}</dd>
         </div>
         <div>
           <dt className="text-muted">생성 일시</dt>
@@ -59,7 +42,7 @@ export function DocumentMeta({
         </div>
       </dl>
 
-      <p className="mt-6 border-t border-line pt-4 text-sm text-muted">
+      <p className="mt-4 border-t border-line pt-3 text-sm text-muted">
         {indexStatus(document)}
       </p>
     </section>

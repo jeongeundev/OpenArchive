@@ -6,8 +6,9 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 
 from openarchive.api.deps import Connection, require_admin
-from openarchive.api.schemas import CreateUserRequest, UserSummary
+from openarchive.api.schemas import CreateUserRequest, UpdateDepartmentRequest, UserSummary
 from openarchive.services import auth as service
+from openarchive.services.grants import GroupNotFound
 
 router = APIRouter(
     prefix="/api/admin/users",
@@ -20,8 +21,14 @@ router = APIRouter(
 async def create_user(body: CreateUserRequest, conn: Connection) -> UserSummary:
     try:
         user = await service.create_user(
-            conn, body.username, body.password, is_admin=body.is_admin
+            conn,
+            body.username,
+            body.password,
+            is_admin=body.is_admin,
+            department_group_id=body.department_group_id,
         )
+    except GroupNotFound as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
     except service.UserAlreadyExists as error:
         raise HTTPException(status_code=409, detail="이미 존재하는 사용자명입니다.") from error
     except (service.PasswordTooShort, service.InvalidUsername) as error:
@@ -54,4 +61,17 @@ async def delete_user(
         ) from error
     except service.UserNotFound as error:
         raise HTTPException(status_code=404, detail="사용자를 찾을 수 없습니다.") from error
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.put("/{user_id}/department", status_code=status.HTTP_204_NO_CONTENT)
+async def set_user_department(
+    user_id: UUID, body: UpdateDepartmentRequest, conn: Connection
+) -> Response:
+    try:
+        await service.set_user_department(conn, user_id, body.group_id)
+    except service.UserNotFound as error:
+        raise HTTPException(status_code=404, detail="사용자를 찾을 수 없습니다.") from error
+    except GroupNotFound as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
     return Response(status_code=status.HTTP_204_NO_CONTENT)

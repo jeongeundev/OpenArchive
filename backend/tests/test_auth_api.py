@@ -45,6 +45,7 @@ def test_login_sets_httponly_cookie_and_returns_only_public_user_fields(
 
     assert response.status_code == 200
     assert response.json() == {
+        "department": None,
         "authenticated": True,
         "username": "alice",
         "is_admin": False,
@@ -68,6 +69,7 @@ def test_me_uses_the_login_cookie_and_ignores_x_user_id(
     authenticated = db_client.get("/api/auth/me")
 
     assert anonymous.json() == {
+        "department": None,
         "authenticated": False,
         "username": None,
         "is_admin": False,
@@ -75,6 +77,7 @@ def test_me_uses_the_login_cookie_and_ignores_x_user_id(
         "expires_at": None,
     }
     assert authenticated.json() == {
+        "department": None,
         "authenticated": True,
         "username": "alice",
         "is_admin": False,
@@ -95,6 +98,7 @@ def test_logout_invalidates_the_cookie_backed_session(
 
     assert response.status_code == 200
     assert db_client.get("/api/auth/me").json() == {
+        "department": None,
         "authenticated": False,
         "username": None,
         "is_admin": False,
@@ -127,6 +131,7 @@ def test_me_accepts_a_valid_bearer_token_without_a_cookie(
     )
 
     assert response.json() == {
+        "department": None,
         "authenticated": True,
         "username": "alice",
         "is_admin": False,
@@ -161,6 +166,7 @@ def test_invalid_bearer_does_not_fall_back_to_a_valid_cookie(
     )
 
     assert response.json() == {
+        "department": None,
         "authenticated": False,
         "username": None,
         "is_admin": False,
@@ -345,6 +351,7 @@ def test_password_change_expires_the_cookie_and_only_the_new_password_logs_in(
 
     assert changed.status_code == 200
     assert changed.json() == {
+        "department": None,
         "authenticated": False,
         "username": None,
         "is_admin": False,
@@ -505,6 +512,7 @@ def test_me_leaves_scope_and_expiry_empty_for_a_cookie_session(
     db_client.post("/api/auth/login", json={"username": "alice", "password": "secret"})
 
     assert db_client.get("/api/auth/me").json() == {
+        "department": None,
         "authenticated": True,
         "username": "alice",
         "is_admin": False,
@@ -530,6 +538,7 @@ def test_me_is_anonymous_for_an_expired_or_revoked_token(
     body = db_client.get("/api/auth/me", headers={"Authorization": f"Bearer {token}"}).json()
 
     assert body == {
+        "department": None,
         "authenticated": False,
         "username": None,
         "is_admin": False,

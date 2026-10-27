@@ -17,7 +17,22 @@ class FolderScope(BaseModel):
     groups: list[str]
 
 
+class Department(BaseModel):
+    id: UUID
+    name: str
+
+
+class UpdateDepartmentRequest(BaseModel):
+    group_id: UUID | None
+
+
+class UpdateFolderDepartmentRequest(BaseModel):
+    # 그룹 이름 — 폴더 열람 범위처럼 일반 사용자가 아는 것은 이름뿐이다
+    group: str | None
+
+
 class Folder(BaseModel):
+    department: Department | None = None
     id: UUID
     parent_id: UUID | None
     name: str
@@ -71,7 +86,13 @@ class MoveDocumentRequest(BaseModel):
     folder_id: UUID | None
 
 
+class OwnerDepartment(BaseModel):
+    name: str
+    folder_id: UUID | None
+
+
 class DocumentSummary(BaseModel):
+    follows_folder: bool = False
     id: UUID
     title: str
     filename: str | None
@@ -87,6 +108,10 @@ class DocumentSummary(BaseModel):
     extraction_status: Literal["pending", "failed", "done"]
     created_at: datetime
     updated_at: datetime
+    # 볼 수 있는 폴더 경로(최상위부터). 폴더가 없거나 볼 수 없으면 None
+    folder_path: list[str] | None = None
+    # 소유자 부서. folder_id는 부서 폴더를 볼 수 있을 때만 채운다 — 웹 API만 붙인다
+    owner_department: OwnerDepartment | None = None
 
 
 class TrashItem(BaseModel):
@@ -246,6 +271,8 @@ class AuthStatus(BaseModel):
     # 토큰 주체일 때만 채운다. 세션·익명이면 null (#189 D2 — 사용자 CLI의 whoami)
     scope: str | None = None
     expires_at: datetime | None = None
+    # 익명이면 null
+    department: OwnerDepartment | None = None
 
 
 class ChangePasswordRequest(BaseModel):
@@ -301,12 +328,14 @@ class SystemStatus(BaseModel):
 
 
 class CreateUserRequest(BaseModel):
+    department_group_id: UUID | None = None
     username: str
     password: str
     is_admin: bool = False
 
 
 class UserSummary(BaseModel):
+    department: Department | None = None
     id: UUID
     username: str
     is_admin: bool
@@ -416,6 +445,11 @@ class SearchResult(BaseModel):
     preview: str | None = None
     passages: list[SearchPassage] = Field(default_factory=list)
 
+    folder_path: list[str] | None = None
+    owner: str | None = None
+    owner_department: OwnerDepartment | None = None
+    updated_at: datetime | None = None
+
 
 class SearchResponse(BaseModel):
     items: list[SearchResult]
@@ -442,6 +476,10 @@ class AskSource(BaseModel):
     revised: bool
     content: str
     cited: bool = False
+    content_type: str | None = None
+    folder_path: list[str] | None = None
+    owner: str | None = None
+    owner_department: OwnerDepartment | None = None
 
 
 class AskResponse(BaseModel):

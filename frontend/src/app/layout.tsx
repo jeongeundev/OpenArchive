@@ -25,7 +25,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       <body className="flex min-h-full flex-col">
         <AuthProvider>
           <SiteHeader />
-          <main className="mx-auto w-full max-w-5xl flex-1 px-6 py-8">
+          <main className="mx-auto w-full max-w-[96rem] flex-1 px-6 py-8">
             <RetryNotice />
             <RequireAuth>{children}</RequireAuth>
           </main>

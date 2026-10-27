@@ -25,7 +25,7 @@ export function SiteHeader(): React.ReactElement {
 
   return (
     <header className="border-b border-line bg-page">
-      <div className="mx-auto flex max-w-5xl items-center justify-between gap-4 px-6 py-4">
+      <div className="mx-auto flex max-w-[96rem] items-center justify-between gap-4 px-6 py-4">
         <div className="flex items-center gap-6">
           <Link className="font-semibold text-strong" href="/">OpenArchive</Link>
           <nav aria-label="주요 메뉴" className="flex items-center gap-4 text-sm">
@@ -60,9 +60,23 @@ export function SiteHeader(): React.ReactElement {
         <div className="flex items-center gap-3 text-sm">
           {!loading && auth.authenticated ? (
             <>
-              <Link className="text-muted hover:text-accent" href="/settings">
-                {auth.username}
-              </Link>
+              <span className="whitespace-nowrap text-muted" data-testid="account-label">
+                <Link className="hover:text-accent" href="/settings">
+                  {auth.username}
+                </Link>
+                {auth.department ? (
+                  <>
+                    {" · "}
+                    {auth.department.folder_id === null ? (
+                      auth.department.name
+                    ) : (
+                      <Link className="hover:text-accent" href={`/?folder=${encodeURIComponent(auth.department.folder_id)}`}>
+                        {auth.department.name}
+                      </Link>
+                    )}
+                  </>
+                ) : null}
+              </span>
               <button
                 className="text-muted hover:text-strong disabled:text-faint"
                 disabled={loggingOut}

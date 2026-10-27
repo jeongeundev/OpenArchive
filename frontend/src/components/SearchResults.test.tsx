@@ -250,3 +250,104 @@ it("추가 대목이 비었으면 불필요한 펼치기를 표시하지 않는�
   render(<SearchResults response={{ ...response, items: [{ ...response.items[0], passages: [] }] }} loading={false} error={null} />);
   expect(screen.queryByText(/검색된 본문 대목/)).not.toBeInTheDocument();
 });
+
+it("제목 아래 메타를 형식·폴더·소유자·수정일·태그·흐린 유사도 순서로 표시한다", () => {
+  const item = { ...response.items[0], content_type: "hwpx" as const, folder_path: ["IT전략실", "통합유지보수"], owner: "IT전략실_김민준", updated_at: "2026-10-26T03:00:00Z" };
+  render(<SearchResults response={{ ...response, items: [item] }} loading={false} error={null} />);
+  const title = screen.getByRole("link", { name: item.title });
+  const meta = title.nextElementSibling;
+  expect(meta?.textContent).toBe("HWPX · IT전략실 › 통합유지보수 · IT전략실_김민준 · 2026년 10월 26일 · OpenSQL, 운영 · 유사도 0.877");
+  expect(meta).toHaveClass("text-xs", "text-muted");
+  expect(screen.getByText(/유사도 0.877/)).not.toHaveClass("text-accent");
+});
+
+it("소유자에 부서가 있으면 `이름(부서)`로 보인다 — 직접 결과와 함께 볼 문서 모두 (D16)", () => {
+  const direct = { ...response.items[0], content_type: "hwpx" as const, folder_path: null, owner: "김민준", owner_department: { name: "IT전략실", folder_id: "f1" }, updated_at: "2026-10-26T03:00:00Z" };
+  const linked = { ...direct, document_id: "linked", title: "이어진 문서", owner_department: { name: "IT전략실", folder_id: null }, via: { from_document_id: direct.document_id, from_title: direct.title, kind: "related", depth: 1 } };
+  render(<SearchResults response={{ ...response, items: [direct, linked] }} loading={false} error={null} />);
+  expect(screen.getByRole("link", { name: direct.title }).nextElementSibling?.textContent).toBe("HWPX · 김민준(IT전략실) · 2026년 10월 26일 · OpenSQL, 운영 · 유사도 0.877");
+  expect(screen.getByRole("link", { name: "이어진 문서" }).nextElementSibling?.textContent).toBe("HWPX · 김민준(IT전략실) · 2026년 10월 26일 · OpenSQL, 운영");
+  expect(screen.getAllByRole("link", { name: "IT전략실" })).toHaveLength(1);
+});
+
+it("폴더가 없는 연결 문서는 빈 자리 없이 같은 메타와 연결 경로를 표시한다", () => {
+  render(<SearchResults response={{ ...response, items: [{ ...response.items[0], content_type: "hwpx", folder_path: null, owner: "IT전략실_김민준", updated_at: "2026-10-26T03:00:00Z", via: { from_document_id: "source", from_title: "출처", kind: "related", depth: 1 } }] }} loading={false} error={null} />);
+  const meta = screen.getByRole("link", { name: response.items[0].title }).nextElementSibling;
+  expect(meta?.textContent).toBe("HWPX · IT전략실_김민준 · 2026년 10월 26일 · OpenSQL, 운영");
+  expect(screen.getByText(/이어짐/)).toHaveTextContent("「출처」에서 「관련 있음」로 이어짐");
+});
+
+it("접힌 발췌만 공백을 접어 세 줄로 제한하고 펼치면 줄바꿈을 보존한다", () => {
+  const content = "첫 줄\n\n둘째   줄\t설명";
+  render(<SearchResults response={{ ...response, items: [{ ...response.items[0], content }] }} loading={false} error={null} />);
+  const excerpt = screen.getByText("첫 줄 둘째 줄 설명");
+  expect(excerpt.textContent).toBe("첫 줄 둘째 줄 설명");
+  expect(excerpt).toHaveClass("line-clamp-3");
+  fireEvent.click(screen.getByRole("button", { name: "발췌 더보기" }));
+  expect(excerpt.textContent).toBe(content);
+  expect(excerpt).toHaveClass("whitespace-pre-wrap");
+  expect(excerpt).not.toHaveClass("line-clamp-3");
+});
+
+it("검색된 본문 대목은 원래 공백과 줄바꿈을 보존한다", () => {
+  const content = "첫 줄\n\n둘째   줄";
+  render(<SearchResults response={{ ...response, items: [{ ...response.items[0], passages: [{ chunk_index: 1, content, based_on_version: 2, score: 0.7 }] }] }} loading={false} error={null} />);
+  fireEvent.click(screen.getByText("검색된 본문 대목 1개"));
+  const passage = screen.getByText("첫 줄 둘째 줄");
+  expect(passage.textContent).toBe(content);
+  expect(passage).toHaveClass("whitespace-pre-wrap");
+});
+
+describe("검색 결과 배치", () => {
+  const linked = {
+    ...response.items[0],
+    document_id: "document-2",
+    title: "OpenProxy 장애 대응",
+    content: "연결 문서의 본문 발췌입니다.",
+    preview: "연결 문서의 미리보기입니다.",
+    folder_path: ["운영"],
+    owner: "kim",
+    updated_at: "2026-10-26T03:00:00Z",
+    via: { from_document_id: "document-1", from_title: "OpenSQL 운영 가이드", kind: "related", depth: 1 },
+  };
+
+  it("함께 볼 문서가 있으면 넓은 화면에서 두 단으로 놓고 함께 볼 문서를 두 번째 단에 둔다", () => {
+    render(<SearchResults response={{ ...response, items: [response.items[0], linked] }} loading={false} error={null} />);
+
+    const columns = screen.getByTestId("search-result-columns");
+    expect(columns).toHaveClass("grid", "lg:grid-cols-[minmax(0,1fr)_340px]");
+    const [first, second] = Array.from(columns.children);
+    expect(first).toContainElement(screen.getByRole("region", { name: "검색 결과" }));
+    expect(second).toContainElement(screen.getByRole("region", { name: "함께 볼 문서" }));
+  });
+
+  it("함께 볼 문서가 없으면 한 단으로 놓는다", () => {
+    render(<SearchResults response={response} loading={false} error={null} />);
+
+    expect(screen.getByTestId("search-result-columns")).not.toHaveClass("lg:grid-cols-[minmax(0,1fr)_340px]");
+  });
+
+  it("함께 볼 문서는 발췌 없이 형식·제목·메타·연결 이유만 보인다", () => {
+    render(<SearchResults response={{ ...response, items: [response.items[0], linked] }} loading={false} error={null} />);
+
+    const related = screen.getByRole("region", { name: "함께 볼 문서" });
+    expect(within(related).queryByText(/연결 문서의 미리보기입니다/)).not.toBeInTheDocument();
+    expect(within(related).queryByText(/연결 문서의 본문 발췌입니다/)).not.toBeInTheDocument();
+    expect(within(related).queryByRole("button", { name: "발췌 더보기" })).not.toBeInTheDocument();
+    const meta = within(related).getByRole("link", { name: "OpenProxy 장애 대응" }).nextElementSibling;
+    expect(meta?.textContent).toBe("MD · 운영 · kim · 2026년 10월 26일 · OpenSQL, 운영");
+    expect(related).toHaveTextContent("「OpenSQL 운영 가이드」에서 「관련 있음」로 이어짐");
+    expect(related).toHaveTextContent("검색 결과에서 관계로 이어진 문서입니다. 각 문서의 연결 이유를 확인하세요.");
+  });
+
+  it("실행된 SQL 보기는 검색 결과 단 안, 결과 목록 아래에 있다", () => {
+    render(<SearchResults response={{ ...response, items: [response.items[0], linked] }} loading={false} error={null} />);
+
+    const [first] = Array.from(screen.getByTestId("search-result-columns").children);
+    const button = screen.getByRole("button", { name: "실행된 SQL 보기" });
+    expect(first).toContainElement(button);
+    const direct = screen.getByRole("region", { name: "검색 결과" });
+    expect(direct.compareDocumentPosition(button) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(direct).not.toContainElement(button);
+  });
+});

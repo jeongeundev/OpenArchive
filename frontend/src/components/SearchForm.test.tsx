@@ -1,6 +1,6 @@
 // Copyright 2026 jeongeundev
 // SPDX-License-Identifier: MIT
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { MAX_K } from "@/lib/types";
@@ -70,5 +70,20 @@ describe("SearchForm", () => {
   it("폴더가 없으면 폴더 칸을 그리지 않는다", () => {
     render(<SearchForm onSearch={vi.fn()} pending={false} folders={[]} />);
     expect(screen.queryByLabelText("폴더")).not.toBeInTheDocument();
+  });
+
+  it("검색어와 검색 버튼을 한 줄에, 필터 넷을 다음 줄에 둔다", () => {
+    render(<SearchForm onSearch={vi.fn()} pending={false} folders={[hr]} />);
+
+    const queryRow = screen.getByTestId("search-query-row");
+    expect(within(queryRow).getByLabelText("검색어")).toBeInTheDocument();
+    expect(within(queryRow).getByRole("button", { name: "검색" })).toBeInTheDocument();
+
+    const filterRow = screen.getByTestId("search-filter-row");
+    for (const label of ["태그 (쉼표로 구분)", "문서 유형", "결과 수", "폴더"]) {
+      expect(within(filterRow).getByLabelText(label)).toBeInTheDocument();
+    }
+    expect(within(filterRow).queryByLabelText("검색어")).not.toBeInTheDocument();
+    expect(screen.getByText(/폴더는 직접 맞은 결과에만 걸립니다/)).toHaveClass("text-xs");
   });
 });

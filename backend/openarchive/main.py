@@ -89,6 +89,7 @@ async def _folder_not_found(request: Request, error: Exception) -> JSONResponse:
 
 @app.exception_handler(folders_service.FolderNotEmpty)
 @app.exception_handler(folders_service.FolderNameTaken)
+@app.exception_handler(folders_service.DepartmentFolderTaken)
 async def _folder_conflict(request: Request, error: Exception) -> JSONResponse:
     return JSONResponse(status_code=409, content={"detail": str(error)})
 

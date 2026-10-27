@@ -55,6 +55,7 @@ from openarchive.api.schemas import (
 from openarchive.config import get_settings
 from openarchive.services import documents as service
 from openarchive.services import organize, trash
+from openarchive.services.folders import owner_departments, visible_folder_paths
 from openarchive.services.links import find_backlinks, resolve_links
 from openarchive.services.parsing import SUPPORTED_CONTENT_TYPES, UnsupportedFileType
 from openarchive.services.related import find_related, suggest_tags
@@ -160,6 +161,7 @@ async def list_documents(
     q: str | None = None,
     content_type: ContentTypeFilter | None = None,
     folder_id: UUID | None = None,
+    granted: bool = False,
     sort: Literal["updated", "title"] = "updated",
     limit: Annotated[int | None, Query(ge=1, le=100)] = None,
     offset: Annotated[int, Query(ge=0)] = 0,
@@ -173,11 +175,24 @@ async def list_documents(
         title_query=q,
         content_type=content_type,
         folder_id=folder_id,
+        granted_only=granted,
         sort=sort,
         limit=limit,
         offset=offset,
     )
-    return [DocumentSummary.model_validate(document) for document in documents]
+    departments = await owner_departments(
+        conn, (d["owner_id"] for d in documents), user_id=user_id
+    )
+    folder_paths = await visible_folder_paths(
+        conn, [document["id"] for document in documents], user_id=user_id
+    )
+    return [
+        DocumentSummary.model_validate(
+            {**document, "folder_path": folder_paths.get(document["id"]),
+             "owner_department": departments.get(document["owner_id"])}
+        )
+        for document in documents
+    ]
 
 
 # `/{document_id}`보다 먼저 등록해야 한다 — 뒤에 두면 'progress'가 UUID 검증에 걸린다.
@@ -202,6 +217,7 @@ async def count_documents(
     q: str | None = None,
     content_type: ContentTypeFilter | None = None,
     folder_id: UUID | None = None,
+    granted: bool = False,
 ) -> DocumentCount:
     total = await service.count_documents(
         conn,
@@ -212,6 +228,7 @@ async def count_documents(
         title_query=q,
         content_type=content_type,
         folder_id=folder_id,
+        granted_only=granted,
     )
     return DocumentCount(total=total)
 
@@ -260,7 +277,10 @@ async def get_document(
     user_id: Annotated[str, Depends(require_reader)],
 ) -> DocumentDetail:
     document = await service.get_document(conn, document_id, user_id=user_id)
-    return DocumentDetail.model_validate(document)
+    departments = await owner_departments(conn, [document["owner_id"]], user_id=user_id)
+    return DocumentDetail.model_validate(
+        {**document, "owner_department": departments.get(document["owner_id"])}
+    )
 
 
 @router.get("/{document_id}/access", response_model=DocumentAccess)

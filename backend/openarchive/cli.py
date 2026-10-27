@@ -589,10 +589,24 @@ async def _has_admin(dsn: str) -> bool:
         return await admin_exists(conn)
 
 
-async def _create_account(dsn: str, username: str, password: str, *, is_admin: bool) -> None:
-    """해시·중복 판정은 서비스가 한다 — 여기 복제하면 두 벌이 되어 갈린다."""
-    async with await _connect(dsn, autocommit=True) as conn:
-        await create_user(conn, username, password, is_admin=is_admin)
+async def _create_account(
+    dsn: str, username: str, password: str, *, is_admin: bool, department: str | None = None
+) -> None:
+    """해시·중복 판정은 서비스가 한다 — 여기 복제하면 두 벌이 되어 갈린다.
+
+    부서 이름은 계정 생성과 같은 트랜잭션에서 그룹으로 푼다. 없는 그룹은 만들지 않는다.
+    """
+    async with await _connect(dsn, autocommit=True) as conn, conn.transaction():
+        # 구성원 추가·소속 부서 변경 감사 기록을 「운영자 CLI」 경로로 남긴다(ADR-055).
+        await set_actor(conn, actor=None, via="cli")
+        department_group_id = None
+        if department is not None:
+            _, (department_group_id,) = await resolve_grantees(
+                conn, users=[], groups=[department]
+            )
+        await create_user(
+            conn, username, password, is_admin=is_admin, department_group_id=department_group_id
+        )
 
 
 def _ensure_admin(dsn: str, username: str) -> bool | None:
@@ -752,7 +766,9 @@ def run_reset_password(*, dsn: str | None, username: str) -> int:
     return 0
 
 
-def run_create_user(*, dsn: str | None, username: str, is_admin: bool) -> int:
+def run_create_user(
+    *, dsn: str | None, username: str, is_admin: bool, department: str | None = None
+) -> int:
     """셸에서 계정을 만든다. 첫 관리자는 init이 만들고, 이것은 그 뒤의 경로다."""
     dsn = dsn or get_settings().database_url
     password = _account_password(f"'{username}'의 비밀번호: ")
@@ -760,12 +776,17 @@ def run_create_user(*, dsn: str | None, username: str, is_admin: bool) -> int:
         print("비밀번호가 비어 있어 계정을 만들지 않았습니다.")
         return 2
     try:
-        asyncio.run(_create_account(dsn, username, password, is_admin=is_admin))
+        asyncio.run(
+            _create_account(dsn, username, password, is_admin=is_admin, department=department)
+        )
     except _ConnectionFailed as error:
         print(f"연결하지 못했습니다: {error}")
         return 1
     except UserAlreadyExists as error:
         print(error)
+        return 1
+    except UnknownGrantee as error:
+        print(f"{error} — 계정을 만들지 않았습니다.")
         return 1
     except (PasswordTooShort, InvalidUsername) as error:
         print(f"{error} 계정을 만들지 않았습니다.")
@@ -1612,6 +1633,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     create.add_argument("username")
     create.add_argument("--admin", action="store_true", help="관리자 권한을 부여합니다.")
+    create.add_argument(
+        "--department",
+        metavar="그룹명",
+        help="소속 부서로 정할 그룹. 그 그룹의 구성원으로도 넣습니다. 그룹은 미리 있어야 합니다.",
+    )
     create.add_argument("--dsn", help="DB 연결 문자열. 생략하면 DATABASE_URL을 씁니다.")
     serve = subcommands.add_parser(
         "serve", help="API 서버와 임베딩 워커를 함께 실행합니다."
@@ -1809,7 +1835,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "reset-password":
         return run_reset_password(dsn=args.dsn, username=args.username)
     if args.command == "create-user":
-        return run_create_user(dsn=args.dsn, username=args.username, is_admin=args.admin)
+        return run_create_user(
+            dsn=args.dsn, username=args.username, is_admin=args.admin, department=args.department
+        )
     return run_init(
         dsn=args.dsn,
         assume_yes=args.yes,

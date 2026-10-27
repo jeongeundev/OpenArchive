@@ -321,3 +321,21 @@ it("비밀번호·관리자 권한·폴더·토큰 변경을 표시하고 동작
     expect(screen.getByRole("option", { name })).toHaveValue(value);
   }
 });
+
+it("소속 부서 변경과 부서 폴더 지정·해제를 표시한다 (D18)", async () => {
+  const items = [
+    entry({ action: "user_changed", document_id: null, document_title: null, detail: { change: "department_changed", user: "김민준", from: null, to: "IT전략실" } }),
+    entry({ action: "user_changed", document_id: null, document_title: null, detail: { change: "department_changed", user: "김민준", from: "IT전략실", to: null } }),
+    entry({ action: "folder_changed", document_id: null, document_title: null, detail: { change: "department_set", folder_id: "f-1", folder_name: "IT전략실", department: "IT전략실" } }),
+    entry({ action: "folder_changed", document_id: null, document_title: null, detail: { change: "department_cleared", folder_id: "f-1", folder_name: "IT전략실", department: "IT전략실" } }),
+  ];
+  vi.stubGlobal("fetch", routedFetch(admin, [{ items, next_before_id: null }]).fetchMock);
+  render(<AuthProvider><AuditPage /></AuthProvider>);
+  const table = await screen.findByRole("table");
+  for (const label of [
+    "사용자 「김민준」 소속 부서: 없음 → IT전략실",
+    "사용자 「김민준」 소속 부서: IT전략실 → 없음",
+    "폴더 「IT전략실」 부서 폴더 지정: IT전략실",
+    "폴더 「IT전략실」 부서 폴더 해제",
+  ]) expect(within(table).getByText(label)).toBeInTheDocument();
+});

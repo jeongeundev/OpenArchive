@@ -9,7 +9,7 @@ import { ErrorDocuments } from "./ErrorDocuments";
 
 const document: DocumentSummary = {
   id: "doc-1", title: "실패 문서", filename: "failed.md", content_type: "md", version: 1,
-  owner_id: "alice", visibility: "public", effective_visibility: "public", tags: [], embedding_status: "error", extraction_status: "done",
+  owner_id: "alice", visibility: "public", effective_visibility: "public", follows_folder: false, tags: [], embedding_status: "error", extraction_status: "done",
   created_at: "2026-08-05T10:00:00Z", updated_at: "2026-08-05T11:00:00Z",
 };
 const response = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
@@ -32,6 +32,16 @@ describe("ErrorDocuments", () => {
     expect(await screen.findByText("실패 문서")).toBeInTheDocument();
     fireEvent.click(await screen.findByRole("button", { name: "재임베딩" }));
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/documents/doc-1/reembed", expect.objectContaining({ method: "POST" })));
+  });
+
+  it("소유자에 부서가 있으면 `이름(부서)`로 보인다 (D16)", async () => {
+    renderDocuments(vi.fn((url: string) => Promise.resolve(
+      url === "/api/auth/me"
+        ? response({ authenticated: true, username: "alice", is_admin: false })
+        : response([{ ...document, owner_id: "김민준", owner_department: { name: "IT전략실", folder_id: "f1" } }]),
+    )));
+    expect(await screen.findByRole("link", { name: "IT전략실" })).toHaveAttribute("href", "/?folder=f1");
+    expect(screen.getByRole("link", { name: "IT전략실" }).closest("td")).toHaveTextContent(/^김민준\(IT전략실\)$/);
   });
 
   it("재임베딩 403 응답의 detail을 표시한다", async () => {

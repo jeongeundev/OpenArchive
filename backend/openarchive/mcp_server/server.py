@@ -136,6 +136,8 @@ def _document_payload(document: dict) -> dict:
     """서비스의 `id`를 MCP 응답 규약인 `document_id`로 바꾼다."""
     payload = _json_value(document)
     payload["document_id"] = str(payload.pop("id"))
+    # follows_folder는 웹 목록의 「폴더 범위 따름」 표시용이다 — MCP 응답 모양은 바꾸지 않는다 (ADR-065).
+    payload.pop("follows_folder", None)
     return payload
 
 

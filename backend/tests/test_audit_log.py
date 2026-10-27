@@ -896,3 +896,72 @@ def test_user_delete_skips_user_token_revocation(conn):
         assert audit_rows(conn)[len(before):] == [
             ("user_changed", "admin", "session", None, None, {"change": "deleted", "user": "bob"}),
         ]
+
+
+def test_department_changes_audit_actor_noop_and_membership_removal(conn):
+    user = conn.execute(
+        "INSERT INTO users (username, password_hash) VALUES ('kim', 'hash') RETURNING id"
+    ).fetchone()[0]
+    groups = [conn.execute(
+        "INSERT INTO groups (name) VALUES (%s) RETURNING id", (name,),
+    ).fetchone()[0] for name in ("IT", "HR")]
+    for group in groups:
+        conn.execute("INSERT INTO group_members VALUES (%s, %s)", (group, user))
+    with conn.transaction():
+        set_actor(conn)
+        for group in (groups[0], groups[0], groups[1]):
+            conn.execute("UPDATE users SET department_group_id = %s WHERE id = %s", (group, user))
+        conn.execute("DELETE FROM group_members WHERE group_id = %s", (groups[1],))
+    rows = [r for r in audit_rows(conn) if r[0] == "user_changed" and r[5].get("change") == "department_changed"]
+    assert rows == [
+        ("user_changed", "alice", "session", None, None,
+         {"change": "department_changed", "user": "kim", "from": before, "to": after})
+        for before, after in ((None, "IT"), ("IT", "HR"), ("HR", None))
+    ]
+
+
+def test_department_folder_audit_and_group_cascade(conn):
+    group = conn.execute("INSERT INTO groups (name) VALUES ('IT') RETURNING id").fetchone()[0]
+    folder = create_folder(conn)
+    with conn.transaction():
+        set_actor(conn)
+        for value in (group, group, None, group):
+            conn.execute("UPDATE folders SET department_group_id = %s WHERE id = %s", (value, folder))
+        conn.execute("DELETE FROM groups WHERE id = %s", (group,))
+    rows = [r for r in audit_rows(conn) if r[0] == "folder_changed" and r[5].get("change", "").startswith("department_")]
+    assert rows == [
+        ("folder_changed", "alice", "session", None, None,
+         {"change": change, "folder_id": str(folder), "folder_name": "사업 자료", "department": department})
+        for change, department in (
+            ("department_set", "IT"), ("department_cleared", "IT"),
+            ("department_set", "IT"), ("department_cleared", None),
+        )
+    ]
+
+
+def test_department_group_deletion_audit_and_rollback(conn):
+    user = conn.execute(
+        "INSERT INTO users (username, password_hash) VALUES ('kim', 'hash') RETURNING id"
+    ).fetchone()[0]
+    group = conn.execute("INSERT INTO groups (name) VALUES ('IT') RETURNING id").fetchone()[0]
+    conn.execute("INSERT INTO group_members VALUES (%s, %s)", (group, user))
+    conn.execute("UPDATE users SET department_group_id = %s WHERE id = %s", (group, user))
+    before = audit_rows(conn)
+    with pytest.raises(RuntimeError, match="rollback"), conn.transaction():
+        set_actor(conn)
+        conn.execute("DELETE FROM groups WHERE id = %s", (group,))
+        assert conn.execute(
+            "SELECT department_group_id FROM users WHERE id = %s", (user,),
+        ).fetchone() == (None,)
+        raise RuntimeError("rollback")
+    assert audit_rows(conn) == before
+    assert conn.execute(
+        "SELECT department_group_id FROM users WHERE id = %s", (user,),
+    ).fetchone() == (group,)
+    with conn.transaction():
+        set_actor(conn)
+        conn.execute("DELETE FROM groups WHERE id = %s", (group,))
+    rows = [r for r in audit_rows(conn)[len(before):] if r[0] == "user_changed"]
+    assert rows == [("user_changed", "alice", "session", None, None, {
+        "change": "department_changed", "user": "kim", "from": None, "to": None,
+    })]

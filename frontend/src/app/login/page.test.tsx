@@ -47,6 +47,19 @@ describe("로그인 화면", () => {
     expect(screen.getByLabelText("비밀번호")).toHaveAttribute("type", "password");
   });
 
+  it("로그인 카드를 화면 가운데에 놓는다", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response({
+      authenticated: false,
+      username: null,
+      is_admin: false,
+    })));
+
+    render(<AuthProvider><LoginPage /></AuthProvider>);
+
+    const button = await screen.findByRole("button", { name: "로그인" });
+    expect(button.closest("section")).toHaveClass("mx-auto");
+  });
+
   it("로그인 성공 후 문서 화면으로 이동한다", async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(response({ authenticated: false, username: null, is_admin: false }))

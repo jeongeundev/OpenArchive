@@ -15,12 +15,19 @@ function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 }
 
-function stubFetch(access: FolderScope, save: (body: FolderScope) => Response = body => json(body)) {
+function stubFetch(
+  access: FolderScope,
+  save: (body: FolderScope) => Response = body => json(body),
+  department: (body: { group: string | null }) => Response = body =>
+    json({ ...root, department: body.group === null ? null : { id: "g1", name: body.group } }),
+) {
   const fetchMock = vi.fn((url: string, init?: RequestInit) => {
     if (url === "/api/principals") return Promise.resolve(json(principals));
     if (url === "/api/folders/f1/access" && init?.method === "PUT")
       return Promise.resolve(save(JSON.parse(String(init.body)) as FolderScope));
     if (url === "/api/folders/f1/access") return Promise.resolve(json(access));
+    if (url === "/api/folders/f1/department" && init?.method === "PUT")
+      return Promise.resolve(department(JSON.parse(String(init.body)) as { group: string | null }));
     return Promise.reject(new Error(`unexpected ${url}`));
   });
   vi.stubGlobal("fetch", fetchMock);
@@ -112,6 +119,62 @@ describe("FolderAccessPanel", () => {
     stubFetch(publicScope);
     await renderPanel({ ...root, id: "f2", parent_id: "f1", inherited: true });
     expect(screen.queryByRole("button", { name: "열람 범위 저장" })).not.toBeInTheDocument();
+  });
+
+  describe("부서 폴더 (D15)", () => {
+    function departmentPuts(fetchMock: ReturnType<typeof stubFetch>): unknown[] {
+      return fetchMock.mock.calls
+        .filter(([url, init]) => url === "/api/folders/f1/department" && init?.method === "PUT")
+        .map(([, init]) => JSON.parse(String(init?.body)));
+    }
+
+    it("만든 사람은 「지정 안 함」과 그룹 중에서 부서 폴더를 골라 저장한다", async () => {
+      const fetchMock = stubFetch(publicScope);
+      const onSaved = await renderPanel();
+      const select = await screen.findByRole("combobox", { name: "부서 폴더" });
+      expect(select).toHaveValue("");
+      const options = Array.from(select.querySelectorAll("option")).map(option => option.textContent);
+      expect(options).toEqual(["지정 안 함", "사업팀", "개발팀"]);
+
+      fireEvent.change(select, { target: { value: "사업팀" } });
+      fireEvent.click(screen.getByRole("button", { name: "부서 폴더 저장" }));
+
+      expect(await screen.findByText("부서 폴더를 저장했습니다.")).toBeInTheDocument();
+      expect(departmentPuts(fetchMock)).toEqual([{ group: "사업팀" }]);
+      expect(putBodies(fetchMock)).toEqual([{ group: "사업팀" }]);
+      expect(onSaved).toHaveBeenCalled();
+    });
+
+    it("지정된 부서를 처음 값으로 두고 「지정 안 함」으로 저장하면 해제한다", async () => {
+      const fetchMock = stubFetch(publicScope);
+      await renderPanel({ ...root, department: { id: "g2", name: "개발팀" } });
+      const select = await screen.findByRole("combobox", { name: "부서 폴더" });
+      expect(select).toHaveValue("개발팀");
+
+      fireEvent.change(select, { target: { value: "" } });
+      fireEvent.click(screen.getByRole("button", { name: "부서 폴더 저장" }));
+
+      await waitFor(() => expect(departmentPuts(fetchMock)).toEqual([{ group: null }]));
+    });
+
+    it("서버가 거부하면 그 문구를 그대로 보이고 고른 값은 남긴다", async () => {
+      stubFetch(publicScope, body => json(body), () =>
+        json({ detail: "부서 폴더로 지정하려면 그 그룹의 구성원이어야 합니다." }, 400));
+      await renderPanel();
+      const select = await screen.findByRole("combobox", { name: "부서 폴더" });
+      fireEvent.change(select, { target: { value: "개발팀" } });
+      fireEvent.click(screen.getByRole("button", { name: "부서 폴더 저장" }));
+
+      expect(await screen.findByRole("alert")).toHaveTextContent("부서 폴더로 지정하려면 그 그룹의 구성원이어야 합니다.");
+      expect(select).toHaveValue("개발팀");
+    });
+
+    it("폴더를 만든 사람이 아니면 부서 폴더 선택이 없다", async () => {
+      stubFetch(publicScope);
+      await renderPanel({ ...root, can_manage: false, can_change_access: false });
+      expect(screen.queryByRole("combobox", { name: "부서 폴더" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "부서 폴더 저장" })).not.toBeInTheDocument();
+    });
   });
 
   it("대상 선택 안내는 문서용 문구가 아니라 폴더용 문구다", async () => {

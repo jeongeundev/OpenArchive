@@ -1612,3 +1612,25 @@ def test_version_author_text_source_preserves_audit_actor(conn, source, expected
         "SELECT actor, actor_via FROM audit_log WHERE document_id = %s AND action = 'text_updated'",
         (doc_id,),
     ).fetchall() == [("alice", "session")]
+
+
+def test_department_requires_membership_on_insert_and_update(conn):
+    group = conn.execute("INSERT INTO groups (name) VALUES ('IT') RETURNING id").fetchone()[0]
+    with pytest.raises(psycopg.errors.RaiseException), conn.transaction():
+        conn.execute(
+            "INSERT INTO users (username, password_hash, department_group_id) "
+            "VALUES ('kim', 'hash', %s)", (group,),
+        )
+    user = conn.execute(
+        "INSERT INTO users (username, password_hash) VALUES ('kim', 'hash') RETURNING id"
+    ).fetchone()[0]
+    with pytest.raises(psycopg.errors.RaiseException), conn.transaction():
+        conn.execute("UPDATE users SET department_group_id = %s WHERE id = %s", (group, user))
+    conn.execute("INSERT INTO group_members VALUES (%s, %s)", (group, user))
+    conn.execute("UPDATE users SET department_group_id = %s WHERE id = %s", (group, user))
+    other = conn.execute("INSERT INTO groups (name) VALUES ('HR') RETURNING id").fetchone()[0]
+    conn.execute("INSERT INTO group_members VALUES (%s, %s)", (other, user))
+    conn.execute("DELETE FROM group_members WHERE group_id = %s", (other,))
+    assert conn.execute("SELECT department_group_id FROM users WHERE id = %s", (user,)).fetchone() == (group,)
+    conn.execute("DELETE FROM group_members WHERE group_id = %s", (group,))
+    assert conn.execute("SELECT department_group_id FROM users WHERE id = %s", (user,)).fetchone() == (None,)

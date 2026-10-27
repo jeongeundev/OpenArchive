@@ -6,11 +6,20 @@ import Link from "next/link";
 
 import { passageHref } from "@/lib/passageLink";
 import type { AnswerSource, AskResponse } from "@/lib/types";
+import { joinMeta, OwnerLabel } from "./OwnerLabel";
 
 function versionLabel(source: AnswerSource): string {
   return source.revised
     ? `v${source.based_on_version} 기준 · 현재 v${source.current_version}`
     : `v${source.based_on_version} 기준`;
+}
+
+/** 검색 결과의 메타 줄과 같은 규칙 — 빈 값은 빼고 ` · `로 잇는다. 소유자는 `이름(부서)`다. */
+function sourceMeta(source: AnswerSource, parts: (string | null | undefined)[]): React.ReactNode {
+  return joinMeta([
+    ...parts,
+    source.owner ? <OwnerLabel key="owner" owner={source.owner} department={source.owner_department} /> : null,
+  ]);
 }
 
 /** 답의 `[번호]`를 근거 링크로 바꾼다. 근거에 없는 번호는 모델이 지어낸 것이라 글자 그대로 둔다. */
@@ -89,7 +98,7 @@ export function AnswerPanel({
           {cited.length > 0 ? (
             <div className="space-y-3 border-t border-line pt-4">
             <h3 id="answer-cited" className="text-sm font-medium text-strong">인용한 근거</h3>
-            <ol aria-labelledby="answer-cited" className="space-y-3">
+            <ol aria-labelledby="answer-cited" className="grid gap-x-6 gap-y-3 lg:grid-cols-2">
               {cited.map((source) => (
                 <li key={source.label} className="text-sm">
                   <div className="flex flex-wrap items-baseline gap-2">
@@ -101,7 +110,10 @@ export function AnswerPanel({
                       {versionLabel(source)}
                     </span>
                   </div>
-                  <p className="mt-1 line-clamp-3 whitespace-pre-wrap text-xs text-muted">{source.content}</p>
+                  <p className="mt-1 break-words text-xs text-muted">
+                    {sourceMeta(source, [source.content_type?.toUpperCase(), source.folder_path?.join(" › ")])}
+                  </p>
+                  <p className="mt-1 line-clamp-2 text-xs text-muted">{source.content.replace(/\s+/g, " ").trim()}</p>
                 </li>
               ))}
             </ol>
@@ -117,6 +129,9 @@ export function AnswerPanel({
                       [{source.label}] {source.title}
                     </Link>
                     <span className="ml-2 text-xs text-muted">{versionLabel(source)}</span>
+                    <span className="ml-2 text-xs text-muted">
+                      {sourceMeta(source, [source.content_type?.toUpperCase()])}
+                    </span>
                   </li>
                 ))}
               </ul>

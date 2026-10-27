@@ -29,6 +29,14 @@ describe("FolderHeader", () => {
     expect(screen.getByText("상위 폴더 범위 따름(조직 공개)")).toBeInTheDocument();
   });
 
+  it("부서 폴더면 머리에 「부서 폴더 · 부서」를 표시하고 아니면 표시하지 않는다 (D15)", () => {
+    const { rerender } = render(<FolderHeader folder={{ ...root, department: { id: "g1", name: "IT전략실" } }} folders={[root]}
+      onChanged={vi.fn()} onDeleted={vi.fn()} />);
+    expect(screen.getByText("부서 폴더 · IT전략실")).toBeInTheDocument();
+    rerender(<FolderHeader folder={root} folders={[root]} onChanged={vi.fn()} onDeleted={vi.fn()} />);
+    expect(screen.queryByText(/부서 폴더/)).not.toBeInTheDocument();
+  });
+
   it("제한 폴더의 범위는 대상과 함께 표시한다", () => {
     const limited = { ...root, scope: { visibility: "private" as const, users: ["lee"], groups: ["사업팀"] } };
     render(<FolderHeader folder={limited} folders={[limited]} onChanged={vi.fn()} onDeleted={vi.fn()} />);

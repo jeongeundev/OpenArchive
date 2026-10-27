@@ -98,6 +98,74 @@ describe("AnswerPanel", () => {
     expect(screen.getByText("인용하지 않은 근거 1건")).toBeInTheDocument();
   });
 
+  it("인용한 근거마다 형식·폴더 경로·소유자를 한 줄로 보인다", () => {
+    renderPanel(
+      answered("답 [1] [2]", [
+        source({ label: 1, content_type: "md", folder_path: ["운영", "규정"], owner: "김지은" }),
+        source({ label: 2, title: "백업 절차", document_id: "document-2", content_type: "pdf", folder_path: null, owner: "이영호" }),
+      ]),
+    );
+
+    const list = screen.getByRole("list", { name: "인용한 근거" });
+    expect(within(list).getByText("MD · 운영 › 규정 · 김지은")).toBeInTheDocument();
+    expect(within(list).getByText("PDF · 이영호")).toBeInTheDocument();
+  });
+
+  // #288 step 9 — 근거 목록을 펼친 채 lg에서 2열로 놓고, 대목은 공백을 접어 2줄로 줄인다.
+  it("인용한 근거 목록을 lg에서 2열 격자로 놓는다", () => {
+    renderPanel(answered("답 [1]", [source({ label: 1 })]));
+
+    expect(screen.getByRole("list", { name: "인용한 근거" })).toHaveClass("lg:grid-cols-2");
+  });
+
+  it("인용한 근거의 대목을 펼친 채 공백을 접어 2줄로 보인다 (명세서 288)", () => {
+    renderPanel(
+      answered("답 [1]", [source({ label: 1, content: "  장애 시\n\nOpenProxy가   새 프라이머리로\n연결한다.  " })]),
+    );
+
+    const list = screen.getByRole("list", { name: "인용한 근거" });
+    const passage = within(list).getByText("장애 시 OpenProxy가 새 프라이머리로 연결한다.");
+    expect(passage.textContent).toBe("장애 시 OpenProxy가 새 프라이머리로 연결한다.");
+    expect(passage.closest("details")).toBeNull();
+    expect(passage).toHaveClass("line-clamp-2");
+    expect(passage).not.toHaveClass("whitespace-pre-wrap");
+  });
+
+  it("인용한 근거의 메타 줄은 형식 · 위치 · 소유자 순서다", () => {
+    renderPanel(
+      answered("답 [1]", [source({ label: 1, content_type: "docx", folder_path: ["재무"], owner: "최수진" })]),
+    );
+
+    const list = screen.getByRole("list", { name: "인용한 근거" });
+    expect(within(list).getByText("DOCX · 재무 · 최수진")).toBeInTheDocument();
+  });
+
+  it("근거의 소유자에 부서가 있으면 `이름(부서)`로 보인다 (D16)", () => {
+    renderPanel(
+      answered("답 [1]", [
+        source({ label: 1, content_type: "docx", folder_path: ["재무"], owner: "최수진", owner_department: { name: "IT전략실", folder_id: "f1" } }),
+        source({ label: 2, title: "참고만 한 문서", document_id: "document-2", cited: false, content_type: "hwpx", folder_path: null, owner: "박민수", owner_department: { name: "운영팀", folder_id: null } }),
+      ]),
+    );
+
+    const list = screen.getByRole("list", { name: "인용한 근거" });
+    expect(within(list).getByText((_, node) => node?.tagName === "P" && node.textContent === "DOCX · 재무 · 최수진(IT전략실)")).toBeInTheDocument();
+    expect(within(list).getByRole("link", { name: "IT전략실" })).toHaveAttribute("href", "/?folder=f1");
+    expect(screen.getByText((_, node) => node?.tagName === "SPAN" && node.textContent === "HWPX · 박민수(운영팀)")).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "운영팀" })).not.toBeInTheDocument();
+  });
+
+  it("인용하지 않은 근거에도 형식·소유자를 보인다", () => {
+    renderPanel(
+      answered("답 [1]", [
+        source({ label: 1 }),
+        source({ label: 2, title: "참고만 한 문서", document_id: "document-2", cited: false, content_type: "hwpx", folder_path: ["운영"], owner: "박민수" }),
+      ]),
+    );
+
+    expect(screen.getByText("HWPX · 박민수")).toBeInTheDocument();
+  });
+
   it.each([
     [{ status: "disabled", detail: null }, /답변 생성이 설정되지 않았습니다/],
     [{ status: "no_evidence", detail: null }, /근거로 쓸 문서를 찾지 못했습니다/],

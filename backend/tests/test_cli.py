@@ -826,6 +826,95 @@ def test_create_user_grants_admin_with_the_flag(migrated_db: str, monkeypatch):
     assert accounts(migrated_db) == [("root", True)]
 
 
+def _insert_group(dsn: str, name: str) -> None:
+    with psycopg.connect(dsn) as conn:
+        conn.execute("INSERT INTO groups (name) VALUES (%s)", (name,))
+
+
+def _department_of(dsn: str, username: str) -> tuple[str | None, list[str]]:
+    """계정의 소속 부서 이름과, 그 계정이 구성원인 그룹 이름들."""
+    with psycopg.connect(dsn) as conn:
+        department = conn.execute(
+            """SELECT g.name FROM users u LEFT JOIN groups g ON g.id = u.department_group_id
+            WHERE u.username = %s""",
+            (username,),
+        ).fetchone()[0]
+        groups = conn.execute(
+            """SELECT g.name FROM group_members m JOIN groups g ON g.id = m.group_id
+            JOIN users u ON u.id = m.user_id WHERE u.username = %s ORDER BY g.name""",
+            (username,),
+        ).fetchall()
+    return department, [row[0] for row in groups]
+
+
+def test_create_user_puts_the_account_in_its_department(migrated_db: str, monkeypatch):
+    """`--department`는 소속 부서를 정하고 그 그룹의 구성원으로 넣는다(D17)."""
+    _insert_group(migrated_db, "IT전략실")
+    monkeypatch.setenv("ADMIN_PASSWORD", "environment-secret")
+
+    exit_code = main(["create-user", "김민준", "--department", "IT전략실", "--dsn", migrated_db])
+
+    assert exit_code == 0
+    assert accounts(migrated_db) == [("김민준", False)]
+    assert _department_of(migrated_db, "김민준") == ("IT전략실", ["IT전략실"])
+
+
+def test_create_user_department_audit_rows_are_attributed_to_the_cli(
+    migrated_db: str, monkeypatch
+):
+    """구성원 추가·소속 부서 변경 감사 행은 「운영자 CLI」 경로로 남는다(ADR-055)."""
+    _insert_group(migrated_db, "IT전략실")
+    monkeypatch.setenv("ADMIN_PASSWORD", "environment-secret")
+    with psycopg.connect(migrated_db) as conn:
+        before = conn.execute("SELECT coalesce(max(id), 0) FROM audit_log").fetchone()[0]
+
+    assert main(["create-user", "김민준", "--department", "IT전략실", "--dsn", migrated_db]) == 0
+
+    with psycopg.connect(migrated_db) as conn:
+        vias = conn.execute(
+            "SELECT action, actor_via FROM audit_log WHERE id > %s ORDER BY id", (before,)
+        ).fetchall()
+    assert {action for action, _ in vias} >= {"group_member_changed", "user_changed"}
+    assert all(via == "cli" for _, via in vias)
+
+
+def test_create_user_with_department_and_admin(migrated_db: str, monkeypatch):
+    _insert_group(migrated_db, "IT전략실")
+    monkeypatch.setenv("ADMIN_PASSWORD", "environment-secret")
+
+    exit_code = main(
+        ["create-user", "root", "--admin", "--department", "IT전략실", "--dsn", migrated_db]
+    )
+
+    assert exit_code == 0
+    assert accounts(migrated_db) == [("root", True)]
+    assert _department_of(migrated_db, "root") == ("IT전략실", ["IT전략실"])
+
+
+def test_create_user_refuses_an_unknown_department(migrated_db: str, monkeypatch, capsys):
+    """없는 그룹을 만들어 주지 않는다 — 계정도 만들지 않는다."""
+    monkeypatch.setenv("ADMIN_PASSWORD", "environment-secret")
+
+    exit_code = main(["create-user", "김민준", "--department", "없는부서", "--dsn", migrated_db])
+
+    assert exit_code != 0
+    assert accounts(migrated_db) == []
+    assert "없는부서" in capsys.readouterr().out
+    with psycopg.connect(migrated_db) as conn:
+        assert conn.execute("SELECT count(*) FROM groups").fetchone()[0] == 0
+
+
+def test_create_user_without_department_leaves_it_empty(migrated_db: str, monkeypatch):
+    """TC 177 — `openarchive create-user kim`은 전과 같이 부서 없이 만든다."""
+    _insert_group(migrated_db, "IT전략실")
+    monkeypatch.setenv("ADMIN_PASSWORD", "environment-secret")
+
+    exit_code = main(["create-user", "kim", "--dsn", migrated_db])
+
+    assert exit_code == 0
+    assert _department_of(migrated_db, "kim") == (None, [])
+
+
 def test_create_user_refuses_to_overwrite_an_existing_username(
     migrated_db: str, monkeypatch, capsys
 ):

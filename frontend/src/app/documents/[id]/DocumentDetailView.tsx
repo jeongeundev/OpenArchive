@@ -10,6 +10,7 @@ import { OwnerTransfer } from "@/components/OwnerTransfer";
 import { AccessPanel } from "@/components/AccessPanel";
 import { DocumentActions } from "@/components/DocumentActions";
 import { DocumentFolderSection } from "@/components/DocumentFolderSection";
+import { DocumentHeader } from "@/components/DocumentHeader";
 import { DocumentMeta } from "@/components/DocumentMeta";
 import { OriginalFiles } from "@/components/OriginalFiles";
 import { RelatedDocuments } from "@/components/RelatedDocuments";
@@ -119,122 +120,137 @@ export function DocumentDetailView(): React.ReactElement {
         ← 목록으로 돌아가기
       </Link>
 
-      <DocumentMeta document={document} />
+      <DocumentHeader document={document} />
 
-      <DocumentFolderSection
-        key={folderKey}
-        disabled={editing}
-        documentId={document.id}
-        folder={document.folder}
-        hiddenFolder={document.hidden_folder ?? false}
-        isOwner={isOwner}
-        onMoved={refresh}
-      />
+      <div className="grid items-start gap-8 lg:grid-cols-[minmax(0,1fr)_340px]" data-testid="document-columns">
+        <div className="min-w-0 space-y-8">
+          <TextEditor
+            disabled={anonymous}
+            document={document}
+            onEditingChange={setEditing}
+            onSaved={refresh}
+            links={links}
+          />
 
-      {!anonymous ? (
-        <>
-          <DocumentActions disabled={editing} document={document} onChanged={refresh} />
-          {isOwner ? (
-            <>
-              <AccessPanel key={folderKey} disabled={editing} documentId={document.id} onSaved={refresh} />
-              <OwnerTransfer documentId={document.id} owner={document.owner_id} disabled={editing} onTransferred={refresh} />
-            </>
+          {linksError !== null ? (
+            <p className="text-sm text-muted" role="status">
+              {linksError}
+            </p>
           ) : null}
-          <TagEditor disabled={editing} error={tagError} onChange={setDraftTags} onSave={() => void saveTags(tags)} saving={savingTags} tags={tags} />
-        </>
-      ) : null}
 
-      <OriginalFiles
-        anonymous={anonymous}
-        disabled={editing}
-        document={document}
-        onChanged={refresh}
-      />
+          {backlinks.length > 0 ? (
+            <section className="space-y-4">
+              <h2 className="text-sm font-medium text-muted">
+                이 문서를 가리키는 문서
+              </h2>
+              <ul className="space-y-2">
+                {backlinks.map((backlink) => (
+                  <li key={backlink.document_id}>
+                    <Link
+                      className="text-sm text-accent hover:underline"
+                      href={`/documents/${backlink.document_id}`}
+                    >
+                      {backlink.title}
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          ) : null}
 
-      <TextEditor
-        disabled={anonymous}
-        document={document}
-        onEditingChange={setEditing}
-        onSaved={refresh}
-        links={links}
-      />
+          <VersionHistory
+            documentId={document.id}
+            versions={document.versions}
+            currentVersion={document.version}
+            disabled={anonymous}
+            focus={versionFocus}
+            restoreBlockedReason={
+              document.extraction_status === "pending" ? EXTRACTING_NOTICE : null
+            }
+            onRestored={refresh}
+          />
+        </div>
 
-      {linksError !== null ? (
-        <p className="text-sm text-muted" role="status">
-          {linksError}
-        </p>
-      ) : null}
+        <aside className="min-w-0 space-y-6" data-testid="document-side">
+          {/* 자주 쓰지 않는 관리 동작은 접어 기둥 맨 위에 둔다 — 본문 아래면 긴 문서에서 닿지 않는다. 임베딩 오류 문서는 재임베딩 버튼이 보이도록 펼친다. */}
+          {!anonymous ? (
+            <details className="rounded-lg border border-line bg-card p-4" open={document.embedding_status === "error"}>
+              <summary className="cursor-pointer text-sm font-medium text-muted hover:text-strong">문서 관리</summary>
+              <div className="mt-4 space-y-8">
+                <DocumentActions disabled={editing} document={document} onChanged={refresh} />
+                {isOwner ? (
+                  <>
+                    <AccessPanel key={folderKey} disabled={editing} documentId={document.id} onSaved={refresh} />
+                    <OwnerTransfer documentId={document.id} owner={document.owner_id} disabled={editing} onTransferred={refresh} />
+                  </>
+                ) : null}
+              </div>
+            </details>
+          ) : null}
 
-      {backlinks.length > 0 ? (
-        <section className="space-y-4">
-          <h2 className="text-sm font-medium text-muted">
-            이 문서를 가리키는 문서
-          </h2>
-          <ul className="space-y-2">
-            {backlinks.map((backlink) => (
-              <li key={backlink.document_id}>
-                <Link
-                  className="text-sm text-accent hover:underline"
-                  href={`/documents/${backlink.document_id}`}
-                >
-                  {backlink.title}
-                </Link>
-              </li>
-            ))}
-          </ul>
-        </section>
-      ) : null}
+          <DocumentFolderSection
+            key={folderKey}
+            disabled={editing}
+            documentId={document.id}
+            folder={document.folder}
+            hiddenFolder={document.hidden_folder ?? false}
+            isOwner={isOwner}
+            onMoved={refresh}
+          />
 
-      <VersionHistory
-        documentId={document.id}
-        versions={document.versions}
-        currentVersion={document.version}
-        disabled={anonymous}
-        focus={versionFocus}
-        restoreBlockedReason={
-          document.extraction_status === "pending" ? EXTRACTING_NOTICE : null
-        }
-        onRestored={refresh}
-      />
+          {relatedData.related !== null ? (
+            <RelatedDocuments
+              response={relatedData.related}
+              textMissing={document.extraction_status === "failed"}
+            />
+          ) : (
+            <section className="space-y-3">
+              <h2 className="text-sm font-medium text-muted">관련 문서</h2>
+              <p className="text-sm text-muted">
+                {relatedData.loading ? "불러오는 중…" : "관련 문서를 불러오지 못했습니다."}
+              </p>
+            </section>
+          )}
 
-      {relatedData.related !== null ? (
-        <RelatedDocuments
-          response={relatedData.related}
-          textMissing={document.extraction_status === "failed"}
-        />
-      ) : (
-        <section className="space-y-3">
-          <h2 className="text-sm font-medium text-muted">관련 문서</h2>
-          <p className="text-sm text-muted">
-            {relatedData.loading ? "불러오는 중…" : "관련 문서를 불러오지 못했습니다."}
-          </p>
-        </section>
-      )}
+          <OriginalFiles
+            anonymous={anonymous}
+            disabled={editing}
+            document={document}
+            onChanged={refresh}
+          />
 
-      {relatedData.suggestions !== null ? (
-        <TagSuggestions
-          onApply={
-            anonymous || editing || savingTags
-              ? undefined
-              : (tag) => saveTags([...tags, tag])
-          }
-          response={relatedData.suggestions}
-          textMissing={document.extraction_status === "failed"}
-        />
-      ) : (
-        <section className="space-y-3">
-          <h2 className="text-sm font-medium text-muted">태그 추천</h2>
-          <p className="text-sm text-muted">
-            {relatedData.loading ? "불러오는 중…" : "태그 추천을 불러오지 못했습니다."}
-          </p>
-        </section>
-      )}
+          {!anonymous ? (
+            <TagEditor disabled={editing} error={tagError} onChange={setDraftTags} onSave={() => void saveTags(tags)} saving={savingTags} tags={tags} />
+          ) : null}
 
-      {relatedData.error !== null ? (
-        <p className="text-sm text-muted" role="status">
-          {relatedData.error}
-        </p>
-      ) : null}
+          {relatedData.suggestions !== null ? (
+            <TagSuggestions
+              onApply={
+                anonymous || editing || savingTags
+                  ? undefined
+                  : (tag) => saveTags([...tags, tag])
+              }
+              response={relatedData.suggestions}
+              textMissing={document.extraction_status === "failed"}
+            />
+          ) : (
+            <section className="space-y-3">
+              <h2 className="text-sm font-medium text-muted">태그 추천</h2>
+              <p className="text-sm text-muted">
+                {relatedData.loading ? "불러오는 중…" : "태그 추천을 불러오지 못했습니다."}
+              </p>
+            </section>
+          )}
+
+          {relatedData.error !== null ? (
+            <p className="text-sm text-muted" role="status">
+              {relatedData.error}
+            </p>
+          ) : null}
+
+          <DocumentMeta document={document} />
+        </aside>
+      </div>
 
       {error !== null ? (
         <p className="text-sm text-muted" role="status">

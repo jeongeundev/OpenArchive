@@ -48,6 +48,46 @@ describe("SiteHeader", () => {
     expect(await screen.findByRole("link", { name: "정리할 문서" })).toHaveAttribute("href", "/organize");
   });
 
+  it("로그인 사용자에 부서가 있으면 `이름 · 부서`로 보이고 부서는 부서 폴더 링크다 (D16)", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response({
+      authenticated: true,
+      username: "김민준",
+      is_admin: false,
+      department: { name: "IT전략실", folder_id: "f1" },
+    })));
+
+    render(<AuthProvider><SiteHeader /></AuthProvider>);
+
+    expect(await screen.findByRole("link", { name: "김민준" })).toHaveAttribute("href", "/settings");
+    expect(screen.getByRole("link", { name: "IT전략실" })).toHaveAttribute("href", "/?folder=f1");
+    expect(screen.getByTestId("account-label")).toHaveTextContent(/^김민준 · IT전략실$/);
+  });
+
+  it("부서 폴더를 볼 수 없으면 부서 이름만 링크 없이, 부서가 없으면 이름만 보인다", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response({
+      authenticated: true,
+      username: "김민준",
+      is_admin: false,
+      department: { name: "IT전략실", folder_id: null },
+    })));
+
+    const { unmount } = render(<AuthProvider><SiteHeader /></AuthProvider>);
+
+    expect(await screen.findByTestId("account-label")).toHaveTextContent(/^김민준 · IT전략실$/);
+    expect(screen.queryByRole("link", { name: "IT전략실" })).not.toBeInTheDocument();
+    unmount();
+
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response({
+      authenticated: true,
+      username: "김민준",
+      is_admin: false,
+      department: null,
+    })));
+    render(<AuthProvider><SiteHeader /></AuthProvider>);
+
+    expect(await screen.findByTestId("account-label")).toHaveTextContent(/^김민준$/);
+  });
+
   it("관리자 메뉴에 시스템 상태를 제공한다", async () => {
     // 문서 진단은 "내가 볼 수 있는 문서"의 상태라 사용자 화면이며 `/diagnostics`에 있다.
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response({

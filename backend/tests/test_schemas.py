@@ -58,6 +58,7 @@ def test_auth_status_cannot_serialize_session_tokens_or_password_hashes():
         "is_admin": False,
         "scope": None,
         "expires_at": None,
+        "department": None,
     }
 
 

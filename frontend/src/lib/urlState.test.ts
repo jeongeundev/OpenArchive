@@ -50,6 +50,15 @@ describe("문서 목록 주소", () => {
     expect(listStateFromParams(new URLSearchParams())).toEqual({ folderId: null, filters: { sort: "updated" }, page: 0 });
   });
 
+  it("「부여받은 문서」 보기는 `granted=1`로 쓰고 읽으며 폴더와 함께 쓰지 않는다 (D20)", () => {
+    expect(listStateFromParams(new URLSearchParams("granted=1"))).toEqual({ folderId: null, filters: { sort: "updated" }, page: 0, granted: true });
+    expect(listHref({ folderId: null, filters: { sort: "updated" }, page: 0, granted: true })).toBe("/?granted=1");
+    expect(listHref({ folderId: "f-hr", filters: { sort: "updated" }, page: 0, granted: true })).toBe("/?granted=1");
+    expect(listStateFromParams(new URLSearchParams("granted=1&folder=f-hr")).folderId).toBeNull();
+    const state = { folderId: null, filters: { tag: "보안", sort: "title" as const }, page: 1, granted: true };
+    expect(listStateFromParams(new URL(listHref(state), "http://localhost").searchParams)).toEqual(state);
+  });
+
   it("손으로 고친 주소의 쪽·유형·정렬은 기본값으로 되돌린다", () => {
     for (const page of ["0", "-1", "1.5", "abc"]) {
       expect(listStateFromParams(new URLSearchParams(`page=${page}`)).page).toBe(0);

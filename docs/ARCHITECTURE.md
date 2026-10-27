@@ -256,6 +256,7 @@ CREATE TABLE folders (
   visibility text,                 -- public | private — 최상위만
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
+  department_group_id uuid REFERENCES groups(id) ON DELETE SET NULL, -- 047: 부서 폴더, 최상위만·부서당 하나(부분 유일 인덱스)
   CONSTRAINT folders_root_scope CHECK ((parent_id IS NULL) = (visibility IS NOT NULL))
 );
 -- 같은 부모 아래 하위 폴더만 이름이 유일하다. 최상위 이름 충돌 오류는 남의 제한 폴더를 누출한다
@@ -334,6 +335,7 @@ CREATE TABLE document_links (
 CREATE TABLE users (
   id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   username      text NOT NULL UNIQUE CHECK (username NOT LIKE 'share:%'), -- 026: 공유 주체 접두사 예약
+  department_group_id uuid REFERENCES groups(id) ON DELETE SET NULL, -- 047: 소속 부서(선택), 구성원인 그룹 하나
   password_hash text NOT NULL,     -- hashlib.scrypt 결과만 저장한다
   is_admin      boolean NOT NULL DEFAULT false,
   created_at    timestamptz NOT NULL DEFAULT now()
@@ -543,6 +545,8 @@ CREATE TRIGGER trg_documents_content_changed
 | psql 등 직접 SQL | NULL (`db_role`만) | NULL |
 
 `set_actor`는 autocommit 유휴 상태(트랜잭션 밖)에서 부르면 예외다. 세션 `SET`은 OpenProxy 풀 백엔드를 타고 다음 클라이언트로 새므로(HA 실측 75/100, `OPENSQL_RESEARCH.md` §5-3) 쓰지 않는다 — GUC 이름이 이 파일 밖에 나오거나 세션 `SET`을 쓰는 코드는 `test_architecture.py`가 막는다.
+
+048의 `trg_users_department_membership`은 소속 부서의 그룹 구성원 자격을 검사하고, `trg_group_members_department_removed`는 탈퇴 때 소속 부서를 비운다. `trg_audit_department_changed`는 `user_changed`에 `change/user/from/to`, `trg_audit_folder_department_changed`는 `folder_changed`에 `change/folder_id/folder_name/department`를 기록한다(그룹 삭제 연쇄 해제 포함).
 
 ### 추출 잡 — 스캔 문서는 텍스트 없이 먼저 생긴다
 
@@ -1104,6 +1108,8 @@ PUT /api/documents/{id}
 읽기 대상에 `/api/ask`를 넣는다. DB 단계가 생성 전에 끝나므로 DB 재시도가 생성을 두 번 돌리지 않는다.
 
 ## 검색 데이터 흐름
+
+결과 메타(폴더 경로·소유자·수정일)는 검색 SQL 밖, 같은 트랜잭션의 일괄 보강 조회로 붙인다. 폴더 경로는 문서 상세와 같은 열람 규칙을 따르며, 결과 집합·순서·점수는 바꾸지 않는다.
 
 질의 텍스트 → 동일 프로바이더로 질의 임베딩 → **단일 `WITH RECURSIVE` SQL**. 벡터 후보 확보와 관계 순회가 한 쿼리 안에서 끝난다.
 

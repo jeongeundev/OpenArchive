@@ -274,12 +274,25 @@ export function createUser(input: {
   username: string;
   password: string;
   is_admin: boolean;
+  department_group_id?: string;
 }): Promise<UserSummary> {
   return request<UserSummary>("/api/admin/users", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input),
   });
+}
+
+export function setUserDepartment(userId: string, groupId: string | null): Promise<void> {
+  return request<void>(
+    `/api/admin/users/${encodeURIComponent(userId)}/department`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ group_id: groupId }),
+    },
+    { parse: false },
+  );
 }
 
 export function deleteUser(id: string, transferTo?: string): Promise<void> {
@@ -418,6 +431,8 @@ export interface DocumentFilters {
   tag?: string;
   sort?: DocumentSort;
   status?: EmbeddingStatus;
+  /** 「부여받은 문서」 — 볼 수 있는 남의 문서 가운데 실효 범위가 「제한」인 것만. */
+  granted?: boolean;
 }
 
 function documentFilterQuery(params?: Omit<DocumentFilters, "sort">): URLSearchParams {
@@ -427,6 +442,7 @@ function documentFilterQuery(params?: Omit<DocumentFilters, "sort">): URLSearchP
   if (params?.tag?.trim()) query.set("tag", params.tag);
   if (params?.q?.trim()) query.set("q", params.q);
   if (params?.contentType?.trim()) query.set("content_type", params.contentType);
+  if (params?.granted) query.set("granted", "true");
   return query;
 }
 
@@ -767,6 +783,13 @@ export function getFolderAccess(id: string, signal?: AbortSignal): Promise<Folde
 export function setFolderAccess(id: string, scope: FolderScope): Promise<FolderScope> {
   return request<FolderScope>(`/api/folders/${encodeURIComponent(id)}/access`, {
     method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(scope),
+  });
+}
+
+/** 최상위 폴더를 부서 폴더로 지정하거나(그룹 이름) 해제한다(null). 만든 사람만, 세션으로만 (D15). */
+export function setFolderDepartment(id: string, group: string | null): Promise<Folder> {
+  return request<Folder>(`/api/folders/${encodeURIComponent(id)}/department`, {
+    method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ group }),
   });
 }
 

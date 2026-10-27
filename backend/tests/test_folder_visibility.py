@@ -13,7 +13,7 @@ import psycopg
 import pytest
 from conftest import insert_test_document
 
-from openarchive.services.documents import list_documents
+from openarchive.services.documents import count_documents, list_documents
 from openarchive.services.visibility import (
     FOLDER_VISIBLE_TO_USER,
     VISIBLE_TO_USER,
@@ -54,9 +54,10 @@ async def grant_folder_group(conn, folder_id, group_id):
 
 
 async def add_doc(conn, title, *, folder=None, follows=True, visibility="private",
-                  owner="writer"):
+                  owner="writer", tags=None, content_type="md"):
     document_id = await insert_test_document(
-        conn, title=title, content=f"{title} 본문", owner_id=owner, visibility=visibility
+        conn, title=title, content=f"{title} 본문", owner_id=owner, visibility=visibility,
+        tags=tags, content_type=content_type,
     )
     await conn.execute(
         "UPDATE documents SET folder_id = %s, follows_folder = %s WHERE id = %s",
@@ -247,3 +248,65 @@ async def test_folder_predicate_follows_root_scope(conn, org):
         (org["groups"]["개발팀"], org["users"]["admin"]),
     )
     assert await visible_folders(conn, "admin") == rfp_tree | {"공지"}
+
+
+async def grant_doc(conn, document_id, *, user=None, group=None):
+    await conn.execute(
+        "INSERT INTO document_grants (document_id, user_id, group_id) VALUES (%s, %s, %s)",
+        (document_id, user, group),
+    )
+
+
+@pytest.fixture
+async def granted_org(conn, org):
+    """kim이 받은 문서 셋과 받지 않은 것으로 봐야 하는 문서들."""
+    user_doc = await add_doc(conn, "사용자 부여", tags=["계약"])
+    await grant_doc(conn, user_doc, user=org["users"]["kim"])
+    group_doc = await add_doc(conn, "그룹 부여", content_type="txt")
+    await grant_doc(conn, group_doc, group=org["groups"]["사업팀"])
+    await add_doc(conn, "폴더 상속", folder=org["q1"], tags=["계약"])
+    await add_doc(conn, "내 제한 문서", owner="kim")
+    await add_doc(conn, "조직 공개", visibility="public")
+    open_folder = await add_folder(conn, "공지", visibility="public")
+    await add_doc(conn, "공개 폴더 따름", folder=open_folder)
+    await add_doc(conn, "볼 수 없음")
+    trashed = await add_doc(conn, "휴지통")
+    await grant_doc(conn, trashed, user=org["users"]["kim"])
+    await conn.execute("UPDATE documents SET deleted_at = now() WHERE id = %s", (trashed,))
+    return org
+
+
+async def granted_titles(conn, user, **filters):
+    """목록 제목을 돌려준다. 페이지를 자르지 않았으면 건수가 목록 길이와 같은지도 본다."""
+    rows = await list_documents(conn, user_id=user, granted_only=True, **filters)
+    if "limit" not in filters:
+        count_filters = {key: value for key, value in filters.items() if key != "sort"}
+        assert len(rows) == await count_documents(
+            conn, user_id=user, granted_only=True, **count_filters
+        )
+    return [row["title"] for row in rows]
+
+
+async def test_granted_only_lists_others_restricted_documents_i_can_see(conn, granted_org):
+    assert set(await granted_titles(conn, "kim")) == {"사용자 부여", "그룹 부여", "폴더 상속"}
+
+
+async def test_granted_only_is_empty_for_anonymous(conn, granted_org):
+    assert await list_documents(conn, user_id=None, granted_only=True) == []
+    assert await count_documents(conn, user_id=None, granted_only=True) == 0
+
+
+async def test_granted_only_combines_with_other_filters(conn, granted_org):
+    assert set(await granted_titles(conn, "kim", tag="계약")) == {"사용자 부여", "폴더 상속"}
+    assert await granted_titles(conn, "kim", content_type="txt") == ["그룹 부여"]
+    assert await granted_titles(conn, "kim", title_query="상속") == ["폴더 상속"]
+    assert await granted_titles(conn, "kim", folder_id=granted_org["q1"]) == ["폴더 상속"]
+    ordered = await granted_titles(conn, "kim", sort="title")
+    assert ordered == sorted(ordered)
+    assert await granted_titles(conn, "kim", sort="title", limit=1, offset=1) == ordered[1:2]
+
+
+async def test_without_granted_only_list_is_unchanged(conn, granted_org):
+    titles = {row["title"] for row in await list_documents(conn, user_id="kim")}
+    assert {"내 제한 문서", "조직 공개", "공개 폴더 따름"} <= titles
+    assert await count_documents(conn, user_id="kim") == len(titles)

@@ -46,7 +46,7 @@ export default function LoginPage(): React.ReactElement {
   }
 
   return (
-    <section className="max-w-md space-y-6">
+    <section className="mx-auto mt-12 max-w-md space-y-6">
       <h1 className="text-4xl font-semibold text-strong">로그인</h1>
       {passwordChanged ? (
         <p className="rounded-lg border border-accent bg-card px-4 py-3 text-sm text-body" role="status">

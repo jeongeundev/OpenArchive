@@ -10,7 +10,9 @@ import type { Cluster, ClustersResponse } from "@/lib/types";
 
 const WIDTH = 900;
 const HEIGHT = 600;
-const LAYOUT_RADIUS = 225;
+// 이름을 원 아래에 두므로 맨 아래 원(반지름 최대 44) 밑에 글자 한 줄이 들어갈 자리를 남긴다.
+const LAYOUT_RADIUS = 200;
+const NAME_LIMIT = 24;
 
 interface Position {
   x: number;
@@ -23,6 +25,16 @@ function spread(value: number, values: number[]): number {
   const smallest = Math.min(...values);
   const largest = Math.max(...values);
   return largest === smallest ? 1 : (value - smallest) / (largest - smallest);
+}
+
+// 긴 이름이 이웃 덩어리 이름과 겹치지 않게 줄인다. 전체 이름은 title·aria-label에 남는다.
+// 가운데를 줄인다 — 문서 제목은 앞부분(연도·사업명)이 같고 끝(제안요청서·설명서)에서 갈리는 일이 많다.
+function shortName(name: string): string {
+  const chars = Array.from(name);
+  const half = NAME_LIMIT / 2;
+  return chars.length > NAME_LIMIT
+    ? `${chars.slice(0, half).join("")}…${chars.slice(-half).join("")}`
+    : name;
 }
 
 export default function ClustersPage(): React.ReactElement {
@@ -46,6 +58,11 @@ export default function ClustersPage(): React.ReactElement {
     const result = new Map<string, Position>();
     const count = data?.clusters.length ?? 0;
     data?.clusters.forEach((cluster, index) => {
+      // 둘이면 위아래가 아니라 좌우로 — 가로로 넓은 화면을 쓰고 이름이 아래 원과 부딪히지 않는다.
+      if (count === 2) {
+        result.set(cluster.name, { x: WIDTH / 2 + (index === 0 ? -LAYOUT_RADIUS : LAYOUT_RADIUS), y: HEIGHT / 2 });
+        return;
+      }
       const angle = -Math.PI / 2 + (2 * Math.PI * index) / Math.max(count, 1);
       result.set(cluster.name, {
         x: WIDTH / 2 + LAYOUT_RADIUS * Math.cos(angle),
@@ -73,7 +90,7 @@ export default function ClustersPage(): React.ReactElement {
       {data?.clusters.length === 0 ? <p className="text-sm text-muted">표시할 문서가 없습니다.</p> : null}
       {data !== null && data.clusters.length > 0 ? (
         <section className="overflow-x-auto rounded-lg border border-line bg-card p-4" aria-label="관계 지도 그래프">
-          <svg className="min-w-[720px]" viewBox={`0 0 ${WIDTH} ${HEIGHT}`} role="img" aria-label="문서 덩어리와 덩어리 사이 연결">
+          <svg className="max-h-[560px] w-full min-w-[720px]" viewBox={`0 0 ${WIDTH} ${HEIGHT}`} role="img" aria-label="문서 덩어리와 덩어리 사이 연결">
             {data.connections.map((connection) => {
               const source = positions.get(connection.source);
               const target = positions.get(connection.target);
@@ -112,8 +129,9 @@ export default function ClustersPage(): React.ReactElement {
                     r={radius}
                     strokeWidth="1.5"
                   />
-                  <text className="pointer-events-none fill-strong text-sm font-medium" textAnchor="middle" x={position.x} y={position.y - 2}>{cluster.name}</text>
-                  <text className="pointer-events-none fill-muted text-xs" textAnchor="middle" x={position.x} y={position.y + 16}>{cluster.size}개</text>
+                  <title>{cluster.name}</title>
+                  <text className="pointer-events-none fill-muted text-xs" dominantBaseline="middle" textAnchor="middle" x={position.x} y={position.y}>{cluster.size}개</text>
+                  <text className="pointer-events-none fill-strong text-sm font-medium" textAnchor="middle" x={position.x} y={position.y + radius + 20}>{shortName(cluster.name)}</text>
                 </g>
               );
             })}

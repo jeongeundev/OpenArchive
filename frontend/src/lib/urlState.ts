@@ -44,11 +44,14 @@ export interface ListState {
   filters: Pick<DocumentFilters, "q" | "contentType" | "tag" | "sort">;
   /** 0부터 센다. 주소에는 1부터 쓴다. */
   page: number;
+  /** 「부여받은 문서」 보기. 폴더와 함께 쓰지 않는다 (D20). */
+  granted?: boolean;
 }
 
-export function listHref({ folderId, filters, page }: ListState): string {
+export function listHref({ folderId, filters, page, granted }: ListState): string {
   const params = new URLSearchParams();
-  if (folderId !== null) params.set("folder", folderId);
+  if (granted) params.set("granted", "1");
+  else if (folderId !== null) params.set("folder", folderId);
   if (filters.q?.trim()) params.set("q", filters.q);
   if (filters.contentType) params.set("type", filters.contentType);
   if (filters.tag) params.set("tag", filters.tag);
@@ -67,10 +70,12 @@ export function listStateFromParams(params: URLSearchParams): ListState {
   if (tag) filters.tag = tag;
   filters.sort = params.get("sort") === "title" ? "title" : "updated";
   const page = Number(params.get("page"));
+  const granted = params.get("granted") === "1";
   return {
-    folderId: params.get("folder") || null,
+    folderId: granted ? null : params.get("folder") || null,
     filters,
     page: Number.isInteger(page) && page >= 1 ? page - 1 : 0,
+    ...(granted ? { granted } : {}),
   };
 }
 
