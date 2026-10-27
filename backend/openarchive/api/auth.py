@@ -22,6 +22,7 @@ from openarchive.api.schemas import (
 )
 from openarchive.config import get_settings
 from openarchive.services import auth as service
+from openarchive.services.folders import owner_departments
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -74,12 +75,16 @@ async def logout(
 
 
 @router.get("/me", response_model=AuthStatus)
-async def me(user: Annotated[dict | None, Depends(current_user)]) -> AuthStatus:
+async def me(conn: Connection, user: Annotated[dict | None, Depends(current_user)]) -> AuthStatus:
     if user is None:
         return AuthStatus(authenticated=False, username=None, is_admin=False)
     # 공유 주체는 사람 계정이 아니다 (ADR-044 「공유」 결정 5).
     reject_share(user)
-    result = AuthStatus(authenticated=True, username=user["username"], is_admin=user["is_admin"])
+    departments = await owner_departments(conn, [user["username"]], user_id=user["username"])
+    result = AuthStatus(
+        authenticated=True, username=user["username"], is_admin=user["is_admin"],
+        department=departments[user["username"]],
+    )
     # 세션 dict의 scope는 쓰기 판정용 내부 값이다 — 토큰 범위만 낸다 (#189 D2).
     if user["credential"] == service.CREDENTIAL_TOKEN:
         result.scope = user["scope"]

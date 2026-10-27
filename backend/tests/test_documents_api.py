@@ -2396,3 +2396,33 @@ def test_list_items_carry_only_the_visible_folder_path(db_client):
     assert hidden in bob and bob[hidden] is None
     assert bob[filed] == ["IT전략실", "통합유지보수"]
     assert "비밀기획실" not in body
+
+
+def test_owner_department_web_metadata_and_hidden_folder(db_client, migrated_db):
+    from test_search_api import seed_documents
+
+    login_as(db_client, "alice")
+    with psycopg.connect(migrated_db) as conn:
+        group = conn.execute("INSERT INTO groups(name) VALUES ('연구부') RETURNING id").fetchone()[0]
+        conn.execute("INSERT INTO group_members SELECT %s, id FROM users WHERE username='alice'", (group,))
+        conn.execute("UPDATE users SET department_group_id=%s WHERE username='alice'", (group,))
+        folder = conn.execute("INSERT INTO folders(name,created_by,visibility,department_group_id) VALUES ('숨은서가','alice','private',%s) RETURNING id", (group,)).fetchone()[0]
+        conn.execute("INSERT INTO folder_grants(folder_id,group_id) VALUES (%s,%s)", (folder, group))
+    ids = seed_documents(migrated_db, [{"title": "공개 자료", "content": "공개 연구 자료"}])
+    expected = {"name": "연구부", "folder_id": str(folder)}
+    assert db_client.get('/api/auth/me').json()['department'] == expected
+    for viewer, department in [('alice', expected), ('bob', {"name": "연구부", "folder_id": None})]:
+        login_as(db_client, viewer)
+        responses = [db_client.get('/api/documents'), db_client.get(f'/api/documents/{ids[0]}'), db_client.post('/api/search', json={"query": "연구"}), db_client.post('/api/ask', json={"query": "연구"})]
+        for response in responses:
+            assert response.status_code == 200
+            body = response.json()
+            items = body if isinstance(body, list) else body.get('items', [body])
+            assert items
+            assert all(item['owner_department'] == department for item in items)
+            if 'sources' in body:
+                assert body['sources']
+                assert all(source['owner_department'] == department for source in body['sources'])
+            if viewer == 'bob':
+                assert str(folder) not in response.text
+                assert '숨은서가' not in response.text

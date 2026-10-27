@@ -55,7 +55,7 @@ from openarchive.api.schemas import (
 from openarchive.config import get_settings
 from openarchive.services import documents as service
 from openarchive.services import organize, trash
-from openarchive.services.folders import visible_folder_paths
+from openarchive.services.folders import owner_departments, visible_folder_paths
 from openarchive.services.links import find_backlinks, resolve_links
 from openarchive.services.parsing import SUPPORTED_CONTENT_TYPES, UnsupportedFileType
 from openarchive.services.related import find_related, suggest_tags
@@ -178,12 +178,16 @@ async def list_documents(
         limit=limit,
         offset=offset,
     )
+    departments = await owner_departments(
+        conn, (d["owner_id"] for d in documents), user_id=user_id
+    )
     folder_paths = await visible_folder_paths(
         conn, [document["id"] for document in documents], user_id=user_id
     )
     return [
         DocumentSummary.model_validate(
-            {**document, "folder_path": folder_paths.get(document["id"])}
+            {**document, "folder_path": folder_paths.get(document["id"]),
+             "owner_department": departments.get(document["owner_id"])}
         )
         for document in documents
     ]
@@ -269,7 +273,10 @@ async def get_document(
     user_id: Annotated[str, Depends(require_reader)],
 ) -> DocumentDetail:
     document = await service.get_document(conn, document_id, user_id=user_id)
-    return DocumentDetail.model_validate(document)
+    departments = await owner_departments(conn, [document["owner_id"]], user_id=user_id)
+    return DocumentDetail.model_validate(
+        {**document, "owner_department": departments.get(document["owner_id"])}
+    )
 
 
 @router.get("/{document_id}/access", response_model=DocumentAccess)

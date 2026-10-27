@@ -365,3 +365,21 @@ async def test_department_explicit_clear_and_unknown_group(conn):
     assert (await f.list_folders(conn, user_id="kim"))[0]["department"] is None
     with pytest.raises(GroupNotFound):
         await f.set_folder_department(conn, r["id"], user_id="kim", group_id=uuid4())
+
+
+async def test_owner_departments_missing_users_and_folder_visibility(conn):
+    from openarchive.services.auth import set_user_department
+
+    group = await create_group(conn, name="연구부")
+    kim = (await (await conn.execute("SELECT id FROM users WHERE username='kim'")).fetchone())[0]
+    await set_user_department(conn, kim, group["id"])
+    expected = {"kim": {"name": "연구부", "folder_id": None}, "lee": None, "missing": None}
+    assert await f.owner_departments(conn, iter(expected), user_id=None) == expected
+    r = await root(conn)
+    await f.set_folder_department(conn, r["id"], user_id="kim", group_id=group["id"])
+    expected["kim"]["folder_id"] = r["id"]
+    assert await f.owner_departments(conn, expected, user_id=None) == expected
+    await f.set_folder_access(conn, r["id"], user_id="kim", visibility="private", users=[], groups=["연구부"])
+    expected["kim"]["folder_id"] = None
+    assert await f.owner_departments(conn, expected, user_id="lee") == expected
+    assert await f.owner_departments(conn, [], user_id="kim") == {}

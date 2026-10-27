@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT
 """폴더 열람·관리. 범위 요약의 부여 대상 이름은 폴더를 보는 사용자에게 공개한다."""
 
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from uuid import UUID
 
 import psycopg
@@ -430,3 +430,24 @@ async def set_folder_department(conn, folder_id: UUID, *, user_id: str, group_id
         if error.diag.constraint_name != "uq_folders_department":
             raise
         raise DepartmentFolderTaken from error
+
+
+async def owner_departments(
+    conn, owners: Iterable[str], *, user_id: str | None
+) -> dict[str, dict | None]:
+    """소유자 부서를 일괄 조회하고 열람 가능한 부서 폴더만 연결한다."""
+    owners = list(dict.fromkeys(owners))
+    async with conn.cursor(row_factory=dict_row) as cur:
+        await cur.execute(
+            f"""SELECT u.username, g.name, f.id AS folder_id
+            FROM users u LEFT JOIN groups g ON g.id=u.department_group_id
+            LEFT JOIN folders f ON f.department_group_id=g.id AND {FOLDER_VISIBLE_TO_USER}
+            WHERE u.username = ANY(%(owners)s::text[])""",
+            {"owners": owners, "user": user_id},
+        )
+        rows = await cur.fetchall()
+    result = dict.fromkeys(owners)
+    for row in rows:
+        if row["name"] is not None:
+            result[row["username"]] = {"name": row["name"], "folder_id": row["folder_id"]}
+    return result

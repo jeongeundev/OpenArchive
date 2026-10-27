@@ -81,6 +81,11 @@ class MoveDocumentRequest(BaseModel):
     folder_id: UUID | None
 
 
+class OwnerDepartment(BaseModel):
+    name: str
+    folder_id: UUID | None
+
+
 class DocumentSummary(BaseModel):
     follows_folder: bool = False
     id: UUID
@@ -100,6 +105,8 @@ class DocumentSummary(BaseModel):
     updated_at: datetime
     # 볼 수 있는 폴더 경로(최상위부터). 폴더가 없거나 볼 수 없으면 None
     folder_path: list[str] | None = None
+    # 소유자 부서. folder_id는 부서 폴더를 볼 수 있을 때만 채운다 — 웹 API만 붙인다
+    owner_department: OwnerDepartment | None = None
 
 
 class TrashItem(BaseModel):
@@ -259,6 +266,8 @@ class AuthStatus(BaseModel):
     # 토큰 주체일 때만 채운다. 세션·익명이면 null (#189 D2 — 사용자 CLI의 whoami)
     scope: str | None = None
     expires_at: datetime | None = None
+    # 익명이면 null
+    department: OwnerDepartment | None = None
 
 
 class ChangePasswordRequest(BaseModel):
@@ -433,6 +442,7 @@ class SearchResult(BaseModel):
 
     folder_path: list[str] | None = None
     owner: str | None = None
+    owner_department: OwnerDepartment | None = None
     updated_at: datetime | None = None
 
 
@@ -464,6 +474,7 @@ class AskSource(BaseModel):
     content_type: str | None = None
     folder_path: list[str] | None = None
     owner: str | None = None
+    owner_department: OwnerDepartment | None = None
 
 
 class AskResponse(BaseModel):

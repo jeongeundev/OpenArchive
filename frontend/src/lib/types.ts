@@ -92,6 +92,7 @@ export interface ShareSummary {
 }
 
 export interface DocumentSummary {
+  owner_department?: { name: string; folder_id: string | null } | null;
   follows_folder: boolean;
   id: string;
   title: string;
@@ -201,6 +202,7 @@ export interface SearchPassage {
 }
 
 export interface SearchResult {
+  owner_department?: { name: string; folder_id: string | null } | null;
   document_id: string;
   title: string;
   filename: string | null;
@@ -232,6 +234,7 @@ export interface SearchResponse {
 
 /** 근거 기반 답변의 근거 하나 — 모델에 준 대목이며 `cited`가 실제 인용 여부다 (ADR-043). */
 export interface AnswerSource {
+  owner_department?: { name: string; folder_id: string | null } | null;
   label: number;
   document_id: string;
   title: string;
@@ -333,6 +336,7 @@ export interface SystemStatus {
 }
 
 export interface AuthStatus {
+  department?: { name: string; folder_id: string | null } | null;
   authenticated: boolean;
   username: string | null;
   is_admin: boolean;

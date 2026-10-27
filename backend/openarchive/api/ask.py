@@ -3,10 +3,11 @@
 from fastapi import APIRouter, HTTPException, Request
 
 from openarchive.api.deps import SESSION_COOKIE, current_user, require_user_id
-from openarchive.api.schemas import AskRequest, AskResponse
+from openarchive.api.schemas import AskRequest, AskResponse, AskSource, SearchResult
 from openarchive.config import get_settings
 from openarchive.db import connection
 from openarchive.services.answer import gather_evidence, generate_answer
+from openarchive.services.folders import owner_departments
 
 router = APIRouter(prefix="/api/ask", tags=["ask"])
 
@@ -29,8 +30,19 @@ async def ask(body: AskRequest, request: Request) -> AskResponse:
             folder_id=body.folder_id,
             context_chars=get_settings().answer_context_chars,
         )
+        departments = await owner_departments(
+            conn, (item.owner for item in [*evidence.sources, *evidence.hits] if item.owner),
+            user_id=user_id,
+        )
     result = await generate_answer(evidence, request.app.state.answer_provider)
     return AskResponse(
         status=result.status, answer=result.answer, detail=result.detail,
-        sources=result.sources, items=result.hits,
+        sources=[AskSource.model_validate(
+            AskSource.model_validate(source).model_dump()
+            | {"owner_department": departments.get(source.owner)}
+        ) for source in result.sources],
+        items=[SearchResult.model_validate(
+            SearchResult.model_validate(hit).model_dump()
+            | {"owner_department": departments.get(hit.owner)}
+        ) for hit in result.hits],
     )

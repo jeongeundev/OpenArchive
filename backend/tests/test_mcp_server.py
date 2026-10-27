@@ -385,6 +385,12 @@ async def test_list_tool_does_not_carry_the_api_folder_path(monkeypatch, mcp_dat
 
     assert str(inside) in {item["document_id"] for item in items}
     assert all("folder_path" not in item for item in items)
+    assert all("owner_department" not in item for item in items)
+    from openarchive.mcp_server.server import get_document, search_documents
+
+    assert "owner_department" not in await get_document(str(inside))
+    assert all("owner_department" not in item for item in
+               (await search_documents("휴가"))["items"])
 
 
 async def test_mcp_user_setting_controls_private_access_for_all_tools(
