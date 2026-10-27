@@ -78,27 +78,36 @@ function SearchView({ initial, input, folders, authenticated, onSearch }: {
     if (inputKey !== null) run(JSON.parse(inputKey) as SearchInput);
   }, [inputKey, run]);
 
-  return (
-    <section className="space-y-8">
-      <div>
-        <h1 className="text-4xl font-semibold text-strong">검색</h1>
-        <p className="mt-3 text-sm text-muted">
-          태그·유형·폴더 필터와 벡터 유사도를 한 번의 SQL로 검색합니다.
-        </p>
-      </div>
+  const found = response?.items.filter((item) => item.via === null).length ?? 0;
 
-      <SearchForm onSearch={onSearch} pending={loading} folders={folders} initial={initial} />
-      {/* /api/ask는 로그인한 사용자만 쓴다 — 익명에게 버튼을 보이면 누르는 순간 401이다.
-          답변은 화면에 보이는 검색 결과와 같은 입력으로 묻는다 — 폼이 바뀌어도 마지막 검색 기준이다. */}
-      {authenticated && input !== null ? (
-        <AnswerPanel
-          response={answer.response}
-          loading={answer.loading}
-          error={answer.error}
-          onAsk={() => answer.run(input)}
-        />
-      ) : null}
-      <SearchResults response={response} loading={loading} error={error} />
+  return (
+    <section className="space-y-6">
+      <h1 className="text-3xl font-bold text-strong">AI 검색</h1>
+
+      <SearchForm onSearch={onSearch} pending={loading} folders={folders} initial={initial}>
+        <div className="space-y-6">
+          {/* 탭이 아니라 같은 화면의 구역으로 가는 링크다 — 답변과 결과는 한 화면에 함께 있다. */}
+          {input !== null && response !== null ? (
+            <nav aria-label="검색 결과 바로가기" className="flex gap-6 border-b border-line text-sm">
+              {authenticated ? (
+                <a href="#answer" className="-mb-px border-b-2 border-strong pb-3 font-semibold text-strong">AI 답변</a>
+              ) : null}
+              <a href="#search-results" className="pb-3 text-muted hover:text-strong">문서 {found}</a>
+            </nav>
+          ) : null}
+          {/* /api/ask는 로그인한 사용자만 쓴다 — 익명에게 버튼을 보이면 누르는 순간 401이다.
+              답변은 화면에 보이는 검색 결과와 같은 입력으로 묻는다 — 폼이 바뀌어도 마지막 검색 기준이다. */}
+          {authenticated && input !== null ? (
+            <AnswerPanel
+              response={answer.response}
+              loading={answer.loading}
+              error={answer.error}
+              onAsk={() => answer.run(input)}
+            />
+          ) : null}
+          <SearchResults response={response} loading={loading} error={error} />
+        </div>
+      </SearchForm>
     </section>
   );
 }

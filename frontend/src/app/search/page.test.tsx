@@ -1,6 +1,6 @@
 // Copyright 2026 jeongeundev
 // SPDX-License-Identifier: MIT
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { AuthProvider } from "@/components/AuthProvider";
@@ -170,10 +170,60 @@ describe("검색 화면의 근거 기반 답변", () => {
     stubFetch(false);
     await renderPage();
 
-    expect(screen.queryByRole("heading", { name: "근거 기반 답변" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "AI 답변" })).not.toBeInTheDocument();
     await searchFor("장애 복구");
 
-    expect(screen.queryByRole("heading", { name: "근거 기반 답변" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "AI 답변" })).not.toBeInTheDocument();
+  });
+});
+
+describe("AI 검색 화면 배치", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  const found = {
+    items: [
+      { document_id: "d1", title: "운영 규정", filename: null, tags: [], content_type: "md", chunk_index: 0, content: "근거", score: 0.9, based_on_version: 1, via: null },
+      { document_id: "d2", title: "백업 절차", filename: null, tags: [], content_type: "pdf", chunk_index: 0, content: "근거", score: 0.8, based_on_version: 1, via: null },
+      { document_id: "d3", title: "이어진 문서", filename: null, tags: [], content_type: "md", chunk_index: 0, content: "근거", score: 0.1, based_on_version: 1,
+        via: { from_document_id: "d1", from_title: "운영 규정", kind: "related", depth: 1 } },
+    ],
+    sql: "SELECT 1",
+  };
+
+  it("머리는 「AI 검색」이고 검색 전에는 안내만 보인다", async () => {
+    stubFetch(true);
+    await renderPage();
+
+    expect(screen.getByRole("heading", { level: 1, name: "AI 검색" })).toHaveClass("text-3xl", "font-bold");
+    expect(screen.getByText("질문이나 키워드로 문서를 찾고, 근거와 함께 답을 받아 보세요.")).toBeInTheDocument();
+    expect(screen.queryByRole("navigation", { name: "검색 결과 바로가기" })).not.toBeInTheDocument();
+  });
+
+  it("검색하면 결과 위에 같은 화면의 구역으로 가는 「AI 답변」·「문서 N」 링크를 둔다", async () => {
+    const fetchMock = stubFetch(true);
+    const answered = fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation((url, init) => url === "/api/search" ? Promise.resolve(jsonResponse(found)) : answered(url, init));
+    await renderPage();
+    await searchFor("장애 복구");
+
+    const anchors = await screen.findByRole("navigation", { name: "검색 결과 바로가기" });
+    expect(within(anchors).getByRole("link", { name: "AI 답변" })).toHaveAttribute("href", "#answer");
+    expect(within(anchors).getByRole("link", { name: "문서 2" })).toHaveAttribute("href", "#search-results");
+    expect(document.getElementById("answer")).toContainElement(screen.getByRole("button", { name: "이 검색어로 답변 받기" }));
+    expect(document.getElementById("search-results")).toContainElement(screen.getByRole("region", { name: "검색 결과" }));
+    // 탭이 아니다 — 답변과 검색 결과·함께 볼 문서가 한 화면에 함께 있다.
+    expect(screen.getByRole("region", { name: "함께 볼 문서" })).toBeVisible();
+    expect(screen.queryByRole("tab")).not.toBeInTheDocument();
+  });
+
+  it("로그인하지 않으면 「AI 답변」 바로가기를 두지 않는다", async () => {
+    stubFetch(false);
+    await renderPage();
+    await searchFor("장애 복구");
+
+    const anchors = await screen.findByRole("navigation", { name: "검색 결과 바로가기" });
+    expect(within(anchors).queryByRole("link", { name: "AI 답변" })).not.toBeInTheDocument();
+    expect(within(anchors).getByRole("link", { name: "문서 0" })).toBeInTheDocument();
   });
 });
 

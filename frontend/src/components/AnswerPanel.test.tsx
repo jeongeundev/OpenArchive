@@ -31,6 +31,14 @@ function renderPanel(response: AskResponse | null, onAsk = vi.fn()) {
 }
 
 describe("AnswerPanel", () => {
+  it("「AI 답변」 카드 머리에 열람 권한 범위를 적는다", () => {
+    renderPanel(null);
+
+    const heading = screen.getByRole("heading", { name: "AI 답변" });
+    expect(heading.closest("section")).toHaveClass("rounded-xl", "bg-accent-soft");
+    expect(screen.getByText("열람 권한이 있는 문서만 근거로 사용")).toHaveClass("text-xs");
+  });
+
   it("답변 전에는 버튼으로 요청하고, 보장이 아님을 밝힌다", () => {
     const onAsk = renderPanel(null);
 
@@ -59,6 +67,43 @@ describe("AnswerPanel", () => {
     expect(citation).toHaveAttribute("href", "/documents/doc%2F1?version=3&chunk=2");
     expect(within(answer).queryByRole("link", { name: "[9]" })).not.toBeInTheDocument();
     expect(answer).toHaveTextContent("[9]");
+  });
+
+  it("답의 인용 번호는 작은 번호 칩으로 보이고, 화면 글자는 번호만이다", () => {
+    renderPanel(answered("연결한다 [1]", [source({ label: 1 })]));
+
+    const citation = within(screen.getByTestId("answer-text")).getByRole("link", { name: "[1]" });
+    expect(citation).toHaveClass("rounded", "bg-card", "text-xs", "text-accent");
+    const visible = Array.from(citation.childNodes)
+      .filter((node) => !(node instanceof HTMLElement && node.classList.contains("sr-only")))
+      .map((node) => node.textContent).join("");
+    expect(visible).toBe("1");
+  });
+
+  it("답이 나오면 「답변 복사」로 답을 클립보드에 넣는다", async () => {
+    const writeText = vi.fn(() => Promise.resolve());
+    vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
+    renderPanel(answered("새 프라이머리로 연결한다 [1]", [source({ label: 1 })]));
+
+    fireEvent.click(screen.getByRole("button", { name: "답변 복사" }));
+
+    expect(writeText).toHaveBeenCalledWith("새 프라이머리로 연결한다 [1]");
+    vi.unstubAllGlobals();
+  });
+
+  it("「다시 생성」은 같은 요청을 다시 부른다", () => {
+    const onAsk = renderPanel(answered("답 [1]", [source({ label: 1 })]));
+
+    fireEvent.click(screen.getByRole("button", { name: "다시 생성" }));
+
+    expect(onAsk).toHaveBeenCalledTimes(1);
+  });
+
+  it("답이 없으면 「답변 복사」·「다시 생성」을 보이지 않는다", () => {
+    renderPanel(null);
+
+    expect(screen.queryByRole("button", { name: "답변 복사" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "다시 생성" })).not.toBeInTheDocument();
   });
 
   it("개정된 근거에는 근거 버전과 현재 버전을 함께 보인다", () => {
@@ -98,7 +143,7 @@ describe("AnswerPanel", () => {
     expect(screen.getByText("인용하지 않은 근거 1건")).toBeInTheDocument();
   });
 
-  it("인용한 근거마다 형식·폴더 경로·소유자를 한 줄로 보인다", () => {
+  it("인용한 근거마다 형식 칩과 폴더 경로·소유자 한 줄을 보인다", () => {
     renderPanel(
       answered("답 [1] [2]", [
         source({ label: 1, content_type: "md", folder_path: ["운영", "규정"], owner: "김지은" }),
@@ -107,8 +152,11 @@ describe("AnswerPanel", () => {
     );
 
     const list = screen.getByRole("list", { name: "인용한 근거" });
-    expect(within(list).getByText("MD · 운영 › 규정 · 김지은")).toBeInTheDocument();
-    expect(within(list).getByText("PDF · 이영호")).toBeInTheDocument();
+    const [first, second] = within(list).getAllByRole("listitem");
+    expect(within(first).getByTestId("source-type")).toHaveTextContent(/^MD$/);
+    expect(within(first).getByText("운영 › 규정 · 김지은")).toBeInTheDocument();
+    expect(within(second).getByTestId("source-type")).toHaveTextContent(/^PDF$/);
+    expect(within(second).getByText("이영호")).toBeInTheDocument();
   });
 
   // #288 step 9 — 근거 목록을 펼친 채 lg에서 2열로 놓고, 대목은 공백을 접어 2줄로 줄인다.
@@ -129,15 +177,27 @@ describe("AnswerPanel", () => {
     expect(passage.closest("details")).toBeNull();
     expect(passage).toHaveClass("line-clamp-2");
     expect(passage).not.toHaveClass("whitespace-pre-wrap");
+    expect(passage.parentElement).toHaveClass("bg-sunken");
   });
 
-  it("인용한 근거의 메타 줄은 형식 · 위치 · 소유자 순서다", () => {
+  it("인용한 근거는 번호 칩을 단 카드로 보인다", () => {
+    renderPanel(answered("답 [1]", [source({ label: 1 })]));
+
+    const item = within(screen.getByRole("list", { name: "인용한 근거" })).getByRole("listitem");
+    expect(item).toHaveClass("rounded-xl", "border-line", "bg-card");
+    expect(within(item).getByTestId("source-label")).toHaveTextContent("[1]");
+  });
+
+  it("인용한 근거는 형식 칩 다음 메타 줄에 위치 · 소유자 순서로 적는다", () => {
     renderPanel(
       answered("답 [1]", [source({ label: 1, content_type: "docx", folder_path: ["재무"], owner: "최수진" })]),
     );
 
     const list = screen.getByRole("list", { name: "인용한 근거" });
-    expect(within(list).getByText("DOCX · 재무 · 최수진")).toBeInTheDocument();
+    const chip = within(list).getByTestId("source-type");
+    const meta = within(list).getByText("재무 · 최수진");
+    expect(chip).toHaveTextContent(/^DOCX$/);
+    expect(chip.compareDocumentPosition(meta) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it("근거의 소유자에 부서가 있으면 `이름(부서)`로 보인다 (D16)", () => {
@@ -149,7 +209,7 @@ describe("AnswerPanel", () => {
     );
 
     const list = screen.getByRole("list", { name: "인용한 근거" });
-    expect(within(list).getByText((_, node) => node?.tagName === "P" && node.textContent === "DOCX · 재무 · 최수진(IT전략실)")).toBeInTheDocument();
+    expect(within(list).getByText((_, node) => node?.tagName === "P" && node.textContent === "재무 · 최수진(IT전략실)")).toBeInTheDocument();
     expect(within(list).getByRole("link", { name: "IT전략실" })).toHaveAttribute("href", "/documents?folder=f1");
     expect(screen.getByText((_, node) => node?.tagName === "SPAN" && node.textContent === "HWPX · 박민수(운영팀)")).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "운영팀" })).not.toBeInTheDocument();

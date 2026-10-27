@@ -34,8 +34,8 @@ function AnswerText({ answer, sources }: { answer: string; sources: AnswerSource
           part
         ) : (
           <Link key={index} href={passageHref(source)} title={`${source.title} · ${versionLabel(source)}`}
-            className="text-accent hover:underline">
-            {part}
+            className="mx-0.5 rounded bg-card px-1.5 py-0.5 align-middle text-xs font-semibold text-accent hover:underline">
+            <span className="sr-only">[</span>{source.label}<span className="sr-only">]</span>
           </Link>
         );
       })}
@@ -65,9 +65,14 @@ export function AnswerPanel({
   const uncited = response?.sources.filter((source) => !source.cited) ?? [];
 
   return (
-    <section aria-labelledby="answer-panel" className="space-y-4 rounded-lg border border-line bg-card p-6">
+    <section id="answer" aria-labelledby="answer-panel" className="scroll-mt-6 space-y-4 rounded-xl border border-line bg-accent-soft p-6">
       <div>
-        <h2 id="answer-panel" className="font-medium text-strong">근거 기반 답변</h2>
+        <div className="flex flex-wrap items-baseline justify-between gap-2">
+          <h2 id="answer-panel" className="font-semibold text-accent">
+            <span aria-hidden="true">✦ </span>AI 답변
+          </h2>
+          <p className="text-xs text-muted">열람 권한이 있는 문서만 근거로 사용</p>
+        </div>
         <p className="mt-2 text-xs text-muted">
           검색된 문서만 근거로 답하도록 지시합니다. 보장은 아닙니다 — 인용한 근거를 확인하세요.
         </p>
@@ -80,7 +85,7 @@ export function AnswerPanel({
 
       {response === null && !loading ? (
         <button type="button" onClick={onAsk}
-          className="rounded-lg border border-line-strong px-4 py-2 text-sm text-strong hover:border-accent">
+          className="rounded-lg bg-accent px-4 py-2 text-sm font-medium text-on-strong hover:bg-accent/90">
           이 검색어로 답변 받기
         </button>
       ) : null}
@@ -95,25 +100,46 @@ export function AnswerPanel({
       {response?.status === "answered" && response.answer !== null ? (
         <>
           <AnswerText answer={response.answer} sources={response.sources} />
+          <div className="flex flex-wrap gap-2">
+            <button type="button" onClick={() => void navigator.clipboard?.writeText(response.answer ?? "")}
+              className="rounded-lg border border-line bg-card px-3 py-1.5 text-sm text-body hover:border-accent">
+              답변 복사
+            </button>
+            <button type="button" onClick={onAsk}
+              className="rounded-lg border border-line bg-card px-3 py-1.5 text-sm text-body hover:border-accent">
+              다시 생성
+            </button>
+          </div>
           {cited.length > 0 ? (
             <div className="space-y-3 border-t border-line pt-4">
-            <h3 id="answer-cited" className="text-sm font-medium text-strong">인용한 근거</h3>
-            <ol aria-labelledby="answer-cited" className="grid gap-x-6 gap-y-3 lg:grid-cols-2">
+            <h3 id="answer-cited" className="text-sm font-semibold text-strong">인용한 근거</h3>
+            <ol aria-labelledby="answer-cited" className="grid gap-3 lg:grid-cols-2">
               {cited.map((source) => (
-                <li key={source.label} className="text-sm">
-                  <div className="flex flex-wrap items-baseline gap-2">
-                    <span className="text-muted">[{source.label}]</span>
-                    <Link href={passageHref(source)} className="text-strong hover:text-accent">
+                <li key={source.label} className="min-w-0 rounded-xl border border-line bg-card p-4 text-sm">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span data-testid="source-label" className="rounded bg-accent-soft px-1.5 py-0.5 text-xs font-semibold text-accent">
+                      <span className="sr-only">[</span>{source.label}<span className="sr-only">]</span>
+                    </span>
+                    {source.content_type ? (
+                      <span data-testid="source-type" className="rounded bg-accent-soft px-1.5 py-0.5 text-xs font-medium text-accent">
+                        {source.content_type.toUpperCase()}
+                      </span>
+                    ) : null}
+                    <Link href={passageHref(source)} className="min-w-0 break-words font-medium text-strong hover:text-accent">
                       {source.title}
                     </Link>
-                    <span className={source.revised ? "text-xs text-body" : "text-xs text-muted"}>
+                  </div>
+                  <div className="mt-1 flex flex-wrap gap-x-2 text-xs text-muted">
+                    <p className="break-words">
+                      {sourceMeta(source, [source.folder_path?.join(" › ")])}
+                    </p>
+                    <span className={source.revised ? "text-body" : "text-muted"}>
                       {versionLabel(source)}
                     </span>
                   </div>
-                  <p className="mt-1 break-words text-xs text-muted">
-                    {sourceMeta(source, [source.content_type?.toUpperCase(), source.folder_path?.join(" › ")])}
-                  </p>
-                  <p className="mt-1 line-clamp-2 text-xs text-muted">{source.content.replace(/\s+/g, " ").trim()}</p>
+                  <div className="mt-3 rounded-lg bg-sunken px-3 py-2">
+                    <p className="line-clamp-2 text-xs text-body">{source.content.replace(/\s+/g, " ").trim()}</p>
+                  </div>
                 </li>
               ))}
             </ol>
