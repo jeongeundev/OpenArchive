@@ -859,6 +859,25 @@ def test_create_user_puts_the_account_in_its_department(migrated_db: str, monkey
     assert _department_of(migrated_db, "김민준") == ("IT전략실", ["IT전략실"])
 
 
+def test_create_user_department_audit_rows_are_attributed_to_the_cli(
+    migrated_db: str, monkeypatch
+):
+    """구성원 추가·소속 부서 변경 감사 행은 「운영자 CLI」 경로로 남는다(ADR-055)."""
+    _insert_group(migrated_db, "IT전략실")
+    monkeypatch.setenv("ADMIN_PASSWORD", "environment-secret")
+    with psycopg.connect(migrated_db) as conn:
+        before = conn.execute("SELECT coalesce(max(id), 0) FROM audit_log").fetchone()[0]
+
+    assert main(["create-user", "김민준", "--department", "IT전략실", "--dsn", migrated_db]) == 0
+
+    with psycopg.connect(migrated_db) as conn:
+        vias = conn.execute(
+            "SELECT action, actor_via FROM audit_log WHERE id > %s ORDER BY id", (before,)
+        ).fetchall()
+    assert {action for action, _ in vias} >= {"group_member_changed", "user_changed"}
+    assert all(via == "cli" for _, via in vias)
+
+
 def test_create_user_with_department_and_admin(migrated_db: str, monkeypatch):
     _insert_group(migrated_db, "IT전략실")
     monkeypatch.setenv("ADMIN_PASSWORD", "environment-secret")

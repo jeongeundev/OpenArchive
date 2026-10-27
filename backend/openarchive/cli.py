@@ -597,6 +597,8 @@ async def _create_account(
     부서 이름은 계정 생성과 같은 트랜잭션에서 그룹으로 푼다. 없는 그룹은 만들지 않는다.
     """
     async with await _connect(dsn, autocommit=True) as conn, conn.transaction():
+        # 구성원 추가·소속 부서 변경 감사 기록을 「운영자 CLI」 경로로 남긴다(ADR-055).
+        await set_actor(conn, actor=None, via="cli")
         department_group_id = None
         if department is not None:
             _, (department_group_id,) = await resolve_grantees(
