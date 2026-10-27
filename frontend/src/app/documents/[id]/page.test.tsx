@@ -527,6 +527,16 @@ describe("문서 상세의 2단 배치", () => {
     expect(manage).not.toContainElement(screen.getByTestId("document-columns"));
   });
 
+  it("「문서 관리」는 긴 본문 아래가 아니라 오른쪽 기둥 맨 위에 둔다", async () => {
+    stubLayoutFetch("alice");
+    await renderPage();
+
+    const side = screen.getByTestId("document-side");
+    const manage = screen.getByText("문서 관리", { selector: "summary" }).closest("details");
+    expect(side).toContainElement(manage);
+    expect(side.firstElementChild).toBe(manage);
+  });
+
   it("임베딩 오류 문서는 재임베딩이 보이도록 「문서 관리」를 펼쳐 둔다", async () => {
     stubLayoutFetch("alice", { ...detail, embedding_status: "error" });
     await renderPage();

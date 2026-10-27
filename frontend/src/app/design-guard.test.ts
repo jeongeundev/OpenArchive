@@ -53,7 +53,7 @@ describe("디자인 가드 (T5)", () => {
     for (const token of tokens) expect(css).toContain(`--color-${token}:`);
   });
 
-  it("헤더·메인·푸터가 같은 폭(max-w-7xl)을 쓴다 — 1920 화면에서 가장자리가 어긋나지 않게", () => {
+  it("헤더·메인·푸터가 같은 폭(max-w-[96rem])을 쓴다 — 1920 화면에서 가장자리가 어긋나지 않고 목록 정보 창이 열려도 가운데 열이 좁지 않게", () => {
     const shells = [
       "app/layout.tsx",
       "app/global-error.tsx",
@@ -62,8 +62,8 @@ describe("디자인 가드 (T5)", () => {
     ];
     for (const file of shells) {
       const source = readFileSync(join(SRC, file), "utf8");
-      expect(source, file).toContain("max-w-7xl");
-      expect(source, file).not.toMatch(/\bmax-w-(?:xs|sm|md|lg|xl|[2-6]xl|full|screen|none)\b/);
+      expect(source, file).toContain("max-w-[96rem]");
+      expect(source, file).not.toMatch(/\bmax-w-(?:xs|sm|md|lg|xl|[2-7]xl|full|screen|none)\b/);
     }
   });
 });

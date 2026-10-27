@@ -172,6 +172,22 @@ export function DocumentDetailView(): React.ReactElement {
         </div>
 
         <aside className="min-w-0 space-y-6" data-testid="document-side">
+          {/* 자주 쓰지 않는 관리 동작은 접어 기둥 맨 위에 둔다 — 본문 아래면 긴 문서에서 닿지 않는다. 임베딩 오류 문서는 재임베딩 버튼이 보이도록 펼친다. */}
+          {!anonymous ? (
+            <details className="rounded-lg border border-line bg-card p-4" open={document.embedding_status === "error"}>
+              <summary className="cursor-pointer text-sm font-medium text-muted hover:text-strong">문서 관리</summary>
+              <div className="mt-4 space-y-8">
+                <DocumentActions disabled={editing} document={document} onChanged={refresh} />
+                {isOwner ? (
+                  <>
+                    <AccessPanel key={folderKey} disabled={editing} documentId={document.id} onSaved={refresh} />
+                    <OwnerTransfer documentId={document.id} owner={document.owner_id} disabled={editing} onTransferred={refresh} />
+                  </>
+                ) : null}
+              </div>
+            </details>
+          ) : null}
+
           <DocumentFolderSection
             key={folderKey}
             disabled={editing}
@@ -235,22 +251,6 @@ export function DocumentDetailView(): React.ReactElement {
           <DocumentMeta document={document} />
         </aside>
       </div>
-
-      {/* 자주 쓰지 않는 관리 동작은 접어 둔다. 임베딩 오류 문서는 재임베딩 버튼이 보이도록 펼친다. */}
-      {!anonymous ? (
-        <details className="rounded-lg border border-line bg-card p-4" open={document.embedding_status === "error"}>
-          <summary className="cursor-pointer text-sm font-medium text-muted hover:text-strong">문서 관리</summary>
-          <div className="mt-4 space-y-8">
-            <DocumentActions disabled={editing} document={document} onChanged={refresh} />
-            {isOwner ? (
-              <>
-                <AccessPanel key={folderKey} disabled={editing} documentId={document.id} onSaved={refresh} />
-                <OwnerTransfer documentId={document.id} owner={document.owner_id} disabled={editing} onTransferred={refresh} />
-              </>
-            ) : null}
-          </div>
-        </details>
-      ) : null}
 
       {error !== null ? (
         <p className="text-sm text-muted" role="status">
