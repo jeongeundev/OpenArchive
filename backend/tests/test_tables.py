@@ -367,6 +367,7 @@ def test_auth_table_columns_and_constraints_match_the_account_model(
         ("users", "password_hash", "text", "NO", None),
         ("users", "is_admin", "boolean", "NO", "false"),
         ("users", "created_at", "timestamp with time zone", "NO", "now()"),
+        ("users", "department_group_id", "uuid", "YES", None),
     ]
 
     constraints = conn.execute(
@@ -388,6 +389,7 @@ def test_auth_table_columns_and_constraints_match_the_account_model(
     assert constraints == [
         ("sessions", "FOREIGN KEY", ["user_id"]),
         ("sessions", "PRIMARY KEY", ["token"]),
+        ("users", "FOREIGN KEY", ["department_group_id"]),
         ("users", "PRIMARY KEY", ["id"]),
         ("users", "UNIQUE", ["username"]),
     ]
@@ -1645,3 +1647,51 @@ async def test_document_visibility_check_fails_on_existing_bad_rows(clean_db, tm
         assert c.execute("SELECT visibility FROM documents WHERE id = %s", (doc,)).fetchone() == (
             "privat",
         )
+
+
+def test_department_columns_and_group_deletion(conn):
+    for table in ("users", "folders"):
+        assert conn.execute(
+            "SELECT data_type, is_nullable FROM information_schema.columns "
+            "WHERE table_schema = 'public' AND table_name = %s "
+            "AND column_name = 'department_group_id'", (table,),
+        ).fetchone() == ("uuid", "YES")
+    group = conn.execute("INSERT INTO groups (name) VALUES ('IT') RETURNING id").fetchone()[0]
+    user = conn.execute(
+        "INSERT INTO users (username, password_hash) VALUES ('kim', 'hash') RETURNING id"
+    ).fetchone()[0]
+    conn.execute("INSERT INTO group_members VALUES (%s, %s)", (group, user))
+    conn.execute("UPDATE users SET department_group_id = %s WHERE id = %s", (group, user))
+    folder = conn.execute(
+        "INSERT INTO folders (name, created_by, visibility, department_group_id) "
+        "VALUES ('IT', 'kim', 'public', %s) RETURNING id", (group,),
+    ).fetchone()[0]
+    conn.execute("DELETE FROM groups WHERE id = %s", (group,))
+    assert conn.execute("SELECT department_group_id FROM users WHERE id = %s", (user,)).fetchone() == (None,)
+    assert conn.execute("SELECT department_group_id FROM folders WHERE id = %s", (folder,)).fetchone() == (None,)
+
+
+def test_department_folder_constraints(conn):
+    groups = [conn.execute(
+        "INSERT INTO groups (name) VALUES (%s) RETURNING id", (name,),
+    ).fetchone()[0] for name in ("IT", "HR")]
+    root = conn.execute(
+        "INSERT INTO folders (name, created_by, visibility, department_group_id) "
+        "VALUES ('IT', 'kim', 'public', %s) RETURNING id", (groups[0],),
+    ).fetchone()[0]
+    with pytest.raises(psycopg.errors.CheckViolation), conn.transaction():
+        conn.execute(
+            "INSERT INTO folders (name, created_by, parent_id, department_group_id) "
+            "VALUES ('child', 'kim', %s, %s)", (root, groups[1]),
+        )
+    with pytest.raises(psycopg.errors.UniqueViolation), conn.transaction():
+        conn.execute(
+            "INSERT INTO folders (name, created_by, visibility, department_group_id) "
+            "VALUES ('duplicate', 'kim', 'public', %s)", (groups[0],),
+        )
+    for group in (groups[1], None, None):
+        conn.execute(
+            "INSERT INTO folders (name, created_by, visibility, department_group_id) "
+            "VALUES ('other', 'kim', 'public', %s)", (group,),
+        )
+    assert conn.execute("SELECT count(*) FROM folders").fetchone()[0] == 4
