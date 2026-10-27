@@ -63,7 +63,7 @@ export function OwnerTransfer({ documentId, owner, disabled, onTransferred }: {
     <OwnerTransferForm key={owner} owner={owner} disabled={disabled} submitLabel="소유자 이전" onTransfer={async next => {
       const result = await transferDocumentOwner(documentId, next);
       if (result.still_visible) onTransferred();
-      else router.push("/");
+      else router.push("/documents");
     }} />
   </section>;
 }

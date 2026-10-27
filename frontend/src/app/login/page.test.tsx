@@ -7,6 +7,11 @@ import { AuthProvider } from "@/components/AuthProvider";
 import { markPasswordChanged } from "@/lib/passwordChangeNotice";
 import LoginPage from "./page";
 
+vi.mock("@/lib/api", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@/lib/api")>(),
+  getHealth: vi.fn().mockResolvedValue({ status: "ok" }),
+}));
+
 const replace = vi.fn();
 vi.mock("next/navigation", () => ({ useRouter: () => ({ replace }) }));
 
@@ -18,6 +23,17 @@ function response(body: unknown, status = 200): Response {
 }
 
 describe("로그인 화면", () => {
+  it("제품 소개와 계정 안내, 서버 상태를 보여준다", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response({ authenticated: false, username: null, is_admin: false })));
+    render(<AuthProvider><LoginPage /></AuthProvider>);
+    for (const text of ["OpenArchive", "조직의 문서를,", "질문 하나로 찾습니다.", "의미 기반 AI 검색", "부서·폴더 단위 권한", "문서 관계 지도", "관리자에게 발급받은 계정으로 로그인하세요.", "비밀번호를 잊었으면 관리자에게 재설정을 요청하세요."]) {
+      expect(screen.getByText(text)).toBeInTheDocument();
+    }
+    expect(await screen.findByText("서버 연결됨")).toBeInTheDocument();
+    expect(screen.getByText(window.location.host)).toBeInTheDocument();
+    expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /비밀번호/ })).not.toBeInTheDocument();
+  });
   it("사용자명과 비밀번호 입력 및 제출 버튼을 렌더한다", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response({
       authenticated: false,
@@ -27,7 +43,7 @@ describe("로그인 화면", () => {
 
     render(<AuthProvider><LoginPage /></AuthProvider>);
 
-    expect(await screen.findByRole("textbox", { name: "사용자명" })).toBeInTheDocument();
+    expect(await screen.findByRole("textbox", { name: "아이디" })).toBeInTheDocument();
     expect(screen.getByLabelText("비밀번호")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "로그인" })).toBeInTheDocument();
   });
@@ -43,7 +59,7 @@ describe("로그인 화면", () => {
 
     render(<AuthProvider><LoginPage /></AuthProvider>);
 
-    expect(await screen.findByRole("textbox", { name: "사용자명" })).toHaveAttribute("type", "text");
+    expect(await screen.findByRole("textbox", { name: "아이디" })).toHaveAttribute("type", "text");
     expect(screen.getByLabelText("비밀번호")).toHaveAttribute("type", "password");
   });
 
@@ -57,7 +73,7 @@ describe("로그인 화면", () => {
     render(<AuthProvider><LoginPage /></AuthProvider>);
 
     const button = await screen.findByRole("button", { name: "로그인" });
-    expect(button.closest("section")).toHaveClass("mx-auto");
+    expect(button.closest("section")).toHaveClass("mx-auto", "max-w-sm");
   });
 
   it("로그인 성공 후 문서 화면으로 이동한다", async () => {
@@ -67,7 +83,7 @@ describe("로그인 화면", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     render(<AuthProvider><LoginPage /></AuthProvider>);
-    fireEvent.change(await screen.findByRole("textbox", { name: "사용자명" }), { target: { value: "alice" } });
+    fireEvent.change(await screen.findByRole("textbox", { name: "아이디" }), { target: { value: "alice" } });
     fireEvent.change(screen.getByLabelText("비밀번호"), { target: { value: "secret" } });
     fireEvent.click(screen.getByRole("button", { name: "로그인" }));
 
@@ -81,7 +97,7 @@ describe("로그인 화면", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     render(<AuthProvider><LoginPage /></AuthProvider>);
-    fireEvent.change(await screen.findByRole("textbox", { name: "사용자명" }), {
+    fireEvent.change(await screen.findByRole("textbox", { name: "아이디" }), {
       target: { value: "alice" },
     });
     fireEvent.change(screen.getByLabelText("비밀번호"), { target: { value: "wrong" } });
@@ -101,7 +117,7 @@ describe("로그인 화면", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     render(<AuthProvider><LoginPage /></AuthProvider>);
-    fireEvent.change(await screen.findByRole("textbox", { name: "사용자명" }), {
+    fireEvent.change(await screen.findByRole("textbox", { name: "아이디" }), {
       target: { value: "alice" },
     });
     fireEvent.change(screen.getByLabelText("비밀번호"), { target: { value: "anything" } });

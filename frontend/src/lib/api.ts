@@ -830,3 +830,8 @@ export function auditCsvUrl(filters: { actor?: string; action?: AuditAction | ""
   if (filters.action) params.set("action", filters.action);
   return `/api/admin/audit?${params.toString()}`;
 }
+
+/** 서버 응답 여부만 확인한다. DB 연결 상태를 뜻하지 않는다. */
+export function getHealth(signal?: AbortSignal): Promise<void> {
+  return request<void>("/api/health", { signal }, { parse: false, backoff: false });
+}

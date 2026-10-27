@@ -48,7 +48,7 @@ describe("DocumentActions", () => {
     await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
     expect(fetchMock.mock.calls[0][0]).toBe("/api/documents/document-1");
     expect(fetchMock.mock.calls[0][1]?.method).toBe("DELETE");
-    expect(push).toHaveBeenCalledWith("/");
+    expect(push).toHaveBeenCalledWith("/documents");
   });
 
   it("확인창에서 취소하면 아무것도 요청하지 않는다", () => {

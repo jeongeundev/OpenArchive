@@ -117,13 +117,13 @@ export function DocumentDetailView(): React.ReactElement {
     <div className="space-y-8">
       {/* 마지막으로 본 목록의 폴더·조건·쪽으로 돌아간다. 문서는 불러온 뒤에만 그리므로 서버 프리렌더와 어긋나지 않는다. */}
       <Link href={lastListHref()} className="text-sm text-muted hover:text-strong">
-        ← 목록으로 돌아가기
+        ← 문서 목록
       </Link>
 
       <DocumentHeader document={document} />
 
       <div className="grid items-start gap-8 lg:grid-cols-[minmax(0,1fr)_340px]" data-testid="document-columns">
-        <div className="min-w-0 space-y-8">
+        <div className="min-w-0 space-y-8 rounded-xl border border-line bg-card p-6">
           <TextEditor
             disabled={anonymous}
             document={document}
@@ -174,8 +174,8 @@ export function DocumentDetailView(): React.ReactElement {
         <aside className="min-w-0 space-y-6" data-testid="document-side">
           {/* 자주 쓰지 않는 관리 동작은 접어 기둥 맨 위에 둔다 — 본문 아래면 긴 문서에서 닿지 않는다. 임베딩 오류 문서는 재임베딩 버튼이 보이도록 펼친다. */}
           {!anonymous ? (
-            <details className="rounded-lg border border-line bg-card p-4" open={document.embedding_status === "error"}>
-              <summary className="cursor-pointer text-sm font-medium text-muted hover:text-strong">문서 관리</summary>
+            <details className="rounded-xl border border-line bg-card p-5" open={document.embedding_status === "error"}>
+              <summary className="cursor-pointer text-sm font-semibold text-strong hover:text-accent">문서 관리</summary>
               <div className="mt-4 space-y-8">
                 <DocumentActions disabled={editing} document={document} onChanged={refresh} />
                 {isOwner ? (
@@ -204,8 +204,8 @@ export function DocumentDetailView(): React.ReactElement {
               textMissing={document.extraction_status === "failed"}
             />
           ) : (
-            <section className="space-y-3">
-              <h2 className="text-sm font-medium text-muted">관련 문서</h2>
+            <section className="space-y-3 rounded-xl border border-line bg-card p-5">
+              <h2 className="text-sm font-semibold text-strong">관련 문서</h2>
               <p className="text-sm text-muted">
                 {relatedData.loading ? "불러오는 중…" : "관련 문서를 불러오지 못했습니다."}
               </p>
@@ -234,8 +234,8 @@ export function DocumentDetailView(): React.ReactElement {
               textMissing={document.extraction_status === "failed"}
             />
           ) : (
-            <section className="space-y-3">
-              <h2 className="text-sm font-medium text-muted">태그 추천</h2>
+            <section className="space-y-3 rounded-xl border border-line bg-card p-5">
+              <h2 className="text-sm font-semibold text-strong">태그 추천</h2>
               <p className="text-sm text-muted">
                 {relatedData.loading ? "불러오는 중…" : "태그 추천을 불러오지 못했습니다."}
               </p>

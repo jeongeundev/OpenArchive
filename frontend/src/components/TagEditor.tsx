@@ -31,8 +31,8 @@ export function TagEditor({
   const controlsDisabled = disabled || saving;
 
   return (
-    <section className="space-y-4">
-      <h2 className="text-sm font-medium text-muted">태그</h2>
+    <section className="space-y-4 rounded-xl border border-line bg-card p-5">
+      <h2 className="text-sm font-semibold text-strong">태그</h2>
       <div className="flex flex-wrap gap-2">
         {tags.map((tag) => (
           <span

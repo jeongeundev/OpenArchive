@@ -56,7 +56,7 @@ export function SearchResults({
         {loading ? <p className="text-sm text-muted">검색 중…</p> : null}
         {error !== null ? <p className="text-sm text-failed" role="status">{error}</p> : null}
         {!loading && error === null ? (
-          <p className="text-sm text-muted">검색어와 필터를 입력해 검색하세요.</p>
+          <p className="text-sm text-muted">질문이나 키워드로 문서를 찾고, 근거와 함께 답을 받아 보세요.</p>
         ) : null}
       </div>
     );
@@ -72,86 +72,31 @@ export function SearchResults({
     seenRelated.add(item.document_id);
     return true;
   });
-  const twoColumns = direct.length > 0 && related.length > 0;
 
-  const renderGroup = (id: string, title: string, items: typeof direct) => (
-    <section aria-labelledby={id} className="space-y-3">
-      <h2 id={id} className="font-medium text-strong">{title}</h2>
-      {id === "related-search-results" ? (
-        <p className="text-sm text-muted">검색 결과에서 관계로 이어진 문서입니다. 각 문서의 연결 이유를 확인하세요.</p>
-      ) : null}
-      {items.map((item) => {
-        const sourceTitle = item.via === null ? null : `「${item.via.from_title}」`;
-        return (
-          <article
-            key={`${item.document_id}:${item.based_on_version}:${item.chunk_index}`}
-            className={item.via === null ? "rounded-lg border border-line bg-card p-5" : "border-b border-line pb-3"}
-          >
-            {/* 함께 볼 문서는 이전 판의 청크 번호가 현재 판 기준일 수 있어 문서로 연결한다. */}
-            <Link href={item.via === null ? passageHref(item) : `/documents/${item.document_id}`} className="break-words font-medium text-strong hover:text-accent">
-              {item.title}
-            </Link>
-            <p className="mt-2 break-words text-xs text-muted">
-              {joinMeta([
-                item.content_type.toUpperCase(),
-                item.folder_path?.join(" › "),
-                item.owner ? <OwnerLabel owner={item.owner} department={item.owner_department} /> : null,
-                item.updated_at ? DATE_FORMATTER.format(new Date(item.updated_at)) : null,
-                item.tags.length > 0 ? item.tags.join(", ") : null,
-              ])}
-              {item.via === null ? <> · <span className="text-muted">유사도 {item.score.toFixed(3)}</span></> : null}
-            </p>
-            {item.via !== null ? (
-              <p className="mt-2 text-xs text-muted">
-                {sourceTitle}에서 「{relationLabel(item.via.kind)}」로 이어짐
-              </p>
-            ) : (
-              <SearchExcerpt key={`${item.content}:${item.preview ?? ""}`} content={item.content} preview={item.preview} />
-            )}
-            {item.via === null && item.passages && item.passages.length > 0 ? (
-              <details className="mt-4 border-t border-line pt-3">
-                <summary className="cursor-pointer text-sm text-accent">
-                  검색된 본문 대목 {item.passages.length}개
-                </summary>
-                <div className="mt-3 space-y-4">
-                  {item.passages.map((passage, index) => (
-                    <section key={`${passage.chunk_index}:${passage.based_on_version}`}>
-                      <p className="text-xs text-muted">
-                        본문 대목 {index + 1} · 텍스트 버전 {passage.based_on_version}
-                      </p>
-                      <p className="mt-2 whitespace-pre-wrap text-sm leading-relaxed text-body">
-                        {passage.content}
-                      </p>
-                    </section>
-                  ))}
-                </div>
-              </details>
-            ) : null}
-          </article>
-        );
-      })}
-    </section>
-  );
-
-  const sqlToggle = (
+  const heading = (item: (typeof direct)[number]) => (
     <>
-      <button
-        type="button"
-        onClick={() => setShowSql((visible) => !visible)}
-        className="text-sm text-muted hover:text-strong"
-      >
-        {showSql ? "실행된 SQL 닫기" : "실행된 SQL 보기"}
-      </button>
-      {showSql ? (
-        <pre className="overflow-x-auto bg-card p-4 font-mono text-xs text-body">
-          {response.sql}
-        </pre>
-      ) : null}
+      <div className="flex flex-wrap items-center gap-2">
+        <span data-testid="result-type" className="shrink-0 rounded bg-accent-soft px-1.5 py-0.5 text-xs font-medium text-accent">
+          {item.content_type.toUpperCase()}
+        </span>
+        {/* 함께 볼 문서는 이전 판의 청크 번호가 현재 판 기준일 수 있어 문서로 연결한다. */}
+        <Link href={item.via === null ? passageHref(item) : `/documents/${item.document_id}`} className="min-w-0 break-words font-semibold text-strong hover:text-accent">
+          {item.title}
+        </Link>
+      </div>
+      <p data-testid="result-meta" className="mt-1 break-words text-xs text-muted">
+        {joinMeta([
+          item.folder_path?.join(" › "),
+          item.owner ? <OwnerLabel owner={item.owner} department={item.owner_department} /> : null,
+          item.updated_at ? DATE_FORMATTER.format(new Date(item.updated_at)) : null,
+          item.tags.length > 0 ? item.tags.join(", ") : null,
+        ])}
+      </p>
     </>
   );
 
   return (
-    <section className="space-y-4">
+    <section id="search-results" className="scroll-mt-6 space-y-6">
       {loading ? <p className="text-sm text-muted">검색 중…</p> : null}
       {error !== null ? <p className="text-sm text-failed" role="status">{error}</p> : null}
 
@@ -159,19 +104,77 @@ export function SearchResults({
         <p className="text-sm text-muted">검색 결과가 없습니다.</p>
       ) : null}
 
-      <div
-        data-testid="search-result-columns"
-        className={twoColumns ? "grid items-start gap-8 lg:grid-cols-[minmax(0,1fr)_340px]" : "space-y-4"}
-      >
-        <div className="min-w-0 space-y-4">
-          {direct.length > 0 ? renderGroup("direct-search-results", "검색 결과", direct) : null}
-          {!twoColumns && related.length > 0 ? renderGroup("related-search-results", "함께 볼 문서", related) : null}
-          {sqlToggle}
-        </div>
-        {twoColumns ? (
-          <div className="min-w-0">{renderGroup("related-search-results", "함께 볼 문서", related)}</div>
+      {direct.length > 0 ? (
+        <section aria-labelledby="direct-search-results" className="space-y-3">
+          <h2 id="direct-search-results" className="text-lg font-semibold text-strong">검색 결과</h2>
+          {direct.map((item) => (
+            <article
+              key={`${item.document_id}:${item.based_on_version}:${item.chunk_index}`}
+              className="rounded-xl border border-line bg-card p-5"
+            >
+              <div className="flex items-start gap-3">
+                <div className="min-w-0 flex-1">{heading(item)}</div>
+                <span className="shrink-0 text-xs text-muted">유사도 {item.score.toFixed(3)}</span>
+              </div>
+              <SearchExcerpt key={`${item.content}:${item.preview ?? ""}`} content={item.content} preview={item.preview} />
+              {item.passages && item.passages.length > 0 ? (
+                <details className="mt-4 border-t border-line pt-3">
+                  <summary className="cursor-pointer text-sm text-accent">
+                    검색된 본문 대목 {item.passages.length}개
+                  </summary>
+                  <div className="mt-3 space-y-4">
+                    {item.passages.map((passage, index) => (
+                      <section key={`${passage.chunk_index}:${passage.based_on_version}`}>
+                        <p className="text-xs text-muted">
+                          본문 대목 {index + 1} · 텍스트 버전 {passage.based_on_version}
+                        </p>
+                        <p className="mt-2 whitespace-pre-wrap text-sm leading-relaxed text-body">
+                          {passage.content}
+                        </p>
+                      </section>
+                    ))}
+                  </div>
+                </details>
+              ) : null}
+            </article>
+          ))}
+        </section>
+      ) : null}
+
+      <div>
+        <button
+          type="button"
+          onClick={() => setShowSql((visible) => !visible)}
+          className="text-sm text-muted hover:text-strong"
+        >
+          {showSql ? "실행된 SQL 닫기" : "실행된 SQL 보기"}
+        </button>
+        {showSql ? (
+          <pre className="mt-2 overflow-x-auto rounded-lg bg-sunken p-4 font-mono text-xs text-body">
+            {response.sql}
+          </pre>
         ) : null}
       </div>
+
+      {related.length > 0 ? (
+        <section aria-labelledby="related-search-results" className="space-y-3 border-t border-line pt-6">
+          <h2 id="related-search-results" className="text-lg font-semibold text-strong">함께 볼 문서</h2>
+          <p className="text-sm text-muted">검색 결과에서 관계로 이어진 문서입니다. 각 문서의 연결 이유를 확인하세요.</p>
+          <div data-testid="related-cards" className="grid gap-3 sm:grid-cols-2">
+            {related.map((item) => (
+              <article key={item.document_id} className="min-w-0 rounded-xl border border-line bg-card p-5">
+                <p className="mb-2 text-xs text-muted">{item.via === null ? null : relationLabel(item.via.kind)}</p>
+                {heading(item)}
+                {item.via !== null ? (
+                  <p className="mt-2 text-xs text-muted">
+                    「{item.via.from_title}」에서 「{relationLabel(item.via.kind)}」로 이어짐
+                  </p>
+                ) : null}
+              </article>
+            ))}
+          </div>
+        </section>
+      ) : null}
     </section>
   );
 }

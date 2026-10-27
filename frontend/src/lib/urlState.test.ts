@@ -44,16 +44,16 @@ describe("문서 목록 주소", () => {
     expect(listStateFromParams(new URL(href, "http://localhost").searchParams)).toEqual(state);
   });
 
-  it("기본 상태는 「/」이고 쪽은 1부터 센다", () => {
-    expect(listHref({ folderId: null, filters: { sort: "updated" }, page: 0 })).toBe("/");
-    expect(listHref({ folderId: null, filters: { sort: "updated" }, page: 1 })).toBe("/?page=2");
+  it("기본 상태는 「/documents」이고 쪽은 1부터 센다", () => {
+    expect(listHref({ folderId: null, filters: { sort: "updated" }, page: 0 })).toBe("/documents");
+    expect(listHref({ folderId: null, filters: { sort: "updated" }, page: 1 })).toBe("/documents?page=2");
     expect(listStateFromParams(new URLSearchParams())).toEqual({ folderId: null, filters: { sort: "updated" }, page: 0 });
   });
 
   it("「부여받은 문서」 보기는 `granted=1`로 쓰고 읽으며 폴더와 함께 쓰지 않는다 (D20)", () => {
     expect(listStateFromParams(new URLSearchParams("granted=1"))).toEqual({ folderId: null, filters: { sort: "updated" }, page: 0, granted: true });
-    expect(listHref({ folderId: null, filters: { sort: "updated" }, page: 0, granted: true })).toBe("/?granted=1");
-    expect(listHref({ folderId: "f-hr", filters: { sort: "updated" }, page: 0, granted: true })).toBe("/?granted=1");
+    expect(listHref({ folderId: null, filters: { sort: "updated" }, page: 0, granted: true })).toBe("/documents?granted=1");
+    expect(listHref({ folderId: "f-hr", filters: { sort: "updated" }, page: 0, granted: true })).toBe("/documents?granted=1");
     expect(listStateFromParams(new URLSearchParams("granted=1&folder=f-hr")).folderId).toBeNull();
     const state = { folderId: null, filters: { tag: "보안", sort: "title" as const }, page: 1, granted: true };
     expect(listStateFromParams(new URL(listHref(state), "http://localhost").searchParams)).toEqual(state);
@@ -73,21 +73,33 @@ describe("마지막 목록 주소", () => {
     sessionStorage.clear();
   });
 
-  it("기억한 목록 주소를 돌려주고, 없으면 「/」다", () => {
-    expect(lastListHref()).toBe("/");
-    rememberListHref("/?sort=title&page=2");
-    expect(lastListHref()).toBe("/?sort=title&page=2");
+  it("기억한 목록 주소를 돌려주고, 없으면 「/documents」다", () => {
+    expect(lastListHref()).toBe("/documents");
+    rememberListHref("/documents?sort=title&page=2");
+    expect(lastListHref()).toBe("/documents?sort=title&page=2");
   });
 
-  it("저장소를 쓸 수 없어도 「/」로 동작한다", () => {
+  it("저장소를 쓸 수 없어도 「/documents」로 동작한다", () => {
     vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => { throw new Error("blocked"); });
     vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new Error("blocked"); });
-    expect(() => rememberListHref("/?page=2")).not.toThrow();
-    expect(lastListHref()).toBe("/");
+    expect(() => rememberListHref("/documents?page=2")).not.toThrow();
+    expect(lastListHref()).toBe("/documents");
   });
 
   it("목록 주소가 아닌 값은 쓰지 않는다", () => {
     sessionStorage.setItem("openarchive:last-list", "https://evil.example/");
-    expect(lastListHref()).toBe("/");
+    expect(lastListHref()).toBe("/documents");
+  });
+});
+
+describe("이전 목록 주소 호환", () => {
+  afterEach(() => sessionStorage.clear());
+  it.each(["/", "/?folder=f1&sort=title&page=2"])("이전 주소 %s의 쿼리를 보존한다", (href) => {
+    rememberListHref(href);
+    expect(lastListHref()).toBe("/documents" + href.slice(1));
+  });
+  it.each(["/documents/other", "/documents-extra", "//evil.example"])("목록이 아닌 주소 %s는 거부한다", (href) => {
+    rememberListHref(href);
+    expect(lastListHref()).toBe("/documents");
   });
 });

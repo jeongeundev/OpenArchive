@@ -13,7 +13,7 @@ it("화면 오류는 한국어로 알리고 내부 오류 내용을 보이지 �
   expect(container).not.toHaveTextContent("relation");
   expect(container).not.toHaveTextContent("db.py");
   expect(container).not.toHaveTextContent("1234567");
-  expect(screen.getByRole("link", { name: "문서 목록으로 가기" })).toHaveAttribute("href", "/");
+  expect(screen.getByRole("link", { name: "문서 목록으로 가기" })).toHaveAttribute("href", "/documents");
 });
 
 it("「다시 시도」를 누르면 그 화면을 다시 불러온다", () => {

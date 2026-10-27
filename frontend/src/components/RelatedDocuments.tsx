@@ -24,8 +24,8 @@ export function RelatedDocuments({
   );
 
   return (
-    <section className="space-y-4">
-      <h2 className="text-sm font-medium text-muted">관련 문서</h2>
+    <section className="space-y-4 rounded-xl border border-line bg-card p-5">
+      <h2 className="text-sm font-semibold text-strong">관련 문서</h2>
       {response.reason === "not_indexed" ? (
         <p className="text-sm text-muted">
           {textMissing
@@ -62,22 +62,22 @@ export function RelatedDocuments({
           {groups.map(([kind, items]) => (
             <div key={kind} className="space-y-2">
               <h3 className="text-xs font-medium text-muted">{relationLabel(kind)}</h3>
-              <ul className="divide-y divide-line rounded-lg border border-line bg-card px-5">
+              {/* 검색 화면 「함께 볼 문서」 카드와 같은 모양 — 관계 라벨 · 점수, 그 아래 제목. */}
+              <ul className="space-y-2">
                 {items.map((item) => (
-                  <li key={item.document_id} className="space-y-2 py-4">
-                    <div className="flex flex-wrap items-center justify-between gap-3">
-                      <Link
-                        href={`/documents/${item.document_id}`}
-                        className="text-sm text-strong hover:text-accent"
-                      >
-                        {item.title}
-                      </Link>
-                      <div className="flex gap-3 text-xs text-muted">
-                        <span className="text-accent">{item.score.toFixed(3)}</span>
-                        <span>v{response.based_on_version} 기준</span>
-                        {item.mutual ? <span>서로 찾음</span> : null}
-                      </div>
+                  <li key={item.document_id} className="space-y-2 rounded-xl border border-line bg-card p-4">
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted">
+                      <span>{relationLabel(kind)}</span>
+                      <span className="text-accent">{item.score.toFixed(3)}</span>
+                      <span>v{response.based_on_version} 기준</span>
+                      {item.mutual ? <span>서로 찾음</span> : null}
                     </div>
+                    <Link
+                      href={`/documents/${item.document_id}`}
+                      className="block break-words text-sm font-semibold text-strong hover:text-accent"
+                    >
+                      {item.title}
+                    </Link>
                     <div className="flex flex-wrap gap-2">
                       {item.tags.map((tag) => (
                         <span key={tag} className="rounded bg-sunken px-2 py-1 text-xs text-body">

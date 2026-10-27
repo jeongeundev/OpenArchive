@@ -4,7 +4,16 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { AuthProvider } from "@/components/AuthProvider";
-import { SiteHeader } from "./SiteHeader";
+import { AppShell } from "./AppShell";
+import { getHealth } from "@/lib/api";
+import { Sidebar } from "./Sidebar";
+
+let pathname = "/";
+vi.mock("next/navigation", () => ({ usePathname: () => pathname, useRouter: () => ({ replace: vi.fn() }) }));
+vi.mock("@/lib/api", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@/lib/api")>(),
+  getHealth: vi.fn().mockResolvedValue(undefined),
+}));
 
 function response(body: unknown): Response {
   return new Response(JSON.stringify(body), {
@@ -12,7 +21,37 @@ function response(body: unknown): Response {
   });
 }
 
-describe("SiteHeader", () => {
+describe("Sidebar", () => {
+  it("문서 상세에서는 문서만 현재 메뉴이며 홈은 아니다", () => {
+    pathname = "/documents/doc-1";
+    render(<Sidebar />);
+    expect(screen.getByRole("link", { name: "문서" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("link", { name: "홈" })).not.toHaveAttribute("aria-current");
+    for (const [name, href] of [["홈", "/"], ["문서", "/documents"], ["AI 검색", "/search"], ["부서", "/departments"]]) {
+      expect(screen.getByRole("link", { name })).toHaveAttribute("href", href);
+    }
+    pathname = "/";
+  });
+
+  it("health 성공과 실패를 서버 상태로 보인다", async () => {
+    const { unmount } = render(<Sidebar />);
+    expect(await screen.findByText("서버 연결됨")).toBeInTheDocument();
+    expect(screen.getByText(window.location.host)).toBeInTheDocument();
+    unmount();
+    vi.mocked(getHealth).mockRejectedValueOnce(new Error("offline"));
+    render(<Sidebar />);
+    expect(await screen.findByText("서버 응답 없음")).toBeInTheDocument();
+  });
+
+  it("로그인 경로에는 사이드바 없이 본문과 푸터가 있다", () => {
+    pathname = "/login";
+    render(<AppShell>로그인 폼</AppShell>);
+    expect(screen.queryByRole("navigation")).not.toBeInTheDocument();
+    expect(screen.getByText("로그인 폼")).toBeInTheDocument();
+    expect(screen.getByRole("contentinfo")).toBeInTheDocument();
+    pathname = "/";
+  });
+
   it("익명에게 로그인 링크만 제공한다", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response({
       authenticated: false,
@@ -20,7 +59,7 @@ describe("SiteHeader", () => {
       is_admin: false,
     })));
 
-    render(<AuthProvider><SiteHeader /></AuthProvider>);
+    render(<AuthProvider><Sidebar /></AuthProvider>);
 
     expect(await screen.findByRole("link", { name: "로그인" })).toHaveAttribute(
       "href",
@@ -43,12 +82,12 @@ describe("SiteHeader", () => {
       is_admin: false,
     })));
 
-    render(<AuthProvider><SiteHeader /></AuthProvider>);
+    render(<AuthProvider><Sidebar /></AuthProvider>);
 
     expect(await screen.findByRole("link", { name: "정리할 문서" })).toHaveAttribute("href", "/organize");
   });
 
-  it("로그인 사용자에 부서가 있으면 `이름 · 부서`로 보이고 부서는 부서 폴더 링크다 (D16)", async () => {
+  it("로그인 사용자에 부서가 있으면 `이름과 둘째 줄 부서`로 보이고 부서는 부서 폴더 링크다 (D16)", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response({
       authenticated: true,
       username: "김민준",
@@ -56,11 +95,11 @@ describe("SiteHeader", () => {
       department: { name: "IT전략실", folder_id: "f1" },
     })));
 
-    render(<AuthProvider><SiteHeader /></AuthProvider>);
+    render(<AuthProvider><Sidebar /></AuthProvider>);
 
     expect(await screen.findByRole("link", { name: "김민준" })).toHaveAttribute("href", "/settings");
-    expect(screen.getByRole("link", { name: "IT전략실" })).toHaveAttribute("href", "/?folder=f1");
-    expect(screen.getByTestId("account-label")).toHaveTextContent(/^김민준 · IT전략실$/);
+    expect(screen.getByRole("link", { name: "IT전략실" })).toHaveAttribute("href", "/documents?folder=f1");
+    expect(screen.getByTestId("account-label")).toHaveTextContent(/^김민준IT전략실$/);
   });
 
   it("부서 폴더를 볼 수 없으면 부서 이름만 링크 없이, 부서가 없으면 이름만 보인다", async () => {
@@ -71,9 +110,9 @@ describe("SiteHeader", () => {
       department: { name: "IT전략실", folder_id: null },
     })));
 
-    const { unmount } = render(<AuthProvider><SiteHeader /></AuthProvider>);
+    const { unmount } = render(<AuthProvider><Sidebar /></AuthProvider>);
 
-    expect(await screen.findByTestId("account-label")).toHaveTextContent(/^김민준 · IT전략실$/);
+    expect(await screen.findByTestId("account-label")).toHaveTextContent(/^김민준IT전략실$/);
     expect(screen.queryByRole("link", { name: "IT전략실" })).not.toBeInTheDocument();
     unmount();
 
@@ -83,7 +122,7 @@ describe("SiteHeader", () => {
       is_admin: false,
       department: null,
     })));
-    render(<AuthProvider><SiteHeader /></AuthProvider>);
+    render(<AuthProvider><Sidebar /></AuthProvider>);
 
     expect(await screen.findByTestId("account-label")).toHaveTextContent(/^김민준$/);
   });
@@ -96,7 +135,7 @@ describe("SiteHeader", () => {
       is_admin: true,
     })));
 
-    render(<AuthProvider><SiteHeader /></AuthProvider>);
+    render(<AuthProvider><Sidebar /></AuthProvider>);
 
     await screen.findByText("root");
     const menu = screen.getByRole("navigation", { name: "주요 메뉴" });
@@ -112,7 +151,7 @@ describe("SiteHeader", () => {
       is_admin: false,
     })));
 
-    render(<AuthProvider><SiteHeader /></AuthProvider>);
+    render(<AuthProvider><Sidebar /></AuthProvider>);
 
     expect(await screen.findByText("alice")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "로그아웃" })).toBeInTheDocument();
@@ -130,7 +169,7 @@ describe("SiteHeader", () => {
       is_admin: true,
     })));
 
-    render(<AuthProvider><SiteHeader /></AuthProvider>);
+    render(<AuthProvider><Sidebar /></AuthProvider>);
 
     expect(await screen.findByRole("link", { name: "사용자 관리" })).toHaveAttribute(
       "href",
@@ -148,7 +187,7 @@ describe("SiteHeader", () => {
       is_admin: false,
     })));
 
-    render(<AuthProvider><SiteHeader /></AuthProvider>);
+    render(<AuthProvider><Sidebar /></AuthProvider>);
 
     expect(await screen.findByRole("link", { name: "alice" })).toHaveAttribute(
       "href",
@@ -163,7 +202,7 @@ describe("SiteHeader", () => {
       is_admin: false,
     })));
 
-    render(<AuthProvider><SiteHeader /></AuthProvider>);
+    render(<AuthProvider><Sidebar /></AuthProvider>);
 
     await screen.findByRole("link", { name: "로그인" });
     const hrefs = Array.from(document.querySelectorAll("a")).map((link) =>
@@ -178,7 +217,7 @@ describe("SiteHeader", () => {
       .mockResolvedValueOnce(response({ authenticated: false, username: null, is_admin: false }));
     vi.stubGlobal("fetch", fetchMock);
 
-    render(<AuthProvider><SiteHeader /></AuthProvider>);
+    render(<AuthProvider><Sidebar /></AuthProvider>);
     fireEvent.click(await screen.findByRole("button", { name: "로그아웃" }));
 
     await waitFor(() => expect(screen.getByRole("link", { name: "로그인" })).toBeInTheDocument());
@@ -190,7 +229,7 @@ describe("SiteHeader", () => {
   ])("로그인 여부와 무관하게 테마 버튼을 둔다 (%#)", async (me, anchor) => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response(me)));
 
-    render(<AuthProvider><SiteHeader /></AuthProvider>);
+    render(<AuthProvider><Sidebar /></AuthProvider>);
 
     await screen.findByText(anchor);
     expect(screen.getByRole("button", { name: /테마$/ })).toBeInTheDocument();

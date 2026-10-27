@@ -181,7 +181,7 @@ export function SharesSection(): React.ReactElement {
                 <ul className="mt-2 space-y-1">
                   {share.folders.map((folder) => (
                     <li className="flex items-center justify-between gap-4 text-sm" key={folder.id}>
-                      <Link className="text-accent hover:underline" href={`/?folder=${encodeURIComponent(folder.id)}`}>
+                      <Link className="text-accent hover:underline" href={`/documents?folder=${encodeURIComponent(folder.id)}`}>
                         {folder.name}
                       </Link>
                       <button

@@ -1,11 +1,11 @@
 // Copyright 2026 jeongeundev
 // SPDX-License-Identifier: MIT
-import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { AuthProvider } from "@/components/AuthProvider";
 import { RequireAuth } from "@/components/RequireAuth";
-import Home from "@/app/page";
+import Home from "@/app/documents/page";
 import type { DocumentSummary, Folder } from "@/lib/types";
 import { lastListHref } from "@/lib/urlState";
 
@@ -32,13 +32,13 @@ vi.mock("next/navigation", async () => {
   const { useSyncExternalStore } = await import("react");
   return {
     useRouter: () => ({ push: navigation.push, replace: navigation.replace }),
-    usePathname: () => "/",
+    usePathname: () => "/documents",
     useSearchParams: () => useSyncExternalStore(navigation.subscribe, navigation.params),
   };
 });
 
 afterEach(() => {
-  navigation.go("/");
+  navigation.go("/documents");
   navigation.push.mockClear();
   navigation.replace.mockClear();
   sessionStorage.clear();
@@ -133,10 +133,9 @@ function mockFinder(total: number, globalTotal: number, folders: Folder[] = []) 
     const body = url.pathname === "/api/auth/me" ? { authenticated: true, username: "alice", is_admin: false }
       : url.pathname === "/api/folders" ? folders
       : url.pathname.endsWith("/progress") ? { extracting: 0, extraction_failed: 0, pending: 0, processing: 0, ready: globalTotal, error: 0 }
-      : url.pathname.endsWith("/count") ? { total }
+      : url.pathname.endsWith("/count") ? { total: url.searchParams.has("content_type") && !url.searchParams.has("q") && !url.searchParams.has("tag") && !url.searchParams.has("folder_id") && !url.searchParams.has("granted") ? (url.searchParams.get("content_type") === "hwp" ? globalTotal : 0) : total }
       : url.pathname.endsWith("/tags") ? ["보안"]
       : url.pathname.endsWith("/related") || url.pathname.endsWith("/tag-suggestions") ? { items: [], identical: [], based_on_version: null, reason: null }
-      : url.pathname.startsWith("/api/documents/document-") ? detailOf(url.pathname.split("/").at(-1) ?? "")
       : total === 0 ? [] : documents;
     return Promise.resolve(new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } }));
   });
@@ -144,73 +143,25 @@ function mockFinder(total: number, globalTotal: number, folders: Folder[] = []) 
   return fetchMock;
 }
 
-// 정보 창이 읽는 상세 응답 — 본문은 비워 둔다.
-function detailOf(id: string) {
-  const summary = documents.find((document) => document.id === id) ?? documents[0];
-  return { ...summary, folder: null, content: "", versions: [], files: [], chunk_count: 0, chunk_version: null };
-}
-
-function infoButton(title: string): HTMLElement {
-  const row = screen.getByRole("link", { name: title }).closest("li") as HTMLElement;
-  return within(row).getByRole("button", { name: "정보" });
-}
-
-describe("목록 정보 창", () => {
+describe("문서 표 배치", () => {
   afterEach(() => vi.unstubAllGlobals());
 
-  it("행을 고르면 「문서 정보」 창이 열린다", async () => {
-    mockFinder(2, 2);
+  it("상세 링크와 여섯 열을 표시하고 정보 창을 열지 않는다", async () => {
+    const fetchMock = mockFinder(2, 2, [hr]);
     render(<AuthProvider><Home /></AuthProvider>);
-
-    await screen.findByRole("link", { name: "정합성 점검표" });
+    expect(await screen.findByRole("link", { name: "정합성 점검표" })).toHaveAttribute("href", "/documents/document-2");
+    expect(screen.getAllByRole("columnheader").map(cell => cell.textContent)).toEqual(["이름", "위치", "소유자", "열람 범위", "수정일", "상태"]);
+    expect(screen.queryByRole("button", { name: "정보" })).not.toBeInTheDocument();
     expect(screen.queryByRole("complementary", { name: "문서 정보" })).not.toBeInTheDocument();
-    fireEvent.click(infoButton("정합성 점검표"));
-
-    const pane = screen.getByRole("complementary", { name: "문서 정보" });
-    expect(await within(pane).findByRole("link", { name: "문서 열기" })).toHaveAttribute("href", "/documents/document-2");
+    expect(requestedUrls(fetchMock).some(url => url.pathname === "/api/documents/document-2")).toBe(false);
   });
 
-  it("폴더를 바꾸면 정보 창이 닫힌다", async () => {
+  it("폴더를 바꿔도 트리와 표의 두 열 배치를 유지한다", async () => {
     mockFinder(2, 2, [hr]);
     render(<AuthProvider><Home /></AuthProvider>);
-
-    await screen.findByRole("link", { name: "OpenSQL 운영 가이드" });
-    fireEvent.click(infoButton("OpenSQL 운영 가이드"));
-    expect(screen.getByRole("complementary", { name: "문서 정보" })).toBeInTheDocument();
-
     fireEvent.click(await screen.findByRole("button", { name: /인사/ }));
-    await waitFor(() => expect(screen.queryByRole("complementary", { name: "문서 정보" })).not.toBeInTheDocument());
-  });
-
-  it("넓은 화면 배치는 고르면 정보 창 열을 더하고, 고르지 않으면 트리와 목록 두 열이다", async () => {
-    mockFinder(2, 2, [hr]);
-    render(<AuthProvider><Home /></AuthProvider>);
-
-    await screen.findByRole("button", { name: /인사/ });
-    await screen.findByRole("link", { name: "OpenSQL 운영 가이드" });
-    const layout = screen.getByTestId("document-layout");
-    expect(layout).toHaveClass("lg:grid-cols-[13rem_minmax(0,1fr)]");
-    expect(layout).not.toHaveClass("lg:grid-cols-[13rem_minmax(0,1fr)_400px]");
-
-    fireEvent.click(infoButton("OpenSQL 운영 가이드"));
-    expect(layout).toHaveClass("lg:grid-cols-[13rem_minmax(0,1fr)_400px]");
-    expect(screen.getByRole("complementary", { name: "문서 정보" })).toHaveClass("lg:sticky", "lg:top-6");
-  });
-
-  it("로그인하지 않아도 목록과 정보 창이 동작한다", async () => {
-    mockFinder(2, 2);
-    render(<Home />);
-
-    await screen.findByRole("link", { name: "OpenSQL 운영 가이드" });
-    const layout = screen.getByTestId("document-layout");
-    expect(layout.className).not.toMatch(/lg:grid-cols/);
-
-    fireEvent.click(infoButton("OpenSQL 운영 가이드"));
-    const pane = screen.getByRole("complementary", { name: "문서 정보" });
-    expect(layout).toHaveClass("lg:grid-cols-[minmax(0,1fr)_400px]");
-    expect(await within(pane).findByRole("link", { name: "문서 열기" })).toHaveAttribute("href", "/documents/document-1");
-
-    fireEvent.click(within(pane).getByRole("button", { name: "닫기" }));
+    expect(await screen.findByRole("heading", { name: "인사" })).toBeInTheDocument();
+    expect(screen.getByTestId("document-layout")).toHaveClass("lg:grid-cols-[13rem_minmax(0,1fr)]");
     expect(screen.queryByRole("complementary", { name: "문서 정보" })).not.toBeInTheDocument();
   });
 });
@@ -234,7 +185,10 @@ describe("목록 찾기", () => {
     fireEvent.change(screen.getByLabelText("제목 검색"), { target: { value: "출장" } });
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining("q="), expect.anything()));
     expect(screen.getByText("120건 중 1–50")).toBeInTheDocument();
-    for (const [label, value] of [["문서 유형", "hwp"], ["태그", "보안"], ["정렬", "title"]]) {
+    fireEvent.click(screen.getByRole("button", { name: "다음" }));
+    fireEvent.click(await screen.findByRole("button", { name: "HWP" }));
+    expect(screen.getByText("120건 중 1–50")).toBeInTheDocument();
+    for (const [label, value] of [["태그", "보안"], ["정렬", "title"]]) {
       fireEvent.click(screen.getByRole("button", { name: "다음" }));
       fireEvent.change(screen.getByLabelText(label), { target: { value } });
       expect(screen.getByText("120건 중 1–50")).toBeInTheDocument();
@@ -247,7 +201,7 @@ describe("목록 찾기", () => {
   it("전체 문서가 있어도 조건 결과가 없으면 첫 사용 안내 대신 조건 안내를 표시한다", async () => {
     mockFinder(0, 300);
     render(<AuthProvider><Home /></AuthProvider>);
-    fireEvent.change(screen.getByLabelText("문서 유형"), { target: { value: "hwp" } });
+    fireEvent.click(await screen.findByRole("button", { name: "HWP" }));
     expect(await screen.findByText("조건에 맞는 문서가 없습니다.")).toBeInTheDocument();
     expect(screen.queryByText(/openarchive demo/)).not.toBeInTheDocument();
     expect(screen.queryByText("아직 문서가 없습니다.")).not.toBeInTheDocument();
@@ -295,7 +249,7 @@ describe("폴더 트리", () => {
   });
 
   it("폴더를 고르면 그 폴더에 든 문서만 목록과 건수로 조회하고 문서 수를 트리에 표시한다", async () => {
-    navigation.go("/?folder=folder-a");
+    navigation.go("/documents?folder=folder-a");
     const fetchMock = mockFinder(1, 2, [hr]);
     // 실제 앱처럼 로그인 확인 뒤에 그린다 — 주소의 폴더를 폴더 목록이 오기 전에 판정하지 않는다.
     render(<AuthProvider><RequireAuth><Home /></RequireAuth></AuthProvider>);
@@ -312,23 +266,23 @@ describe("폴더 트리", () => {
     mockFinder(2, 2, [hr]);
     render(<AuthProvider><Home /></AuthProvider>);
     fireEvent.click(await screen.findByRole("button", { name: /인사/ }));
-    expect(navigation.push).toHaveBeenLastCalledWith("/?folder=folder-a");
+    expect(navigation.push).toHaveBeenLastCalledWith("/documents?folder=folder-a");
     fireEvent.click(screen.getByRole("button", { name: "전체 문서" }));
-    expect(navigation.push).toHaveBeenLastCalledWith("/");
+    expect(navigation.push).toHaveBeenLastCalledWith("/documents");
   });
 
   it("볼 수 없는 폴더를 주소로 고르면 존재를 알리지 않고 전체 문서로 되돌린다", async () => {
-    navigation.go("/?folder=hidden");
+    navigation.go("/documents?folder=hidden");
     const fetchMock = mockFinder(2, 2, [hr]);
     // 실제 앱처럼 로그인 확인 뒤에 그린다 — 주소의 폴더를 폴더 목록이 오기 전에 판정하지 않는다.
     render(<AuthProvider><RequireAuth><Home /></RequireAuth></AuthProvider>);
-    await waitFor(() => expect(navigation.replace).toHaveBeenCalledWith("/"));
+    await waitFor(() => expect(navigation.replace).toHaveBeenCalledWith("/documents"));
     expect(screen.queryByText(/찾을 수 없/)).not.toBeInTheDocument();
     expect(requestedUrls(fetchMock).some(url => url.searchParams.get("folder_id") === "hidden")).toBe(false);
   });
 
   it("빈 폴더를 고르면 폴더가 비었다고 알린다", async () => {
-    navigation.go("/?folder=folder-a");
+    navigation.go("/documents?folder=folder-a");
     mockFinder(0, 2, [{ ...hr, document_count: 0 }]);
     // 실제 앱처럼 로그인 확인 뒤에 그린다 — 주소의 폴더를 폴더 목록이 오기 전에 판정하지 않는다.
     render(<AuthProvider><RequireAuth><Home /></RequireAuth></AuthProvider>);
@@ -356,7 +310,7 @@ describe("폴더 트리", () => {
     fireEvent.change(screen.getByLabelText("새 폴더 이름"), { target: { value: "인사" } });
     fireEvent.click(screen.getByRole("button", { name: "만들기" }));
     expect(await screen.findByRole("button", { name: /인사/ })).toBeInTheDocument();
-    act(() => navigation.go("/?folder=folder-a"));
+    act(() => navigation.go("/documents?folder=folder-a"));
     rerender(<AuthProvider><Home /></AuthProvider>);
     const header = (await screen.findByRole("heading", { name: "인사" })).parentElement as HTMLElement;
     expect(header).toHaveTextContent("열람 범위 · 조직 공개");
@@ -364,7 +318,7 @@ describe("폴더 트리", () => {
 
   it("빈 폴더를 삭제하면 트리에서 사라지고 전체 문서로 돌아간다", async () => {
     vi.spyOn(window, "confirm").mockReturnValue(true);
-    navigation.go("/?folder=folder-a");
+    navigation.go("/documents?folder=folder-a");
     let folders: Folder[] = [{ ...hr, document_count: 0 }];
     vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const url = new URL(String(input), "http://localhost");
@@ -382,22 +336,22 @@ describe("폴더 트리", () => {
     // 실제 앱처럼 로그인 확인 뒤에 그린다 — 주소의 폴더를 폴더 목록이 오기 전에 판정하지 않는다.
     render(<AuthProvider><RequireAuth><Home /></RequireAuth></AuthProvider>);
     fireEvent.click(await screen.findByRole("button", { name: "삭제" }));
-    await waitFor(() => expect(navigation.push).toHaveBeenCalledWith("/"));
+    await waitFor(() => expect(navigation.push).toHaveBeenCalledWith("/documents"));
     await waitFor(() => expect(screen.queryByRole("button", { name: /인사/ })).not.toBeInTheDocument());
     vi.restoreAllMocks();
   });
 
   it("「부여받은 문서」를 누르면 부여받은 문서만 목록·건수로 조회하고 주소에 남긴다 (D20)", async () => {
-    navigation.go("/?folder=folder-a");
+    navigation.go("/documents?folder=folder-a");
     const fetchMock = mockFinder(2, 2, [hr]);
     render(<AuthProvider><RequireAuth><Home /></RequireAuth></AuthProvider>);
     expect(await screen.findByRole("heading", { name: "인사" })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "부여받은 문서" }));
 
-    expect(navigation.push).toHaveBeenLastCalledWith("/?granted=1");
+    expect(navigation.push).toHaveBeenLastCalledWith("/documents?granted=1");
     await waitFor(() => expect(screen.queryByRole("heading", { name: "인사" })).not.toBeInTheDocument());
-    expect(screen.getByRole("button", { name: "부여받은 문서" })).toHaveAttribute("aria-current", "true");
+    expect(screen.getByRole("button", { name: "부여받은 문서" })).toHaveAttribute("aria-current", "page");
     expect(screen.getByRole("button", { name: /인사/ })).not.toHaveAttribute("aria-current");
     await waitFor(() => {
       const urls = requestedUrls(fetchMock);
@@ -407,59 +361,59 @@ describe("폴더 트리", () => {
   });
 
   it("「부여받은 문서」에서 폴더를 고르면 그 보기를 벗어난다", async () => {
-    navigation.go("/?granted=1");
+    navigation.go("/documents?granted=1");
     mockFinder(2, 2, [hr]);
     render(<AuthProvider><Home /></AuthProvider>);
     fireEvent.click(await screen.findByRole("button", { name: /인사/ }));
-    expect(navigation.push).toHaveBeenLastCalledWith("/?folder=folder-a");
+    expect(navigation.push).toHaveBeenLastCalledWith("/documents?folder=folder-a");
     expect(screen.getByRole("button", { name: "부여받은 문서" })).not.toHaveAttribute("aria-current");
   });
 
   it("「부여받은 문서」에서 조건·쪽을 바꿔도 그 보기에 머문다", async () => {
-    navigation.go("/?granted=1");
+    navigation.go("/documents?granted=1");
     mockFinder(120, 300, [hr]);
     render(<AuthProvider><Home /></AuthProvider>);
     await screen.findByText("120건 중 1–50");
     fireEvent.change(screen.getByLabelText("정렬"), { target: { value: "title" } });
-    expect(navigation.replace).toHaveBeenLastCalledWith("/?granted=1&sort=title");
+    expect(navigation.replace).toHaveBeenLastCalledWith("/documents?granted=1&sort=title");
     fireEvent.click(screen.getByRole("button", { name: "다음" }));
-    expect(navigation.replace).toHaveBeenLastCalledWith("/?granted=1&sort=title&page=2");
+    expect(navigation.replace).toHaveBeenLastCalledWith("/documents?granted=1&sort=title&page=2");
   });
 
   it("부여받은 문서가 없으면 그렇게 알린다", async () => {
-    navigation.go("/?granted=1");
+    navigation.go("/documents?granted=1");
     mockFinder(0, 2, [hr]);
     render(<AuthProvider><Home /></AuthProvider>);
     expect(await screen.findByText("부여받은 문서가 없습니다.")).toBeInTheDocument();
   });
 
   it("「부여받은 문서」에서는 건수 줄이 전체가 아니라 이 목록의 건수다", async () => {
-    navigation.go("/?granted=1");
+    navigation.go("/documents?granted=1");
     mockFinder(2, 10, [hr]);
     render(<AuthProvider><Home /></AuthProvider>);
-    expect(await screen.findByText("이 목록 2건")).toBeInTheDocument();
+    expect(await screen.findByText("부여받은 문서 · 2건")).toBeInTheDocument();
     expect(screen.queryByText("문서 10건")).not.toBeInTheDocument();
   });
 
   it("폴더를 고르면 건수 줄이 그 폴더 목록의 건수다", async () => {
-    navigation.go("/?folder=folder-a");
+    navigation.go("/documents?folder=folder-a");
     mockFinder(2, 10, [hr]);
     // 실제 앱처럼 로그인 확인 뒤에 그린다 — 주소의 폴더를 폴더 목록이 오기 전에 판정하지 않는다.
     render(<AuthProvider><RequireAuth><Home /></RequireAuth></AuthProvider>);
     expect(await screen.findByRole("heading", { name: "인사" })).toBeInTheDocument();
-    expect(await screen.findByText("이 목록 2건")).toBeInTheDocument();
+    expect(await screen.findByText("인사 · 2건")).toBeInTheDocument();
     expect(screen.queryByText("문서 10건")).not.toBeInTheDocument();
   });
 
   it("전체 문서에서는 건수 줄이 열람 범위 전체의 처리 현황이다", async () => {
     mockFinder(2, 10, [hr]);
     render(<AuthProvider><Home /></AuthProvider>);
-    expect(await screen.findByText("문서 10건")).toBeInTheDocument();
+    expect(await screen.findByText("내가 열람할 수 있는 문서 10건 · 모두 검색 가능")).toBeInTheDocument();
     expect(screen.queryByText("이 목록 2건")).not.toBeInTheDocument();
   });
 
   it("「부여받은 문서」에서 올리면 업로드 폴더 기본값은 「폴더 없음」이다", async () => {
-    navigation.go("/?granted=1");
+    navigation.go("/documents?granted=1");
     mockFinder(2, 2, [hr]);
     render(<AuthProvider><Home /></AuthProvider>);
     await screen.findByRole("button", { name: /인사/ });
@@ -485,7 +439,7 @@ describe("목록 상태 주소", () => {
   afterEach(() => vi.unstubAllGlobals());
 
   it("주소의 조건과 쪽으로 조회하고 필터에도 표시한다", async () => {
-    navigation.go("/?q=출장&type=hwp&tag=보안&sort=title&page=2");
+    navigation.go("/documents?q=출장&type=hwp&tag=보안&sort=title&page=2");
     const fetchMock = mockFinder(120, 300);
     render(<Home />);
 
@@ -493,7 +447,7 @@ describe("목록 상태 주소", () => {
     const last = listRequests(fetchMock).at(-1);
     expect(Object.fromEntries(last?.searchParams ?? [])).toMatchObject({ q: "출장", content_type: "hwp", tag: "보안", sort: "title", offset: "50" });
     expect(screen.getByLabelText("제목 검색")).toHaveValue("출장");
-    expect(screen.getByLabelText("문서 유형")).toHaveValue("hwp");
+    expect(await screen.findByRole("button", { name: "HWP" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByLabelText("정렬")).toHaveValue("title");
   });
 
@@ -503,30 +457,30 @@ describe("목록 상태 주소", () => {
     await screen.findByText("120건 중 1–50");
 
     fireEvent.change(screen.getByLabelText("정렬"), { target: { value: "title" } });
-    expect(navigation.replace).toHaveBeenLastCalledWith("/?sort=title");
+    expect(navigation.replace).toHaveBeenLastCalledWith("/documents?sort=title");
     fireEvent.click(screen.getByRole("button", { name: "다음" }));
-    expect(navigation.replace).toHaveBeenLastCalledWith("/?sort=title&page=2");
+    expect(navigation.replace).toHaveBeenLastCalledWith("/documents?sort=title&page=2");
     expect(navigation.push).not.toHaveBeenCalled();
   });
 
   it("폴더를 바꾸면 조건은 두고 쪽만 처음으로 돌린다", async () => {
-    navigation.go("/?tag=보안&page=3");
+    navigation.go("/documents?tag=보안&page=3");
     mockFinder(120, 300, [hr]);
     render(<AuthProvider><Home /></AuthProvider>);
 
     fireEvent.click(await screen.findByRole("button", { name: /인사/ }));
 
-    expect(navigation.push).toHaveBeenLastCalledWith("/?folder=folder-a&tag=%EB%B3%B4%EC%95%88");
+    expect(navigation.push).toHaveBeenLastCalledWith("/documents?folder=folder-a&tag=%EB%B3%B4%EC%95%88");
   });
 
   it("주소에서 조건이 빠지면 제목 입력칸도 비우고 되돌려 쓰지 않는다", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
-    navigation.go("/?q=출장");
+    navigation.go("/documents?q=출장");
     mockFinder(2, 2);
     render(<Home />);
     expect(screen.getByLabelText("제목 검색")).toHaveValue("출장");
 
-    act(() => navigation.go("/"));
+    act(() => navigation.go("/documents"));
     act(() => vi.advanceTimersByTime(500));
 
     expect(screen.getByLabelText("제목 검색")).toHaveValue("");
@@ -535,11 +489,11 @@ describe("목록 상태 주소", () => {
   });
 
   it("지금 목록 주소를 「목록으로 돌아가기」용으로 기억한다", async () => {
-    navigation.go("/?sort=title&page=2");
+    navigation.go("/documents?sort=title&page=2");
     mockFinder(120, 300);
     render(<Home />);
     await screen.findByText("120건 중 51–100");
 
-    expect(lastListHref()).toBe("/?sort=title&page=2");
+    expect(lastListHref()).toBe("/documents?sort=title&page=2");
   });
 });

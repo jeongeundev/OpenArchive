@@ -19,7 +19,7 @@ export default function ErrorPage({ retry }: {
           className="rounded-lg bg-strong px-4 py-2 text-sm font-medium text-on-strong hover:bg-strong/90">
           다시 시도
         </button>
-        <Link href="/" className="text-sm text-accent hover:underline">문서 목록으로 가기</Link>
+        <Link href="/documents" className="text-sm text-accent hover:underline">문서 목록으로 가기</Link>
       </div>
     </section>
   );

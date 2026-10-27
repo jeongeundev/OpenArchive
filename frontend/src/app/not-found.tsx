@@ -7,7 +7,7 @@ export default function NotFound(): React.ReactElement {
     <section className="space-y-4">
       <h1 className="text-4xl font-semibold text-strong">페이지를 찾을 수 없습니다</h1>
       <p className="text-sm text-muted">주소가 잘못되었거나 없는 화면입니다.</p>
-      <Link href="/" className="inline-block text-sm text-accent hover:underline">문서 목록으로 가기</Link>
+      <Link href="/documents" className="inline-block text-sm text-accent hover:underline">문서 목록으로 가기</Link>
     </section>
   );
 }
