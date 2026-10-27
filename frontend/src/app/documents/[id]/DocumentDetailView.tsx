@@ -78,9 +78,11 @@ export function DocumentDetailView(): React.ReactElement {
   const urlTab = readTab(new URLSearchParams(searchParams.toString()), versionFocus !== null, anonymous);
   const [tab, setTab] = useState<DetailTab>(urlTab);
   // 주소가 바뀌면(다른 인용 링크로 이동 등) 그 탭으로 맞춘다. 탭 클릭은 주소를 같은 값으로 바꾸므로 그대로다.
-  const [shownUrlTab, setShownUrlTab] = useState({ tab: urlTab, focus: versionFocus });
-  if (shownUrlTab.tab !== urlTab || shownUrlTab.focus !== versionFocus) {
-    setShownUrlTab({ tab: urlTab, focus: versionFocus });
+  // 인용 위치는 값으로 비교한다 — 탭 클릭이 주소를 바꾸면 searchParams가 새 객체가 되어 객체 비교는 늘 달라진다.
+  const focusKey = versionFocus === null ? null : `${versionFocus.version}:${versionFocus.chunk}`;
+  const [shownUrlTab, setShownUrlTab] = useState({ tab: urlTab, focus: focusKey });
+  if (shownUrlTab.tab !== urlTab || shownUrlTab.focus !== focusKey) {
+    setShownUrlTab({ tab: urlTab, focus: focusKey });
     setTab(urlTab);
   }
   // 활동 기록은 처음 열 때 불러오고, 그 뒤로는 숨겨도 마운트를 유지한다.

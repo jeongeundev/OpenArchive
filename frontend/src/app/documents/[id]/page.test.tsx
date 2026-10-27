@@ -688,6 +688,36 @@ describe("문서 상세의 탭", () => {
     await waitFor(() => expect(scroll).toHaveBeenCalled());
   });
 
+  it("인용 링크로 들어온 뒤에도 탭을 고르면 주소가 바뀌어도 그 탭에 머문다", async () => {
+    navigation.searchParams = new URLSearchParams("version=1&chunk=0");
+    stubTabFetch();
+    Element.prototype.scrollIntoView = vi.fn();
+    const view = (): React.ReactElement => <AuthProvider><DocumentDetailView /></AuthProvider>;
+    let rerender: (ui: React.ReactElement) => void = () => {};
+    await act(async () => {
+      rerender = render(view()).rerender;
+    });
+    await screen.findByRole("tab", { name: "본문" });
+    // 실제 라우터처럼 replace가 주소를 바꾸면 useSearchParams가 새 객체를 돌려준다.
+    navigation.replace.mockImplementation((href: string) => {
+      navigation.searchParams = new URLSearchParams(href.split("?")[1] ?? "");
+      rerender(view());
+    });
+    expect(screen.getByRole("tab", { name: /버전 이력/ })).toHaveAttribute("aria-selected", "true");
+
+    act(() => fireEvent.click(screen.getByRole("tab", { name: "활동 기록" })));
+    expect(navigation.replace).toHaveBeenLastCalledWith(
+      "/documents/document-1?version=1&chunk=0&tab=activity", { scroll: false },
+    );
+    expect(screen.getByRole("tab", { name: "활동 기록" })).toHaveAttribute("aria-selected", "true");
+
+    act(() => fireEvent.click(screen.getByRole("tab", { name: "본문" })));
+    expect(navigation.replace).toHaveBeenLastCalledWith(
+      "/documents/document-1?version=1&chunk=0", { scroll: false },
+    );
+    expect(screen.getByRole("tab", { name: "본문" })).toHaveAttribute("aria-selected", "true");
+  });
+
   it("「활동 기록」은 처음 열 때 한 번만 불러오고, 탭을 오가도 다시 부르지 않는다", async () => {
     const fetchMock = stubTabFetch();
     await renderPage();
