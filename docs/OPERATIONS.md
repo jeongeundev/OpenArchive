@@ -752,6 +752,9 @@ ADMIN_PASSWORD='<초기 비밀번호>' openarchive init --yes --dsn "..."    # �
 ADMIN_PASSWORD='<비밀번호>' openarchive create-user alice [--admin]    # 셸에서 계정 추가
 ```
 
+`--department <그룹명>`을 주면 그 그룹을 소속 부서로 정하고 구성원으로도 넣습니다. 그룹은 미리 있어야 하며, 없는
+이름이면 계정을 만들지 않고 종료 코드 1로 끝납니다(그룹을 대신 만들지 않습니다).
+
 웹의 "첫 가입자가 관리자" 방식은 두지 않습니다. 설치 직후 URL에 먼저 닿은 사람이 관리자를 차지하기
 때문입니다 (ADR-028).
 
