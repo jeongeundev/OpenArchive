@@ -3,106 +3,46 @@
 "use client";
 
 import Link from "next/link";
-
-import { scopeSummary } from "@/lib/scope";
 import type { DocumentSummary } from "@/lib/types";
-import { OwnerLabel } from "./OwnerLabel";
 import { DocumentStatusBadge } from "./StatusBadge";
 
-const DATE_FORMATTER = new Intl.DateTimeFormat("ko-KR", {
-  year: "numeric",
-  month: "short",
-  day: "numeric",
-  hour: "2-digit",
-  minute: "2-digit",
-});
+function dateLabel(value: string): string {
+  const date = new Date(value);
+  const pad = (number: number) => String(number).padStart(2, "0");
+  return `${date.getFullYear()}.${pad(date.getMonth() + 1)}.${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
 
-/**
- * 문서 목록 — 행마다 두 줄(형식 · 제목 · 상태 / 위치 · 소유자 · 열람 범위 · 수정일 · 태그).
- * 제목은 상세로 가고(TC 245), 행의 나머지 영역과 「정보」 버튼은 오른쪽 정보 창을 연다.
- * 위치는 볼 수 있는 폴더 경로만 온다 — 없으면 자리째 빼 숨은 폴더의 흔적을 남기지 않는다.
- */
-export function DocumentList({
-  documents,
-  emptyMessage = "아직 문서가 없습니다.",
-  selectedId,
-  onSelect,
-}: {
+export function DocumentList({ documents, emptyMessage = "아직 문서가 없습니다." }: {
   documents: DocumentSummary[];
   emptyMessage?: string;
-  selectedId: string | null;
-  onSelect: (id: string) => void;
 }): React.ReactElement {
-  if (documents.length === 0) {
-    return (
-      <div className="rounded-lg border border-line bg-card p-6">
-        <p className="text-sm text-muted">{emptyMessage}</p>
-      </div>
-    );
-  }
-
+  if (!documents.length) return <p className="rounded-xl border border-line bg-card p-6 text-sm text-muted">{emptyMessage}</p>;
+  const cell = "block min-w-0 break-words px-4 py-2 lg:table-cell lg:py-4";
   return (
-    <ul className="divide-y divide-line overflow-hidden rounded-lg border border-line bg-card">
-      {documents.map((document) => {
-        const selected = document.id === selectedId;
-        const location = document.folder_path?.length ? document.folder_path.join(" › ") : null;
-        const meta: { key: string; text: React.ReactNode; strong?: boolean; wrap?: boolean }[] = [
-          ...(location !== null ? [{ key: "location", text: location, strong: true }] : []),
-          { key: "owner", text: <OwnerLabel owner={document.owner_id} department={document.owner_department} /> },
-          { key: "scope", text: scopeSummary(document) },
-          { key: "updated", text: DATE_FORMATTER.format(new Date(document.updated_at)) },
-          ...(document.tags.length > 0 ? [{ key: "tags", text: document.tags.join(", "), wrap: true }] : []),
-        ];
-        return (
-          <li
-            key={document.id}
-            aria-current={selected ? "true" : undefined}
-            onClick={(event) => {
-              if ((event.target as HTMLElement).closest("a, button")) return;
-              onSelect(document.id);
-            }}
-            className={`cursor-pointer border-l-2 px-4 py-3 ${
-              selected ? "border-l-accent bg-accent-soft" : "border-l-transparent hover:bg-sunken"
-            }`}
-          >
-            <div className="flex items-start gap-3">
-              <span className="mt-0.5 shrink-0 whitespace-nowrap rounded border border-line px-1.5 py-0.5 text-xs font-medium uppercase text-muted">
-                {document.content_type}
-              </span>
-              <Link
-                href={`/documents/${document.id}`}
-                className="min-w-0 flex-1 break-words font-medium text-strong hover:text-accent"
-              >
-                {document.title}
-              </Link>
-              <div className="flex shrink-0 items-center gap-2">
-                <DocumentStatusBadge document={document} />
-                <button
-                  type="button"
-                  aria-pressed={selected}
-                  onClick={() => onSelect(document.id)}
-                  className="rounded-lg border border-line px-2 py-0.5 text-xs text-body hover:bg-sunken"
-                >
-                  정보
-                </button>
+    <table className="block w-full table-fixed rounded-xl border border-line bg-card text-left text-sm lg:table">
+      <thead className="hidden bg-sunken text-xs text-muted lg:table-header-group">
+        <tr>{["이름", "위치", "소유자", "열람 범위", "수정일", "상태"].map((label, index) => <th key={label} className={`px-4 py-3 font-medium ${index === 0 ? "w-1/3" : ""}`}>{label}</th>)}</tr>
+      </thead>
+      <tbody className="block lg:table-row-group">
+        {documents.map(document => {
+          const department = document.owner_department;
+          const isPublic = document.effective_visibility === "public";
+          return <tr key={document.id} className="block border-t border-line py-3 lg:table-row lg:py-0">
+            <td className={cell}>
+              <div className="flex items-start gap-2">
+                <span className="shrink-0 whitespace-nowrap rounded bg-accent-soft px-1.5 py-0.5 text-xs font-medium uppercase text-accent">{document.content_type}</span>
+                <Link href={`/documents/${document.id}`} className="min-w-0 break-words font-semibold text-strong hover:text-accent">{document.title}</Link>
               </div>
-            </div>
-            <p className="mt-1 flex flex-wrap gap-x-1.5 pl-1 text-xs text-muted">
-              {meta.map((item, index) => (
-                <span key={item.key} className="flex gap-x-1.5">
-                  {index > 0 ? <span aria-hidden="true">·</span> : null}
-                  <span
-                    data-testid="document-meta-item"
-                    className={`${item.wrap ? "" : "whitespace-nowrap"} ${item.strong ? "font-medium text-body" : ""}`.trim()}
-                  >
-                    {item.text}
-                  </span>
-                </span>
-              ))}
-            </p>
-          </li>
-        );
-      })}
-    </ul>
+              {document.tags.length > 0 && <div className="mt-2 flex flex-wrap gap-2 text-xs text-muted">{document.tags.map(tag => <span key={tag}>#{tag}</span>)}</div>}
+            </td>
+            <td className={`${cell} text-muted`}>{document.folder_path?.join(" › ")}</td>
+            <td className={`${cell} text-body`}>{document.owner_id}{department && <div className="mt-1 text-xs text-muted">{department.folder_id ? <Link href={`/documents?folder=${encodeURIComponent(department.folder_id)}`} className="hover:text-accent">{department.name}</Link> : department.name}</div>}</td>
+            <td className={cell}><span className={`inline-block whitespace-nowrap rounded-full px-2 py-0.5 text-xs ${isPublic ? "bg-done-soft text-done" : "bg-sunken text-body"}`}>{isPublic ? "조직 공개" : "제한"}</span>{document.follows_folder && <div className="mt-1 text-xs text-muted">폴더 범위 따름</div>}</td>
+            <td className={`${cell} text-xs text-muted`}><time dateTime={document.updated_at}>{dateLabel(document.updated_at)}</time></td>
+            <td className={cell}><DocumentStatusBadge document={document} /></td>
+          </tr>;
+        })}
+      </tbody>
+    </table>
   );
 }

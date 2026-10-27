@@ -5,13 +5,14 @@
 import { useEffect, useState } from "react";
 
 import type { DocumentFilters as Filters, DocumentSort } from "@/lib/api";
-import { SUPPORTED_CONTENT_TYPES, type ContentType } from "@/lib/types";
+import { type ContentType } from "@/lib/types";
 
 const INPUT_CLASS = "mt-1 w-full rounded-lg border border-line bg-card px-3 py-1.5 text-sm text-strong";
 
-export function DocumentFilters({ value, tags, onChange }: {
+export function DocumentFilters({ value, tags, types = [], onChange }: {
   value: Filters;
   tags: string[];
+  types?: ContentType[];
   onChange: (value: Filters) => void;
 }): React.ReactElement {
   const [query, setQuery] = useState(value.q ?? "");
@@ -34,18 +35,16 @@ export function DocumentFilters({ value, tags, onChange }: {
   }, [query, value, onChange]);
 
   return (
-    <div className="grid gap-3 rounded-lg border border-line bg-card p-3 md:grid-cols-4">
+    <div className="grid gap-3 rounded-lg border border-line bg-card p-3 lg:grid-cols-[minmax(0,1fr)_auto_auto]">
       <label className="block text-sm text-body">
         제목 검색
         <input className={INPUT_CLASS} value={query} onChange={(event) => setQuery(event.target.value)} />
       </label>
-      <label className="block text-sm text-body">
-        문서 유형
-        <select className={INPUT_CLASS} value={value.contentType ?? ""} onChange={(event) => onChange({ ...value, contentType: (event.target.value || undefined) as ContentType | undefined })}>
-          <option value="">전체</option>
-          {SUPPORTED_CONTENT_TYPES.map((type) => <option key={type} value={type}>{type.toUpperCase()}</option>)}
-        </select>
-      </label>
+      <div role="group" aria-label="문서 유형" className="flex flex-wrap items-center gap-2 lg:col-span-3 lg:row-start-2">
+        {[undefined, ...types].map(type => <button key={type ?? "all"} type="button" aria-pressed={(value.contentType ?? undefined) === type}
+          onClick={() => onChange({ ...value, contentType: type })}
+          className={`rounded-full border border-line px-3 py-1.5 text-xs ${value.contentType === type ? "bg-strong text-on-strong" : "bg-card text-body"}`}>{type?.toUpperCase() ?? "전체"}</button>)}
+      </div>
       <label className="block text-sm text-body">
         태그
         <select className={INPUT_CLASS} value={value.tag ?? ""} onChange={(event) => onChange({ ...value, tag: event.target.value || undefined })}>

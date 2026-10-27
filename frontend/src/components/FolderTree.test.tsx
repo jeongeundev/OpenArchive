@@ -41,13 +41,13 @@ describe("FolderTree", () => {
     expect(parent).not.toBeNull();
     const child = within(parent as HTMLElement).getByRole("button", { name: /채용/ });
     expect(child).toHaveTextContent("1");
-    expect(screen.getByRole("button", { name: /인사/ })).toHaveTextContent("3");
+    expect(screen.getByRole("button", { name: /인사/ })).toHaveTextContent("4");
   });
 
   it("부서 폴더에는 「부서 폴더 · 부서」를 작게 표시하고 다른 폴더에는 없다 (D15)", () => {
     render(<FolderTree folders={[{ ...folder("a", "IT전략실 문서", null, 2), department: { id: "g1", name: "IT전략실" } }, folder("b", "인사", null)]}
       selectedId={null} onSelect={vi.fn()} onCreate={vi.fn()} />);
-    expect(screen.getByRole("button", { name: /IT전략실 문서/ })).toHaveTextContent("부서 폴더 · IT전략실");
+    expect(screen.getByRole("button", { name: /IT전략실 문서/ })).not.toHaveTextContent("부서 폴더");
     expect(screen.getByRole("button", { name: /인사/ })).not.toHaveTextContent("부서 폴더");
   });
 
@@ -62,26 +62,11 @@ describe("FolderTree", () => {
     expect(onSelect).toHaveBeenLastCalledWith(null);
   });
 
-  it("「전체 문서」 바로 아래 「부여받은 문서」를 두고, 누르면 그 보기를 알린다 (D20)", () => {
-    const onSelect = vi.fn();
-    const onSelectGranted = vi.fn();
-    render(<FolderTree folders={[folder("a", "인사", null, 2)]} selectedId={null} granted={false}
-      onSelect={onSelect} onSelectGranted={onSelectGranted} onCreate={vi.fn()} />);
-    const all = screen.getByRole("button", { name: "전체 문서" });
-    const granted = screen.getByRole("button", { name: "부여받은 문서" });
-    expect(all.nextElementSibling).toBe(granted);
-    expect(granted).toHaveTextContent(/^부여받은 문서$/);
-    fireEvent.click(granted);
-    expect(onSelectGranted).toHaveBeenCalledTimes(1);
-    fireEvent.click(screen.getByRole("button", { name: /인사/ }));
-    expect(onSelect).toHaveBeenLastCalledWith("a");
-  });
-
-  it("「부여받은 문서」를 보는 중이면 그 항목만 현재 위치다", () => {
-    render(<FolderTree folders={[folder("a", "인사", null)]} selectedId={null} granted
-      onSelect={vi.fn()} onSelectGranted={vi.fn()} onCreate={vi.fn()} />);
-    expect(screen.getByRole("button", { name: "부여받은 문서" })).toHaveAttribute("aria-current", "true");
-    expect(screen.getByRole("button", { name: "전체 문서" })).not.toHaveAttribute("aria-current");
-    expect(screen.getByRole("button", { name: /인사/ })).not.toHaveAttribute("aria-current");
+  it("부여받은 문서와 휴지통은 트리에 없고 전체 건수를 표시한다", () => {
+    render(<FolderTree folders={[]} selectedId={null} granted total={12} onSelect={vi.fn()} onCreate={vi.fn()} />);
+    expect(screen.getByRole("button", { name: /전체 문서/ })).toHaveTextContent("12");
+    expect(screen.queryByText("부여받은 문서")).not.toBeInTheDocument();
+    expect(screen.queryByText("휴지통")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /전체 문서/ })).not.toHaveAttribute("aria-current");
   });
 });

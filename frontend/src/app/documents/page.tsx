@@ -7,9 +7,8 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useId, useMemo, useState } from "react";
 
 import { DocumentFilters } from "@/components/DocumentFilters";
-import { DocumentInfoPane } from "@/components/DocumentInfoPane";
 import { DocumentList } from "@/components/DocumentList";
-import { createFolder, listDocumentTags, type DocumentFilters as Filters } from "@/lib/api";
+import { countDocuments, createFolder, listDocumentTags, type DocumentFilters as Filters } from "@/lib/api";
 import { DocumentPager } from "@/components/DocumentPager";
 import { EmptyDocuments } from "@/components/EmptyDocuments";
 import { FolderHeader } from "@/components/FolderHeader";
@@ -21,6 +20,8 @@ import { useDocumentProgress } from "@/lib/useDocumentProgress";
 import { useDocuments } from "@/lib/useDocuments";
 import { useFolders } from "@/lib/useFolders";
 import { listHref, listStateFromParams, rememberListHref } from "@/lib/urlState";
+
+import { SUPPORTED_CONTENT_TYPES, type ContentType } from "@/lib/types";
 
 const PAGE_SIZE = 50;
 
@@ -50,7 +51,9 @@ function HomeView(): React.ReactElement {
   const [tags, setTags] = useState<string[]>([]);
   const [tagsRevision, setTagsRevision] = useState(0);
   // 업로드 폼은 접어 두고 목록을 먼저 보인다. 올린 뒤에도 이어서 올릴 수 있게 펼친 채로 둔다.
-  const [uploadOpen, setUploadOpen] = useState(false);
+  const [uploadOpen, setUploadOpen] = useState(searchParams?.get("upload") === "1");
+  const [creating, setCreating] = useState(false);
+  const [types, setTypes] = useState<ContentType[]>([]);
   const uploadRegionId = useId();
   const { documents, total, loading, error, refresh } = useDocuments({
     ...filters,
@@ -60,17 +63,6 @@ function HomeView(): React.ReactElement {
     offset: page * PAGE_SIZE,
   });
   const { progress, error: progressError, refresh: refreshProgress } = useDocumentProgress();
-  // 정보 창에 띄운 문서. 주소에 두지 않는다 — 목록 상태가 아니라 잠깐 들여다보는 것이다.
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  // 폴더가 바뀌면 창을 닫는다. 렌더 중에 맞추는 것은 React가 권하는 「이전 값과 비교」 방식이다.
-  const [selectionFolderId, setSelectionFolderId] = useState(folderId);
-  if (selectionFolderId !== folderId) {
-    setSelectionFolderId(folderId);
-    setSelectedId(null);
-  }
-  // 목록에서 사라진 문서(조건·쪽 변경, 삭제)는 창도 닫는다.
-  const shownId = selectedId !== null && documents.some(document => document.id === selectedId) ? selectedId : null;
-
   useEffect(() => {
     if (folderParam === null || !auth.authenticated || foldersLoading || foldersError !== null) return;
     if (!folders.some(folder => folder.id === folderParam)) router.replace(listHref({ folderId: null, filters, page: 0 }));
@@ -105,6 +97,14 @@ function HomeView(): React.ReactElement {
 
   useEffect(() => {
     const controller = new AbortController();
+    Promise.all(SUPPORTED_CONTENT_TYPES.filter(type => type !== "jpeg").map(async type => ({ type, count: await countDocuments({ contentType: type }, controller.signal) })))
+      .then(results => { if (!controller.signal.aborted) setTypes(results.filter(item => item.count > 0).map(item => item.type)); }).catch(() => {});
+    return () => controller.abort();
+  }, [tagsRevision]);
+  const inFlight = progress ? progress.extracting + progress.pending + progress.processing : 0;
+
+  useEffect(() => {
+    const controller = new AbortController();
     listDocumentTags(controller.signal).then((result) => {
       if (!controller.signal.aborted) setTags(result);
     }).catch(() => {});
@@ -135,66 +135,41 @@ function HomeView(): React.ReactElement {
 
   return (
     <section className="space-y-8">
-      <div>
-        <h1 className="text-4xl font-semibold text-strong">문서</h1>
-        <p className="mt-3 text-sm text-muted">
-          저장된 문서와 임베딩 처리 상태를 확인합니다.
-        </p>
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <div><h1 className="text-3xl font-bold text-strong">문서</h1>
+          <p className="mt-2 text-sm text-muted">{globalTotal !== null ? `내가 열람할 수 있는 문서 ${globalTotal}건` : "문서 수를 확인하는 중…"}{inFlight > 0 ? ` · 처리 중 ${inFlight}` : progress && progress.ready === globalTotal && globalTotal !== 0 ? " · 모두 검색 가능" : ""}</p>
+        </div>
+        {auth.authenticated && <div className="flex gap-2">
+          <button type="button" onClick={() => setCreating(open => !open)} className="rounded-lg border border-line-strong px-4 py-2 text-sm text-body">새 폴더</button>
+          <button type="button" aria-expanded={uploadOpen} aria-controls={uploadRegionId} onClick={() => setUploadOpen(open => !open)} className="rounded-lg bg-strong px-4 py-2 text-sm text-on-strong">{uploadOpen ? "업로드 닫기" : "문서 올리기"}</button>
+        </div>}
       </div>
-
-      <div data-testid="document-layout" className={`grid gap-6 ${
-        auth.authenticated
-          ? shownId !== null ? "lg:grid-cols-[13rem_minmax(0,1fr)_400px]" : "lg:grid-cols-[13rem_minmax(0,1fr)]"
-          : shownId !== null ? "lg:grid-cols-[minmax(0,1fr)_400px]" : ""
-      }`}>
-      {auth.authenticated ? (
-        <aside>
-          <FolderTree folders={folders} selectedId={folderId} granted={granted}
-            onSelect={selectFolder} onSelectGranted={selectGranted} onCreate={onCreateFolder} />
-          <Link href="/trash" className="mt-6 block px-2 text-sm text-muted hover:text-strong">휴지통</Link>
-        </aside>
-      ) : null}
-      <div className="min-w-0 space-y-8">
+      {auth.authenticated && <nav aria-label="문서 보기" className="flex gap-6 border-b border-line text-sm">
+        <button type="button" aria-current={!granted ? "page" : undefined} onClick={() => selectFolder(null)} className={`border-b-2 pb-3 ${!granted ? "border-strong font-semibold text-strong" : "border-transparent text-muted"}`}>전체 문서</button>
+        <button type="button" aria-current={granted ? "page" : undefined} onClick={selectGranted} className={`border-b-2 pb-3 ${granted ? "border-strong font-semibold text-strong" : "border-transparent text-muted"}`}>부여받은 문서</button>
+        <Link href="/trash" className="pb-3 text-muted">휴지통</Link>
+      </nav>}
+      <div id={uploadRegionId}>{auth.authenticated && uploadOpen ? <UploadDropzone onUploaded={onUploaded} folders={folders} defaultFolderId={folderId} /> : null}</div>
+      <div data-testid="document-layout" className={`grid gap-6 ${auth.authenticated ? "lg:grid-cols-[13rem_minmax(0,1fr)]" : ""}`}>
+        {auth.authenticated && <aside className="min-w-0"><h2 className="mb-3 text-sm font-semibold text-muted">폴더</h2>
+          <FolderTree folders={folders} selectedId={folderId} granted={granted} total={globalTotal} creating={creating} onCreatingChange={setCreating} onSelect={selectFolder} onCreate={onCreateFolder} />
+        </aside>}
+        <div className="min-w-0 space-y-5">
       {selectedFolder !== null ? (
         <FolderHeader key={selectedFolder.id} folder={selectedFolder} folders={folders}
           onChanged={refreshFolders} onDeleted={onFolderDeleted} onAccessSaved={onFolderAccessSaved} />
       ) : null}
 
-      <div className="space-y-4">
-        <div className="flex flex-wrap items-center gap-3">
-          {auth.authenticated ? (
-            <button type="button" aria-expanded={uploadOpen} aria-controls={uploadRegionId}
-              onClick={() => setUploadOpen(open => !open)}
-              className="whitespace-nowrap rounded-lg bg-strong px-4 py-2 text-sm font-medium text-on-strong hover:bg-strong/90">
-              {uploadOpen ? "업로드 닫기" : "문서 올리기"}
-            </button>
-          ) : null}
-          <div className="min-w-0 flex-1">
-            <DocumentFilters value={filters} tags={tags} onChange={onFiltersChanged} />
-          </div>
-        </div>
-        {auth.authenticated ? (
-          <div id={uploadRegionId}>
-            {uploadOpen ? <UploadDropzone onUploaded={onUploaded} folders={folders} defaultFolderId={folderId} /> : null}
-          </div>
-        ) : null}
-      </div>
-
+      <DocumentFilters value={filters} tags={tags} types={types} onChange={onFiltersChanged} />
+      {total !== null && <p aria-label="목록 건수" className="text-sm text-muted" role="status">{selectedFolder?.name ?? (granted ? "부여받은 문서" : "전체 문서")} · {total}건</p>}
       {globalTotal === 0 && auth.username !== null ? (
         <EmptyDocuments username={auth.username} />
       ) : loading ? (
         <p className="text-sm text-muted">불러오는 중…</p>
       ) : (
         <div className="space-y-4">
-          {/* 폴더·「부여받은 문서」는 그 목록만 센다 — 열람 범위 전체 수가 좁힌 목록 위에 있으면 엇갈려 읽힌다. */}
-          {folderId !== null || granted ? (
-            total !== null ? (
-              <p aria-label="목록 건수" className="text-sm" role="status">
-                <span className="font-medium text-strong">이 목록 {total}건</span>
-              </p>
-            ) : null
-          ) : progress !== null ? <PipelineProgress progress={progress} /> : null}
-          <DocumentList documents={documents} emptyMessage={emptyMessage} selectedId={shownId} onSelect={setSelectedId} />
+          {progress !== null && inFlight > 0 ? <PipelineProgress progress={progress} /> : null}
+          <DocumentList documents={documents} emptyMessage={emptyMessage} />
           {globalTotal === null && progressError !== null ? (
             <p className="text-sm text-muted" role="status">
               처리 현황을 불러오지 못했습니다 — 전체 문서 수를 표시할 수 없습니다.
@@ -218,7 +193,6 @@ function HomeView(): React.ReactElement {
         </p>
       ) : null}
       </div>
-      {shownId !== null ? <DocumentInfoPane key={shownId} documentId={shownId} onClose={() => setSelectedId(null)} /> : null}
       </div>
     </section>
   );

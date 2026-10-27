@@ -23,6 +23,9 @@ export function PipelineProgress({
 
   return (
     <div className="space-y-1 text-sm">
+      {inFlight > 0 && <div role="progressbar" aria-label="검색 준비 진행률" aria-valuemin={0} aria-valuemax={total} aria-valuenow={progress.ready} className="h-1 overflow-hidden rounded-full bg-sunken">
+        <div className="h-full bg-accent" style={{ width: `${total ? progress.ready / total * 100 : 0}%` }} />
+      </div>}
       <p aria-label="처리 현황" className="text-body" role="status">
         <span className="font-medium text-strong">문서 {total}건</span>
         {STAGES.filter((stage) => progress[stage.key] > 0).map((stage) => (

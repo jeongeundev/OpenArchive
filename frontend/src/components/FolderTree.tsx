@@ -47,16 +47,21 @@ export function FolderNameForm({ label, initial = "", submitLabel, onSubmit, onC
   );
 }
 
-export function FolderTree({ folders, selectedId, granted = false, onSelect, onSelectGranted, onCreate }: {
+export function FolderTree({ folders, selectedId, granted = false, total, creating: externalCreating, onCreatingChange, onSelect, onCreate }: {
   folders: Folder[];
   selectedId: string | null;
   /** 「부여받은 문서」 보기 중인지. 그때는 「전체 문서」가 현재 위치가 아니다. */
   granted?: boolean;
   onSelect: (id: string | null) => void;
-  onSelectGranted?: () => void;
+  total?: number | null;
+  creating?: boolean;
+  onCreatingChange?: (value: boolean) => void;
   onCreate: (name: string, parentId: string | null) => Promise<void>;
 }): React.ReactElement {
-  const [creating, setCreating] = useState(false);
+  const [localCreating, setLocalCreating] = useState(false);
+  const creating = externalCreating ?? localCreating;
+  const setCreating = onCreatingChange ?? setLocalCreating;
+  function count(folder: Folder): number { return folder.document_count + folderChildren(folders, folder.id).reduce((sum, child) => sum + count(child), 0); }
   const allSelected = selectedId === null && !granted;
   const ids = new Set(folders.map(folder => folder.id));
   const roots = folders.filter(folder => folder.parent_id === null || !ids.has(folder.parent_id))
@@ -71,11 +76,8 @@ export function FolderTree({ folders, selectedId, granted = false, onSelect, onS
           className={`flex w-full justify-between gap-2 rounded px-2 py-1 text-left text-sm ${selected ? "bg-sunken text-strong" : "text-body hover:text-strong"}`}>
           <span className="min-w-0">
             <span className="block truncate">{folder.name}</span>
-            {folder.department ? (
-              <span className="block truncate text-xs text-muted">부서 폴더 · {folder.department.name}</span>
-            ) : null}
           </span>
-          <span className="text-muted">{folder.document_count}</span>
+          <span className="text-muted">{count(folder)}</span>
         </button>
         {children.length > 0 ? <ul className="ml-3 border-l border-line pl-2">{children.map(item)}</ul> : null}
       </li>
@@ -87,22 +89,16 @@ export function FolderTree({ folders, selectedId, granted = false, onSelect, onS
       <div className="space-y-1">
         <button type="button" onClick={() => onSelect(null)} aria-current={allSelected ? "true" : undefined}
           className={`w-full rounded px-2 py-1 text-left text-sm ${allSelected ? "bg-sunken text-strong" : "text-body hover:text-strong"}`}>
-          전체 문서
+          전체 문서{total != null ? <span className="float-right text-muted">{total}</span> : null}
         </button>
-        {onSelectGranted ? (
-          <button type="button" onClick={onSelectGranted} aria-current={granted ? "true" : undefined}
-            className={`w-full rounded px-2 py-1 text-left text-sm ${granted ? "bg-sunken text-strong" : "text-body hover:text-strong"}`}>
-            부여받은 문서
-          </button>
-        ) : null}
       </div>
       {roots.length > 0 ? <ul className="space-y-1">{roots.map(item)}</ul> : null}
       {creating ? (
         <FolderNameForm label="새 폴더 이름" submitLabel="만들기" onCancel={() => setCreating(false)}
           onSubmit={async name => { await onCreate(name, null); setCreating(false); }} />
-      ) : (
+      ) : externalCreating === undefined ? (
         <button type="button" onClick={() => setCreating(true)} className="text-sm text-accent hover:underline">새 폴더</button>
-      )}
+      ) : null}
     </nav>
   );
 }
