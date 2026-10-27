@@ -12,7 +12,7 @@ describe("OwnerLabel", () => {
     );
 
     expect(container).toHaveTextContent(/^김민준\(IT전략실\)$/);
-    expect(screen.getByRole("link", { name: "IT전략실" })).toHaveAttribute("href", "/?folder=f1");
+    expect(screen.getByRole("link", { name: "IT전략실" })).toHaveAttribute("href", "/documents?folder=f1");
   });
 
   it("부서 폴더를 볼 수 없으면 같은 글자를 링크 없이 보인다", () => {

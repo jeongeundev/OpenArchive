@@ -27,5 +27,5 @@ it("「다시 시도」로 다시 그리거나 문서 목록으로 갈 수 있�
 
   fireEvent.click(screen.getByRole("button", { name: "다시 시도" }));
   expect(retry).toHaveBeenCalledOnce();
-  expect(screen.getByRole("link", { name: "문서 목록으로 가기" })).toHaveAttribute("href", "/");
+  expect(screen.getByRole("link", { name: "문서 목록으로 가기" })).toHaveAttribute("href", "/documents");
 });

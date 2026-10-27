@@ -23,7 +23,7 @@ export function OwnerLabel({
       {department.folder_id === null ? (
         department.name
       ) : (
-        <Link href={`/?folder=${encodeURIComponent(department.folder_id)}`} className="hover:text-accent">
+        <Link href={`/documents?folder=${encodeURIComponent(department.folder_id)}`} className="hover:text-accent">
           {department.name}
         </Link>
       )}

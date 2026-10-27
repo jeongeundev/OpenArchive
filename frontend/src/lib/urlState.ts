@@ -57,7 +57,7 @@ export function listHref({ folderId, filters, page, granted }: ListState): strin
   if (filters.tag) params.set("tag", filters.tag);
   if (filters.sort && filters.sort !== "updated") params.set("sort", filters.sort);
   if (page > 0) params.set("page", String(page + 1));
-  return withQuery("/", params);
+  return withQuery("/documents", params);
 }
 
 export function listStateFromParams(params: URLSearchParams): ListState {
@@ -94,9 +94,10 @@ export function lastListHref(): string {
   try {
     const href = sessionStorage.getItem(LAST_LIST_KEY);
     // 목록 주소만 받는다 — 링크 href로 쓰이므로 다른 곳을 가리키는 값을 그대로 따르지 않는다.
-    if (href === "/" || href?.startsWith("/?")) return href;
+    if (href === "/documents" || href?.startsWith("/documents?")) return href;
+    if (href === "/" || href?.startsWith("/?")) return "/documents" + href.slice(1);
   } catch {
     // 아래로.
   }
-  return "/";
+  return "/documents";
 }

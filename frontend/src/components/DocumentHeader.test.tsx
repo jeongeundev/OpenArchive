@@ -76,7 +76,7 @@ describe("DocumentHeader", () => {
     render(<DocumentHeader document={{ ...document, owner_id: "김민준", owner_department: { name: "IT전략실", folder_id: "f1" } }} />);
 
     expect(metaLine()).toHaveTextContent(`MD · 김민준(IT전략실) · 조직 공개 · ${formatDate(document.updated_at)}`);
-    expect(screen.getByRole("link", { name: "IT전략실" })).toHaveAttribute("href", "/?folder=f1");
+    expect(screen.getByRole("link", { name: "IT전략실" })).toHaveAttribute("href", "/documents?folder=f1");
   });
 
   it("폴더 밖 문서는 위치 칸을 통째로 뺀다", () => {

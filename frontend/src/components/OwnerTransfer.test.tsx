@@ -24,7 +24,7 @@ describe("OwnerTransfer", () => {
     fireEvent.click(screen.getByRole("button", { name: "소유자 이전" }));
     expect(confirm).toHaveBeenCalledWith(expect.stringContaining("이전하면 열람 범위대로만 봅니다"));
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/documents/doc/owner", expect.objectContaining({ method: "PUT", body: JSON.stringify({ owner: "lee" }) })));
-    await waitFor(() => visible ? expect(onTransferred).toHaveBeenCalled() : expect(push).toHaveBeenCalledWith("/"));
+    await waitFor(() => visible ? expect(onTransferred).toHaveBeenCalled() : expect(push).toHaveBeenCalledWith("/documents"));
   });
   it("preserves selection on server error", async () => {
     const { onTransferred } = setup(true, 400);

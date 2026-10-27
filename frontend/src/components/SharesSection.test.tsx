@@ -314,7 +314,7 @@ describe("외부 공유 절", () => {
     vi.stubGlobal("fetch", fetchMock);
     render(<SharesSection />);
     const link = await screen.findByRole("link", { name: "RFP" });
-    expect(link).toHaveAttribute("href", "/?folder=f-1");
+    expect(link).toHaveAttribute("href", "/documents?folder=f-1");
     expect(screen.getByText("포함 폴더")).toBeInTheDocument();
     expect(screen.queryByText("아직 넣은 문서가 없습니다.")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "RFP 빼기" }));

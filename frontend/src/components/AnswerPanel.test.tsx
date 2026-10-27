@@ -150,7 +150,7 @@ describe("AnswerPanel", () => {
 
     const list = screen.getByRole("list", { name: "인용한 근거" });
     expect(within(list).getByText((_, node) => node?.tagName === "P" && node.textContent === "DOCX · 재무 · 최수진(IT전략실)")).toBeInTheDocument();
-    expect(within(list).getByRole("link", { name: "IT전략실" })).toHaveAttribute("href", "/?folder=f1");
+    expect(within(list).getByRole("link", { name: "IT전략실" })).toHaveAttribute("href", "/documents?folder=f1");
     expect(screen.getByText((_, node) => node?.tagName === "SPAN" && node.textContent === "HWPX · 박민수(운영팀)")).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "운영팀" })).not.toBeInTheDocument();
   });

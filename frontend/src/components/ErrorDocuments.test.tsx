@@ -40,7 +40,7 @@ describe("ErrorDocuments", () => {
         ? response({ authenticated: true, username: "alice", is_admin: false })
         : response([{ ...document, owner_id: "김민준", owner_department: { name: "IT전략실", folder_id: "f1" } }]),
     )));
-    expect(await screen.findByRole("link", { name: "IT전략실" })).toHaveAttribute("href", "/?folder=f1");
+    expect(await screen.findByRole("link", { name: "IT전략실" })).toHaveAttribute("href", "/documents?folder=f1");
     expect(screen.getByRole("link", { name: "IT전략실" }).closest("td")).toHaveTextContent(/^김민준\(IT전략실\)$/);
   });
 

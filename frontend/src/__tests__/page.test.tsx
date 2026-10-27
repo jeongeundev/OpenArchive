@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { AuthProvider } from "@/components/AuthProvider";
 import { RequireAuth } from "@/components/RequireAuth";
-import Home from "@/app/page";
+import Home from "@/app/documents/page";
 import type { DocumentSummary, Folder } from "@/lib/types";
 import { lastListHref } from "@/lib/urlState";
 
@@ -32,13 +32,13 @@ vi.mock("next/navigation", async () => {
   const { useSyncExternalStore } = await import("react");
   return {
     useRouter: () => ({ push: navigation.push, replace: navigation.replace }),
-    usePathname: () => "/",
+    usePathname: () => "/documents",
     useSearchParams: () => useSyncExternalStore(navigation.subscribe, navigation.params),
   };
 });
 
 afterEach(() => {
-  navigation.go("/");
+  navigation.go("/documents");
   navigation.push.mockClear();
   navigation.replace.mockClear();
   sessionStorage.clear();
@@ -295,7 +295,7 @@ describe("폴더 트리", () => {
   });
 
   it("폴더를 고르면 그 폴더에 든 문서만 목록과 건수로 조회하고 문서 수를 트리에 표시한다", async () => {
-    navigation.go("/?folder=folder-a");
+    navigation.go("/documents?folder=folder-a");
     const fetchMock = mockFinder(1, 2, [hr]);
     // 실제 앱처럼 로그인 확인 뒤에 그린다 — 주소의 폴더를 폴더 목록이 오기 전에 판정하지 않는다.
     render(<AuthProvider><RequireAuth><Home /></RequireAuth></AuthProvider>);
@@ -312,23 +312,23 @@ describe("폴더 트리", () => {
     mockFinder(2, 2, [hr]);
     render(<AuthProvider><Home /></AuthProvider>);
     fireEvent.click(await screen.findByRole("button", { name: /인사/ }));
-    expect(navigation.push).toHaveBeenLastCalledWith("/?folder=folder-a");
+    expect(navigation.push).toHaveBeenLastCalledWith("/documents?folder=folder-a");
     fireEvent.click(screen.getByRole("button", { name: "전체 문서" }));
-    expect(navigation.push).toHaveBeenLastCalledWith("/");
+    expect(navigation.push).toHaveBeenLastCalledWith("/documents");
   });
 
   it("볼 수 없는 폴더를 주소로 고르면 존재를 알리지 않고 전체 문서로 되돌린다", async () => {
-    navigation.go("/?folder=hidden");
+    navigation.go("/documents?folder=hidden");
     const fetchMock = mockFinder(2, 2, [hr]);
     // 실제 앱처럼 로그인 확인 뒤에 그린다 — 주소의 폴더를 폴더 목록이 오기 전에 판정하지 않는다.
     render(<AuthProvider><RequireAuth><Home /></RequireAuth></AuthProvider>);
-    await waitFor(() => expect(navigation.replace).toHaveBeenCalledWith("/"));
+    await waitFor(() => expect(navigation.replace).toHaveBeenCalledWith("/documents"));
     expect(screen.queryByText(/찾을 수 없/)).not.toBeInTheDocument();
     expect(requestedUrls(fetchMock).some(url => url.searchParams.get("folder_id") === "hidden")).toBe(false);
   });
 
   it("빈 폴더를 고르면 폴더가 비었다고 알린다", async () => {
-    navigation.go("/?folder=folder-a");
+    navigation.go("/documents?folder=folder-a");
     mockFinder(0, 2, [{ ...hr, document_count: 0 }]);
     // 실제 앱처럼 로그인 확인 뒤에 그린다 — 주소의 폴더를 폴더 목록이 오기 전에 판정하지 않는다.
     render(<AuthProvider><RequireAuth><Home /></RequireAuth></AuthProvider>);
@@ -356,7 +356,7 @@ describe("폴더 트리", () => {
     fireEvent.change(screen.getByLabelText("새 폴더 이름"), { target: { value: "인사" } });
     fireEvent.click(screen.getByRole("button", { name: "만들기" }));
     expect(await screen.findByRole("button", { name: /인사/ })).toBeInTheDocument();
-    act(() => navigation.go("/?folder=folder-a"));
+    act(() => navigation.go("/documents?folder=folder-a"));
     rerender(<AuthProvider><Home /></AuthProvider>);
     const header = (await screen.findByRole("heading", { name: "인사" })).parentElement as HTMLElement;
     expect(header).toHaveTextContent("열람 범위 · 조직 공개");
@@ -364,7 +364,7 @@ describe("폴더 트리", () => {
 
   it("빈 폴더를 삭제하면 트리에서 사라지고 전체 문서로 돌아간다", async () => {
     vi.spyOn(window, "confirm").mockReturnValue(true);
-    navigation.go("/?folder=folder-a");
+    navigation.go("/documents?folder=folder-a");
     let folders: Folder[] = [{ ...hr, document_count: 0 }];
     vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const url = new URL(String(input), "http://localhost");
@@ -382,20 +382,20 @@ describe("폴더 트리", () => {
     // 실제 앱처럼 로그인 확인 뒤에 그린다 — 주소의 폴더를 폴더 목록이 오기 전에 판정하지 않는다.
     render(<AuthProvider><RequireAuth><Home /></RequireAuth></AuthProvider>);
     fireEvent.click(await screen.findByRole("button", { name: "삭제" }));
-    await waitFor(() => expect(navigation.push).toHaveBeenCalledWith("/"));
+    await waitFor(() => expect(navigation.push).toHaveBeenCalledWith("/documents"));
     await waitFor(() => expect(screen.queryByRole("button", { name: /인사/ })).not.toBeInTheDocument());
     vi.restoreAllMocks();
   });
 
   it("「부여받은 문서」를 누르면 부여받은 문서만 목록·건수로 조회하고 주소에 남긴다 (D20)", async () => {
-    navigation.go("/?folder=folder-a");
+    navigation.go("/documents?folder=folder-a");
     const fetchMock = mockFinder(2, 2, [hr]);
     render(<AuthProvider><RequireAuth><Home /></RequireAuth></AuthProvider>);
     expect(await screen.findByRole("heading", { name: "인사" })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "부여받은 문서" }));
 
-    expect(navigation.push).toHaveBeenLastCalledWith("/?granted=1");
+    expect(navigation.push).toHaveBeenLastCalledWith("/documents?granted=1");
     await waitFor(() => expect(screen.queryByRole("heading", { name: "인사" })).not.toBeInTheDocument());
     expect(screen.getByRole("button", { name: "부여받은 문서" })).toHaveAttribute("aria-current", "true");
     expect(screen.getByRole("button", { name: /인사/ })).not.toHaveAttribute("aria-current");
@@ -407,34 +407,34 @@ describe("폴더 트리", () => {
   });
 
   it("「부여받은 문서」에서 폴더를 고르면 그 보기를 벗어난다", async () => {
-    navigation.go("/?granted=1");
+    navigation.go("/documents?granted=1");
     mockFinder(2, 2, [hr]);
     render(<AuthProvider><Home /></AuthProvider>);
     fireEvent.click(await screen.findByRole("button", { name: /인사/ }));
-    expect(navigation.push).toHaveBeenLastCalledWith("/?folder=folder-a");
+    expect(navigation.push).toHaveBeenLastCalledWith("/documents?folder=folder-a");
     expect(screen.getByRole("button", { name: "부여받은 문서" })).not.toHaveAttribute("aria-current");
   });
 
   it("「부여받은 문서」에서 조건·쪽을 바꿔도 그 보기에 머문다", async () => {
-    navigation.go("/?granted=1");
+    navigation.go("/documents?granted=1");
     mockFinder(120, 300, [hr]);
     render(<AuthProvider><Home /></AuthProvider>);
     await screen.findByText("120건 중 1–50");
     fireEvent.change(screen.getByLabelText("정렬"), { target: { value: "title" } });
-    expect(navigation.replace).toHaveBeenLastCalledWith("/?granted=1&sort=title");
+    expect(navigation.replace).toHaveBeenLastCalledWith("/documents?granted=1&sort=title");
     fireEvent.click(screen.getByRole("button", { name: "다음" }));
-    expect(navigation.replace).toHaveBeenLastCalledWith("/?granted=1&sort=title&page=2");
+    expect(navigation.replace).toHaveBeenLastCalledWith("/documents?granted=1&sort=title&page=2");
   });
 
   it("부여받은 문서가 없으면 그렇게 알린다", async () => {
-    navigation.go("/?granted=1");
+    navigation.go("/documents?granted=1");
     mockFinder(0, 2, [hr]);
     render(<AuthProvider><Home /></AuthProvider>);
     expect(await screen.findByText("부여받은 문서가 없습니다.")).toBeInTheDocument();
   });
 
   it("「부여받은 문서」에서는 건수 줄이 전체가 아니라 이 목록의 건수다", async () => {
-    navigation.go("/?granted=1");
+    navigation.go("/documents?granted=1");
     mockFinder(2, 10, [hr]);
     render(<AuthProvider><Home /></AuthProvider>);
     expect(await screen.findByText("이 목록 2건")).toBeInTheDocument();
@@ -442,7 +442,7 @@ describe("폴더 트리", () => {
   });
 
   it("폴더를 고르면 건수 줄이 그 폴더 목록의 건수다", async () => {
-    navigation.go("/?folder=folder-a");
+    navigation.go("/documents?folder=folder-a");
     mockFinder(2, 10, [hr]);
     // 실제 앱처럼 로그인 확인 뒤에 그린다 — 주소의 폴더를 폴더 목록이 오기 전에 판정하지 않는다.
     render(<AuthProvider><RequireAuth><Home /></RequireAuth></AuthProvider>);
@@ -459,7 +459,7 @@ describe("폴더 트리", () => {
   });
 
   it("「부여받은 문서」에서 올리면 업로드 폴더 기본값은 「폴더 없음」이다", async () => {
-    navigation.go("/?granted=1");
+    navigation.go("/documents?granted=1");
     mockFinder(2, 2, [hr]);
     render(<AuthProvider><Home /></AuthProvider>);
     await screen.findByRole("button", { name: /인사/ });
@@ -485,7 +485,7 @@ describe("목록 상태 주소", () => {
   afterEach(() => vi.unstubAllGlobals());
 
   it("주소의 조건과 쪽으로 조회하고 필터에도 표시한다", async () => {
-    navigation.go("/?q=출장&type=hwp&tag=보안&sort=title&page=2");
+    navigation.go("/documents?q=출장&type=hwp&tag=보안&sort=title&page=2");
     const fetchMock = mockFinder(120, 300);
     render(<Home />);
 
@@ -503,30 +503,30 @@ describe("목록 상태 주소", () => {
     await screen.findByText("120건 중 1–50");
 
     fireEvent.change(screen.getByLabelText("정렬"), { target: { value: "title" } });
-    expect(navigation.replace).toHaveBeenLastCalledWith("/?sort=title");
+    expect(navigation.replace).toHaveBeenLastCalledWith("/documents?sort=title");
     fireEvent.click(screen.getByRole("button", { name: "다음" }));
-    expect(navigation.replace).toHaveBeenLastCalledWith("/?sort=title&page=2");
+    expect(navigation.replace).toHaveBeenLastCalledWith("/documents?sort=title&page=2");
     expect(navigation.push).not.toHaveBeenCalled();
   });
 
   it("폴더를 바꾸면 조건은 두고 쪽만 처음으로 돌린다", async () => {
-    navigation.go("/?tag=보안&page=3");
+    navigation.go("/documents?tag=보안&page=3");
     mockFinder(120, 300, [hr]);
     render(<AuthProvider><Home /></AuthProvider>);
 
     fireEvent.click(await screen.findByRole("button", { name: /인사/ }));
 
-    expect(navigation.push).toHaveBeenLastCalledWith("/?folder=folder-a&tag=%EB%B3%B4%EC%95%88");
+    expect(navigation.push).toHaveBeenLastCalledWith("/documents?folder=folder-a&tag=%EB%B3%B4%EC%95%88");
   });
 
   it("주소에서 조건이 빠지면 제목 입력칸도 비우고 되돌려 쓰지 않는다", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
-    navigation.go("/?q=출장");
+    navigation.go("/documents?q=출장");
     mockFinder(2, 2);
     render(<Home />);
     expect(screen.getByLabelText("제목 검색")).toHaveValue("출장");
 
-    act(() => navigation.go("/"));
+    act(() => navigation.go("/documents"));
     act(() => vi.advanceTimersByTime(500));
 
     expect(screen.getByLabelText("제목 검색")).toHaveValue("");
@@ -535,11 +535,11 @@ describe("목록 상태 주소", () => {
   });
 
   it("지금 목록 주소를 「목록으로 돌아가기」용으로 기억한다", async () => {
-    navigation.go("/?sort=title&page=2");
+    navigation.go("/documents?sort=title&page=2");
     mockFinder(120, 300);
     render(<Home />);
     await screen.findByText("120건 중 51–100");
 
-    expect(lastListHref()).toBe("/?sort=title&page=2");
+    expect(lastListHref()).toBe("/documents?sort=title&page=2");
   });
 });

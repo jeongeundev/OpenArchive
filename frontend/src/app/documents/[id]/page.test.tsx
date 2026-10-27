@@ -452,16 +452,16 @@ describe("목록으로 돌아가기", () => {
   });
 
   it("마지막으로 본 목록의 조건과 쪽으로 돌아간다", async () => {
-    rememberListHref("/?sort=title&page=2");
+    rememberListHref("/documents?sort=title&page=2");
     stubFetch(() => jsonResponse(detail));
     await renderPage();
-    expect(screen.getByRole("link", { name: "← 목록으로 돌아가기" })).toHaveAttribute("href", "/?sort=title&page=2");
+    expect(screen.getByRole("link", { name: "← 목록으로 돌아가기" })).toHaveAttribute("href", "/documents?sort=title&page=2");
   });
 
   it("목록을 거치지 않고 왔으면 첫 목록으로 간다", async () => {
     stubFetch(() => jsonResponse(detail));
     await renderPage();
-    expect(screen.getByRole("link", { name: "← 목록으로 돌아가기" })).toHaveAttribute("href", "/");
+    expect(screen.getByRole("link", { name: "← 목록으로 돌아가기" })).toHaveAttribute("href", "/documents");
   });
 });
 

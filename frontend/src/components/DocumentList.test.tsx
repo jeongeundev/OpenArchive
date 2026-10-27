@@ -71,7 +71,7 @@ describe("DocumentList", () => {
     renderList([{ ...documents[0], owner_id: "김민준", owner_department: { name: "IT전략실", folder_id: "f1" } }]);
 
     expect(metaItems(screen.getByRole("listitem"))).toContain("김민준(IT전략실)");
-    expect(screen.getByRole("link", { name: "IT전략실" })).toHaveAttribute("href", "/?folder=f1");
+    expect(screen.getByRole("link", { name: "IT전략실" })).toHaveAttribute("href", "/documents?folder=f1");
   });
 
   it("부서 링크를 눌러도 행을 고르지 않는다", () => {

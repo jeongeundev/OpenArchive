@@ -4,6 +4,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import Home from "./page";
+import RootPage from "../page";
 
 const auth = vi.hoisted(() => ({ value: { authenticated: true, username: "alice", is_admin: false } }));
 const location = vi.hoisted(() => ({ search: "" }));
@@ -44,7 +45,7 @@ afterEach(() => {
 });
 
 describe("폴더 주소", () => {
-  it("`/?folder=<id>`로 들어오면 그 폴더가 열린 상태다 — 부서 링크가 이 경로를 쓴다 (D16)", () => {
+  it("`/documents?folder=<id>`로 들어오면 그 폴더가 열린 상태다 — 부서 링크가 이 경로를 쓴다 (D16)", () => {
     location.search = "folder=f1";
     folderList.value = [{
       id: "f1", parent_id: null, name: "IT전략실", created_by: "kim", document_count: 0,
@@ -129,4 +130,8 @@ describe("업로드 폼 접기", () => {
     expect(screen.queryByRole("button", { name: "문서 올리기" })).toBeNull();
     expect(screen.queryByTestId("upload-dropzone")).toBeNull();
   });
+});
+
+it("홈도 같은 목록 화면을 내보낸다", () => {
+  expect(RootPage).toBe(Home);
 });

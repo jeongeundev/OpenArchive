@@ -152,7 +152,7 @@ describe("DocumentInfoPane", () => {
 
     await screen.findByRole("link", { name: "문서 열기" });
     expect(screen.getAllByRole("definition")[1].textContent).toBe("김민준(IT전략실)");
-    expect(screen.getByRole("link", { name: "IT전략실" })).toHaveAttribute("href", "/?folder=f1");
+    expect(screen.getByRole("link", { name: "IT전략실" })).toHaveAttribute("href", "/documents?folder=f1");
   });
 
   it("폴더·원본 파일이 없으면 위치·파일 항목이 빠진다", async () => {

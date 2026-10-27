@@ -72,7 +72,7 @@ export function DocumentFolderSection({ documentId, folder, hiddenFolder = false
           {folder.path.map((item, index) => (
             <Fragment key={item.id}>
               {index > 0 ? <span className="text-faint">/</span> : null}
-              <Link className="text-accent hover:underline" href={`/?folder=${encodeURIComponent(item.id)}`}>
+              <Link className="text-accent hover:underline" href={`/documents?folder=${encodeURIComponent(item.id)}`}>
                 {item.name}
               </Link>
             </Fragment>

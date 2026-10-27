@@ -53,8 +53,8 @@ describe("DocumentFolderSection", () => {
     stub();
     const folder: DocumentFolder = { id: "b", name: "채용", path: [{ id: "a", name: "인사" }, { id: "b", name: "채용" }] };
     render(<DocumentFolderSection documentId="d1" folder={folder} isOwner={false} onMoved={vi.fn()} />);
-    expect(screen.getByRole("link", { name: "인사" })).toHaveAttribute("href", "/?folder=a");
-    expect(screen.getByRole("link", { name: "채용" })).toHaveAttribute("href", "/?folder=b");
+    expect(screen.getByRole("link", { name: "인사" })).toHaveAttribute("href", "/documents?folder=a");
+    expect(screen.getByRole("link", { name: "채용" })).toHaveAttribute("href", "/documents?folder=b");
   });
 
   it("폴더를 볼 수 없는 비소유자에게는 아무것도 그리지 않는다", () => {

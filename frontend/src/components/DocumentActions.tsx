@@ -29,7 +29,7 @@ export function DocumentActions({
     setError(null);
     try {
       await deleteDocument(document.id);
-      router.push("/");
+      router.push("/documents");
     } catch (reason: unknown) {
       setError(reason instanceof ApiError ? reason.detail : "문서를 삭제하지 못했습니다.");
     } finally {

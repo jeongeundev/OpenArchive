@@ -32,7 +32,7 @@ export default function GlobalError({ retry }: {
                 다시 시도
               </button>
               {/* eslint-disable-next-line @next/next/no-html-link-for-pages */}
-              <a href="/" className="text-sm text-accent hover:underline">문서 목록으로 가기</a>
+              <a href="/documents" className="text-sm text-accent hover:underline">문서 목록으로 가기</a>
             </div>
           </section>
         </main>
