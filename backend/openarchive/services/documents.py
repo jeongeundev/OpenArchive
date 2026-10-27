@@ -46,11 +46,12 @@ from openarchive.services.visibility import (
 # 보인다. 거슬러 오르기는 열람 술어와 같은 조각이다(visibility.py). 볼 수 없는 폴더의 최상위는 늘
 # private라 새로 드러나는 것이 없다. FROM 별칭 없이 쓰이는 RETURNING에도 들어가므로 바깥 컬럼은
 # 한정하지 않는다 — folders에는 folder_id·follows_folder 컬럼이 없어 바깥 행으로 해석된다.
-EFFECTIVE_VISIBILITY = (
+EFFECTIVE_VISIBILITY_EXPR = (
     "CASE WHEN folder_id IS NOT NULL AND follows_folder THEN "
     + root_folder_visibility("folder_id")
-    + " ELSE visibility END AS effective_visibility"
+    + " ELSE visibility END"
 )
+EFFECTIVE_VISIBILITY = EFFECTIVE_VISIBILITY_EXPR + " AS effective_visibility"
 
 # 목록·요약 응답이 쓰는 컬럼. 네 곳에서 같은 나열을 반복하지 않도록 한 곳에 둔다.
 SUMMARY_COLUMNS = """id, title, filename, content_type, version, owner_id, visibility, tags,
@@ -752,11 +753,13 @@ AND (%(title)s::text IS NULL OR d.title ILIKE '%%' || %(title)s || '%%' ESCAPE '
 AND (%(content_type)s::text IS NULL OR d.content_type = %(content_type)s)
 AND (%(folder)s::uuid IS NULL OR (d.folder_id = %(folder)s AND EXISTS (
     SELECT 1 FROM folders f WHERE f.id = %(folder)s AND {FOLDER_VISIBLE_TO_USER})))
+AND (NOT %(granted)s OR (d.owner_id <> %(user)s AND {EFFECTIVE_VISIBILITY_EXPR} = 'private'))
 """
 
 
 def _document_filter_params(
-    user_id, embedding_status, extraction_status, tag, title_query, content_type, folder_id
+    user_id, embedding_status, extraction_status, tag, title_query, content_type, folder_id,
+    granted_only,
 ) -> dict:
     title = title_query.strip() if title_query is not None else None
     if title:
@@ -769,6 +772,7 @@ def _document_filter_params(
         "title": title or None,
         "content_type": content_type,
         "folder": folder_id,
+        "granted": granted_only,
     }
 
 
@@ -782,6 +786,7 @@ async def list_documents(
     title_query: str | None = None,
     content_type: str | None = None,
     folder_id: UUID | None = None,
+    granted_only: bool = False,
     sort: DocumentSort = "updated",
     limit: int | None = None,
     offset: int = 0,
@@ -792,12 +797,15 @@ async def list_documents(
     `embedding_status`는 컬럼 그대로다 — 인식 실패 문서는 임베딩 잡이 생기지 않아 'pending'에
     남는다. 곧 임베딩될 문서만 보려면 `extraction_status='done'`을 함께 준다 (#139, ADR-052).
     `limit`이 없으면 전부 반환한다 — 페이지는 화면이 쓰고, export·MCP는 전체를 본다 (#95-d).
+    `granted_only`는 「부여받은 문서」다 — 볼 수 있는 남의 문서 가운데 실효 범위가 「제한」인 것만
+    남긴다. 부여 테이블을 따로 보지 않는다: 볼 수 있다는 판정은 열람 술어 하나가 이미 했다.
     """
 
     if sort not in DOCUMENT_ORDER_BY:
         raise ValueError(f"허용되지 않은 문서 정렬: {sort}")
     params = _document_filter_params(
-        user_id, embedding_status, extraction_status, tag, title_query, content_type, folder_id
+        user_id, embedding_status, extraction_status, tag, title_query, content_type, folder_id,
+        granted_only,
     )
     cur = conn.cursor(row_factory=dict_row)
     await cur.execute(
@@ -823,12 +831,14 @@ async def count_documents(
     title_query: str | None = None,
     content_type: str | None = None,
     folder_id: UUID | None = None,
+    granted_only: bool = False,
 ) -> int:
     """목록과 같은 열람 범위·필터로 전체 건수를 센다."""
     cur = await conn.execute(
         f"SELECT count(*) FROM documents d WHERE {DOCUMENT_FILTERS}",
         _document_filter_params(
-            user_id, embedding_status, extraction_status, tag, title_query, content_type, folder_id
+            user_id, embedding_status, extraction_status, tag, title_query, content_type, folder_id,
+            granted_only,
         ),
     )
     return (await cur.fetchone())[0]

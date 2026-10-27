@@ -659,6 +659,39 @@ def test_finder_sort_title_and_default_updated(db_client: TestClient, migrated_d
         assert [item["id"] for item in response.json()] == expected
 
 
+def test_finder_granted_lists_only_others_restricted_documents(
+    db_client: TestClient, migrated_db: str
+):
+    login_as(db_client, "alice")
+    granted = upload(
+        db_client, user_id="bob",
+        data={"title": "받은 제한", "tags": "보안", "visibility": "private"},
+    ).json()["id"]
+    upload(db_client, user_id="bob", data={"title": "받지 않은 제한", "visibility": "private"})
+    upload(db_client, user_id="bob", data={"title": "밥 공개", "visibility": "public"})
+    own = upload(db_client, data={"title": "내 제한", "visibility": "private"}).json()["id"]
+    with psycopg.connect(migrated_db) as conn:
+        conn.execute(
+            "INSERT INTO document_grants (document_id, user_id) "
+            "SELECT %s, id FROM users WHERE username = 'alice'",
+            (granted,),
+        )
+    login_as(db_client, "alice")
+
+    for params, expected in [({"granted": "true"}, [granted]),
+                             ({"granted": "true", "tag": "보안"}, [granted]),
+                             ({"granted": "true", "tag": "기타"}, [])]:
+        listing = db_client.get("/api/documents", params=params)
+        count = db_client.get("/api/documents/count", params=params)
+        assert listing.status_code == count.status_code == 200
+        assert [item["id"] for item in listing.json()] == expected
+        assert count.json() == {"total": len(expected)}
+
+    everything = {item["id"] for item in db_client.get("/api/documents").json()}
+    assert {granted, own} <= everything and len(everything) == 3
+    assert db_client.get("/api/documents/count").json() == {"total": 3}
+
+
 @pytest.mark.parametrize("path,params", [
     ("", {"sort": "bogus"}), ("", {"content_type": "exe"}),
     ("/count", {"content_type": "exe"}),

@@ -161,6 +161,7 @@ async def list_documents(
     q: str | None = None,
     content_type: ContentTypeFilter | None = None,
     folder_id: UUID | None = None,
+    granted: bool = False,
     sort: Literal["updated", "title"] = "updated",
     limit: Annotated[int | None, Query(ge=1, le=100)] = None,
     offset: Annotated[int, Query(ge=0)] = 0,
@@ -174,6 +175,7 @@ async def list_documents(
         title_query=q,
         content_type=content_type,
         folder_id=folder_id,
+        granted_only=granted,
         sort=sort,
         limit=limit,
         offset=offset,
@@ -215,6 +217,7 @@ async def count_documents(
     q: str | None = None,
     content_type: ContentTypeFilter | None = None,
     folder_id: UUID | None = None,
+    granted: bool = False,
 ) -> DocumentCount:
     total = await service.count_documents(
         conn,
@@ -225,6 +228,7 @@ async def count_documents(
         title_query=q,
         content_type=content_type,
         folder_id=folder_id,
+        granted_only=granted,
     )
     return DocumentCount(total=total)
 

@@ -431,6 +431,8 @@ export interface DocumentFilters {
   tag?: string;
   sort?: DocumentSort;
   status?: EmbeddingStatus;
+  /** 「부여받은 문서」 — 볼 수 있는 남의 문서 가운데 실효 범위가 「제한」인 것만. */
+  granted?: boolean;
 }
 
 function documentFilterQuery(params?: Omit<DocumentFilters, "sort">): URLSearchParams {
@@ -440,6 +442,7 @@ function documentFilterQuery(params?: Omit<DocumentFilters, "sort">): URLSearchP
   if (params?.tag?.trim()) query.set("tag", params.tag);
   if (params?.q?.trim()) query.set("q", params.q);
   if (params?.contentType?.trim()) query.set("content_type", params.contentType);
+  if (params?.granted) query.set("granted", "true");
   return query;
 }
 
