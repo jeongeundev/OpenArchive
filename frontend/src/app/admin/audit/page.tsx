@@ -81,6 +81,10 @@ function actionDescription(entry: AuditEntry): string | null {
     const owner = text(detail.owner);
     return `${descriptions[text(detail.change)] ?? share}${owner && owner !== entry.actor ? ` (소유자 ${owner})` : ""}`;
   }
+  if (entry.action === "user_changed" && detail.change === "department_changed") {
+    const department = (value: unknown): string => (value === null || value === undefined ? "없음" : text(value));
+    return `사용자 「${text(detail.user)}」 소속 부서: ${department(detail.from)} → ${department(detail.to)}`;
+  }
   if (entry.action === "group_changed" || entry.action === "user_changed") {
     const subject = entry.action === "group_changed" ? `그룹 ${text(detail.group)}` : `사용자 ${text(detail.user)}`;
     if (detail.change === "admin_granted") return `${subject} 관리자 권한 부여`;
@@ -92,6 +96,8 @@ function actionDescription(entry: AuditEntry): string | null {
   if (entry.action === "folder_changed") {
     const folder = `「${text(detail.folder_name)}」`;
     if (detail.change === "renamed") return `폴더 「${text(detail.old_name)}」 → ${folder}`;
+    if (detail.change === "department_set") return `폴더 ${folder} 부서 폴더 지정: ${text(detail.department)}`;
+    if (detail.change === "department_cleared") return `폴더 ${folder} 부서 폴더 해제`;
     return `폴더 ${folder} ${detail.change === "deleted" ? "삭제" : "생성"}`;
   }
   if (entry.action === "token_changed") {

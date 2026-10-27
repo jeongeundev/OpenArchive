@@ -274,12 +274,25 @@ export function createUser(input: {
   username: string;
   password: string;
   is_admin: boolean;
+  department_group_id?: string;
 }): Promise<UserSummary> {
   return request<UserSummary>("/api/admin/users", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input),
   });
+}
+
+export function setUserDepartment(userId: string, groupId: string | null): Promise<void> {
+  return request<void>(
+    `/api/admin/users/${encodeURIComponent(userId)}/department`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ group_id: groupId }),
+    },
+    { parse: false },
+  );
 }
 
 export function deleteUser(id: string, transferTo?: string): Promise<void> {

@@ -347,6 +347,8 @@ export interface UserSummary {
   username: string;
   is_admin: boolean;
   created_at: string;
+  /** 소속 부서 — 그 사람이 구성원인 그룹 하나(D14). 없을 수 있다. */
+  department?: { id: string; name: string } | null;
 }
 
 export interface GroupSummary {
