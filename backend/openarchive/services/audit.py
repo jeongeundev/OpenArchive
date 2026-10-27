@@ -46,6 +46,33 @@ ORDER BY id DESC
 LIMIT %(limit)s
 """
 
+# 문서 단위 활동 기록은 그 문서를 보는 사람에게 연다 (ADR-055 결정 7 개정).
+# 열람 범위·공유·원본 열람 기록은 누가 무엇을 받았는지 드러내므로 소유자에게만 보인다.
+DOCUMENT_ACTIVITY_PUBLIC_ACTIONS: tuple[str, ...] = (
+    "document_created",
+    "text_updated",
+    "original_replaced",
+    "document_trashed",
+    "document_restored",
+    "owner_changed",
+)
+DOCUMENT_ACTIVITY_OWNER_ACTIONS: tuple[str, ...] = (
+    "access_changed",
+    "share_changed",
+    "original_downloaded",
+    "original_previewed",
+)
+
+LIST_DOCUMENT_ACTIVITY_SQL = """
+SELECT id, occurred_at, action, actor, actor_via, detail
+FROM audit_log
+WHERE document_id = %(id)s
+  AND action = ANY(%(actions)s)
+  AND (%(before_id)s::bigint IS NULL OR id < %(before_id)s)
+ORDER BY id DESC
+LIMIT %(limit)s
+"""
+
 
 async def set_actor(
     conn: psycopg.AsyncConnection,
@@ -98,6 +125,36 @@ async def list_audit(
         await cur.execute(
             LIST_AUDIT_SQL,
             {"actor": actor, "action": action, "limit": limit, "before_id": before_id},
+        )
+        return await cur.fetchall()
+
+
+async def list_document_activity(
+    conn: psycopg.AsyncConnection,
+    document_id: UUID,
+    *,
+    user_id: str | None,
+    limit: int = 50,
+    before_id: int | None = None,
+) -> list[dict]:
+    """그 문서의 활동 기록을 최신순으로 돌려준다. 볼 수 없는 문서는 DocumentNotFound다."""
+    # documents가 이 모듈을 import하므로 순환을 피해 호출 시점에 가져온다.
+    from openarchive.services.documents import DocumentNotFound, ensure_visible
+
+    if user_id is None:
+        raise DocumentNotFound
+    await ensure_visible(conn, document_id, user_id=user_id)
+    cur = await conn.execute(
+        "SELECT owner_id = %s FROM documents WHERE id = %s", (user_id, document_id)
+    )
+    is_owner = (await cur.fetchone())[0]
+    actions = DOCUMENT_ACTIVITY_PUBLIC_ACTIONS
+    if is_owner:
+        actions += DOCUMENT_ACTIVITY_OWNER_ACTIONS
+    async with conn.cursor(row_factory=dict_row) as cur:
+        await cur.execute(
+            LIST_DOCUMENT_ACTIVITY_SQL,
+            {"id": document_id, "actions": list(actions), "limit": limit, "before_id": before_id},
         )
         return await cur.fetchall()
 
