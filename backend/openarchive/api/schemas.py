@@ -17,7 +17,17 @@ class FolderScope(BaseModel):
     groups: list[str]
 
 
+class Department(BaseModel):
+    id: UUID
+    name: str
+
+
+class UpdateDepartmentRequest(BaseModel):
+    group_id: UUID | None
+
+
 class Folder(BaseModel):
+    department: Department | None = None
     id: UUID
     parent_id: UUID | None
     name: str
@@ -304,12 +314,14 @@ class SystemStatus(BaseModel):
 
 
 class CreateUserRequest(BaseModel):
+    department_group_id: UUID | None = None
     username: str
     password: str
     is_admin: bool = False
 
 
 class UserSummary(BaseModel):
+    department: Department | None = None
     id: UUID
     username: str
     is_admin: bool

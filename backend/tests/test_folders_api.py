@@ -34,6 +34,7 @@ def test_folder_lifecycle_and_inherited_scope(db_client):
         "can_manage": True,
         "can_change_access": True,
         "can_share": True,
+        "department": None,
     }
     child = folder(db_client, "하위", root["id"])
     assert child["inherited"] is True
@@ -353,3 +354,62 @@ def test_can_share_only_for_the_root_creator(db_client):
     login_as(db_client, "bob")
     listed = {row["id"]: row for row in db_client.get("/api/folders").json()}
     assert listed[child["id"]]["can_share"] is True
+
+
+def test_department_admin_and_folder_api(db_client, migrated_db):
+    login_admin(db_client, migrated_db)
+    admin = "boss"
+    group = db_client.post("/api/admin/groups", json={"name": "개발"}).json()
+    created = db_client.post(
+        "/api/admin/users",
+        json={
+            "username": "department-api",
+            "password": "password123",
+            "department_group_id": group["id"],
+        },
+    )
+    assert created.status_code == 201
+    user = created.json()
+    assert user["department"] == {"id": group["id"], "name": "개발"}
+    path = f"/api/admin/users/{user['id']}/department"
+    assert db_client.put(path, json={"group_id": None}).status_code == 204
+    assert (
+        next(u for u in db_client.get("/api/admin/users").json() if u["id"] == user["id"])[
+            "department"
+        ]
+        is None
+    )
+    assert db_client.put(path, json={"group_id": group["id"]}).status_code == 204
+    assert db_client.put(path, json={"group_id": MISSING}).status_code == 404
+    assert (
+        db_client.put(f"/api/admin/users/{MISSING}/department", json={"group_id": None}).status_code
+        == 404
+    )
+    admin_token = issue_token(db_client, admin, scope="read_write")["token"]
+    assert (
+        db_client.put(path, json={"group_id": None}, headers=bearer(admin_token)).status_code == 403
+    )
+    login_as(db_client, "department-api", password="password123")
+    assert db_client.put(path, json={"group_id": None}).status_code == 403
+    r = folder(db_client)
+    fp = f"/api/folders/{r['id']}/department"
+    token = db_client.post(
+        "/api/auth/tokens", json={"name": "department", "scope": "read_write"}
+    ).json()["token"]
+    assert (
+        db_client.put(fp, json={"group_id": group["id"]}, headers=bearer(token)).status_code == 403
+    )
+    assert db_client.put(fp, json={"group_id": group["id"]}).status_code == 200
+    assert db_client.get("/api/folders").json()[0]["department"] == user["department"]
+    assert db_client.put(fp, json={"group_id": None}).status_code == 200
+    login_admin(db_client, migrated_db)
+    assert db_client.put(fp, json={"group_id": group["id"]}).status_code == 403
+    with psycopg.connect(migrated_db) as conn:
+        rows = conn.execute(
+            """SELECT actor, actor_via, action, detail->>'change' FROM audit_log
+            WHERE detail->>'change' IN ('department_changed','department_set','department_cleared')
+            ORDER BY id"""
+        ).fetchall()
+    assert (admin, "session", "user_changed", "department_changed") in rows
+    assert ("department-api", "session", "folder_changed", "department_set") in rows
+    assert ("department-api", "session", "folder_changed", "department_cleared") in rows

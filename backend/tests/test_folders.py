@@ -318,3 +318,50 @@ async def test_root_transfer_removes_only_previous_owner_tree_shares(conn):
     assert set(await (await conn.execute("SELECT share_id,folder_id FROM share_folders")).fetchall()) == {
         (old["id"], other["id"]), (new["id"], leaf["id"]),
     }
+
+
+async def test_department_folder_constraints_and_access_clear(conn):
+    group = await create_group(conn, "개발")
+    r = await root(conn)
+    with pytest.raises(f.DepartmentMembershipRequired):
+        await f.set_folder_department(conn, r["id"], user_id="kim", group_id=group["id"])
+    await add_member(conn, group["id"], "kim")
+    await f.set_folder_department(conn, r["id"], user_id="kim", group_id=group["id"])
+    assert (await f.list_folders(conn, user_id="lee"))[0]["department"] == {
+        "id": str(group["id"]),
+        "name": "개발",
+    }
+    for user in ["lee", "admin"]:
+        with pytest.raises(f.NotFolderCreator):
+            await f.set_folder_department(conn, r["id"], user_id=user, group_id=None)
+    child = await f.create_folder(conn, user_id="kim", name="하위", parent_id=r["id"])
+    with pytest.raises(f.SubfolderScope):
+        await f.set_folder_department(conn, child["id"], user_id="kim", group_id=group["id"])
+    other = await root(conn)
+    with pytest.raises(f.DepartmentFolderTaken):
+        await f.set_folder_department(conn, other["id"], user_id="kim", group_id=group["id"])
+    await f.set_folder_access(
+        conn, r["id"], user_id="kim", visibility="private", users=[], groups=["개발"]
+    )
+    assert (await f.list_folders(conn, user_id="kim"))[0]["department"] is not None
+    await f.set_folder_access(
+        conn, r["id"], user_id="kim", visibility="private", users=[], groups=[]
+    )
+    assert (await f.list_folders(conn, user_id="kim"))[0]["department"] is None
+    with pytest.raises(f.DepartmentScopeRequired):
+        await f.set_folder_department(conn, r["id"], user_id="kim", group_id=group["id"])
+    with pytest.raises(f.FolderNotFound):
+        await f.set_folder_department(conn, r["id"], user_id="lee", group_id=None)
+
+
+async def test_department_explicit_clear_and_unknown_group(conn):
+    from openarchive.services.grants import GroupNotFound
+
+    group = await create_group(conn, "사업")
+    await add_member(conn, group["id"], "kim")
+    r = await root(conn)
+    await f.set_folder_department(conn, r["id"], user_id="kim", group_id=group["id"])
+    await f.set_folder_department(conn, r["id"], user_id="kim", group_id=None)
+    assert (await f.list_folders(conn, user_id="kim"))[0]["department"] is None
+    with pytest.raises(GroupNotFound):
+        await f.set_folder_department(conn, r["id"], user_id="kim", group_id=uuid4())

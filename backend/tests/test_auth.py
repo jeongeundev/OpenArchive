@@ -3,6 +3,7 @@
 import asyncio
 import hashlib
 from datetime import UTC, datetime, timedelta
+from uuid import uuid4
 
 import psycopg
 import pytest
@@ -919,3 +920,50 @@ async def test_a_too_long_username_is_rejected_without_recording(conn, monkeypat
 
     assert len(calls) == 1
     assert (await (await conn.execute("SELECT count(*) FROM login_attempts")).fetchone())[0] == 0
+
+
+async def test_department_creation_change_and_clear(conn):
+    from openarchive.services.auth import list_users, set_user_department
+    from openarchive.services.grants import GroupNotFound, create_group
+
+    group = await create_group(conn, "개발")
+    user = await create_user(
+        conn, "department-user", "password123", department_group_id=group["id"]
+    )
+    assert user["department"] == {"id": str(group["id"]), "name": "개발"}
+    await set_user_department(conn, user["id"], None)
+    assert (await list_users(conn))[0]["department"] is None
+    assert (await (await conn.execute("SELECT count(*) FROM group_members")).fetchone())[0] == 1
+    await set_user_department(conn, user["id"], group["id"])
+    assert (await list_users(conn))[0]["department"] == user["department"]
+    with pytest.raises(GroupNotFound):
+        await create_user(conn, "missing-department", "password123", department_group_id=uuid4())
+    assert len(await list_users(conn)) == 1
+    with pytest.raises(UserNotFound):
+        await set_user_department(conn, uuid4(), None)
+
+
+async def test_set_department_adds_membership_and_preserves_state_on_missing_group(conn):
+    from openarchive.services.auth import set_user_department
+    from openarchive.services.grants import GroupNotFound, create_group
+
+    user = await create_user(conn, "new-member", "password123")
+    group = await create_group(conn, "사업")
+    assert user["department"] is None
+    assert await set_user_department(conn, user["id"], group["id"]) == {
+        "id": str(group["id"]),
+        "name": "사업",
+    }
+    with pytest.raises(GroupNotFound):
+        await set_user_department(conn, user["id"], uuid4())
+    row = await (
+        await conn.execute("SELECT department_group_id FROM users WHERE id=%s", (user["id"],))
+    ).fetchone()
+    assert row[0] == group["id"]
+    assert (
+        await (
+            await conn.execute(
+                "SELECT user_id FROM group_members WHERE group_id=%s", (group["id"],)
+            )
+        ).fetchone()
+    )[0] == user["id"]

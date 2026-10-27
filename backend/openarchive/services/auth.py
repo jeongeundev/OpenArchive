@@ -184,22 +184,57 @@ def hash_token(token: str) -> str:
 
 
 async def create_user(
-    conn: psycopg.AsyncConnection, username: str, password: str, *, is_admin: bool = False
+    conn: psycopg.AsyncConnection,
+    username: str,
+    password: str,
+    *,
+    is_admin: bool = False,
+    department_group_id: UUID | None = None,
 ) -> dict:
     """관리자가 로그인 가능한 계정을 만든다."""
     _check_username(username)
     _check_new_password(password)
-    cur = conn.cursor(row_factory=dict_row)
-    try:
-        await cur.execute(
-            """INSERT INTO users (username, password_hash, is_admin)
-               VALUES (%s, %s, %s)
-               RETURNING id, username, is_admin, created_at""",
-            (username, hash_password(password), is_admin),
+    async with conn.transaction():
+        cur = conn.cursor(row_factory=dict_row)
+        try:
+            await cur.execute(
+                """INSERT INTO users (username, password_hash, is_admin)
+                   VALUES (%s, %s, %s)
+                   RETURNING id, username, is_admin, created_at""",
+                (username, hash_password(password), is_admin),
+            )
+        except psycopg.errors.UniqueViolation as error:
+            raise UserAlreadyExists(f"이미 존재하는 사용자명입니다: '{username}'") from error
+        user = await cur.fetchone()
+        user["department"] = await set_user_department(conn, user["id"], department_group_id)
+        return user
+
+
+async def set_user_department(conn, user_id: UUID, group_id: UUID | None) -> dict | None:
+    from openarchive.services.grants import GroupNotFound
+
+    async with conn.transaction():
+        row = await (
+            await conn.execute("SELECT id FROM users WHERE id=%s FOR UPDATE", (user_id,))
+        ).fetchone()
+        if row is None:
+            raise UserNotFound
+        department = None
+        if group_id is not None:
+            row = await (
+                await conn.execute("SELECT name FROM groups WHERE id=%s FOR KEY SHARE", (group_id,))
+            ).fetchone()
+            if row is None:
+                raise GroupNotFound("그룹을 찾을 수 없습니다.")
+            department = {"id": str(group_id), "name": row[0]}
+            await conn.execute(
+                "INSERT INTO group_members (group_id,user_id) VALUES (%s,%s) ON CONFLICT DO NOTHING",
+                (group_id, user_id),
+            )
+        await conn.execute(
+            "UPDATE users SET department_group_id=%s WHERE id=%s", (group_id, user_id)
         )
-    except psycopg.errors.UniqueViolation as error:
-        raise UserAlreadyExists(f"이미 존재하는 사용자명입니다: '{username}'") from error
-    return await cur.fetchone()
+        return department
 
 
 async def admin_exists(conn: psycopg.AsyncConnection) -> bool:
@@ -212,7 +247,10 @@ async def list_users(conn: psycopg.AsyncConnection) -> list[dict]:
     """비밀번호 해시를 제외한 계정 목록을 반환한다."""
     cur = conn.cursor(row_factory=dict_row)
     await cur.execute(
-        "SELECT id, username, is_admin, created_at FROM users ORDER BY created_at, id"
+        """SELECT u.id, u.username, u.is_admin, u.created_at,
+        (SELECT jsonb_build_object('id',g.id,'name',g.name) FROM groups g
+         WHERE g.id=u.department_group_id) AS department
+        FROM users u ORDER BY u.created_at, u.id"""
     )
     return await cur.fetchall()
 

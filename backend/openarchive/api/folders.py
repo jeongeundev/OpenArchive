@@ -21,6 +21,7 @@ from openarchive.api.schemas import (
     RenameFolderRequest,
     SharedFolder,
     TransferOwnerRequest,
+    UpdateDepartmentRequest,
     UpdateFolderAccessRequest,
 )
 from openarchive.services import folders as service
@@ -140,3 +141,23 @@ async def transfer_owner(
             conn, folder_id, user_id=user["username"], new_owner=body.owner
         )
     )
+
+
+@router.put("/{folder_id}/department", response_model=Folder)
+async def set_folder_department(
+    folder_id: UUID,
+    body: UpdateDepartmentRequest,
+    conn: Connection,
+    user: Annotated[dict, Depends(require_session_user)],
+) -> Folder:
+    from openarchive.services.grants import GroupNotFound
+
+    try:
+        await service.set_folder_department(
+            conn, folder_id, user_id=user["username"], group_id=body.group_id
+        )
+    except GroupNotFound as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    return await _folder_response(conn, folder_id, user["username"], user["is_admin"])

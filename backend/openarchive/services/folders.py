@@ -210,6 +210,8 @@ async def list_folders(conn, *, user_id: str | None, is_admin: bool = False) -> 
         f"""SELECT f.id, f.parent_id, f.name, f.created_by,
         (SELECT count(*) FROM documents d WHERE d.folder_id=f.id AND {VISIBLE_TO_USER}) AS document_count,
         jsonb_build_object('visibility', scope.visibility, 'users', scope.users, 'groups', scope.groups) AS scope,
+        (SELECT jsonb_build_object('id',g.id,'name',g.name) FROM groups g
+         WHERE g.id=f.department_group_id) AS department,
         (f.parent_id IS NOT NULL) AS inherited,
         COALESCE(f.created_by=%(user)s OR %(admin)s, false) AS can_manage,
         COALESCE(f.parent_id IS NULL AND f.created_by=%(user)s, false) AS can_change_access,
@@ -326,6 +328,13 @@ async def set_folder_access(
             [u for u in user_ids if u not in old_users],
             [g for g in group_ids if g not in old_groups],
         )
+        await conn.execute(
+            """UPDATE folders SET department_group_id=NULL WHERE id=%s
+            AND visibility='private' AND department_group_id IS NOT NULL
+            AND NOT EXISTS (SELECT 1 FROM folder_grants
+                WHERE folder_id=folders.id AND group_id=folders.department_group_id)""",
+            (folder_id,),
+        )
         return await _read_access(conn, folder_id)
 
 
@@ -364,3 +373,60 @@ async def transfer_folder_owner(
             )
         ).fetchone()
         return {"created_by": new_owner, "still_visible": visible is not None}
+
+
+class DepartmentMembershipRequired(ValueError):
+    def __init__(self):
+        super().__init__("지정할 부서의 그룹 구성원이어야 합니다.")
+
+
+class DepartmentScopeRequired(ValueError):
+    def __init__(self):
+        super().__init__("부서 구성원이 볼 수 있는 폴더만 지정할 수 있습니다.")
+
+
+class DepartmentFolderTaken(Exception):
+    def __init__(self):
+        super().__init__("이미 부서 폴더가 있습니다.")
+
+
+async def set_folder_department(conn, folder_id: UUID, *, user_id: str, group_id: UUID | None):
+    from openarchive.services.grants import GroupNotFound
+
+    try:
+        async with conn.transaction():
+            await conn.execute("SELECT 1 FROM folders WHERE id=%s FOR UPDATE", (folder_id,))
+            row = await _creator(conn, folder_id, user_id)
+            if group_id is not None:
+                group = await (
+                    await conn.execute(
+                        "SELECT id FROM groups WHERE id=%s FOR KEY SHARE", (group_id,)
+                    )
+                ).fetchone()
+                if group is None:
+                    raise GroupNotFound("그룹을 찾을 수 없습니다.")
+                member = await (
+                    await conn.execute(
+                        """SELECT 1 FROM group_members m JOIN users u ON u.id=m.user_id
+                    WHERE m.group_id=%s AND u.username=%s FOR KEY SHARE OF m""",
+                        (group_id, user_id),
+                    )
+                ).fetchone()
+                if member is None:
+                    raise DepartmentMembershipRequired
+                if row["visibility"] != "public":
+                    grant = await (
+                        await conn.execute(
+                            "SELECT 1 FROM folder_grants WHERE folder_id=%s AND group_id=%s",
+                            (folder_id, group_id),
+                        )
+                    ).fetchone()
+                    if grant is None:
+                        raise DepartmentScopeRequired
+            await conn.execute(
+                "UPDATE folders SET department_group_id=%s WHERE id=%s", (group_id, folder_id)
+            )
+    except psycopg.errors.UniqueViolation as error:
+        if error.diag.constraint_name != "uq_folders_department":
+            raise
+        raise DepartmentFolderTaken from error
