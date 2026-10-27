@@ -186,7 +186,14 @@ function HomeView(): React.ReactElement {
         <p className="text-sm text-muted">불러오는 중…</p>
       ) : (
         <div className="space-y-4">
-          {progress !== null ? <PipelineProgress progress={progress} /> : null}
+          {/* 폴더·「부여받은 문서」는 그 목록만 센다 — 열람 범위 전체 수가 좁힌 목록 위에 있으면 엇갈려 읽힌다. */}
+          {folderId !== null || granted ? (
+            total !== null ? (
+              <p aria-label="목록 건수" className="text-sm" role="status">
+                <span className="font-medium text-strong">이 목록 {total}건</span>
+              </p>
+            ) : null
+          ) : progress !== null ? <PipelineProgress progress={progress} /> : null}
           <DocumentList documents={documents} emptyMessage={emptyMessage} selectedId={shownId} onSelect={setSelectedId} />
           {globalTotal === null && progressError !== null ? (
             <p className="text-sm text-muted" role="status">

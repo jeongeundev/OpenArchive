@@ -28,9 +28,13 @@ function spread(value: number, values: number[]): number {
 }
 
 // 긴 이름이 이웃 덩어리 이름과 겹치지 않게 줄인다. 전체 이름은 title·aria-label에 남는다.
+// 가운데를 줄인다 — 문서 제목은 앞부분(연도·사업명)이 같고 끝(제안요청서·설명서)에서 갈리는 일이 많다.
 function shortName(name: string): string {
   const chars = Array.from(name);
-  return chars.length > NAME_LIMIT ? `${chars.slice(0, NAME_LIMIT).join("")}…` : name;
+  const half = NAME_LIMIT / 2;
+  return chars.length > NAME_LIMIT
+    ? `${chars.slice(0, half).join("")}…${chars.slice(-half).join("")}`
+    : name;
 }
 
 export default function ClustersPage(): React.ReactElement {
