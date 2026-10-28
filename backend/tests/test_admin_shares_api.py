@@ -54,6 +54,7 @@ def test_admin_shares_session_boundary(db_client, migrated_db, identity, expecte
         headers = bearer(issue_admin_token(migrated_db))
         db_client.cookies.clear()
     assert db_client.get("/api/admin/shares", headers=headers).status_code == expected
+    assert db_client.get("/api/admin/shares/revoked", headers=headers).status_code == expected
     assert db_client.delete(
         f"/api/admin/shares/{MISSING_ID}/tokens/{MISSING_ID}", headers=headers
     ).status_code == expected
@@ -110,3 +111,34 @@ def test_admin_sees_folder_count_but_not_folder_names(db_client, migrated_db):
     assert [row["folder_count"] for row in response.json()] == [2]
     assert "비밀" not in response.text
     assert root not in response.text and child not in response.text
+
+
+def test_revoked_tokens_include_owner_and_admin_actions(db_client, migrated_db):
+    shares = seed_shares(db_client, migrated_db)
+    share, token, _ = shares[0]
+    login_as(db_client, "kim")
+    assert db_client.post(
+        f"/api/shares/{share['id']}/tokens", json={"name": "유효 토큰"}
+    ).status_code == 201
+    assert db_client.delete(
+        f"/api/shares/{share['id']}/tokens/{token['id']}"
+    ).status_code == 204
+    login_admin(db_client, migrated_db)
+    other_share, other_token, _ = shares[1]
+    assert db_client.delete(
+        f"/api/admin/shares/{other_share['id']}/tokens/{other_token['id']}"
+    ).status_code == 204
+    response = db_client.get("/api/admin/shares/revoked")
+    assert response.status_code == 200
+    rows = response.json()
+    assert [(row["share_name"], row["token_name"], row["revoked_by"]) for row in rows] == [
+        ("lee 공유", "외부", "boss"), ("kim 공유", "외부", "kim")
+    ]
+    assert rows[0]["id"] > rows[1]["id"]
+    for row in rows:
+        assert set(row) == {
+            "id", "revoked_at", "share_name", "token_name", "revoked_by", "actor_via"
+        }
+        assert row["revoked_at"]
+        assert row["actor_via"] == "session"
+    assert "비밀 제목" not in response.text

@@ -707,6 +707,15 @@ class AdminShareTokenSummary(BaseModel):
     expired: bool
 
 
+class AdminRevokedShareToken(BaseModel):
+    id: int
+    revoked_at: datetime
+    share_name: str
+    token_name: str
+    revoked_by: str | None
+    actor_via: str | None
+
+
 class AdminShareSummary(BaseModel):
     id: UUID
     name: str

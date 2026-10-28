@@ -5,7 +5,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 
 from openarchive.api.deps import Connection, require_admin
-from openarchive.api.schemas import AdminShareSummary
+from openarchive.api.schemas import AdminRevokedShareToken, AdminShareSummary
 from openarchive.services import shares as service
 from openarchive.services.auth import TokenNotFound
 
@@ -19,6 +19,14 @@ async def list_shares(conn: Connection) -> list[AdminShareSummary]:
     return [
         AdminShareSummary.model_validate(row)
         for row in await service.list_all_shares(conn)
+    ]
+
+
+@router.get("/revoked", response_model=list[AdminRevokedShareToken])
+async def list_revoked_tokens(conn: Connection) -> list[AdminRevokedShareToken]:
+    return [
+        AdminRevokedShareToken.model_validate(row)
+        for row in await service.list_revoked_share_tokens(conn)
     ]
 
 

@@ -377,3 +377,20 @@ async def test_share_folder_lists_and_admin_count(conn):
     for folder in folders:
         assert folder["name"] not in serialized
         assert str(folder["id"]) not in serialized
+
+
+async def test_revoked_token_history_limits_and_direct_actor(conn):
+    from openarchive.services.shares import list_revoked_share_tokens
+
+    share = await create_share(conn, owner="alice", name="폐기 이력")
+    for index in range(201):
+        token = await issue_share_token(conn, share["id"], owner="alice", name=f"토큰 {index}")
+        await revoke_share_token(conn, share["id"], token["id"], owner="alice")
+    await issue_share_token(conn, share["id"], owner="alice", name="발급만")
+
+    rows = await list_revoked_share_tokens(conn)
+    assert len(rows) == 200
+    assert [row["token_name"] for row in rows] == [f"토큰 {i}" for i in range(200, 0, -1)]
+    assert all(row["revoked_by"] is None and row["actor_via"] is None for row in rows)
+    assert await list_revoked_share_tokens(conn, limit=2) == rows[:2]
+    assert await list_revoked_share_tokens(conn, limit=0) == []
