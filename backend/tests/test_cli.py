@@ -81,6 +81,7 @@ def test_owned_tables_match_the_migration_files():
         "embedding_jobs",
         "folder_grants",
         "folders",
+        "group_managers",
         "group_members",
         "groups",
         "idempotency_keys",

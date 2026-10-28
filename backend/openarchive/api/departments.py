@@ -14,14 +14,19 @@ router = APIRouter(prefix="/api/departments", tags=["departments"])
 SessionUser = Annotated[dict, Depends(require_session_user)]
 
 
+async def _is_admin(user: Annotated[dict | None, Depends(current_user)]) -> bool:
+    # 인증과 공유 주체 거부는 require_user_id가 담당한다.
+    return user is not None and user["is_admin"]
+
+
 @router.get("", response_model=list[Department])
 async def list_departments(
     conn: Connection,
     user_id: Annotated[str, Depends(require_user_id)],
-    user: Annotated[dict, Depends(current_user)],
+    is_admin: Annotated[bool, Depends(_is_admin)],
 ) -> list[Department]:
     return [Department.model_validate(row) for row in await service.list_departments(
-        conn, user_id=user_id, is_admin=user["is_admin"]
+        conn, user_id=user_id, is_admin=is_admin
     )]
 
 
