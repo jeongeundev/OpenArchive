@@ -93,3 +93,14 @@ describe("auditSince", () => {
     expect(auditSince("all", now)).toBeUndefined();
   });
 });
+
+
+it("동작 배지의 의미 색을 분류한다", async () => {
+  const { actionBadgeClass } = await import("./audit");
+  expect(actionBadgeClass("document_created")).toBe("bg-done-soft text-done");
+  expect(actionBadgeClass("document_restored")).toBe("bg-done-soft text-done");
+  expect(actionBadgeClass("document_deleted")).toBe("bg-failed-soft text-failed");
+  for (const action of ["access_changed", "folder_access_changed", "share_changed", "owner_changed"] as const)
+    expect(actionBadgeClass(action)).toBe("bg-attention-soft text-attention");
+  expect(actionBadgeClass("document_trashed")).toBe("bg-sunken text-body");
+});

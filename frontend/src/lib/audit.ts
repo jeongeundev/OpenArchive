@@ -145,3 +145,13 @@ export function auditSince(period: "today" | "7d" | "30d" | "all", now: Date): s
   const days = period === "7d" ? 7 : 30;
   return new Date(now.getTime() - days * 24 * 60 * 60 * 1000).toISOString();
 }
+
+
+/** 감사 동작의 의미에 맞춘 배지 색. 관리 화면에서 공통으로 사용한다. */
+export function actionBadgeClass(action: AuditAction): string {
+  if (action === "document_created" || action === "document_restored") return "bg-done-soft text-done";
+  if (action === "document_deleted") return "bg-failed-soft text-failed";
+  if (action === "access_changed" || action === "folder_access_changed" || action === "share_changed" || action === "owner_changed")
+    return "bg-attention-soft text-attention";
+  return "bg-sunken text-body";
+}
