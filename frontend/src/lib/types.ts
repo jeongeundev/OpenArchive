@@ -357,6 +357,10 @@ export interface UserSummary {
   created_at: string;
   /** 소속 부서 — 그 사람이 구성원인 그룹 하나(D14). 없을 수 있다. */
   department?: { id: string; name: string } | null;
+  /** 관리자 목록에만 온다 — 휴지통 포함 소유 문서 수(삭제 409와 같은 기준). */
+  owned_documents?: number;
+  /** 관리자 목록에만 온다 — 만든 폴더 수. */
+  created_folders?: number;
 }
 
 export interface GroupSummary {
