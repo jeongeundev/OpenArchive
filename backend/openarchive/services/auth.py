@@ -244,12 +244,18 @@ async def admin_exists(conn: psycopg.AsyncConnection) -> bool:
 
 
 async def list_users(conn: psycopg.AsyncConnection) -> list[dict]:
-    """비밀번호 해시를 제외한 계정 목록을 반환한다."""
+    """비밀번호 해시를 제외한 계정 목록을 반환한다.
+
+    소유 문서 수(휴지통 포함)와 만든 폴더 수는 `delete_user`의 409 판정과 같은 기준이다.
+    수만 돌려주고 문서 제목·id는 싣지 않는다(ADR-040).
+    """
     cur = conn.cursor(row_factory=dict_row)
     await cur.execute(
         """SELECT u.id, u.username, u.is_admin, u.created_at,
         (SELECT jsonb_build_object('id',g.id,'name',g.name) FROM groups g
-         WHERE g.id=u.department_group_id) AS department
+         WHERE g.id=u.department_group_id) AS department,
+        (SELECT count(*) FROM documents d WHERE d.owner_id=u.username) AS owned_documents,
+        (SELECT count(*) FROM folders f WHERE f.created_by=u.username) AS created_folders
         FROM users u ORDER BY u.created_at, u.id"""
     )
     return await cur.fetchall()

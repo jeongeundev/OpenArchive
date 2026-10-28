@@ -342,6 +342,11 @@ class UserSummary(BaseModel):
     created_at: datetime
 
 
+class AdminUserSummary(UserSummary):
+    owned_documents: int
+    created_folders: int
+
+
 class CreateGroupRequest(BaseModel):
     name: str = Field(min_length=1)
 
