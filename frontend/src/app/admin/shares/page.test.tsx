@@ -26,9 +26,12 @@ afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 it("공유와 토큰 메타데이터만 표시한다", async () => {
   setup();
   expect(await screen.findByText("협업")).toBeInTheDocument();
-  for (const label of ["kim", "lee", "3", "· 폴더 2", "· 폴더 1"]) expect(screen.getByText(label)).toBeInTheDocument();
+  for (const label of ["kim", "lee", "3", "· 폴더 2", "· 폴더 1", "토큰 없음", "만료 없음", "사용 기록 없음"]) expect(screen.getByText(label)).toBeInTheDocument();
   fireEvent.click(screen.getByRole("tab", { name: "만료 1" }));
   for (const label of ["外部봇", "만료", `만료 ${formatExpiry(token.expires_at)}`]) expect(screen.getByText(label)).toBeInTheDocument();
+  // 만료 토큰만 남은 공유도 문서 수가 보여야 한다 (TC 284)
+  expect(screen.getByRole("columnheader", { name: "문서 수" })).toBeInTheDocument();
+  expect(screen.getByRole("cell", { name: "3" })).toBeInTheDocument();
   const date = new Intl.DateTimeFormat("ko-KR", { dateStyle: "medium", timeStyle: "short" }).format(new Date(token.last_used_at));
   expect(screen.getByText(`마지막 사용 ${date}`)).toBeInTheDocument();
   expect(screen.queryByRole("link", { name: /문서 제목/ })).not.toBeInTheDocument();
@@ -42,7 +45,7 @@ it("확인 후 해당 토큰을 폐기하고 목록에서 제거한다", async (
   await waitFor(() => expect(screen.queryByText("外部봇")).not.toBeInTheDocument());
   expect(confirm).toHaveBeenCalledWith(expect.stringContaining("협업"));
   expect(fetchMock).toHaveBeenCalledWith("/api/admin/shares/s1/tokens/t1", expect.objectContaining({ method: "DELETE" }));
-  fireEvent.click(screen.getByRole("tab", { name: "활성 1" }));
+  fireEvent.click(screen.getByRole("tab", { name: "활성 2" }));
   expect(screen.getByText("미사용")).toBeInTheDocument();
   expect(fetchMock.mock.calls.filter(([url]) => String(url) === "/api/admin/shares/revoked")).toHaveLength(2);
 });
@@ -94,4 +97,31 @@ it("폐기 탭은 감사 기록의 공유·토큰·사람을 표시한다", asyn
   render(<AuthProvider><SharesPage /></AuthProvider>);
   fireEvent.click(await screen.findByRole("tab", { name: "폐기 1" }));
   for (const label of ["지난 공유", "폐기 봇", "관리자kim"]) expect(screen.getByText(label)).toBeInTheDocument();
+});
+it("활성 탭 숫자는 탭 안의 공유 행 수다", async () => {
+  setup([shares[1]]);
+  expect(await screen.findByRole("tab", { name: "활성 1" })).toBeInTheDocument();
+  expect(screen.getByText("빈 공유")).toBeInTheDocument();
+});
+it("폐기 기록이 상한만큼 오면 200+로 적는다", async () => {
+  const history = Array.from({ length: 200 }, (_, index) => ({ id: index, share_name: `공유${index}`, token_name: `봇${index}`, revoked_at: token.created_at, revoked_by: "admin", actor_via: "session" }));
+  vi.stubGlobal("fetch", vi.fn(async (input) => response(String(input) === "/api/auth/me" ? admin : String(input).endsWith("/revoked") ? history : [])));
+  render(<AuthProvider><SharesPage /></AuthProvider>);
+  expect(await screen.findByRole("tab", { name: "폐기 200+" })).toBeInTheDocument();
+  expect(screen.getByText("200+")).toBeInTheDocument();
+});
+it("폐기는 성공하고 폐기 목록 재조회만 실패하면 폐기 실패라고 하지 않는다", async () => {
+  let revokedCalls = 0;
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input) === "/api/auth/me") return response(admin);
+    if (String(input) === "/api/admin/shares/revoked") { revokedCalls += 1; return revokedCalls === 1 ? response([]) : response({ detail: "오류" }, 500); }
+    if (init?.method === "DELETE") return new Response(null, { status: 204 });
+    return response(shares);
+  }));
+  vi.spyOn(window, "confirm").mockReturnValue(true);
+  render(<AuthProvider><SharesPage /></AuthProvider>);
+  fireEvent.click(await screen.findByRole("tab", { name: "만료 1" }));
+  fireEvent.click(screen.getByRole("button", { name: "外部봇 폐기" }));
+  expect(await screen.findByRole("alert")).toHaveTextContent("토큰은 폐기했지만 폐기 목록을 새로 불러오지 못했습니다.");
+  expect(screen.queryByText("外部봇")).not.toBeInTheDocument();
 });

@@ -9,6 +9,8 @@ import { formatExpiry, summarizeShares } from "@/lib/tokenExpiry";
 import type { AdminShareSummary, AdminRevokedShareToken } from "@/lib/types";
 
 const DATE_FORMATTER = new Intl.DateTimeFormat("ko-KR", { dateStyle: "medium", timeStyle: "short" });
+// 서버 `list_revoked_share_tokens`의 기본 상한. 이만큼 오면 누적 전체가 아니므로 「200+」로 적는다.
+const REVOKED_LIMIT = 200;
 
 export default function SharesPage(): React.ReactElement {
   const { auth, loading: authLoading } = useAuth();
@@ -36,10 +38,16 @@ export default function SharesPage(): React.ReactElement {
     setError(null);
     try {
       await revokeAdminShareToken(share.id, token.id);
-      setShares(current => current.map(item => item.id === share.id ? { ...item, tokens: item.tokens.filter(value => value.id !== token.id) } : item));
-      setRevoked(await listRevokedShareTokens());
     } catch (reason: unknown) {
       setError(reason instanceof ApiError ? reason.detail : "토큰을 폐기하지 못했습니다.");
+      setWorking(false);
+      return;
+    }
+    setShares(current => current.map(item => item.id === share.id ? { ...item, tokens: item.tokens.filter(value => value.id !== token.id) } : item));
+    try {
+      setRevoked(await listRevokedShareTokens());
+    } catch {
+      setError("토큰은 폐기했지만 폐기 목록을 새로 불러오지 못했습니다.");
     } finally { setWorking(false); }
   }
 
@@ -47,6 +55,7 @@ export default function SharesPage(): React.ReactElement {
   if (!auth.is_admin) return <p className="text-sm text-muted">관리자 권한이 필요합니다.</p>;
 
   const summary = summarizeShares(shares, revoked.length, new Date());
+  const revokedLabel = revoked.length >= REVOKED_LIMIT ? `${REVOKED_LIMIT}+` : revoked.length;
   const activeShares = shares.filter(share => share.tokens.length === 0 || share.tokens.some(token => !token.expired));
   const expiredTokens = shares.flatMap(share => share.tokens.filter(token => token.expired).map(token => ({ share, token })));
   const empty = tab === "active" ? activeShares.length === 0 : tab === "expired" ? expiredTokens.length === 0 : revoked.length === 0;
@@ -59,7 +68,7 @@ export default function SharesPage(): React.ReactElement {
       <button aria-label={`${token.name} 폐기`} className="text-muted hover:text-strong disabled:text-faint" disabled={working} onClick={() => void revoke(share, token)} type="button">폐기</button>
     </div>;
   }
-  const headings = tab === "active" ? ["공유 이름", "소유자", "문서 수", "토큰"] : tab === "expired" ? ["공유 이름", "소유자", "토큰 · 만료 · 마지막 사용"] : ["공유 이름", "토큰 이름", "폐기 시각", "폐기한 사람"];
+  const headings = tab === "active" ? ["공유 이름", "소유자", "문서 수", "토큰"] : tab === "expired" ? ["공유 이름", "소유자", "문서 수", "토큰 · 만료 · 마지막 사용"] : ["공유 이름", "토큰 이름", "폐기 시각", "폐기한 사람"];
   return <section className="space-y-6">
     <div>
       <p className="mb-2 text-sm font-medium text-accent">관리</p>
@@ -69,10 +78,10 @@ export default function SharesPage(): React.ReactElement {
     {error !== null ? <p className="text-sm text-failed" role="alert">{error}</p> : null}
     {!loaded ? error === null ? <p className="text-sm text-muted">불러오는 중…</p> : null : <>
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        {[["활성 링크", summary.active], ["7일 내 만료 예정", summary.expiring], ["최근 7일 토큰 사용", summary.recent], ["폐기된 토큰", summary.revoked]].map(([label, count]) => <div key={label} className="rounded-xl border border-line bg-card px-5 py-4"><p className="text-xs text-muted">{label}</p><p className="mt-2 text-3xl font-semibold text-strong">{count}</p></div>)}
+        {[["활성 링크", summary.active], ["7일 내 만료 예정", summary.expiring], ["최근 7일 토큰 사용", summary.recent], ["폐기된 토큰", revokedLabel]].map(([label, count]) => <div key={label} className="rounded-xl border border-line bg-card px-5 py-4"><p className="text-xs text-muted">{label}</p><p className="mt-2 text-3xl font-semibold text-strong">{count}</p></div>)}
       </div>
       <div role="tablist" aria-label="토큰 상태" className="flex gap-1 border-b border-line">
-        {([["active", "활성", summary.active], ["expired", "만료", expiredTokens.length], ["revoked", "폐기", revoked.length]] as const).map(([value, label, count]) => <button key={value} role="tab" aria-selected={tab === value} type="button" onClick={() => setTab(value)} className={`border-b-2 px-4 py-3 text-sm ${tab === value ? "border-strong font-semibold text-strong" : "border-transparent text-muted hover:text-strong"}`}>{label} {count}</button>)}
+        {([["active", "활성", activeShares.length], ["expired", "만료", expiredTokens.length], ["revoked", "폐기", revokedLabel]] as const).map(([value, label, count]) => <button key={value} role="tab" aria-selected={tab === value} type="button" onClick={() => setTab(value)} className={`border-b-2 px-4 py-3 text-sm ${tab === value ? "border-strong font-semibold text-strong" : "border-transparent text-muted hover:text-strong"}`}>{label} {count}</button>)}
       </div>
       {empty ? <div className="flex min-h-72 flex-col items-center justify-center rounded-xl border border-dashed border-line-strong px-6 py-12 text-center">
         <div className="mb-4 flex size-12 items-center justify-center rounded-full bg-sunken text-muted"><svg aria-hidden="true" className="size-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}><path d="m10 13 4-4m-6 6-1 1a4 4 0 0 1-6-6l4-4a4 4 0 0 1 6 0m2 2 1-1a4 4 0 0 1 6 6l-4 4a4 4 0 0 1-6 0" strokeLinecap="round" strokeLinejoin="round" /></svg></div>
@@ -87,7 +96,7 @@ export default function SharesPage(): React.ReactElement {
               <td className="px-5 py-4 font-semibold text-strong">{share.name}</td><td className="px-5 py-4">{share.owner}</td>
               <td className="px-5 py-4"><span>{share.document_count}</span>{share.folder_count > 0 ? <span className="ml-1 text-muted">· 폴더 {share.folder_count}</span> : null}</td>
               <td className="space-y-3 px-5 py-4">{share.tokens.length === 0 ? "토큰 없음" : share.tokens.filter(token => !token.expired).map(token => <div key={token.id}>{tokenInfo(share, token)}</div>)}</td>
-            </tr>) : tab === "expired" ? expiredTokens.map(({ share, token }) => <tr key={token.id} className="border-b border-line align-top last:border-0"><td className="px-5 py-4 font-semibold text-strong">{share.name}</td><td className="px-5 py-4">{share.owner}</td><td className="px-5 py-4">{tokenInfo(share, token)}</td></tr>) : revoked.map(token => <tr key={token.id} className="border-b border-line last:border-0"><td className="px-5 py-4 font-semibold text-strong">{token.share_name}</td><td className="px-5 py-4">{token.token_name}</td><td className="px-5 py-4 text-muted">{DATE_FORMATTER.format(new Date(token.revoked_at))}</td><td className="px-5 py-4">{token.revoked_by ?? (token.actor_via === "cli" ? "운영자 CLI" : "직접 접속")}</td></tr>)}
+            </tr>) : tab === "expired" ? expiredTokens.map(({ share, token }) => <tr key={token.id} className="border-b border-line align-top last:border-0"><td className="px-5 py-4 font-semibold text-strong">{share.name}</td><td className="px-5 py-4">{share.owner}</td><td className="px-5 py-4">{share.document_count}</td><td className="px-5 py-4">{tokenInfo(share, token)}</td></tr>) : revoked.map(token => <tr key={token.id} className="border-b border-line last:border-0"><td className="px-5 py-4 font-semibold text-strong">{token.share_name}</td><td className="px-5 py-4">{token.token_name}</td><td className="px-5 py-4 text-muted">{DATE_FORMATTER.format(new Date(token.revoked_at))}</td><td className="px-5 py-4">{token.revoked_by ?? (token.actor_via === "cli" ? "운영자 CLI" : "직접 접속")}</td></tr>)}
           </tbody>
         </table>
       </div>}
