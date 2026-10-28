@@ -1695,3 +1695,50 @@ def test_department_folder_constraints(conn):
             "VALUES ('other', 'kim', 'public', %s)", (group,),
         )
     assert conn.execute("SELECT count(*) FROM folders").fetchone()[0] == 4
+
+
+def test_group_manager_requires_membership(conn):
+    user = conn.execute(
+        "INSERT INTO users (username, password_hash) VALUES ('manager', 'hash') RETURNING id"
+    ).fetchone()[0]
+    group = conn.execute("INSERT INTO groups (name) VALUES ('IT') RETURNING id").fetchone()[0]
+    with pytest.raises(psycopg.errors.ForeignKeyViolation):
+        conn.execute(
+            "INSERT INTO group_managers (group_id, user_id) VALUES (%s, %s)", (group, user),
+        )
+    conn.execute("INSERT INTO group_members VALUES (%s, %s)", (group, user))
+    created_at = conn.execute(
+        "INSERT INTO group_managers (group_id, user_id) VALUES (%s, %s) RETURNING created_at",
+        (group, user),
+    ).fetchone()[0]
+    assert created_at is not None
+    conn.execute("DELETE FROM group_members WHERE group_id = %s", (group,))
+    assert conn.execute("SELECT * FROM group_managers").fetchall() == []
+
+
+@pytest.mark.parametrize("parent", ["groups", "users"])
+def test_group_manager_cascades_on_principal_deletion(conn, parent):
+    user = conn.execute(
+        "INSERT INTO users (username, password_hash) VALUES ('manager', 'hash') RETURNING id"
+    ).fetchone()[0]
+    group = conn.execute("INSERT INTO groups (name) VALUES ('IT') RETURNING id").fetchone()[0]
+    conn.execute("INSERT INTO group_members VALUES (%s, %s)", (group, user))
+    conn.execute(
+        "INSERT INTO group_managers (group_id, user_id) VALUES (%s, %s)", (group, user),
+    )
+    conn.execute(f"DELETE FROM {parent} WHERE id = %s", (group if parent == "groups" else user,))
+    assert conn.execute(f"SELECT id FROM {parent}").fetchall() == []
+    assert conn.execute("SELECT * FROM group_managers").fetchall() == []
+
+
+def test_group_description_default_and_length_limit(conn):
+    group, description = conn.execute(
+        "INSERT INTO groups (name) VALUES ('IT') RETURNING id, description"
+    ).fetchone()
+    assert description == ""
+    conn.execute("UPDATE groups SET description = %s WHERE id = %s", ("가" * 200, group))
+    with pytest.raises(psycopg.errors.CheckViolation):
+        conn.execute("UPDATE groups SET description = %s WHERE id = %s", ("가" * 201, group))
+    assert conn.execute("SELECT description FROM groups WHERE id = %s", (group,)).fetchone() == (
+        "가" * 200,
+    )

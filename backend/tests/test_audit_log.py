@@ -965,3 +965,56 @@ def test_department_group_deletion_audit_and_rollback(conn):
     assert rows == [("user_changed", "alice", "session", None, None, {
         "change": "department_changed", "user": "kim", "from": None, "to": None,
     })]
+
+
+@pytest.mark.parametrize("removal", ["manager", "membership"])
+def test_department_manager_changes_record_actor(conn, removal):
+    user, group = principals(conn)
+    conn.execute("INSERT INTO group_members VALUES (%s, %s)", (group, user))
+    before = audit_rows(conn)
+    with conn.transaction():
+        set_actor(conn, "department-lead")
+        conn.execute(
+            "INSERT INTO group_managers (group_id, user_id) VALUES (%s, %s)", (group, user),
+        )
+        table = "group_managers" if removal == "manager" else "group_members"
+        conn.execute(f"DELETE FROM {table} WHERE group_id = %s", (group,))
+    changes = [row for row in audit_rows(conn)[len(before):] if row[0] == "group_changed"]
+    assert changes == [
+        ("group_changed", "department-lead", "session", None, None,
+         {"change": change, "group": "개발팀", "user": "bob"})
+        for change in ("manager_added", "manager_removed")
+    ]
+    assert conn.execute("SELECT * FROM group_managers").fetchall() == []
+
+
+@pytest.mark.parametrize("parent", ["groups", "users"])
+def test_department_manager_principal_cascade_skips_manager_audit(conn, parent):
+    user, group = principals(conn)
+    conn.execute("INSERT INTO group_members VALUES (%s, %s)", (group, user))
+    conn.execute(
+        "INSERT INTO group_managers (group_id, user_id) VALUES (%s, %s)", (group, user),
+    )
+    before = audit_rows(conn)
+    conn.execute(f"DELETE FROM {parent} WHERE id = %s", (group if parent == "groups" else user,))
+    assert conn.execute(f"SELECT id FROM {parent}").fetchall() == []
+    assert conn.execute("SELECT * FROM group_managers").fetchall() == []
+    assert audit_rows(conn)[len(before):] == [
+        ("group_changed" if parent == "groups" else "user_changed",
+         None, None, None, None,
+         {"change": "deleted", "group": "개발팀"} if parent == "groups"
+         else {"change": "deleted", "user": "bob"})
+    ]
+
+
+def test_department_description_audits_only_actual_changes(conn):
+    _, group = principals(conn)
+    before = audit_rows(conn)
+    with conn.transaction():
+        set_actor(conn, "department-lead")
+        conn.execute("UPDATE groups SET description = '개발 부서' WHERE id = %s", (group,))
+        conn.execute("UPDATE groups SET description = '개발 부서' WHERE id = %s", (group,))
+    assert audit_rows(conn)[len(before):] == [
+        ("group_changed", "department-lead", "session", None, None,
+         {"change": "description_changed", "group": "개발팀"})
+    ]
