@@ -14,6 +14,7 @@ from openarchive.api.ask import router as ask_router
 from openarchive.api.audit import router as audit_router
 from openarchive.api.auth import router as auth_router
 from openarchive.api.clusters import router as clusters_router
+from openarchive.api.departments import router as departments_router
 from openarchive.api.diagnostics import router as diagnostics_router
 from openarchive.api.documents import router as documents_router
 from openarchive.api.folders import router as folders_router
@@ -30,6 +31,7 @@ from openarchive.embeddings import get_provider, warm_up
 from openarchive.frontend import mount_frontend
 from openarchive.mcp_server.http import remote_mcp
 from openarchive.migrations import run_migrations
+from openarchive.services import departments as departments_service
 from openarchive.services import documents as documents_service
 from openarchive.services import folders as folders_service
 from openarchive.services import grants as grants_service
@@ -67,6 +69,7 @@ app.add_middleware(SecurityHeaders)
 app.include_router(admin_router)
 app.include_router(admin_shares_router)
 app.include_router(groups_router)
+app.include_router(departments_router)
 app.include_router(audit_router)
 app.include_router(principals_router)
 app.include_router(shares_router)
@@ -180,6 +183,24 @@ async def _version_conflict(
     return JSONResponse(
         status_code=409,
         content={"detail": str(error), "current_version": error.current_version},
+    )
+
+
+@app.exception_handler(grants_service.GroupNotFound)
+@app.exception_handler(grants_service.UserNotFound)
+async def department_not_found(request: Request, exc: Exception):
+    return JSONResponse(status_code=404, content={"detail": str(exc)})
+
+
+@app.exception_handler(departments_service.NotDepartmentManager)
+async def department_forbidden(request: Request, exc: Exception):
+    return JSONResponse(status_code=403, content={"detail": str(exc)})
+
+
+@app.exception_handler(departments_service.ManagerMustBeMember)
+async def department_member_required(request: Request, exc: Exception):
+    return JSONResponse(
+        status_code=400, content={"detail": "부서 구성원만 부서 관리자가 될 수 있습니다."}
     )
 
 

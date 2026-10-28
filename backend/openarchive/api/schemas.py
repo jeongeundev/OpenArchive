@@ -17,12 +17,12 @@ class FolderScope(BaseModel):
     groups: list[str]
 
 
-class Department(BaseModel):
+class DepartmentSummary(BaseModel):
     id: UUID
     name: str
 
 
-class UpdateDepartmentRequest(BaseModel):
+class UpdateUserDepartmentRequest(BaseModel):
     group_id: UUID | None
 
 
@@ -32,7 +32,7 @@ class UpdateFolderDepartmentRequest(BaseModel):
 
 
 class Folder(BaseModel):
-    department: Department | None = None
+    department: DepartmentSummary | None = None
     id: UUID
     parent_id: UUID | None
     name: str
@@ -335,7 +335,7 @@ class CreateUserRequest(BaseModel):
 
 
 class UserSummary(BaseModel):
-    department: Department | None = None
+    department: DepartmentSummary | None = None
     id: UUID
     username: str
     is_admin: bool
@@ -711,3 +711,23 @@ class AdminShareSummary(BaseModel):
     # 폴더 이름·id는 싣지 않는다 (ADR-061 결정 3과 같은 이유, #206)
     folder_count: int
     tokens: list[AdminShareTokenSummary]
+
+
+class DepartmentMember(BaseModel):
+    username: str
+    manager: bool
+    primary: bool
+
+
+class Department(BaseModel):
+    id: UUID
+    name: str
+    description: str
+    folder_id: UUID | None
+    members: list[DepartmentMember]
+    granted_document_count: int
+    can_manage: bool
+
+
+class UpdateDepartmentRequest(BaseModel):
+    description: str = Field(max_length=200)

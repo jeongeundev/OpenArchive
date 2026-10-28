@@ -90,6 +90,9 @@ async def set_department_manager(
 ) -> None:
     async with conn.transaction():
         await ensure_can_manage(conn, group_id, user_id=user_id, is_admin=is_admin)
+        cur = await conn.execute("SELECT id FROM users WHERE username = %s", (username,))
+        if await cur.fetchone() is None:
+            raise grants.UserNotFound("사용자를 찾을 수 없습니다.")
         if manager:
             # FK 대상 구성원을 잠가 지정 도중 제거되는 경쟁도 막는다.
             cur = await conn.execute(
