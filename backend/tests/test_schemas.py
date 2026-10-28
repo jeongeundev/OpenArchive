@@ -59,6 +59,7 @@ def test_auth_status_cannot_serialize_session_tokens_or_password_hashes():
         "scope": None,
         "expires_at": None,
         "department": None,
+        "manages_department": False,
     }
 
 
