@@ -377,3 +377,25 @@ it("주소의 동작을 초기 선택하고 0건이어도 선택 칩을 남긴�
   fireEvent.click(await screen.findByRole("button", { name: "전체 123" }));
   await waitFor(() => expect(screen.queryByRole("button", { name: "텍스트 수정 0" })).not.toBeInTheDocument());
 });
+
+it.each(["2026-10-28T06:09:02Z", "invalid"])("since 진입을 목록·집계·CSV에 적용한다: %s", async value => {
+  window.history.replaceState({}, "", `/admin/audit?since=${value}&action=text_updated`);
+  const { fetchMock, auditUrls } = routedFetch(admin, [{ items: [], next_before_id: null }]);
+  vi.stubGlobal("fetch", fetchMock);
+  render(<AuthProvider><AuditPage /></AuthProvider>);
+  await waitFor(() => expect(auditUrls.length).toBeGreaterThan(0));
+  const since = new URL(auditUrls[0], "http://localhost").searchParams.get("since");
+  expect(since).not.toBeNull();
+  if (value === "invalid") {
+    expect(Math.abs(Date.parse(since!) - (Date.now() - 7 * 24 * 60 * 60 * 1000))).toBeLessThan(2_000);
+  } else {
+    expect(since).toBe(value);
+  }
+  expect(screen.getByLabelText("기간")).toHaveValue(value === "invalid" ? "7d" : "custom");
+  expect(new URL(screen.getByText("CSV 내려받기").closest("a")!.href).searchParams.get("since")).toBe(since);
+  const counts = fetchMock.mock.calls.map(call => String(call[0])).find(url => url.startsWith("/api/admin/audit/counts"));
+  expect(new URL(counts!, "http://localhost").searchParams.get("since")).toBe(since);
+  expect(new URL(auditUrls[0], "http://localhost").searchParams.get("action")).toBe("text_updated");
+  fireEvent.change(screen.getByLabelText("기간"), { target: { value: "all" } });
+  await waitFor(() => expect(new URL(auditUrls.at(-1)!, "http://localhost").searchParams.has("since")).toBe(false));
+});

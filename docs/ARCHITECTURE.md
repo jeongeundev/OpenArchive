@@ -870,6 +870,8 @@ DATABASE_URL="postgresql://app@<vip>:6432/<pool_name>"
 
 ### 애플리케이션이 담당하는 복구 로직
 
+- **장애 관측·기록**: API의 전용 연결 감시가 복구 시 `db_outages`에 앱이 겪은 중단·승격과 요청 처리 카운터를 남긴다(ADR-067). 새 Primary 발견은 계속 OpenProxy가 맡는다.
+
 - **API**: `psycopg_pool.AsyncConnectionPool(check=AsyncConnectionPool.check_connection)` — 죽은 연결을 대여 시점에 감지·폐기·재수립. 처리 도중 끊긴 요청은 미들웨어가 **1회 재시도**한다. 대상은 **읽기 요청**(`GET`·`HEAD`·`POST /api/search`·`POST /api/ask` — ask는 DB 단계가 생성 전에 끝나 재시도가 생성을 두 번 돌리지 않는다)과 **`Idempotency-Key`가 있는 문서 생성**(`POST /api/documents`·`/api/documents/text`, ADR-047)뿐이다. 그 밖의 쓰기는 커밋 도달 여부를 구분할 수 없어 재시도 시 중복 생성 위험이 있다 (ADR-023).
 - **일시 불가용은 503 + `Retry-After`**: 기다리면 풀리는 DB 오류를 `openarchive.db.is_unavailable` 하나로 가른다 — 연결 유실·풀 대여 시간 초과(SQLSTATE 없는 `OperationalError`), 연결 예외 `08xxx`, OpenProxy `AllServersDown`과 서버 소켓 오류가 올라오는 `58000`, 서버 종료·기동 중인 `57P01`·`57P02`·`57P03`, 승격 직후 쓰기가 replica로 간 `25006`. **나열한 것만** 일시 불가용이다 — `OperationalError`에는 디스크 가득 참(`53100`)·인증 실패(`28P01`)·statement timeout(`57014`)처럼 기다려도 풀리지 않는 것도 섞여 있어, 그것을 503으로 주면 결함이 가려진다. 한계: 잘못된 DSN·비밀번호는 풀에서 `PoolTimeout`으로 보여 장애와 구별되지 않는다. 미들웨어(`api/retry.py`)의 즉시 1회 재시도도 이 기준을 따르고, 끝내 풀리지 않으면 **503 + `Retry-After: 1`**로 응답한다. 쓰기도 503은 받지만 즉시 재시도는 `Idempotency-Key`가 있는 문서 생성(`POST /api/documents`·`/api/documents/text`)만 한다 — 다른 쓰기는 헤더가 붙어 와도 키를 지키지 않는다. 그 밖의 오류는 500이며, 500은 코드 결함에만 남는다. #110 B에서는 장애 구간 응답이 전부 500이었다(B-5) (ADR-048 결정 3).
 - **긴 재시도는 클라이언트가 한다**: 즉시 1회로는 7~42초 중단을 덮지 못한다. 웹 UI(`lib/api.ts`)의 읽기와 업로드, MCP 도구 4개(읽기 3개와 `create_document`)가 503·네트워크 오류(MCP는 분류된 DB 오류)를 **지수 백오프(1초 시작·상한 8초) + 전체 지터, 총 60초**로 다시 시도한다. 웹 UI는 503의 `Retry-After`보다 일찍 보내지 않는다 — 간격은 `max(Retry-After, 지터 백오프)`이고, 알린 값이 남은 예산을 넘으면 바로 포기한다(RFC 9110 §10.2.3). stdio·원격 MCP 도구는 REST를 거치지 않고 서비스를 직접 부르며 같은 `with_backoff`를 쓴다. 도구 내부의 DB 실패는 MCP 오류로 전달된다. DB 불가용을 HTTP 503으로 받는 것은 토큰 인증 단계뿐이며 `RetryOnUnavailable`이 변환한다(매니저 미기동도 별도로 503). 쓰기는 멱등키가 있는 것만 재시도한다 — 웹 UI는 업로드 동작마다, MCP는 `create_document` 호출마다 키를 하나 만들어 그 요청의 모든 재시도에 쓴다(ADR-047). 편집·태그·삭제 등 다른 쓰기는 재시도하지 않는다. REST 서버는 긴 백오프 동안 요청을 붙잡지 않는다. 원격 MCP는 예외로 공유 도구 본체가 서버 안에서 백오프하므로 장애 구간의 도구 응답은 그동안 기다린다 — MCP 도구 호출에는 클라이언트가 멱등키를 실을 자리가 없어 같은 키로 재시도할 수 있는 곳이 서버뿐이고, 대기는 연결을 반납한 뒤라 풀을 묶지 않는다 (ADR-048 결정 4·「2026-10-07 개정」, ADR-056 구현 결정 7).
@@ -931,6 +933,32 @@ OpenSQL `patroni.yml`의 PostgreSQL 파라미터는 `max_connections: 100`이다
 ### 로컬 개발 갭
 
 로컬은 pgvector 단일 컨테이너다 (ADR-007). **OpenProxy 경유 경로는 로컬에서 검증할 수 없다** — 공식 Docker 배포판이 없기 때문이다. M0 검증 목록은 `docs/OPENSQL_RESEARCH.md` §12를 따른다.
+
+### DB 장애 관측과 기록 (ADR-067, #300)
+
+API lifespan이 `services/db_outages.py:run_monitor` 태스크 하나를 시작하고 종료 때 정리한다. `DATABASE_URL`로
+`db.connect` 전용 연결을 열어 기본 2초 간격으로 plain 트랜잭션 안에서 주소·포트와
+`('x' || substr(pg_walfile_name(pg_current_wal_lsn()), 1, 8))::bit(32)::int` 타임라인을 읽는다.
+연결 수립을 포함한 탐침 제한은 3초이며 실패하면 연결을 닫고 다음 주기에 다시 연다. 풀·워커와 독립한 관측이다.
+정상 관측 이후 연속 실패 2회 이상 또는 타임라인 변경이 있으면 복구 탐침에서 기록한다. 타임라인 변경은 `promotion`,
+그대로면 `interruption`이다. 실패 없이 승격을 관측하면 `failed_checks=0`, `first_failure_at=recovered_at`이다.
+
+`052_db_outages_tables.sql`의 `db_outages`는 다음 값을 저장한다. 앱이 쓰는 운영 기록이며 `audit_log`와 별개다.
+
+| 칼럼 | 의미·제약 |
+|---|---|
+| `id`, `recorded_at` | bigserial 기본키, 저장 시각 기본 `now()` |
+| `kind` | `promotion` 또는 `interruption` CHECK |
+| `last_ok_at`, `first_failure_at`, `recovered_at` | NOT NULL timestamptz, 이 순서가 비감소라는 CHECK |
+| `node_before`, `node_after` | nullable text, 주소:포트 |
+| `timeline_before`, `timeline_after` | nullable integer, 타임라인 전후 |
+| `failed_checks` | 0 이상 CHECK, 실패 탐침 수 |
+| `requests_retried`, `requests_unavailable`, `server_errors` | NOT NULL integer, 기본 0. 서버 즉시 재시도 뒤 2xx·503·그 밖 500 이상 응답 수 |
+
+요청 수는 `api/retry.py`의 프로세스 전역 카운터를 마지막 정상 탐침과 복구 탐침 사이에서 뺀 값이다.
+브라우저 재시도 전체의 성공 수가 아니다. 저장 실패는 메모리에 보관해 다음 정상 탐침에서 다시 쓰며, API 종료 시
+저장 전 기록은 사라질 수 있고 모호한 커밋 뒤에는 중복될 수 있다. API 프로세스마다 따로 기록한다.
+앱 연결에 영향 없는 장애·API가 꺼진 동안·첫 정상 관측 전 장애는 기록하지 못한다. 시각은 탐침 기준 관측값이다.
 
 ## API 설계
 
@@ -1003,6 +1031,7 @@ OpenSQL `patroni.yml`의 PostgreSQL 파라미터는 `max_connections: 100`이다
 | `PUT /api/shares/{id}/documents/{document_id}` · `DELETE /api/shares/{id}/documents/{document_id}` | 공유에 내 문서 넣기·빼기(멱등 204). 세션 전용 |
 | `PUT /api/shares/{id}/folders/{folder_id}` · `DELETE /api/shares/{id}/folders/{folder_id}` | 공유에 폴더 넣기·빼기(멱등 204). 세션 전용. **그 폴더의 최상위 폴더를 만든 사람만**(관리자 예외 없음) — 아니면 403, 폴더가 안 보이면 404. 하위의 「폴더 범위 따름」 문서가 소유자와 무관하게 포함된다 (#206) |
 | `POST /api/shares/{id}/tokens` `{name}` · `DELETE /api/shares/{id}/tokens/{token_id}` | 공유 토큰 발급(원문 1회)·폐기. 세션 전용 |
+| `GET /api/system/outages` | **로그인 필요**, 상태 API와 같은 `require_user_id` 경계(공유 주체 거부). `limit` 기본 20, 1~200. `recovered_at DESC, id DESC` 순 배열로 id·종류·세 관측 시각·노드/타임라인 전후·실패 탐침 수·요청 카운터 세 개를 반환한다. `recorded_at`은 응답에 싣지 않는다 (ADR-067) |
 | `GET /api/system/status` | **로그인 필요 · 운영/데모 전용**: `inet_server_addr()`(현재 접속 노드), pending/processing/error **임베딩** 잡 수(`kind='embed'`, lease가 만료된 `processing`은 `recovery_pending`으로 따로)·`job_lease_seconds`·`last_job_finished_at`, 임베딩 프로바이더명, **정합성 검증 쿼리 결과**(`c.version <> d.version` 건수), **관계 미반영 문서 수**(`kind='edges'` 잡이 `done`이 아닌 문서), **텍스트 인식 대기·실패 문서 수**(`extraction_status`가 `pending`·`failed`), **미리보기 변환 판 수**(`preview_pending`·`preview_failed`·`preview_unavailable` — `document_file_previews.status`별). `/admin/status`가 소비하며 사용자 화면은 호출하지 않는다. SQL과 결과 모델은 `services/system.py`에 있고 라우터는 인증과 응답 변환만 맡는다 |
 
 > **공유 API(#97 c)** — 남의 공유 id는 404, 추가할 문서가 안 보이면 404, 보이는 남의 문서면 403이다. 공유 토큰은 ADR-044 「공유」 결정 5의 읽기 허용 목록만 통과하며 나머지는 403이다. MCP는 바꾸지 않는다.

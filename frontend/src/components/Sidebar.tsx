@@ -19,8 +19,11 @@ const menus = [
   ["/diagnostics", "문서 진단", "M2 12h5l3-8 4 16 3-8h5"],
 ];
 const adminMenus = [
-  ["/admin/users", "사용자 관리"], ["/admin/groups", "그룹 관리"],
-  ["/admin/shares", "외부 공유"], ["/admin/audit", "감사 로그"], ["/admin/status", "시스템 상태"],
+  ["/admin/users", "사용자 관리", "M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2 M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8 M22 21v-2a4 4 0 0 0-3-3.87 M16 3.13a4 4 0 0 1 0 7.75"],
+  ["/admin/groups", "그룹 관리", "M3 3h7v7H3Z M14 3h7v7h-7Z M3 14h7v7H3Z M14 14h7v7h-7Z"],
+  ["/admin/shares", "외부 공유", "M10 13a5 5 0 0 0 7 .5l3-3a5 5 0 0 0-7-7l-2 2 M14 11a5 5 0 0 0-7-.5l-3 3a5 5 0 0 0 7 7l2-2"],
+  ["/admin/audit", "감사 로그", "M9 3H6a2 2 0 0 0-2 2v15a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2h-3 M9 2h6v4H9Z M8 11h8 M8 16h5"],
+  ["/admin/status", "시스템 상태", "M4 3h16a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1Z M4 14h16a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-5a1 1 0 0 1 1-1Z M7 6h.01 M7 17h.01"],
 ];
 
 export function Sidebar(): React.ReactElement {
@@ -75,8 +78,8 @@ export function Sidebar(): React.ReactElement {
       <nav aria-label="주요 메뉴" className="flex flex-wrap gap-1 lg:flex-col">
         {menus.filter(([href]) => href !== "/organize" || auth.authenticated).map(([href, label, path]) => menu(href, label, path))}
         {auth.is_admin ? <div className="w-full space-y-1 lg:mt-4">
-          <p className="px-3 py-2 text-xs font-semibold text-muted">관리</p>
-          <div className="flex flex-wrap gap-1 lg:flex-col">{adminMenus.map(([href, label]) => menu(href, label))}</div>
+          <p className="flex items-center gap-2 px-3 py-2 text-xs font-semibold text-muted">관리 <span className="rounded-full bg-accent-soft px-2 py-0.5 text-xs font-semibold text-accent">관리자 전용</span></p>
+          <div className="flex flex-wrap gap-1 lg:flex-col">{adminMenus.map(([href, label, path]) => menu(href, label, path))}</div>
         </div> : null}
       </nav>
       <div className="space-y-4 lg:mt-auto">

@@ -26,6 +26,8 @@
 import json
 import logging
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
+from threading import Lock
 
 from openarchive.db import is_unavailable
 
@@ -111,6 +113,21 @@ async def _send_unavailable(send: Send) -> None:
     await send({"type": "http.response.body", "body": body})
 
 
+@dataclass
+class RequestCounters:
+    retried_ok: int = 0
+    unavailable: int = 0
+    server_errors: int = 0
+
+    def snapshot(self):
+        with _counter_lock:
+            return self.retried_ok, self.unavailable, self.server_errors
+
+
+_counter_lock = Lock()
+request_counters = RequestCounters()
+
+
 class RetryOnUnavailable:
     def __init__(self, app) -> None:
         self.app = app
@@ -126,11 +143,21 @@ class RetryOnUnavailable:
             body = await _buffer_body(client)
             receive = _replay(body, client)
         responded = False
+        retried = False
 
         async def tracking_send(message: Message) -> None:
             nonlocal responded
             responded = True
             await send(message)
+            if message["type"] == "http.response.start":
+                status = message["status"]
+                with _counter_lock:
+                    if retried and 200 <= status < 300:
+                        request_counters.retried_ok += 1
+                    if status == 503:
+                        request_counters.unavailable += 1
+                    elif status >= 500:
+                        request_counters.server_errors += 1
 
         try:
             try:
@@ -139,6 +166,7 @@ class RetryOnUnavailable:
                 # 응답이 이미 나가기 시작했으면 되돌릴 수 없다.
                 if not retryable or responded or not is_unavailable(error):
                     raise
+                retried = True
                 await self.app(scope, _replay(body, client), tracking_send)
         except Exception as error:
             if responded or not is_unavailable(error):
@@ -147,4 +175,4 @@ class RetryOnUnavailable:
             logger.warning(
                 "DB 일시 불가용으로 503 응답: %s %s", scope["method"], scope["path"], exc_info=error
             )
-            await _send_unavailable(send)
+            await _send_unavailable(tracking_send)

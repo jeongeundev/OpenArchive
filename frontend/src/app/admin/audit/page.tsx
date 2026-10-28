@@ -43,8 +43,12 @@ export default function AuditPage(): React.ReactElement {
   });
   const [loaded, setLoaded] = useState(false);
   const [resolvedRequest, setResolvedRequest] = useState<string | null>(null);
-  const [period, setPeriod] = useState<"today" | "7d" | "30d" | "all">("7d");
-  const [since, setSince] = useState<string | undefined>(() => auditSince("7d", new Date()));
+  const [entrySince] = useState(() => {
+    const value = typeof window === "undefined" ? null : new URLSearchParams(window.location.search).get("since");
+    return value && /^\d{4}-\d{2}-\d{2}T/.test(value) && Number.isFinite(Date.parse(value)) ? value : undefined;
+  });
+  const [period, setPeriod] = useState<"today" | "7d" | "30d" | "all" | "custom">(() => entrySince ? "custom" : "7d");
+  const [since, setSince] = useState<string | undefined>(() => entrySince ?? auditSince("7d", new Date()));
   const [search, setSearch] = useState("");
   const [q, setQ] = useState("");
   const [cursors, setCursors] = useState<(number | undefined)[]>([undefined]);
@@ -131,8 +135,9 @@ export default function AuditPage(): React.ReactElement {
         <label className="text-xs font-medium text-muted">기간
           <select className="mt-2 block rounded-lg border border-line-strong bg-card px-3 py-2 text-sm text-body" value={period} onChange={event => {
             const value = event.target.value as typeof period;
-            setPeriod(value); setSince(auditSince(value, new Date())); resetPage();
+            setPeriod(value); setSince(value === "custom" ? entrySince : auditSince(value, new Date())); resetPage();
           }}>
+            {entrySince && <option value="custom">{new Date(entrySince).toLocaleTimeString("ko-KR", { hour: "numeric", minute: "2-digit", hour12: true })} 이후</option>}
             <option value="today">오늘</option><option value="7d">최근 7일</option><option value="30d">최근 30일</option><option value="all">전체</option>
           </select>
         </label>

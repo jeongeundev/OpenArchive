@@ -1,6 +1,6 @@
 // Copyright 2026 jeongeundev
 // SPDX-License-Identifier: MIT
-import type { SystemStatus } from "./types";
+import type { DbOutage, SystemStatus } from "./types";
 
 export type HealthKind = "ok" | "attention" | "failed";
 export type Stage = "extraction" | "embedding" | "relations" | "preview";
@@ -35,4 +35,25 @@ export function attentionTarget(status: SystemStatus): string | null {
   if (status.preview_failed > 0) return "stage-preview";
   if (status.preview_unavailable > 0) return "preview-unavailable-notice";
   return null;
+}
+
+
+// 장애 기록은 감시 루프가 복구를 알아챈 뒤(최대 약 5초) 쓴다. 상태 조회가 그보다 먼저 돌아오면
+// 복구 순간의 재조회가 빈 결과를 받으므로, 시스템 상태 화면이 떠 있는 동안 이 주기로 다시 읽는다.
+export const OUTAGES_REFRESH_MS = 5_000;
+export const STATUS_UNRESPONSIVE_MS = 5_000;
+
+export function outageSeconds(outage: Pick<DbOutage, "first_failure_at" | "recovered_at">): number {
+  return Math.round((Date.parse(outage.recovered_at) - Date.parse(outage.first_failure_at)) / 1000);
+}
+
+export function outageNodes(outage: Pick<DbOutage, "node_before" | "node_after">): string {
+  const before = outage.node_before ?? "기록 없음";
+  const after = outage.node_after ?? "기록 없음";
+  return before === after ? before : `${before} → ${after}`;
+}
+
+export function outageAuditUrl(firstFailureAt: string): string {
+  const since = new Date(Date.parse(firstFailureAt) - 60_000).toISOString();
+  return `/admin/audit?since=${encodeURIComponent(since)}`;
 }

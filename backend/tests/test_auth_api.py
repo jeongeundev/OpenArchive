@@ -593,6 +593,45 @@ def test_admin_delete_user_without_owned_items(db_client, migrated_db):
     assert "empty" not in [row["username"] for row in db_client.get("/api/admin/users").json()]
 
 
+def test_admin_user_list_counts_owned_documents_including_trash_and_created_folders(
+    db_client, migrated_db
+):
+    from conftest import login_as
+    from test_folders_api import folder
+    from test_groups_api import login_admin
+
+    login_as(db_client, "empty")
+    login_as(db_client, "kim")
+    ids = [
+        db_client.post("/api/documents/text", json={
+            "title": f"비밀 제목 {n}", "content": "내용", "visibility": "private",
+        }).json()["id"]
+        for n in range(3)
+    ]
+    assert db_client.delete(f"/api/documents/{ids[0]}").status_code == 204
+    folder(db_client)
+    login_admin(db_client, migrated_db)
+
+    users = {row["username"]: row for row in db_client.get("/api/admin/users").json()}
+
+    assert (users["kim"]["owned_documents"], users["kim"]["created_folders"]) == (3, 1)
+    assert (users["empty"]["owned_documents"], users["empty"]["created_folders"]) == (0, 0)
+    assert "비밀 제목" not in json.dumps(users)
+    assert not any(key in row for row in users.values() for key in ("documents", "titles"))
+    # 0이 아니면 삭제가 409로 거부되고, 0이면 그대로 삭제된다 — 같은 기준이다.
+    assert db_client.delete(f"/api/admin/users/{users['kim']['id']}").status_code == 409
+    assert db_client.delete(f"/api/admin/users/{users['empty']['id']}").status_code == 204
+
+
+def test_user_list_with_counts_is_admin_only(db_client, migrated_db):
+    from conftest import login_as
+
+    login_as(db_client, "kim")
+    assert db_client.get("/api/admin/users").status_code == 403
+    me = db_client.get("/api/auth/me").json()
+    assert "owned_documents" not in me and "created_folders" not in me
+
+
 # --- 로그인 실패 제한·비밀번호 최소 길이·자기 삭제 금지 (ADR-040 2026-10-12 개정) ---
 
 LOCKED_DETAIL = "로그인 시도가 너무 많습니다. 잠시 뒤 다시 시도하세요."

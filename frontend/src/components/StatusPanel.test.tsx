@@ -161,3 +161,42 @@ describe("StatusPanel", () => {
     expect(document.body.textContent).not.toMatch(/OpenSQL|실시간|항상 최신|무중단/);
   });
 });
+
+const outage: import("@/lib/types").DbOutage = {
+  id: 1, kind: "promotion", last_ok_at: "2026-10-28T06:10:00Z",
+  first_failure_at: "2026-10-28T06:10:02Z", recovered_at: "2026-10-28T06:10:35Z",
+  node_before: "192.168.64.201:5432", node_after: "192.168.64.202:5432",
+  timeline_before: 85, timeline_after: 86, failed_checks: 10,
+  requests_retried: 3, requests_unavailable: 4, server_errors: 0,
+};
+
+it("장애 기록의 시각·노드·타임라인·요청과 감사 링크를 보인다", () => {
+  render(<StatusPanel status={status} error={null} outages={[outage, { ...outage, id: 2, kind: "interruption" }]} />);
+  expect(screen.getByText("Primary 승격")).toHaveClass("text-attention");
+  expect(screen.getByText("연결 일시 중단")).toHaveClass("text-wait");
+  expect(screen.getByText(/Primary 192.168.64.201:5432 → 192.168.64.202:5432/)).toBeInTheDocument();
+  expect(screen.getByText("타임라인 85 → 86")).toBeInTheDocument();
+  expect(screen.getByText(/그 사이 요청 자동 재시도 성공 3건 · 503 응답 4건/)).toBeInTheDocument();
+  expect(screen.getAllByText("서버 오류 0건")[0]).toHaveClass("text-done");
+  expect(screen.getByText("이 시간대 감사 로그 보기")).toHaveAttribute("href", "/admin/audit?since=2026-10-28T06%3A09%3A02.000Z");
+  expect(screen.getAllByText(/33초/).length).toBeGreaterThan(0);
+});
+
+it("빈 장애 기록과 관측 한계를 알린다", () => {
+  render(<StatusPanel status={status} error={null} outages={[]} />);
+  expect(screen.getByText("기록된 DB 장애가 없습니다")).toBeInTheDocument();
+  expect(screen.getByText(/앱 연결에 영향이 없는 장애/)).toBeInTheDocument();
+});
+
+it("응답 없음 배너에서도 마지막 관측값을 보존한다", () => {
+  render(<StatusPanel status={status} error={null} unresponsiveSeconds={6} lastSuccessAt={new Date(outage.last_ok_at)} />);
+  expect(screen.getByTestId("health-banner")).toHaveTextContent("DB 응답 없음 — 6초째");
+  expect(screen.getByTestId("health-banner")).toHaveClass("text-failed");
+  expect(screen.getByTestId("consistency-count")).toHaveTextContent("0");
+});
+
+
+it("최초 상태 조회도 응답이 없으면 배너를 보인다", () => {
+  render(<StatusPanel status={null} error={null} unresponsiveSeconds={6} />);
+  expect(screen.getByTestId("health-banner")).toHaveTextContent("DB 응답 없음 — 6초째");
+});

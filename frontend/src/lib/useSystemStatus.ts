@@ -13,6 +13,7 @@ export function useSystemStatus(intervalMs = DEFAULT_INTERVAL_MS): {
   loading: boolean;
   error: string | null;
   checkedAt: Date | null;
+  lastSuccessAt: Date | null;
   refresh: () => void;
 } {
   const [status, setStatus] = useState<SystemStatus | null>(null);
@@ -57,5 +58,5 @@ export function useSystemStatus(intervalMs = DEFAULT_INTERVAL_MS): {
     };
   }, [intervalMs, refresh]);
 
-  return { status, loading, error, checkedAt, refresh };
+  return { status, loading, error, checkedAt, lastSuccessAt: checkedAt, refresh };
 }

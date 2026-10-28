@@ -1742,3 +1742,71 @@ def test_group_description_default_and_length_limit(conn):
     assert conn.execute("SELECT description FROM groups WHERE id = %s", (group,)).fetchone() == (
         "가" * 200,
     )
+
+
+# --- db_outages: API 프로세스가 관측한 장애 기록 (052, #300) ---------------------
+
+
+def test_db_outages_columns_exist(conn):
+    columns = conn.execute(
+        "SELECT column_name, data_type, is_nullable FROM information_schema.columns"
+        " WHERE table_schema = 'public' AND table_name = 'db_outages'"
+        " ORDER BY ordinal_position"
+    ).fetchall()
+    assert columns == [
+        ("id", "bigint", "NO"),
+        ("kind", "text", "NO"),
+        ("last_ok_at", "timestamp with time zone", "NO"),
+        ("first_failure_at", "timestamp with time zone", "NO"),
+        ("recovered_at", "timestamp with time zone", "NO"),
+        ("node_before", "text", "YES"),
+        ("node_after", "text", "YES"),
+        ("timeline_before", "integer", "YES"),
+        ("timeline_after", "integer", "YES"),
+        ("failed_checks", "integer", "NO"),
+        ("requests_retried", "integer", "NO"),
+        ("requests_unavailable", "integer", "NO"),
+        ("server_errors", "integer", "NO"),
+        ("recorded_at", "timestamp with time zone", "NO"),
+    ]
+
+
+@pytest.mark.parametrize("kind", ["promotion", "interruption"])
+def test_db_outages_accepts_normal_record_and_defaults(conn, kind):
+    row = conn.execute(
+        "INSERT INTO db_outages (kind, last_ok_at, first_failure_at, recovered_at,"
+        " failed_checks) VALUES (%s, now(), now(), now(), 0)"
+        " RETURNING id, kind, requests_retried, requests_unavailable, server_errors,"
+        " recorded_at = now(), node_before, node_after, timeline_before, timeline_after",
+        (kind,),
+    ).fetchone()
+    assert row[0] > 0
+    assert row[1:] == (kind, 0, 0, 0, True, None, None, None, None)
+
+
+@pytest.mark.parametrize("kind", ["failover", "Promotion", ""])
+def test_db_outages_rejects_unknown_kind(conn, kind):
+    with pytest.raises(psycopg.errors.CheckViolation):
+        conn.execute(
+            "INSERT INTO db_outages (kind, last_ok_at, first_failure_at, recovered_at,"
+            " failed_checks) VALUES (%s, now(), now(), now(), 2)", (kind,),
+        )
+
+
+@pytest.mark.parametrize(("first", "recovered"), [(0, 1), (2, 1)])
+def test_db_outages_rejects_out_of_order_timestamps(conn, first, recovered):
+    with pytest.raises(psycopg.errors.CheckViolation):
+        conn.execute(
+            "INSERT INTO db_outages (kind, last_ok_at, first_failure_at, recovered_at,"
+            " failed_checks) VALUES ('interruption', now() + interval '1 second',"
+            " now() + %s * interval '1 second', now() + %s * interval '1 second', 2)",
+            (first, recovered),
+        )
+
+
+def test_db_outages_rejects_negative_failed_checks(conn):
+    with pytest.raises(psycopg.errors.CheckViolation):
+        conn.execute(
+            "INSERT INTO db_outages (kind, last_ok_at, first_failure_at, recovered_at,"
+            " failed_checks) VALUES ('interruption', now(), now(), now(), -1)"
+        )

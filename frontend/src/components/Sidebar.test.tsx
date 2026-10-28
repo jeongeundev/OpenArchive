@@ -157,6 +157,8 @@ describe("Sidebar", () => {
     expect(screen.getByRole("button", { name: "로그아웃" })).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "외부 공유" })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "사용자 관리" })).not.toBeInTheDocument();
+    expect(screen.queryByText("관리자 전용")).not.toBeInTheDocument();
+    expect(screen.queryByText("관리", { exact: true })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "그룹 관리" })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "감사 로그" })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "시스템 상태" })).not.toBeInTheDocument();
@@ -178,6 +180,18 @@ describe("Sidebar", () => {
     expect(screen.getByRole("link", { name: "외부 공유" })).toHaveAttribute("href", "/admin/shares");
     expect(screen.getByRole("link", { name: "그룹 관리" })).toHaveAttribute("href", "/admin/groups");
     expect(screen.getByRole("link", { name: "감사 로그" })).toHaveAttribute("href", "/admin/audit");
+    expect(screen.getByText("관리자 전용")).toHaveClass("rounded-full", "bg-accent-soft", "text-accent");
+    const paths = ["사용자 관리", "그룹 관리", "외부 공유", "감사 로그", "시스템 상태"].map((name) => {
+      const link = screen.getByRole("link", { name });
+      const svg = link.querySelector("svg");
+      expect(svg).toHaveAttribute("viewBox", "0 0 24 24");
+      expect(svg).toHaveAttribute("stroke-width", "1.5");
+      const path = svg?.querySelector("path")?.getAttribute("d");
+      expect(path).toBeTruthy();
+      expect(path).not.toBe("M4 4h16v16H4Z");
+      return path;
+    });
+    expect(new Set(paths).size).toBe(5);
   });
 
   it("사용자명이 계정 설정으로 가는 링크다", async () => {

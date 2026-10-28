@@ -6,7 +6,12 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 
 from openarchive.api.deps import Connection, require_admin
-from openarchive.api.schemas import CreateUserRequest, UpdateUserDepartmentRequest, UserSummary
+from openarchive.api.schemas import (
+    AdminUserSummary,
+    CreateUserRequest,
+    UpdateUserDepartmentRequest,
+    UserSummary,
+)
 from openarchive.services import auth as service
 from openarchive.services.grants import GroupNotFound
 
@@ -36,9 +41,9 @@ async def create_user(body: CreateUserRequest, conn: Connection) -> UserSummary:
     return UserSummary.model_validate(user)
 
 
-@router.get("", response_model=list[UserSummary])
-async def list_users(conn: Connection) -> list[UserSummary]:
-    return [UserSummary.model_validate(user) for user in await service.list_users(conn)]
+@router.get("", response_model=list[AdminUserSummary])
+async def list_users(conn: Connection) -> list[AdminUserSummary]:
+    return [AdminUserSummary.model_validate(user) for user in await service.list_users(conn)]
 
 
 @router.delete("/{user_id}", status_code=status.HTTP_204_NO_CONTENT)

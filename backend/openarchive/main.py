@@ -1,7 +1,8 @@
 # Copyright 2026 jeongeundev
 # SPDX-License-Identifier: MIT
+import asyncio
 import logging
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -35,6 +36,7 @@ from openarchive.services import departments as departments_service
 from openarchive.services import documents as documents_service
 from openarchive.services import folders as folders_service
 from openarchive.services import grants as grants_service
+from openarchive.services.db_outages import run_monitor
 
 logger = logging.getLogger(__name__)
 
@@ -55,10 +57,22 @@ async def lifespan(app: FastAPI):
     app.state.provider = get_provider()
     # 예열하지 않으면 이 로딩이 통째로 첫 검색 요청에 붙는다 (실측 12.5초).
     await warm_up(app.state.provider)
+    monitor = None
+    if get_settings().db_monitor_interval_seconds:
+        monitor = asyncio.create_task(
+            run_monitor(
+                get_settings().database_url,
+                interval=get_settings().db_monitor_interval_seconds,
+            )
+        )
     try:
         async with remote_mcp.running(app.state.provider):
             yield
     finally:
+        if monitor is not None:
+            monitor.cancel()
+            with suppress(asyncio.CancelledError):
+                await monitor
         await close_pool()
 
 
