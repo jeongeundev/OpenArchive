@@ -242,3 +242,65 @@ def test_csv_auth_and_invalid_queries(db_client, migrated_db):
     token = issue_admin_token(migrated_db)
     db_client.cookies.clear()
     assert db_client.get("/api/admin/audit?format=csv", headers=bearer(token)).status_code == 403
+
+
+def test_target_filters_counts_and_csv_share_conditions(db_client, migrated_db):
+    import csv
+    import io
+    from datetime import datetime, timedelta
+
+    doc = create_text(db_client, "alice", r"보고 50%_\결과")
+    assert db_client.put(
+        f"/api/documents/{doc}", json={"content": "수정", "version": 1}
+    ).status_code == 200
+    create_text(db_client, "alice", "보고 500X결과")
+    folder = db_client.post("/api/folders", json={"name": r"폴더 50%_\결과"})
+    assert folder.status_code == 201
+    create_text(db_client, "bob", r"보고 50%_\결과")
+    login_admin(db_client, migrated_db)
+    before = audit_count(migrated_db)
+    entries = db_client.get("/api/admin/audit", params={"actor": "alice"}).json()["items"]
+    since = next(e["occurred_at"] for e in entries if e["document_id"] == doc
+                 and e["action"] == "document_created")
+    params = {"actor": "alice", "since": since, "q": " 50%_" + chr(92) + " "}
+    response = db_client.get("/api/admin/audit", params=params)
+    assert response.status_code == 200
+    items = response.json()["items"]
+    assert {e["action"] for e in items} == {
+        "document_created", "text_updated", "folder_changed",
+    }
+    assert len(items) == 3
+    counts = db_client.get("/api/admin/audit/counts", params=params)
+    assert counts.status_code == 200
+    assert counts.json() == {"total": 3, "actions": {
+        "document_created": 1, "text_updated": 1, "folder_changed": 1,
+    }}
+    for action, count in counts.json()["actions"].items():
+        selected = db_client.get("/api/admin/audit", params={**params, "action": action})
+        assert len(selected.json()["items"]) == count
+    exported = db_client.get("/api/admin/audit", params={
+        **params, "format": "csv", "action": "document_created", "limit": 1, "before_id": 1,
+    })
+    assert exported.status_code == 200
+    csv_rows = list(csv.DictReader(io.StringIO(exported.text.removeprefix("\ufeff"))))
+    assert [int(e["id"]) for e in csv_rows] == [
+        e["id"] for e in items if e["action"] == "document_created"
+    ]
+    future = (datetime.fromisoformat(since) + timedelta(days=1)).isoformat()
+    assert db_client.get("/api/admin/audit/counts", params={"since": future}).json() == {
+        "total": 0, "actions": {},
+    }
+    assert audit_count(migrated_db) == before
+
+
+@pytest.mark.parametrize("path", ["/api/admin/audit", "/api/admin/audit/counts"])
+def test_filter_validation_and_counts_auth(db_client, migrated_db, path):
+    assert db_client.get(path).status_code == 401
+    login_as(db_client, "alice")
+    assert db_client.get(path).status_code == 403
+    login_admin(db_client, migrated_db)
+    assert db_client.get(path, params={"q": "x" * 201}).status_code == 422
+    assert db_client.get(path, params={"since": "invalid"}).status_code == 422
+    token = issue_admin_token(migrated_db)
+    db_client.cookies.clear()
+    assert db_client.get(path, headers=bearer(token)).status_code == 403

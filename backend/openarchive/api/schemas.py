@@ -365,6 +365,11 @@ class AuditEntry(BaseModel):
     detail: dict
 
 
+class AuditCounts(BaseModel):
+    total: int
+    actions: dict[str, int]
+
+
 class AuditPage(BaseModel):
     items: list[AuditEntry]
     next_before_id: int | None

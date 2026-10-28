@@ -315,3 +315,22 @@ def test_admin_rename_and_delete_of_others_folder_records_admin(db_client, migra
             "parent_id": None,
         }),
     ]
+
+
+async def test_audit_since_boundary_and_literal_target_search(migrated_db):
+    from datetime import timedelta
+
+    from openarchive.services.audit import list_audit
+
+    async with await psycopg.AsyncConnection.connect(migrated_db) as conn:
+        await set_actor(conn, actor="filter-user", via="session")
+        await insert_test_document(conn, title="old", content="글")
+        await conn.commit()
+        await set_actor(conn, actor="filter-user", via="session")
+        await insert_test_document(conn, title=r"보고 50%_\결과", content="글")
+        since = (await (await conn.execute("SELECT now()")).fetchone())[0]
+        result = await list_audit(conn, since=since, q="50%_" + chr(92))
+        assert [r["document_title"] for r in result] == [r"보고 50%_\결과"]
+        assert await list_audit(conn, since=since + timedelta(microseconds=1)) == []
+        assert len(await list_audit(conn, since=since, q="  ")) == 1
+        assert len(await list_audit(conn, actor="filter-user", q=" old ")) == 1

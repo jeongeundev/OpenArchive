@@ -6,7 +6,7 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, Query, Response
 
 from openarchive.api.deps import Connection, require_admin
-from openarchive.api.schemas import AuditEntry, AuditPage
+from openarchive.api.schemas import AuditCounts, AuditEntry, AuditPage
 from openarchive.services import audit as service
 
 # 동작 목록은 서비스 한 곳에서만 관리한다. 모르는 값은 422다.
@@ -20,18 +20,31 @@ router = APIRouter(
 )
 
 
+@router.get("/counts", response_model=AuditCounts)
+async def count_audit_actions(
+    conn: Connection,
+    actor: str | None = None,
+    since: datetime | None = None,
+    q: Annotated[str | None, Query(max_length=200)] = None,
+) -> AuditCounts:
+    actions = await service.count_audit_actions(conn, actor=actor, since=since, q=q)
+    return AuditCounts(total=sum(actions.values()), actions=actions)
+
+
 @router.get("", response_model=AuditPage)
 async def list_audit(
     conn: Connection,
     actor: str | None = None,
     action: AuditAction | None = None,
+    since: datetime | None = None,
+    q: Annotated[str | None, Query(max_length=200)] = None,
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
     before_id: int | None = None,
     format: Literal["json", "csv"] = "json",
 ) -> AuditPage | Response:
     """CSV 파일명의 시각은 UTC다."""
     if format == "csv":
-        rows = await service.list_audit(conn, actor=actor, action=action, limit=None)
+        rows = await service.list_audit(conn, actor=actor, action=action, since=since, q=q, limit=None)
         filename = datetime.now(UTC).strftime("audit-%Y%m%d-%H%M%S.csv")
         return Response(
             content=service.render_audit_csv(rows),
@@ -39,7 +52,7 @@ async def list_audit(
             headers={"Content-Disposition": f'attachment; filename="{filename}"'},
         )
     rows = await service.list_audit(
-        conn, actor=actor, action=action, limit=limit, before_id=before_id
+        conn, actor=actor, action=action, since=since, q=q, limit=limit, before_id=before_id
     )
     items = [AuditEntry.model_validate(row) for row in rows]
     next_before_id = items[-1].id if len(items) == limit else None
