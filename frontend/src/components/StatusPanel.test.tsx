@@ -49,10 +49,10 @@ describe("StatusPanel", () => {
 
   it("두 수가 무엇을 세는지 레이블로 구분한다", () => {
     render(<StatusPanel status={{ ...status, inconsistent_documents: 2, stale_edge_documents: 4 }} error={null} />);
-    expect(screen.getByText("원본과 청크 버전")).toBeInTheDocument();
+    expect(screen.getByText("원본과 청크 버전 불일치")).toBeInTheDocument();
     expect(screen.queryByText("텍스트와 청크 버전")).not.toBeInTheDocument();
     expect(screen.getByText(/텍스트 버전과 청크 버전이 어긋난 문서 수/)).toBeInTheDocument();
-    expect(screen.getByText("관계")).toBeInTheDocument();
+    expect(screen.getByText("관계 미반영")).toBeInTheDocument();
     expect(screen.getByTestId("consistency-count")).toHaveTextContent("2");
     expect(screen.getByTestId("stale-edge-count")).toHaveTextContent("4");
   });
@@ -76,9 +76,9 @@ describe("StatusPanel", () => {
 
   it("lease가 만료된 처리 중 잡을 회수 대기로 표시하고 관측 가능한 완료 시각만 보여준다", () => {
     render(<StatusPanel status={status} error={null} />);
-    expect(screen.getByText("회수 대기").parentElement).toHaveTextContent("회수 대기1");
-    expect(screen.getByText("워커가 60초 동안 처리 중임을 알리지 않은 잡은 회수됩니다.")).toBeInTheDocument();
-    expect(screen.getByText(/최근 잡 완료 시각/)).toBeInTheDocument();
+    expect(screen.getByText("회수 대기").parentElement).toHaveTextContent(/^1회수 대기$/);
+    expect(screen.getByText("워커가 60초 동안 응답하지 않으면 잡을 회수해 다시 처리합니다.")).toBeInTheDocument();
+    expect(screen.getByText(/최근 잡 완료/)).toBeInTheDocument();
     expect(screen.queryByText(/워커 정상/)).not.toBeInTheDocument();
   });
 
@@ -106,8 +106,58 @@ describe("StatusPanel", () => {
     render(<StatusPanel status={{ ...status, preview_unavailable: 3 }} error={null} />);
 
     expect(screen.getByTestId("preview-unavailable")).toHaveTextContent("3");
-    expect(
-      screen.getByText("변환기(rhwp·LibreOffice)·한글 글꼴·bubblewrap 설치를 확인하세요. 설치 뒤 openarchive rebuild-previews로 다시 겁니다."),
-    ).toBeInTheDocument();
+    const notice = screen.getByTestId("preview-unavailable-notice");
+    expect(notice).toHaveTextContent(
+      "미리보기 변환기가 없는 문서가 3건 있습니다. 변환기(rhwp·LibreOffice)·한글 글꼴·bubblewrap 설치를 확인한 뒤 서버에서 openarchive rebuild-previews를 실행하세요.",
+    );
+    expect(within(notice).getByText("openarchive rebuild-previews").tagName).toBe("CODE");
+  });
+
+  it("전부 0이면 정상 배너를 보이고 확인할 항목 링크를 숨긴다", () => {
+    render(<StatusPanel status={{ ...status, jobs: { ...status.jobs, error: 0 } }} error={null} />);
+    const banner = screen.getByTestId("health-banner");
+    expect(banner).toHaveClass("bg-done-soft");
+    expect(banner).toHaveTextContent("모든 처리가 정상입니다");
+    expect(banner).toHaveTextContent("처리 실패 0건 · 정합성 불일치 0건 · 확인이 필요한 항목 0건");
+    expect(banner).not.toHaveTextContent("(미리보기 변환기)");
+    expect(screen.queryByRole("link", { name: "확인할 항목 보기" })).not.toBeInTheDocument();
+    expect(screen.queryByTestId("preview-unavailable-notice")).not.toBeInTheDocument();
+  });
+
+  it("변환기 없음이 1건이면 확인 필요 항목·안내 띠·미리보기 배지로 알린다", () => {
+    render(<StatusPanel status={{ ...status, jobs: { ...status.jobs, error: 0 }, preview_unavailable: 1 }} error={null} />);
+    expect(screen.getByTestId("health-banner")).toHaveTextContent("확인이 필요한 항목 1건 (미리보기 변환기)");
+    expect(screen.getByRole("link", { name: "확인할 항목 보기" })).toHaveAttribute("href", "#preview-unavailable-notice");
+    expect(screen.getByTestId("preview-unavailable-notice")).toHaveAttribute("id", "preview-unavailable-notice");
+    expect(within(screen.getByTestId("stage-preview")).getByText("확인 필요")).toHaveClass("text-attention");
+    expect(screen.getByTestId("stage-preview")).toHaveClass("bg-attention-soft");
+    expect(screen.getByTestId("preview-unavailable")).toHaveClass("text-attention");
+  });
+
+  it("임베딩 오류가 있으면 실패 배너와 임베딩 실패 배지를 보인다", () => {
+    render(<StatusPanel status={{ ...status, jobs: { ...status.jobs, error: 1 } }} error={null} />);
+    const banner = screen.getByTestId("health-banner");
+    expect(banner).toHaveClass("bg-failed-soft");
+    expect(banner).toHaveTextContent("확인이 필요한 처리가 있습니다");
+    expect(banner).toHaveTextContent("처리 실패 1건");
+    expect(within(screen.getByTestId("stage-embedding")).getByText("실패")).toHaveClass("text-failed");
+    expect(screen.getByRole("link", { name: "확인할 항목 보기" })).toHaveAttribute("href", "#stage-embedding");
+  });
+
+  it("정합성 카드는 둘 다 0이면 일치, 아니면 불일치 배지를 단다", () => {
+    const { rerender } = render(<StatusPanel status={status} error={null} />);
+    expect(within(screen.getByTestId("consistency-card")).getByText("일치")).toHaveClass("text-done");
+    rerender(<StatusPanel status={{ ...status, stale_edge_documents: 1 }} error={null} />);
+    expect(within(screen.getByTestId("consistency-card")).getByText("불일치")).toHaveClass("text-failed");
+  });
+
+  it("TC 286 항목을 모두 보여준다", () => {
+    render(<StatusPanel status={status} error={null} />);
+    for (const label of ["원본과 청크 버전 불일치", "접속 DB 노드", "인식 대기", "인식 실패", "처리 중", "회수 대기", "오류", "BAAI/bge-m3"]) {
+      expect(screen.getByText(label)).toBeInTheDocument();
+    }
+    expect(within(screen.getByTestId("stage-embedding")).getByText("대기")).toBeInTheDocument();
+    expect(screen.getByText("장애 전환 시 새 Primary로 바뀝니다")).toBeInTheDocument();
+    expect(document.body.textContent).not.toMatch(/OpenSQL|실시간|항상 최신|무중단/);
   });
 });

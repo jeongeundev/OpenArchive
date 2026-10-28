@@ -31,10 +31,16 @@ export function ErrorDocuments(): React.ReactElement {
 
   return (
     <section className="space-y-4" aria-labelledby="error-documents-heading">
-      <h2 id="error-documents-heading" className="text-sm font-medium text-muted">임베딩 실패 문서</h2>
+      <h2 id="error-documents-heading" className="text-lg font-semibold text-strong">임베딩 실패 문서</h2>
       {(error ?? actionError) !== null && <p className="text-sm text-failed">{actionError ?? error}</p>}
       {!loading && documents.length === 0 ? (
-        <p className="rounded-lg border border-line bg-card p-6 text-sm text-muted">실패한 문서가 없습니다.</p>
+        <div className="flex flex-col items-center gap-2 rounded-xl border border-dashed border-line-strong px-6 py-10 text-center">
+          <span className="flex size-10 items-center justify-center rounded-full bg-done-soft text-done">
+            <svg aria-hidden="true" className="size-5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path d="M5 12l5 5 9-10" /></svg>
+          </span>
+          <p className="text-sm font-semibold text-strong">실패한 문서가 없습니다</p>
+          <p className="text-xs text-muted">실패가 생기면 문서와 원인, 다시 시도 버튼이 여기에 표시됩니다.</p>
+        </div>
       ) : (
         <div className="overflow-x-auto rounded-lg border border-line bg-card">
           <table className="w-full text-left text-sm"><thead className="border-b border-line text-muted"><tr><th className="px-4 py-3 font-medium">제목</th><th className="px-4 py-3 font-medium">소유자</th><th className="px-4 py-3 font-medium">수정일</th><th className="px-4 py-3 font-medium"><span className="sr-only">작업</span></th></tr></thead>

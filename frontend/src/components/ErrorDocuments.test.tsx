@@ -73,6 +73,8 @@ describe("ErrorDocuments", () => {
         ? { authenticated: true, username: "alice", is_admin: false }
         : [],
     ))));
-    expect(await screen.findByText("실패한 문서가 없습니다.")).toBeInTheDocument();
+    expect(await screen.findByText("실패한 문서가 없습니다")).toBeInTheDocument();
+    expect(screen.getByText("실패가 생기면 문서와 원인, 다시 시도 버튼이 여기에 표시됩니다.")).toBeInTheDocument();
+    expect(screen.getByText("권한 필터가 적용되어 현재 선택된 사용자가 볼 수 있는 문서만 표시됩니다.")).toBeInTheDocument();
   });
 });

@@ -64,6 +64,31 @@ describe("useSystemStatus", () => {
     expect(result.current.status).toEqual(status);
     expect(result.current.error).toBe("DB 연결이 끊겼습니다.");
   });
+
+  it("마지막 성공 조회 시각을 남기고, 실패한 조회는 그 시각을 바꾸지 않는다", async () => {
+    vi.setSystemTime(new Date("2026-10-28T05:31:05Z"));
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(response(status))
+      .mockResolvedValueOnce(response({ detail: "DB 연결이 끊겼습니다." }, 503));
+    vi.stubGlobal("fetch", fetchMock);
+    const { result } = renderHook(() => useSystemStatus());
+    expect(result.current.checkedAt).toBeNull();
+    await flush();
+    expect(result.current.checkedAt).toEqual(new Date("2026-10-28T05:31:05Z"));
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
+    expect(result.current.error).toBe("DB 연결이 끊겼습니다.");
+    expect(result.current.checkedAt).toEqual(new Date("2026-10-28T05:31:05Z"));
+  });
+
+  it("refresh로 주기를 기다리지 않고 다시 조회한다", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(response(status));
+    vi.stubGlobal("fetch", fetchMock);
+    const { result } = renderHook(() => useSystemStatus());
+    await flush();
+    act(() => result.current.refresh());
+    await flush();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
 });
 
 // 응답하지 않는 서버 — 화면을 떠날 때 요청이 취소되는지만 본다.

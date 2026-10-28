@@ -12,10 +12,13 @@ export function useSystemStatus(intervalMs = DEFAULT_INTERVAL_MS): {
   status: SystemStatus | null;
   loading: boolean;
   error: string | null;
+  checkedAt: Date | null;
+  refresh: () => void;
 } {
   const [status, setStatus] = useState<SystemStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [checkedAt, setCheckedAt] = useState<Date | null>(null);
   const controllerRef = useRef<AbortController | null>(null);
   const inFlightRef = useRef(false);
 
@@ -28,6 +31,7 @@ export function useSystemStatus(intervalMs = DEFAULT_INTERVAL_MS): {
         if (controller.signal.aborted) return;
         setStatus(nextStatus);
         setError(null);
+        setCheckedAt(new Date());
       })
       .catch((reason: unknown) => {
         if (controller.signal.aborted) return;
@@ -53,5 +57,5 @@ export function useSystemStatus(intervalMs = DEFAULT_INTERVAL_MS): {
     };
   }, [intervalMs, refresh]);
 
-  return { status, loading, error };
+  return { status, loading, error, checkedAt, refresh };
 }
