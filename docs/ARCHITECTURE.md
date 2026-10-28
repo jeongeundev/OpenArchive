@@ -533,7 +533,7 @@ CREATE TRIGGER trg_documents_content_changed
 | `trg_audit_share_folder_changed` | `share_folders` INSERT / DELETE — 공유·공유 소유자·폴더가 이미 없으면 제외 (043, #206) | `share_changed` · `{change: folder_added/folder_removed, share_id, share_name, owner, folder_id, folder_name}` · 대상 문서 NULL |
 | `trg_audit_share_token_changed` | `api_tokens` INSERT / DELETE — `share_id IS NOT NULL`, 연쇄 삭제 제외 (041) | `share_changed` · `{change: token_issued/token_revoked, share_id, share_name, owner, token_name}` |
 | `trg_audit_group_changed` / `trg_audit_user_changed` | `groups` / `users` INSERT / DELETE (041, 사용자 생성의 `is_admin`은 045) | `group_changed` · `{change: created/deleted, group}` / `user_changed` · `{change: created/deleted, user}` — 사용자 생성은 `is_admin`을 더한다 |
-| `trg_audit_group_manager_changed` | `group_managers` INSERT / DELETE (051) — 구성원 제거·그룹 삭제로 연쇄된 해제 제외 | `group_changed` · `{change: manager_added/manager_removed, group, user}` (ADR-066) |
+| `trg_audit_group_manager_changed` | `group_managers` INSERT / DELETE (051) — 그룹·사용자 삭제로 연쇄된 해제만 제외(구성원 제거의 연쇄는 `manager_removed`로 남는다) | `group_changed` · `{change: manager_added/manager_removed, group, user}` (ADR-066) |
 | `trg_audit_group_description_changed` | `groups` UPDATE OF `description`, 실제 값 변경만 (051) | `group_changed` · `{change: description_changed, group}` (ADR-066) |
 | `trg_audit_admin_changed` | `users` UPDATE OF `is_admin`, 실제 값 변경만 (045) | `user_changed` · `{change: admin_granted/admin_revoked, user}` — API 경로가 없어도 psql 변경이 남는다 |
 | `trg_audit_password_changed` | `users` UPDATE OF `password_hash`, 실제 값 변경만 (045) | `password_changed` · `{user}` — 해시는 넣지 않는다. 본인 변경·운영자 `reset-password` 공통 |

@@ -5489,8 +5489,9 @@ ROADMAP 다음 단계 후보) · 열람·검색·로그인 미기록(ADR-055 결
 5. **감사는 DB 트리거가 쓴다(ADR-055) — 새 action을 만들지 않는다.** 구성원 추가·제거는 기존 `trg_audit_group_member_changed`가
    `group_member_added`·`group_member_removed`로 이미 남긴다 — 부서 관리자가 바꾸면 수행자가 부서 관리자로 남는다(TC 320). 관리자
    지정·해제(`trg_audit_group_manager_changed`)와 설명 변경(`trg_audit_group_description_changed`)은 기존 `group_changed`에
-   `detail.change` = `manager_added`·`manager_removed`·`description_changed`로 싣는다. 구성원 제거·그룹 삭제로 연쇄 해제될 때는
-   관리자 해제를 따로 남기지 않는다 — 원인이 된 구성원 제거·그룹 삭제 기록이 이미 있다. `audit_log_action_valid` 제약은 그대로다.
+   `detail.change` = `manager_added`·`manager_removed`·`description_changed`로 싣는다. 그룹 삭제·사용자 삭제로 연쇄 해제될 때만
+   관리자 해제를 따로 남기지 않는다 — 원인이 된 그룹·사용자 삭제 기록이 이미 있다. 구성원 제거로 연쇄된 해제는 그룹·사용자가
+   남아 있으므로 `manager_removed`로 남는다. `audit_log_action_valid` 제약은 그대로다.
 6. **쓰기는 세션 전용(ADR-034).** `PATCH /api/departments/{id}`, `PUT|DELETE /api/departments/{id}/members/{username}`,
    `PUT|DELETE /api/departments/{id}/managers/{username}`은 `require_session_user`다. 조회 `GET /api/departments`는
    `require_user_id` — 사용자 위임 토큰은 허용하고 외부 공유 주체는 거부한다(내부 사용자 이름이 외부로 새면 안 된다). 조직 관리자의
