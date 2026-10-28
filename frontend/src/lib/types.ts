@@ -361,6 +361,8 @@ export interface UserSummary {
   owned_documents?: number;
   /** 관리자 목록에만 온다 — 만든 폴더 수. */
   created_folders?: number;
+  /** 관리자 목록에만 온다 — 이 사람이 관리하는 부서 이름(ADR-066). */
+  managed_departments?: string[];
 }
 
 export interface GroupSummary {

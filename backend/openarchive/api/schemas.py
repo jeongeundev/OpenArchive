@@ -345,6 +345,7 @@ class UserSummary(BaseModel):
 class AdminUserSummary(UserSummary):
     owned_documents: int
     created_folders: int
+    managed_departments: list[str]
 
 
 class CreateGroupRequest(BaseModel):
