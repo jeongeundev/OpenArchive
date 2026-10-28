@@ -3,12 +3,13 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname, useSearchParams } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 
 import { OwnerTransfer } from "@/components/OwnerTransfer";
 import { AccessPanel } from "@/components/AccessPanel";
 import { DocumentActions } from "@/components/DocumentActions";
+import { DocumentActivity } from "@/components/DocumentActivity";
 import { DocumentFolderSection } from "@/components/DocumentFolderSection";
 import { DocumentHeader } from "@/components/DocumentHeader";
 import { DocumentMeta } from "@/components/DocumentMeta";
@@ -38,6 +39,23 @@ function readVersionFocus(params: URLSearchParams): { version: number; chunk: nu
   return { version, chunk };
 }
 
+type DetailTab = "text" | "versions" | "activity";
+
+/** `?tab=versions|activity`. 본문은 쿼리 없이 둔다. 인용 위치(`?version=&chunk=`)가 있으면 버전 이력이 우선이다. */
+function readTab(params: URLSearchParams, hasFocus: boolean, anonymous: boolean): DetailTab {
+  if (hasFocus) return "versions";
+  const tab = params.get("tab");
+  if (tab === "versions") return "versions";
+  if (tab === "activity" && !anonymous) return "activity";
+  return "text";
+}
+
+function tabClass(active: boolean): string {
+  return `-mb-px border-b-2 px-1 pb-2 text-sm ${
+    active ? "border-accent font-medium text-strong" : "border-transparent text-muted hover:text-strong"
+  }`;
+}
+
 export function DocumentDetailView(): React.ReactElement {
   // 정적 export에서는 빌드 시점의 껍데기 경로(FALLBACK_DOCUMENT_ID)가 params로 들어온다.
   // 서버가 어떤 ID 요청에든 같은 파일을 내려주므로, 실제 ID는 브라우저 URL에서 읽는다.
@@ -56,6 +74,30 @@ export function DocumentDetailView(): React.ReactElement {
   const versionFocus = useMemo(() => readVersionFocus(new URLSearchParams(searchParams.toString())), [searchParams]);
   const { auth } = useAuth();
   const anonymous = !auth.authenticated;
+  const router = useRouter();
+  const urlTab = readTab(new URLSearchParams(searchParams.toString()), versionFocus !== null, anonymous);
+  const [tab, setTab] = useState<DetailTab>(urlTab);
+  // 주소가 바뀌면(다른 인용 링크로 이동 등) 그 탭으로 맞춘다. 탭 클릭은 주소를 같은 값으로 바꾸므로 그대로다.
+  // 인용 위치는 값으로 비교한다 — 탭 클릭이 주소를 바꾸면 searchParams가 새 객체가 되어 객체 비교는 늘 달라진다.
+  const focusKey = versionFocus === null ? null : `${versionFocus.version}:${versionFocus.chunk}`;
+  const [shownUrlTab, setShownUrlTab] = useState({ tab: urlTab, focus: focusKey });
+  if (shownUrlTab.tab !== urlTab || shownUrlTab.focus !== focusKey) {
+    setShownUrlTab({ tab: urlTab, focus: focusKey });
+    setTab(urlTab);
+  }
+  // 활동 기록은 처음 열 때 불러오고, 그 뒤로는 숨겨도 마운트를 유지한다.
+  const [activityOpened, setActivityOpened] = useState(urlTab === "activity");
+  if (tab === "activity" && !activityOpened) setActivityOpened(true);
+
+  function selectTab(next: DetailTab) {
+    setTab(next);
+    const params = new URLSearchParams(searchParams.toString());
+    if (next === "text") params.delete("tab");
+    else params.set("tab", next);
+    const query = params.toString();
+    router.replace(query === "" ? pathname : `${pathname}?${query}`, { scroll: false });
+  }
+
   // 열람 범위는 소유자만 본다. 비소유자에게는 조회도 하지 않는다 — 패널 자리가 제한의 존재를 드러낸다.
   const isOwner = auth.authenticated && document !== null && auth.username === document.owner_id;
 
@@ -123,52 +165,121 @@ export function DocumentDetailView(): React.ReactElement {
       <DocumentHeader document={document} />
 
       <div className="grid items-start gap-8 lg:grid-cols-[minmax(0,1fr)_340px]" data-testid="document-columns">
-        <div className="min-w-0 space-y-8 rounded-xl border border-line bg-card p-6">
-          <TextEditor
-            disabled={anonymous}
-            document={document}
-            onEditingChange={setEditing}
-            onSaved={refresh}
-            links={links}
-          />
+        <div className="min-w-0 space-y-6 rounded-xl border border-line bg-card p-6">
+          <div className="flex gap-6 border-b border-line" role="tablist" aria-label="문서 내용">
+            <button
+              type="button"
+              role="tab"
+              id="document-tab-text"
+              aria-selected={tab === "text"}
+              aria-controls="document-panel-text"
+              className={tabClass(tab === "text")}
+              onClick={() => selectTab("text")}
+            >
+              본문
+            </button>
+            <button
+              type="button"
+              role="tab"
+              id="document-tab-versions"
+              aria-selected={tab === "versions"}
+              aria-controls="document-panel-versions"
+              className={tabClass(tab === "versions")}
+              onClick={() => selectTab("versions")}
+            >
+              버전 이력{" "}
+              <span className="ml-1 rounded-full bg-sunken px-1.5 py-0.5 text-xs text-muted">
+                {document.versions.length}
+              </span>
+            </button>
+            {anonymous ? null : (
+              <button
+                type="button"
+                role="tab"
+                id="document-tab-activity"
+                aria-selected={tab === "activity"}
+                aria-controls="document-panel-activity"
+                className={tabClass(tab === "activity")}
+                onClick={() => selectTab("activity")}
+              >
+                활동 기록
+              </button>
+            )}
+          </div>
 
-          {linksError !== null ? (
-            <p className="text-sm text-muted" role="status">
-              {linksError}
-            </p>
+          {/* 본문·버전 이력은 숨기기만 한다 — 편집 중 내용과 펼친 버전을 탭을 오가도 잃지 않는다. */}
+          <div
+            className="space-y-8"
+            role="tabpanel"
+            id="document-panel-text"
+            aria-labelledby="document-tab-text"
+            hidden={tab !== "text"}
+          >
+            <TextEditor
+              disabled={anonymous}
+              document={document}
+              onEditingChange={setEditing}
+              onSaved={refresh}
+              links={links}
+            />
+
+            {linksError !== null ? (
+              <p className="text-sm text-muted" role="status">
+                {linksError}
+              </p>
+            ) : null}
+
+            {backlinks.length > 0 ? (
+              <section className="space-y-4">
+                <h2 className="text-sm font-medium text-muted">
+                  이 문서를 가리키는 문서
+                </h2>
+                <ul className="space-y-2">
+                  {backlinks.map((backlink) => (
+                    <li key={backlink.document_id}>
+                      <Link
+                        className="text-sm text-accent hover:underline"
+                        href={`/documents/${backlink.document_id}`}
+                      >
+                        {backlink.title}
+                      </Link>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            ) : null}
+          </div>
+
+          <div
+            role="tabpanel"
+            id="document-panel-versions"
+            aria-labelledby="document-tab-versions"
+            hidden={tab !== "versions"}
+          >
+            <VersionHistory
+              documentId={document.id}
+              versions={document.versions}
+              currentVersion={document.version}
+              disabled={anonymous}
+              focus={versionFocus}
+              restoreBlockedReason={
+                document.extraction_status === "pending" ? EXTRACTING_NOTICE : null
+              }
+              onRestored={refresh}
+            />
+          </div>
+
+          {!anonymous && activityOpened ? (
+            <div
+              role="tabpanel"
+              id="document-panel-activity"
+              aria-labelledby="document-tab-activity"
+              hidden={tab !== "activity"}
+            >
+              {/* 복원·저장으로 버전이 바뀌면 새로 불러온다. */}
+              <DocumentActivity key={`${document.id}:${document.version}`} documentId={document.id} />
+            </div>
           ) : null}
-
-          {backlinks.length > 0 ? (
-            <section className="space-y-4">
-              <h2 className="text-sm font-medium text-muted">
-                이 문서를 가리키는 문서
-              </h2>
-              <ul className="space-y-2">
-                {backlinks.map((backlink) => (
-                  <li key={backlink.document_id}>
-                    <Link
-                      className="text-sm text-accent hover:underline"
-                      href={`/documents/${backlink.document_id}`}
-                    >
-                      {backlink.title}
-                    </Link>
-                  </li>
-                ))}
-              </ul>
-            </section>
-          ) : null}
-
-          <VersionHistory
-            documentId={document.id}
-            versions={document.versions}
-            currentVersion={document.version}
-            disabled={anonymous}
-            focus={versionFocus}
-            restoreBlockedReason={
-              document.extraction_status === "pending" ? EXTRACTING_NOTICE : null
-            }
-            onRestored={refresh}
-          />
         </div>
 
         <aside className="min-w-0 space-y-6" data-testid="document-side">

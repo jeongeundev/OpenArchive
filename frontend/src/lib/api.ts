@@ -10,6 +10,7 @@ import type {
   Backlink,
   ClustersResponse,
   DocumentAccess,
+  DocumentActivityPage,
   DocumentDetail,
   DocumentProgress,
   DocumentSummary,
@@ -555,6 +556,22 @@ export function getDocumentVersion(
   const query = chunk === undefined ? "" : `?chunk=${chunk}`;
   return request<TextVersionDetail>(
     `/api/documents/${encodeURIComponent(id)}/versions/${version}${query}`,
+    { signal },
+  );
+}
+
+/** 문서 한 건의 활동 기록. 공개 범위는 서버가 정한다 (ADR-055 결정 7). */
+export function getDocumentActivity(
+  documentId: string,
+  { beforeId, limit }: { beforeId?: number; limit?: number } = {},
+  signal?: AbortSignal,
+): Promise<DocumentActivityPage> {
+  const params = new URLSearchParams();
+  if (beforeId !== undefined) params.set("before_id", String(beforeId));
+  if (limit !== undefined) params.set("limit", String(limit));
+  const query = params.toString();
+  return request<DocumentActivityPage>(
+    `/api/documents/${encodeURIComponent(documentId)}/activity${query ? `?${query}` : ""}`,
     { signal },
   );
 }

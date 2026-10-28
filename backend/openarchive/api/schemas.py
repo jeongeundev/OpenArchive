@@ -370,6 +370,20 @@ class AuditPage(BaseModel):
     next_before_id: int | None
 
 
+class DocumentActivityEntry(BaseModel):
+    id: int
+    occurred_at: datetime
+    action: str
+    actor: str | None
+    actor_via: str | None
+    detail: dict
+
+
+class DocumentActivityPage(BaseModel):
+    items: list[DocumentActivityEntry]
+    next_before_id: int | None
+
+
 class CreateShareRequest(BaseModel):
     name: str = Field(min_length=1, max_length=100)
 

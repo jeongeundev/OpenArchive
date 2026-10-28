@@ -10,9 +10,9 @@ import { rememberListHref } from "@/lib/urlState";
 
 // useRouter는 DocumentActions가 삭제 후 목록으로 보낼 때만 쓴다. usePathname은 문서 ID의
 // 출처다 — 정적 export에서는 params에 껍데기 값이 들어오므로 URL에서 읽는다.
-const navigation = vi.hoisted(() => ({ searchParams: new URLSearchParams() }));
+const navigation = vi.hoisted(() => ({ searchParams: new URLSearchParams(), replace: vi.fn() }));
 vi.mock("next/navigation", () => ({
-  useRouter: () => ({ push: vi.fn() }),
+  useRouter: () => ({ push: vi.fn(), replace: navigation.replace }),
   usePathname: () => "/documents/document-1",
   useSearchParams: () => navigation.searchParams,
 }));
@@ -499,7 +499,15 @@ describe("문서 상세의 2단 배치", () => {
 
     const columns = screen.getByTestId("document-columns");
     const side = within(columns).getByTestId("document-side");
-    for (const name of ["추출 텍스트", "이 문서를 가리키는 문서", "텍스트 버전 이력"]) {
+    // 버전 이력은 왼쪽 카드의 「버전 이력」 탭 안에 있다.
+    fireEvent.click(within(columns).getByRole("tab", { name: /버전 이력/ }));
+    expect(within(side).queryByRole("tab")).not.toBeInTheDocument();
+    for (const name of ["텍스트 버전 이력"]) {
+      const heading = within(columns).getByRole("heading", { name });
+      expect(side).not.toContainElement(heading);
+    }
+    fireEvent.click(within(columns).getByRole("tab", { name: "본문" }));
+    for (const name of ["추출 텍스트", "이 문서를 가리키는 문서"]) {
       const heading = within(columns).getByRole("heading", { name });
       expect(side).not.toContainElement(heading);
     }
@@ -566,5 +574,186 @@ describe("문서 상세의 2단 배치", () => {
     expect(screen.queryByText("문서 관리")).not.toBeInTheDocument();
     expect(screen.queryByRole("textbox", { name: "태그" })).not.toBeInTheDocument();
     expect(within(screen.getByTestId("document-side")).getByRole("heading", { name: "문서 정보" })).toBeInTheDocument();
+  });
+});
+
+// #293 — 왼쪽 카드를 「본문 · 버전 이력 · 활동 기록」 탭으로 나눈다.
+describe("문서 상세의 탭", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    navigation.searchParams = new URLSearchParams();
+    navigation.replace.mockReset();
+  });
+
+  const versioned: DocumentDetail = {
+    ...detail,
+    versions: [
+      { version: 1, created_at: "2026-08-05T10:00:00Z", author: null, author_via: null },
+      { version: 2, created_at: "2026-08-05T11:00:00Z", author: "alice", author_via: null },
+    ],
+  };
+
+  function stubTabFetch(authenticated = true) {
+    const fetchMock = vi.fn((url: string) => {
+      if (url === "/api/auth/me") {
+        return Promise.resolve(jsonResponse(
+          authenticated
+            ? { authenticated: true, username: "alice", is_admin: false }
+            : { authenticated: false, username: null, is_admin: false },
+        ));
+      }
+      if (url.endsWith("/links") || url.endsWith("/backlinks")) return Promise.resolve(jsonResponse([]));
+      if (url.endsWith("/related")) return Promise.resolve(jsonResponse(related));
+      if (url.endsWith("/tag-suggestions")) return Promise.resolve(jsonResponse(suggestions));
+      if (url === "/api/shares") return Promise.resolve(jsonResponse([]));
+      if (url === "/api/folders") return Promise.resolve(jsonResponse([]));
+      if (url === "/api/principals") return Promise.resolve(jsonResponse({ users: ["alice"], groups: [] }));
+      if (url.endsWith("/access")) return Promise.resolve(jsonResponse({ visibility: "public", users: [], groups: [] }));
+      if (url.includes("/activity")) return Promise.resolve(jsonResponse({ items: [], next_before_id: null }));
+      if (url.includes("/versions/1")) {
+        return Promise.resolve(jsonResponse({
+          version: 1, content: "처음 근거", created_at: "2026-08-05T10:00:00Z",
+          passage_start: 0, passage_end: 5,
+        }));
+      }
+      return Promise.resolve(jsonResponse(versioned));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    return fetchMock;
+  }
+
+  function activityCalls(fetchMock: ReturnType<typeof stubTabFetch>): number {
+    return fetchMock.mock.calls.filter(([url]) => String(url).includes("/activity")).length;
+  }
+
+  async function renderAnonymous(): Promise<void> {
+    await act(async () => {
+      render(<AuthProvider><DocumentDetailView /></AuthProvider>);
+    });
+    await screen.findByRole("tab", { name: "본문" });
+  }
+
+  it("기본 탭은 본문이고 문서 텍스트가 펼치지 않고 바로 보인다", async () => {
+    stubTabFetch();
+    await renderPage();
+
+    expect(screen.getByRole("tab", { name: "본문" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: /버전 이력/ })).toHaveAttribute("aria-selected", "false");
+    expect(screen.getByText("추출된 텍스트")).toBeVisible();
+    expect(screen.queryByRole("heading", { name: "텍스트 버전 이력" })).not.toBeInTheDocument();
+  });
+
+  it("「버전 이력」 탭은 버전 수를 달고, 누르면 버전 이력과 각 버전이 보이며 주소에 tab을 남긴다", async () => {
+    navigation.searchParams = new URLSearchParams("from=list");
+    stubTabFetch();
+    await renderPage();
+
+    const tab = screen.getByRole("tab", { name: /버전 이력/ });
+    expect(tab).toHaveTextContent("2");
+    fireEvent.click(tab);
+
+    expect(tab).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByText("추출된 텍스트")).not.toBeVisible();
+    const panel = screen.getByRole("tabpanel", { name: /버전 이력/ });
+    expect(within(panel).getByRole("heading", { name: "텍스트 버전 이력" })).toBeVisible();
+    expect(within(panel).getByText(/v1/)).toBeInTheDocument();
+    expect(within(panel).getByText(/v2/)).toBeInTheDocument();
+    expect(navigation.replace).toHaveBeenLastCalledWith(
+      "/documents/document-1?from=list&tab=versions", { scroll: false },
+    );
+
+    fireEvent.click(screen.getByRole("tab", { name: "본문" }));
+    expect(navigation.replace).toHaveBeenLastCalledWith("/documents/document-1?from=list", { scroll: false });
+  });
+
+  it("주소에 tab=versions가 있으면 버전 이력 탭으로 연다", async () => {
+    navigation.searchParams = new URLSearchParams("tab=versions");
+    stubTabFetch();
+    await renderPage();
+
+    expect(screen.getByRole("tab", { name: /버전 이력/ })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("heading", { name: "텍스트 버전 이력" })).toBeVisible();
+  });
+
+  it("인용 위치가 있으면 tab보다 우선해 버전 이력 탭에서 그 버전을 펼치고 대목으로 스크롤한다", async () => {
+    navigation.searchParams = new URLSearchParams("tab=activity&version=1&chunk=0");
+    stubTabFetch();
+    const scroll = vi.fn();
+    Element.prototype.scrollIntoView = scroll;
+    await renderPage();
+
+    expect(screen.getByRole("tab", { name: /버전 이력/ })).toHaveAttribute("aria-selected", "true");
+    const mark = await screen.findByText("처음 근거", { selector: "mark" });
+    expect(mark).toBeVisible();
+    await waitFor(() => expect(scroll).toHaveBeenCalled());
+  });
+
+  it("인용 링크로 들어온 뒤에도 탭을 고르면 주소가 바뀌어도 그 탭에 머문다", async () => {
+    navigation.searchParams = new URLSearchParams("version=1&chunk=0");
+    stubTabFetch();
+    Element.prototype.scrollIntoView = vi.fn();
+    const view = (): React.ReactElement => <AuthProvider><DocumentDetailView /></AuthProvider>;
+    let rerender: (ui: React.ReactElement) => void = () => {};
+    await act(async () => {
+      rerender = render(view()).rerender;
+    });
+    await screen.findByRole("tab", { name: "본문" });
+    // 실제 라우터처럼 replace가 주소를 바꾸면 useSearchParams가 새 객체를 돌려준다.
+    navigation.replace.mockImplementation((href: string) => {
+      navigation.searchParams = new URLSearchParams(href.split("?")[1] ?? "");
+      rerender(view());
+    });
+    expect(screen.getByRole("tab", { name: /버전 이력/ })).toHaveAttribute("aria-selected", "true");
+
+    act(() => fireEvent.click(screen.getByRole("tab", { name: "활동 기록" })));
+    expect(navigation.replace).toHaveBeenLastCalledWith(
+      "/documents/document-1?version=1&chunk=0&tab=activity", { scroll: false },
+    );
+    expect(screen.getByRole("tab", { name: "활동 기록" })).toHaveAttribute("aria-selected", "true");
+
+    act(() => fireEvent.click(screen.getByRole("tab", { name: "본문" })));
+    expect(navigation.replace).toHaveBeenLastCalledWith(
+      "/documents/document-1?version=1&chunk=0", { scroll: false },
+    );
+    expect(screen.getByRole("tab", { name: "본문" })).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("「활동 기록」은 처음 열 때 한 번만 불러오고, 탭을 오가도 다시 부르지 않는다", async () => {
+    const fetchMock = stubTabFetch();
+    await renderPage();
+
+    expect(activityCalls(fetchMock)).toBe(0);
+    fireEvent.click(screen.getByRole("tab", { name: "활동 기록" }));
+    expect(await screen.findByText("아직 기록이 없습니다.")).toBeVisible();
+    expect(activityCalls(fetchMock)).toBe(1);
+
+    fireEvent.click(screen.getByRole("tab", { name: "본문" }));
+    fireEvent.click(screen.getByRole("tab", { name: "활동 기록" }));
+    expect(screen.getByText("아직 기록이 없습니다.")).toBeVisible();
+    expect(activityCalls(fetchMock)).toBe(1);
+  });
+
+  it("로그인하지 않았으면 활동 기록 탭이 없다", async () => {
+    navigation.searchParams = new URLSearchParams("tab=activity");
+    const fetchMock = stubTabFetch(false);
+    await renderAnonymous();
+
+    expect(screen.queryByRole("tab", { name: "활동 기록" })).not.toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "본문" })).toHaveAttribute("aria-selected", "true");
+    expect(activityCalls(fetchMock)).toBe(0);
+  });
+
+  it("편집 중 탭을 바꿨다 돌아와도 편집 내용이 남는다", async () => {
+    stubTabFetch();
+    await renderPage();
+
+    fireEvent.click(screen.getByRole("button", { name: "편집" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "추출 텍스트" }), {
+      target: { value: "고치던 내용" },
+    });
+    fireEvent.click(screen.getByRole("tab", { name: /버전 이력/ }));
+    fireEvent.click(screen.getByRole("tab", { name: "본문" }));
+
+    expect(screen.getByRole("textbox", { name: "추출 텍스트" })).toHaveValue("고치던 내용");
   });
 });

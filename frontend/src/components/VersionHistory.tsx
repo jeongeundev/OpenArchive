@@ -5,6 +5,7 @@
 import { useEffect, useRef, useState } from "react";
 
 import { ApiError, getDocumentVersion, getVersionDiff, restoreDocumentVersion } from "@/lib/api";
+import { viaLabel } from "@/lib/audit";
 import type { TextVersion, VersionDiff } from "@/lib/types";
 import { useUnmountSignal } from "@/lib/useUnmountSignal";
 
@@ -17,10 +18,7 @@ function formatDate(value: string): string {
 
 function versionAuthorLabel(item: TextVersion): string {
   if (item.author) return item.author;
-  if (item.author_via === "worker") return "워커";
-  if (item.author_via === "direct") return "직접 접속";
-  if (item.author_via === "cli") return "운영자 CLI";
-  return "기록 없음";
+  return viaLabel(item.author_via) ?? "기록 없음";
 }
 
 export function VersionHistory({

@@ -26,6 +26,7 @@ import {
   getAuthStatus,
   getDocument,
   getDocumentAccess,
+  getDocumentActivity,
   getDocumentProgress,
   getDocumentVersion,
   isRetrying,
@@ -688,6 +689,17 @@ describe("groups and document access", () => {
     await listAudit({ actor: "", action: "" });
 
     expect(fetchMock.mock.calls[0][0]).toBe("/api/admin/audit");
+  });
+
+  it("reads one document's activity with an encoded id and cursor", async () => {
+    const page = JSON.stringify({ items: [], next_before_id: null });
+    const fetchMock = stubFetch(page);
+    await getDocumentActivity("doc/1", { beforeId: 9, limit: 20 });
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/documents/doc%2F1/activity?before_id=9&limit=20");
+
+    const bareFetchMock = stubFetch(page);
+    await getDocumentActivity("doc/1");
+    expect(bareFetchMock.mock.calls[0][0]).toBe("/api/documents/doc%2F1/activity");
   });
 
   it("lists groups from the admin path", async () => {

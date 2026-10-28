@@ -58,7 +58,7 @@ OpenArchive/
 │   │   ├── config.py             # pydantic-settings — $OPENARCHIVE_HOME/.env(기본 ~/.openarchive/.env)
 │   │   ├── db.py                 # 앱 풀·풀 밖 연결(connect/connect_sync)·일시 불가용 판정 — import 시 부작용 없음
 │   │   ├── migrations/           # __init__.py = 러너(API startup과 `openarchive init`이 호출)
-│   │   │                         #   + SQL(패키지 안이라 wheel에 실린다) 001~046: extensions, tables, triggers, indexes,
+│   │   │                         #   + SQL(패키지 안이라 wheel에 실린다) 001~049: extensions, tables, triggers, indexes,
 │   │   │                         #   trgm, edges(006~008), auth(009), links(010~012), token(013),
 │   │   │                         #   edges 재설계(014 — rebuild_document_edges), 위키링크 정규화(015),
 │   │   │                         #   관계 잡 분리(016 — embedding_jobs.kind / 017 — ready 트리거,
@@ -77,7 +77,8 @@ OpenArchive/
 │   │   │                         #   폴더 단위 공유(042 — share_folders / 043 — 폴더 공유 감사 트리거, #206),
 │   │   │                         #   로그인 실패 제한(044 — login_attempts, ADR-040 2026-10-12 개정),
 │   │   │                         #   비밀번호·관리자 권한·폴더·사용자 토큰 감사(045, ADR-055 2026-10-12 개정),
-│   │   │                         #   visibility CHECK(046 — #193)
+│   │   │                         #   visibility CHECK(046 — #193), 소속 부서(047·048 — #288),
+│   │   │                         #   문서별 감사 조회 인덱스(049 — idx_audit_log_document, ADR-055 2026-10-28 개정)
 │   │   ├── cli.py                # `openarchive init`(첫 관리자 포함)·`serve`·`create-user`·`reset-password`·`rebuild-edges`·`rebuild-previews`·`reextract`
 │   │   │                         #   ·`import`·`export`·`search --user`·`ask --user`·`demo` — 운영자 CLI, DB에 직접 붙는다 (ADR-039·040·046)
 │   │   │                         #   사용자 CLI `login`·`whoami`·`doc …`, 그리고 `--user` 없는 `search`·`ask`는 user_cli.py·client.py로
@@ -945,6 +946,7 @@ OpenSQL `patroni.yml`의 PostgreSQL 파라미터는 `max_connections: 100`이다
 | `PUT /api/documents/{id}` | 편집된 문서 텍스트(`{content, version}` JSON) → `version`+1, `content`, `content_hash` UPDATE. **버전 이력 기록과 재임베딩 잡 생성은 트리거가 수행.** 요청의 `version`이 현재 버전과 다르면 **409** (아래) |
 | `GET /api/documents/{id}/versions/{version}` | 그 텍스트 버전의 본문과 `version`·`created_at`·nullable `author`·`author_via`. 선택 `?chunk=n`이면 그 청크 대목의 위치 `passage_start`·`passage_end`(UTF-16 단위)를 더한다 — 답변 인용 링크용(#96 b). 열람 술어를 같은 SQL에 넣어 조회하며 없거나 볼 수 없으면 404 (ADR-037) |
 | `GET /api/documents/{id}/versions/{base}/diff/{target}` | **텍스트 버전 비교.** 서버가 줄 단위로 비교한다(`services/textdiff.py` — Myers O((N+M)D), git의 기본 알고리즘, 새 의존성 없음). 응답 `{base, target, identical, too_large, hunks: [{lines: [{op: equal\|added\|removed, text}]}]}` — 바뀐 곳 앞뒤 **3줄**만 맥락으로 싣고(`difflib.get_grouped_opcodes(3)`와 같은 묶음), `text`에는 줄 끝 개행을 넣지 않는다. `identical`은 두 텍스트가 문자열로 완전히 같을 때만 true이고 그때 `hunks`는 빈 배열. **작업량 예산**: 대각선 하나·직진한 줄 하나·역추적 기록 한 칸을 작업 1로 세다가 `MAX_DIFF_WORK`(500만)를 넘으면 그 자리에서 멈추고 `too_large: true`·빈 `hunks`로 답한다 — 쓴 작업량은 예산 + 2 + min(N, M)을 넘지 않는다(jsdiff `maxEditLength`와 같은 방식). 2026-10-08 실측(크기 4.8K~20K줄 × 반복도 × 고친 곳 10~3,000 × 흩어짐/몰림 × 전체 교체): 작업 100만당 **0.12~0.15초·기록 3.8MB**로 일정해 예산이 최악 약 0.75초·19MB를 보장한다. 작업량은 문서 크기가 아니라 바뀐 줄 수(D)에 따라 늘어 대략 D²이며, 고친 줄이 약 1,100줄을 넘으면 too_large다. 실제 규정 2022판↔현행판 21쌍은 최대 6만 작업·8ms다. 처음 쓴 표준 `difflib`(autojunk 끔)는 같은 줄의 짝 수 × 바뀐 대목 수에 비례해, 빈 줄로 나눈 마크다운 2,000문단을 10문단마다 고치면 23.6초였다(같은 입력 Myers 20ms) — 짝 수로 미리 거르는 상한은 바뀐 대목 수 축에서 깨져 버렸다. 계산은 이벤트 루프 밖 스레드에서 돈다. 두 버전 중 하나라도 없거나 볼 수 없으면 404, 공유 토큰은 403 (#190) |
+| `GET /api/documents/{id}/activity` | **문서 활동 기록.** 감사 로그(`audit_log`)에서 이 문서의 기록만 id 내림차순으로 읽는다. 쿼리 `limit`(기본 50, 1~200)·`before_id`(id 커서), 응답 `{items: [{id, occurred_at, action, actor, actor_via, detail}], next_before_id}`(`next_before_id`는 `GET /api/admin/audit`와 같은 규칙). 열람자에게는 `document_created`·`text_updated`·`original_replaced`·`document_trashed`·`document_restored`·`owner_changed`, 소유자에게는 여기에 `access_changed`·`share_changed`·`original_downloaded`·`original_previewed`까지 보인다 — 그 밖 동작은 나오지 않는다. 열람 판정은 `ensure_visible`(볼 수 없거나 휴지통이면 404), 관리자 분기 없음, 공유 토큰은 403(`require_user_id`). 조회 자체는 기록하지 않는다. 문서별 최신순 조회는 `idx_audit_log_document(document_id, id DESC)`(049)가 받친다 (ADR-055 결정 7 2026-10-28 개정, #293) |
 | `POST /api/documents/{id}/versions/{v}/restore` `{current_version}` | **되돌리기.** 그 텍스트 버전의 내용으로 **새 텍스트 버전**을 만든다(되감기가 아니다). 편집과 같은 경로라 버전 이력 기록·재임베딩 잡 생성은 트리거가 하고, 쓰기 권한(세션 또는 `read_write` 토큰)이 필요하다. `current_version`이 현재 버전과 다르거나 추출 중이면 409, 없거나 볼 수 없는 버전은 404 (ADR-037) |
 | `PUT /api/documents/{id}/tags` | `{tags: string[]}`로 태그 전체 교체. 트리거는 `UPDATE OF content_hash`에만 걸려 있으므로 **재임베딩을 유발하지 않는다** |
 | `DELETE /api/documents/{id}` | **휴지통 이동** — `deleted_at`을 채운다. 소유자만, 쓰기 토큰 허용. `?permanent=true`면 영구 삭제(CASCADE로 벡터·잡·원본 판까지 원자 삭제, 휴지통 밖 문서도 가능) (ADR-060) |

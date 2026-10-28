@@ -29,6 +29,8 @@ from openarchive.api.schemas import (
     BacklinkItem,
     CreateTextDocumentRequest,
     DocumentAccess,
+    DocumentActivityEntry,
+    DocumentActivityPage,
     DocumentCount,
     DocumentDetail,
     DocumentOwnerTransferred,
@@ -53,8 +55,8 @@ from openarchive.api.schemas import (
     VersionDiff,
 )
 from openarchive.config import get_settings
+from openarchive.services import audit, organize, trash
 from openarchive.services import documents as service
-from openarchive.services import organize, trash
 from openarchive.services.folders import owner_departments, visible_folder_paths
 from openarchive.services.links import find_backlinks, resolve_links
 from openarchive.services.parsing import SUPPORTED_CONTENT_TYPES, UnsupportedFileType
@@ -447,6 +449,22 @@ async def get_folder_suggestion(
 ) -> FolderSuggestionResponse:
     suggestion = await organize.suggest_folder(conn, document_id=document_id, user_id=user_id)
     return FolderSuggestionResponse.model_validate({"suggestion": suggestion})
+
+
+@router.get("/{document_id}/activity", response_model=DocumentActivityPage)
+async def list_document_activity(
+    document_id: UUID,
+    conn: Connection,
+    user_id: Annotated[str, Depends(require_user_id)],
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    before_id: int | None = None,
+) -> DocumentActivityPage:
+    rows = await audit.list_document_activity(
+        conn, document_id, user_id=user_id, limit=limit, before_id=before_id
+    )
+    items = [DocumentActivityEntry.model_validate(row) for row in rows]
+    next_before_id = items[-1].id if len(items) == limit else None
+    return DocumentActivityPage(items=items, next_before_id=next_before_id)
 
 
 @router.get("/{document_id}/versions/{version}", response_model=TextVersionDetail)

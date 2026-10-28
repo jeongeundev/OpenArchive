@@ -271,3 +271,30 @@ def test_planner_can_use_the_visibility_predicate_lookup_indexes(
         )
 
     assert index_name in plan, f"술어 조회 인덱스를 타지 않았다:\n{plan}"
+
+
+def test_planner_can_use_the_audit_log_document_index(conn: psycopg.Connection):
+    """문서 상세 활동 기록은 `WHERE document_id = $1 ORDER BY id DESC LIMIT n`으로 읽는다 (#293).
+
+    감사 행이 쌓여도 전체를 훑거나 정렬하지 않고 인덱스 순서로 끊어 읽어야 한다.
+    """
+    exists = conn.execute(
+        "SELECT 1 FROM pg_indexes WHERE schemaname = 'public' AND indexname = %s",
+        ("idx_audit_log_document",),
+    ).fetchone()
+    assert exists, "idx_audit_log_document 인덱스가 없다"
+
+    with conn.transaction():
+        conn.execute("SET LOCAL enable_seqscan = off")
+        # 빈 테이블에서는 Bitmap 스캔 + Sort가 싸게 나온다. 순서대로 읽을 수 있는지를 본다.
+        conn.execute("SET LOCAL enable_bitmapscan = off")
+        plan = "\n".join(
+            row[0]
+            for row in conn.execute(
+                "EXPLAIN SELECT id FROM audit_log WHERE document_id = %s ORDER BY id DESC LIMIT 20",
+                ("00000000-0000-0000-0000-000000000001",),
+            ).fetchall()
+        )
+
+    assert "idx_audit_log_document" in plan, f"문서별 감사 인덱스를 타지 않았다:\n{plan}"
+    assert "Sort" not in plan, f"인덱스 순서로 읽지 않고 정렬했다:\n{plan}"
