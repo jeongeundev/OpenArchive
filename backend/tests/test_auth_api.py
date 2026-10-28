@@ -46,6 +46,7 @@ def test_login_sets_httponly_cookie_and_returns_only_public_user_fields(
     assert response.status_code == 200
     assert response.json() == {
         "department": None,
+        "manages_department": False,
         "authenticated": True,
         "username": "alice",
         "is_admin": False,
@@ -70,6 +71,7 @@ def test_me_uses_the_login_cookie_and_ignores_x_user_id(
 
     assert anonymous.json() == {
         "department": None,
+        "manages_department": False,
         "authenticated": False,
         "username": None,
         "is_admin": False,
@@ -78,6 +80,7 @@ def test_me_uses_the_login_cookie_and_ignores_x_user_id(
     }
     assert authenticated.json() == {
         "department": None,
+        "manages_department": False,
         "authenticated": True,
         "username": "alice",
         "is_admin": False,
@@ -99,6 +102,7 @@ def test_logout_invalidates_the_cookie_backed_session(
     assert response.status_code == 200
     assert db_client.get("/api/auth/me").json() == {
         "department": None,
+        "manages_department": False,
         "authenticated": False,
         "username": None,
         "is_admin": False,
@@ -132,6 +136,7 @@ def test_me_accepts_a_valid_bearer_token_without_a_cookie(
 
     assert response.json() == {
         "department": None,
+        "manages_department": False,
         "authenticated": True,
         "username": "alice",
         "is_admin": False,
@@ -167,6 +172,7 @@ def test_invalid_bearer_does_not_fall_back_to_a_valid_cookie(
 
     assert response.json() == {
         "department": None,
+        "manages_department": False,
         "authenticated": False,
         "username": None,
         "is_admin": False,
@@ -352,6 +358,7 @@ def test_password_change_expires_the_cookie_and_only_the_new_password_logs_in(
     assert changed.status_code == 200
     assert changed.json() == {
         "department": None,
+        "manages_department": False,
         "authenticated": False,
         "username": None,
         "is_admin": False,
@@ -513,6 +520,7 @@ def test_me_leaves_scope_and_expiry_empty_for_a_cookie_session(
 
     assert db_client.get("/api/auth/me").json() == {
         "department": None,
+        "manages_department": False,
         "authenticated": True,
         "username": "alice",
         "is_admin": False,
@@ -539,6 +547,7 @@ def test_me_is_anonymous_for_an_expired_or_revoked_token(
 
     assert body == {
         "department": None,
+        "manages_department": False,
         "authenticated": False,
         "username": None,
         "is_admin": False,
@@ -629,7 +638,45 @@ def test_user_list_with_counts_is_admin_only(db_client, migrated_db):
     login_as(db_client, "kim")
     assert db_client.get("/api/admin/users").status_code == 403
     me = db_client.get("/api/auth/me").json()
-    assert "owned_documents" not in me and "created_folders" not in me
+    assert not {"owned_documents", "created_folders", "managed_departments"} & me.keys()
+
+
+def test_me_tells_whether_the_user_manages_a_department(db_client, migrated_db):
+    import psycopg
+    from conftest import login_as
+    from test_groups_api import create_group, login_admin
+
+    login_as(db_client, "lee")
+    login_admin(db_client, migrated_db)
+    group = create_group(db_client)
+    assert db_client.put(f"/api/admin/groups/{group['id']}/members/lee").status_code == 204
+    login_as(db_client, "lee")
+    assert db_client.get("/api/auth/me").json()["manages_department"] is False
+    with psycopg.connect(migrated_db) as conn:
+        conn.execute("INSERT INTO group_managers SELECT %s, id FROM users WHERE username='lee'",
+                     (group["id"],))
+    assert db_client.get("/api/auth/me").json()["manages_department"] is True
+
+
+def test_admin_user_list_names_departments_each_user_manages(db_client, migrated_db):
+    import psycopg
+    from conftest import login_as
+    from test_groups_api import create_group, login_admin
+
+    login_as(db_client, "kim")
+    login_as(db_client, "lee")
+    login_admin(db_client, migrated_db)
+    group = create_group(db_client)
+    for name in ["kim", "lee"]:
+        assert db_client.put(f"/api/admin/groups/{group['id']}/members/{name}").status_code == 204
+    with psycopg.connect(migrated_db) as conn:
+        conn.execute("INSERT INTO group_managers SELECT %s, id FROM users WHERE username='kim'",
+                     (group["id"],))
+
+    users = {row["username"]: row for row in db_client.get("/api/admin/users").json()}
+
+    assert users["kim"]["managed_departments"] == [group["name"]]
+    assert users["lee"]["managed_departments"] == []
 
 
 # --- 로그인 실패 제한·비밀번호 최소 길이·자기 삭제 금지 (ADR-040 2026-10-12 개정) ---

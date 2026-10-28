@@ -345,6 +345,8 @@ export interface SystemStatus {
 
 export interface AuthStatus {
   department?: OwnerDepartment | null;
+  /** 한 부서라도 관리하면 true — 사이드바의 부서 관리 진입점 (ADR-066). */
+  manages_department?: boolean;
   authenticated: boolean;
   username: string | null;
   is_admin: boolean;
@@ -361,6 +363,8 @@ export interface UserSummary {
   owned_documents?: number;
   /** 관리자 목록에만 온다 — 만든 폴더 수. */
   created_folders?: number;
+  /** 관리자 목록에만 온다 — 이 사람이 관리하는 부서 이름(ADR-066). */
+  managed_departments?: string[];
 }
 
 export interface GroupSummary {

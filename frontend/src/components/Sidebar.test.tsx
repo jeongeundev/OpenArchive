@@ -159,9 +159,26 @@ describe("Sidebar", () => {
     expect(screen.queryByRole("link", { name: "사용자 관리" })).not.toBeInTheDocument();
     expect(screen.queryByText("관리자 전용")).not.toBeInTheDocument();
     expect(screen.queryByText("관리", { exact: true })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "내 부서 관리" })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "그룹 관리" })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "감사 로그" })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "시스템 상태" })).not.toBeInTheDocument();
+  });
+
+  it("부서 관리자에게는 부서 관리자 묶음과 내 부서 관리 진입점만 보인다", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response({
+      authenticated: true,
+      username: "it.manager",
+      is_admin: false,
+      manages_department: true,
+    })));
+
+    render(<AuthProvider><Sidebar /></AuthProvider>);
+
+    expect(await screen.findByRole("link", { name: "내 부서 관리" })).toHaveAttribute("href", "/departments");
+    expect(screen.getByText("부서 관리자")).toHaveClass("rounded-full", "bg-accent-soft", "text-accent");
+    expect(screen.queryByText("관리자 전용")).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "사용자 관리" })).not.toBeInTheDocument();
   });
 
   it("관리자에게만 사용자 관리 진입점을 제공한다", async () => {

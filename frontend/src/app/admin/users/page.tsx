@@ -223,7 +223,10 @@ export default function UsersPage(): React.ReactElement {
                     {groups?.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}
                   </select>
                 </td>
-                <td className="px-5 py-4"><span className={`rounded px-2 py-1 text-xs font-medium ${user.is_admin ? "bg-accent-soft text-accent" : "bg-sunken text-body"}`}>{user.is_admin ? "관리자" : "일반 사용자"}</span></td>
+                <td className="px-5 py-4"><div className="flex flex-wrap gap-1">
+                  {user.is_admin || !user.managed_departments?.length ? <span className={`rounded px-2 py-1 text-xs font-medium ${user.is_admin ? "bg-accent-soft text-accent" : "bg-sunken text-body"}`}>{user.is_admin ? "관리자" : "일반 사용자"}</span> : null}
+                  {user.managed_departments?.length ? <span className="rounded border border-accent px-2 py-0.5 text-xs font-medium text-accent" title={`${user.managed_departments.join(", ")} 관리`}>부서 관리자</span> : null}
+                </div></td>
                 <td className="px-5 py-4 text-body"><span>{user.owned_documents ?? 0}건</span>{(user.created_folders ?? 0) > 0 ? <span className="ml-1 text-muted">· 폴더 {user.created_folders}</span> : null}</td>
                 <td className="px-5 py-4 text-right">{self
                   ? <span className="text-xs text-faint">본인 계정은 삭제할 수 없음</span>

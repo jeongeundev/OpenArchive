@@ -273,6 +273,8 @@ class AuthStatus(BaseModel):
     expires_at: datetime | None = None
     # 익명이면 null
     department: OwnerDepartment | None = None
+    # 한 부서라도 관리하면 true — 사이드바의 부서 관리 진입점 (ADR-066)
+    manages_department: bool = False
 
 
 class ChangePasswordRequest(BaseModel):
@@ -345,6 +347,7 @@ class UserSummary(BaseModel):
 class AdminUserSummary(UserSummary):
     owned_documents: int
     created_folders: int
+    managed_departments: list[str]
 
 
 class CreateGroupRequest(BaseModel):

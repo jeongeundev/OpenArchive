@@ -314,7 +314,7 @@ describe("사용자 관리 화면 — 시안 (m44 step 7)", () => {
     { id: "user-0", username: "admin", is_admin: true, created_at: "2026-08-11T00:00:00Z", department: { id: "group-1", name: "IT전략실" }, owned_documents: 0, created_folders: 0 },
     { id: "user-1", username: "alice", is_admin: false, created_at: "2026-08-11T00:00:00Z", department: { id: "group-1", name: "IT전략실" }, owned_documents: 4, created_folders: 0 },
     { id: "user-2", username: "bob", is_admin: false, created_at: "2026-08-11T00:00:00Z", department: null, owned_documents: 0, created_folders: 0 },
-    { id: "user-3", username: "kim", is_admin: false, created_at: "2026-08-11T00:00:00Z", department: { id: "group-1", name: "IT전략실" }, owned_documents: 0, created_folders: 2 },
+    { id: "user-3", username: "kim", is_admin: false, created_at: "2026-08-11T00:00:00Z", department: { id: "group-1", name: "IT전략실" }, owned_documents: 0, created_folders: 2, managed_departments: ["IT전략실"] },
   ];
 
   function routed(list: () => unknown[] = () => roster) {
@@ -418,6 +418,15 @@ describe("사용자 관리 화면 — 시안 (m44 step 7)", () => {
     expect(within(aliceRow).getByText("일반 사용자")).toBeInTheDocument();
     expect(within(adminRow).getByText("0건")).toBeInTheDocument();
     expect(within(adminRow).getByText("관리자")).toHaveClass("bg-accent-soft", "text-accent");
+  });
+
+  it("부서를 관리하는 사람에게는 부서 관리자 배지를 보인다", async () => {
+    await renderPage();
+    const kimRow = screen.getByText("kim").closest("tr") as HTMLElement;
+    const aliceRow = screen.getByText("alice").closest("tr") as HTMLElement;
+    expect(within(kimRow).getByText("부서 관리자")).toHaveAttribute("title", "IT전략실 관리");
+    expect(within(kimRow).queryByText("일반 사용자")).not.toBeInTheDocument();
+    expect(within(aliceRow).queryByText("부서 관리자")).not.toBeInTheDocument();
   });
 
   it("소유가 없으면 확인 뒤 바로 삭제한다", async () => {
