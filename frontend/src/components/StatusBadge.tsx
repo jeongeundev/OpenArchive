@@ -5,12 +5,15 @@ import type { DocumentSummary, EmbeddingStatus } from "@/lib/types";
 type Tone = "wait" | "inflight" | "done" | "failed";
 
 /** 연한 배경 알약 + 점 + 한글. 색만으로 상태를 말하지 않도록 대기는 빈 점, 처리 중은 깜빡이는 점이다. */
-const TONE: Record<Tone, { badge: string; dot: string }> = {
-  wait: { badge: "bg-wait-soft text-wait", dot: "border border-current" },
-  inflight: { badge: "bg-accent-soft text-accent", dot: "bg-current motion-safe:animate-pulse" },
-  done: { badge: "bg-done-soft text-done", dot: "bg-current" },
-  failed: { badge: "bg-failed-soft text-failed", dot: "bg-current" },
+const TONE: Record<Tone, { badge: string; text: string; dot: string }> = {
+  wait: { badge: "bg-wait-soft text-wait", text: "text-muted", dot: "border border-current" },
+  inflight: { badge: "bg-accent-soft text-accent", text: "text-accent", dot: "bg-current motion-safe:animate-pulse" },
+  done: { badge: "bg-done-soft text-done", text: "text-done", dot: "bg-current" },
+  failed: { badge: "bg-failed-soft text-failed", text: "text-failed", dot: "bg-current" },
 };
+
+/** `pill`은 연한 배경 알약, `dot`은 알약 없이 점 + 글자다(문서 목록 표). 문구는 같다. */
+type Variant = "pill" | "dot";
 
 const STATUS_DISPLAY: Record<EmbeddingStatus, { label: string; tone: Tone }> = {
   pending: { label: "대기 중", tone: "wait" },
@@ -19,11 +22,12 @@ const STATUS_DISPLAY: Record<EmbeddingStatus, { label: string; tone: Tone }> = {
   error: { label: "실패", tone: "failed" },
 };
 
-function Badge({ label, tone }: { label: string; tone: Tone }): React.ReactElement {
+function Badge({ label, tone, variant = "pill" }: { label: string; tone: Tone; variant?: Variant }): React.ReactElement {
   const style = TONE[tone];
+  const shape = variant === "dot" ? `text-sm ${style.text}` : `rounded-full px-2 py-0.5 text-xs ${style.badge}`;
   return (
     <span
-      className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2 py-0.5 text-xs font-medium ${style.badge}`}
+      className={`inline-flex items-center gap-1.5 whitespace-nowrap font-medium ${shape}`}
     >
       <span aria-hidden="true" className={`size-2 shrink-0 rounded-full ${style.dot}`} />
       {label}
@@ -43,11 +47,13 @@ const EXTRACTION_DISPLAY = {
 /** 문서 한 건의 상태 배지. 텍스트 인식이 끝나지 않은 문서는 임베딩 상태가 의미 없으므로 인식 상태를 먼저 보인다 (ADR-052). */
 export function DocumentStatusBadge({
   document,
+  variant,
 }: {
   document: Pick<DocumentSummary, "embedding_status" | "extraction_status">;
+  variant?: Variant;
 }): React.ReactElement {
   if (document.extraction_status === "done") {
-    return <StatusBadge status={document.embedding_status} />;
+    return <Badge {...STATUS_DISPLAY[document.embedding_status]} variant={variant} />;
   }
-  return <Badge {...EXTRACTION_DISPLAY[document.extraction_status]} />;
+  return <Badge {...EXTRACTION_DISPLAY[document.extraction_status]} variant={variant} />;
 }

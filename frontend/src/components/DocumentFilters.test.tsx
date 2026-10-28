@@ -15,7 +15,7 @@ it("제목·유형·태그·정렬의 선택지를 표시한다", () => {
   for (const type of ["전체", "HWP", "PDF"]) expect(types.getByRole("button", { name: type })).toBeInTheDocument();
   expect(types.queryByRole("button", { name: "XLSX" })).not.toBeInTheDocument();
   const tags = within(screen.getByRole("combobox", { name: "태그" }));
-  for (const tag of ["전체", "보안", "운영"]) expect(tags.getByRole("option", { name: tag })).toBeInTheDocument();
+  expect(tags.getAllByRole("option").map(option => option.textContent)).toEqual(["모든 태그", "보안", "운영"]);
   expect(screen.getByRole("combobox", { name: "정렬" })).toHaveValue("updated");
   expect(screen.getByRole("option", { name: "최근 수정순" })).toBeInTheDocument();
   expect(screen.getByRole("option", { name: "제목순" })).toBeInTheDocument();
@@ -63,4 +63,16 @@ it("입력이 반영된 뒤에도 이어서 친 글자를 지우지 않는다", 
   fireEvent.change(screen.getByLabelText("제목 검색"), { target: { value: "출장비" } });
   rerender(<DocumentFilters value={{ q: "출장", sort: "updated" }} tags={[]} onChange={onChange} />);
   expect(screen.getByLabelText("제목 검색")).toHaveValue("출장비");
+});
+
+it("카드 상자 없는 한 줄 — 돋보기 검색칸·40px 알약 칩·선택한 칩은 진한 배경", () => {
+  const { container } = render(<DocumentFilters value={{ contentType: "pdf" }} types={["hwp", "pdf"]} tags={[]} onChange={vi.fn()} />);
+  const search = screen.getByRole("textbox", { name: "제목 검색" });
+  expect(search).toHaveAttribute("placeholder", "제목으로 찾기");
+  expect(search.parentElement?.querySelector("svg[aria-hidden='true']")).not.toBeNull();
+  expect(container.firstElementChild).not.toHaveClass("bg-card");
+  expect(container.firstElementChild).toHaveClass("flex-wrap");
+  const types = within(screen.getByRole("group", { name: "문서 유형" }));
+  expect(types.getByRole("button", { name: "PDF" })).toHaveClass("h-10", "rounded-full", "bg-strong", "text-on-strong");
+  expect(types.getByRole("button", { name: "HWP" })).not.toHaveClass("bg-strong");
 });

@@ -61,6 +61,22 @@ describe("useDocuments", () => {
     ]));
   });
 
+  it.each([
+    [{ mine: true }, "mine=true"],
+    [{ unfiled: true }, "unfiled=true"],
+  ])("「내 문서」·「폴더 미지정」 보기는 목록과 건수 모두 같은 조건으로 조회한다 (%o)", async (filters, query) => {
+    const fetchMock = vi.fn().mockImplementation((url: string) => Promise.resolve(jsonResponse(url.includes("/count") ? { total: 1 } : [document])));
+    vi.stubGlobal("fetch", fetchMock);
+    renderHook(() => useDocuments(filters));
+    await flushRequest();
+    const urls = fetchMock.mock.calls.map(([url]) => String(url));
+    expect(urls).toHaveLength(2);
+    expect(urls).toEqual(expect.arrayContaining([
+      expect.stringMatching(new RegExp(`^/api/documents\\?.*${query}`)),
+      expect.stringMatching(new RegExp(`^/api/documents/count\\?.*${query}`)),
+    ]));
+  });
+
   it("마운트 직후 조회하고 기본 2초마다 다시 조회한다", async () => {
     const fetchMock = vi.fn().mockImplementation((url: string) => Promise.resolve(jsonResponse(url.includes("/count") ? { total: 1 } : [document])));
     vi.stubGlobal("fetch", fetchMock);

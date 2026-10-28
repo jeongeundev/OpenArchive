@@ -73,4 +73,25 @@ describe("StatusBadge", () => {
     rerender(<DocumentStatusBadge document={{ embedding_status: "pending", extraction_status: "failed" }} />);
     expect(screen.getByText("텍스트 인식 실패")).toHaveClass("text-failed", "bg-failed-soft");
   });
+
+  it.each([
+    ["ready", "완료", "text-done"],
+    ["error", "실패", "text-failed"],
+    ["pending", "대기 중", "text-muted"],
+    ["processing", "처리 중…", "text-accent"],
+  ] as const)("점 변형(문서 목록)은 같은 문구를 알약 없이 점 + 글자로 그린다 — %s", (status, label, text) => {
+    render(<DocumentStatusBadge variant="dot" document={{ embedding_status: status, extraction_status: "done" }} />);
+    const badge = screen.getByText(label);
+
+    expect(badge).toHaveClass(text, "whitespace-nowrap");
+    expect(badge).not.toHaveClass("rounded-full");
+    expect(badge.className).not.toMatch(/bg-\S*-soft/);
+    dotOf(badge);
+  });
+
+  it("점 변형도 텍스트 인식 상태를 먼저 보인다", () => {
+    render(<DocumentStatusBadge variant="dot" document={{ embedding_status: "pending", extraction_status: "failed" }} />);
+    expect(screen.getByText("텍스트 인식 실패")).toHaveClass("text-failed");
+    expect(screen.getByText("텍스트 인식 실패")).not.toHaveClass("rounded-full");
+  });
 });
