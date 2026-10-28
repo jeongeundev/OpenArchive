@@ -38,3 +38,16 @@ export function formatExpiry(expiresAt: string | null): string {
 export function todayInputValue(): string {
   return localDate(new Date());
 }
+
+/** 관리자 공유 요약. 만료 판정은 서버 값을 따르고 기간 경계는 양끝을 포함한다. */
+export function summarizeShares(shares: import("./types").AdminShareSummary[], revoked: number, now: Date): { active: number; expiring: number; recent: number; revoked: number } {
+  const tokens = shares.flatMap(share => share.tokens);
+  const at = now.getTime();
+  const week = 7 * 24 * 60 * 60 * 1000;
+  return {
+    active: tokens.filter(token => !token.expired).length,
+    expiring: tokens.filter(token => !token.expired && token.expires_at !== null && Date.parse(token.expires_at) >= at && Date.parse(token.expires_at) <= at + week).length,
+    recent: tokens.filter(token => token.last_used_at !== null && Date.parse(token.last_used_at) >= at - week && Date.parse(token.last_used_at) <= at).length,
+    revoked,
+  };
+}
