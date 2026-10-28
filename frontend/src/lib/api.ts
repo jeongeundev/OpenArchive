@@ -9,6 +9,7 @@ import type {
   AuthStatus,
   Backlink,
   ClustersResponse,
+  Department,
   DocumentAccess,
   DocumentActivityPage,
   DocumentDetail,
@@ -349,6 +350,38 @@ export function removeGroupMember(groupId: string, username: string): Promise<vo
   return request<void>(groupMemberPath(groupId, username), { method: "DELETE" }, { parse: false });
 }
 
+export function listDepartments(signal?: AbortSignal): Promise<Department[]> {
+  return request<Department[]>("/api/departments", { signal });
+}
+
+function departmentPath(id: string): string {
+  return `/api/departments/${encodeURIComponent(id)}`;
+}
+
+export function updateDepartment(id: string, description: string): Promise<void> {
+  return request<void>(
+    departmentPath(id),
+    { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ description }) },
+    { parse: false },
+  );
+}
+
+export function addDepartmentMember(id: string, username: string): Promise<void> {
+  return request<void>(`${departmentPath(id)}/members/${encodeURIComponent(username)}`, { method: "PUT" }, { parse: false });
+}
+
+export function removeDepartmentMember(id: string, username: string): Promise<void> {
+  return request<void>(`${departmentPath(id)}/members/${encodeURIComponent(username)}`, { method: "DELETE" }, { parse: false });
+}
+
+export function setDepartmentManager(id: string, username: string, manager: boolean): Promise<void> {
+  return request<void>(
+    `${departmentPath(id)}/managers/${encodeURIComponent(username)}`,
+    { method: manager ? "PUT" : "DELETE" },
+    { parse: false },
+  );
+}
+
 export function listPrincipals(signal?: AbortSignal): Promise<Principals> {
   return request<Principals>("/api/principals", { signal });
 }
@@ -434,6 +467,10 @@ export interface DocumentFilters {
   status?: EmbeddingStatus;
   /** 「부여받은 문서」 — 볼 수 있는 남의 문서 가운데 실효 범위가 「제한」인 것만. */
   granted?: boolean;
+  /** 「내 문서」 — 내가 소유한 문서만. */
+  mine?: boolean;
+  /** 「폴더 미지정」 — 폴더에 들지 않은 문서만. */
+  unfiled?: boolean;
 }
 
 function documentFilterQuery(params?: Omit<DocumentFilters, "sort">): URLSearchParams {
@@ -444,6 +481,8 @@ function documentFilterQuery(params?: Omit<DocumentFilters, "sort">): URLSearchP
   if (params?.q?.trim()) query.set("q", params.q);
   if (params?.contentType?.trim()) query.set("content_type", params.contentType);
   if (params?.granted) query.set("granted", "true");
+  if (params?.mine) query.set("mine", "true");
+  if (params?.unfiled) query.set("unfiled", "true");
   return query;
 }
 

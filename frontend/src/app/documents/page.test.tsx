@@ -11,9 +11,12 @@ const location = vi.hoisted(() => ({ search: "" }));
 const progressState = vi.hoisted(() => ({ value: null as import("@/lib/types").DocumentProgress | null }));
 const folderList = vi.hoisted(() => ({ value: [] as import("@/lib/types").Folder[] }));
 const typeCounts = vi.hoisted(() => ({ value: {} as Record<string, number> }));
+const unfiledCount = vi.hoisted(() => ({ value: 0 }));
+const router = vi.hoisted(() => ({ push: vi.fn(), replace: vi.fn() }));
+const documentQuery = vi.hoisted(() => ({ last: null as Record<string, unknown> | null }));
 
 vi.mock("next/navigation", () => ({
-  useRouter: () => ({ push: vi.fn(), replace: vi.fn() }),
+  useRouter: () => router,
   useSearchParams: () => new URLSearchParams(location.search),
 }));
 vi.mock("@/components/AuthProvider", () => ({
@@ -23,7 +26,10 @@ vi.mock("@/lib/useFolders", () => ({
   useFolders: () => ({ folders: folderList.value, loading: false, error: null, refresh: vi.fn() }),
 }));
 vi.mock("@/lib/useDocuments", () => ({
-  useDocuments: () => ({ documents: [], total: 0, loading: false, error: null, refresh: vi.fn() }),
+  useDocuments: (params: Record<string, unknown>) => {
+    documentQuery.last = params;
+    return { documents: [], total: 0, loading: false, error: null, refresh: vi.fn() };
+  },
 }));
 vi.mock("@/lib/useDocumentProgress", () => ({
   useDocumentProgress: () => ({ progress: progressState.value, error: null, refresh: vi.fn() }),
@@ -31,7 +37,8 @@ vi.mock("@/lib/useDocumentProgress", () => ({
 vi.mock("@/lib/api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/api")>()),
   listDocumentTags: () => Promise.resolve([]),
-  countDocuments: (filters: { contentType?: string }) => Promise.resolve(typeCounts.value[filters.contentType ?? ""] ?? 0),
+  countDocuments: (filters: { contentType?: string; unfiled?: boolean }) =>
+    Promise.resolve(filters.unfiled ? unfiledCount.value : typeCounts.value[filters.contentType ?? ""] ?? 0),
 }));
 // 업로드는 자기 테스트가 있다. 부여 대상 조회 같은 요청을 끌어오지 않게 뺀다.
 // 펼침 여부만 보면 되므로 표지 요소 하나로 둔다.
@@ -47,6 +54,57 @@ afterEach(() => {
   folderList.value = [];
   progressState.value = null;
   typeCounts.value = {};
+  unfiledCount.value = 0;
+  documentQuery.last = null;
+  router.push.mockClear();
+  router.replace.mockClear();
+});
+
+describe("「내 문서」 탭", () => {
+  it("탭 순서는 전체 문서 · 내 문서 · 부여받은 문서 · 휴지통이다", () => {
+    render(<Home />);
+    const tabs = within(screen.getByRole("navigation", { name: "문서 보기" }));
+    expect([...tabs.getAllByRole("button"), ...tabs.getAllByRole("link")].map(element => element.textContent))
+      .toEqual(["전체 문서", "내 문서", "부여받은 문서", "휴지통"]);
+  });
+
+  it("누르면 `?mine=1`로 간다", () => {
+    render(<Home />);
+    fireEvent.click(within(screen.getByRole("navigation", { name: "문서 보기" })).getByRole("button", { name: "내 문서" }));
+    expect(router.push).toHaveBeenLastCalledWith("/documents?mine=1");
+  });
+
+  it("`?mine=1`이면 목록·건수를 mine으로 부르고 건수 줄과 활성 탭이 「내 문서」다", () => {
+    location.search = "mine=1";
+    render(<Home />);
+    expect(documentQuery.last).toMatchObject({ mine: true });
+    expect(documentQuery.last?.granted).toBeFalsy();
+    expect(screen.getByRole("status", { name: "목록 건수" })).toHaveTextContent("내 문서 · 0건");
+    const tabs = within(screen.getByRole("navigation", { name: "문서 보기" }));
+    expect(tabs.getByRole("button", { name: "내 문서" })).toHaveAttribute("aria-current", "page");
+    expect(tabs.getByRole("button", { name: "전체 문서" })).not.toHaveAttribute("aria-current");
+    expect(within(screen.getByRole("navigation", { name: "폴더" })).getByRole("button", { name: "전체 문서" })).not.toHaveAttribute("aria-current");
+  });
+});
+
+describe("「폴더 미지정」", () => {
+  it("폴더 미지정 문서 수를 트리 맨 아래에 보이고 누르면 `?folder=none`으로 간다", async () => {
+    unfiledCount.value = 2;
+    render(<Home />);
+    const row = await within(screen.getByRole("navigation", { name: "폴더" })).findByRole("button", { name: /폴더 미지정/ });
+    expect(row).toHaveTextContent("2");
+    fireEvent.click(row);
+    expect(router.push).toHaveBeenLastCalledWith("/documents?folder=none");
+  });
+
+  it("`?folder=none`이면 목록·건수를 unfiled로 부르고 건수 줄이 「폴더 미지정」이다", () => {
+    location.search = "folder=none";
+    render(<Home />);
+    expect(documentQuery.last).toMatchObject({ unfiled: true });
+    expect(documentQuery.last?.folderId).toBeUndefined();
+    expect(screen.getByRole("status", { name: "목록 건수" })).toHaveTextContent("폴더 미지정 · 0건");
+    expect(router.replace).not.toHaveBeenCalled();
+  });
 });
 
 describe("유형 칩", () => {
@@ -169,7 +227,7 @@ describe("처리 현황 표시", () => {
     expect(screen.getByRole("progressbar", { name: "검색 준비 진행률" })).toHaveAttribute("aria-valuenow", "4");
     progressState.value = idle;
     rerender(<Home />);
-    expect(screen.getByText("내가 열람할 수 있는 문서 4건 · 모두 검색 가능")).toBeInTheDocument();
+    expect(screen.getByText("내가 열람할 수 있는 문서 4건 · 모두 AI 검색 가능")).toBeInTheDocument();
     expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
   });
   it("실패한 문서가 있으면 모두 검색 가능하다고 안내하지 않는다", () => {

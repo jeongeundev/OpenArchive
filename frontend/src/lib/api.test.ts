@@ -8,6 +8,11 @@ import {
   originalPreviewUrl,
   listFolders, createFolder, renameFolder, deleteFolder, getFolderAccess, setFolderAccess, moveDocument,
   addGroupMember,
+  listDepartments,
+  updateDepartment,
+  addDepartmentMember,
+  removeDepartmentMember,
+  setDepartmentManager,
   addShareDocument,
   addShareFolder,
   ask,
@@ -194,6 +199,21 @@ describe("API responses", () => {
     expect(Object.fromEntries(list.searchParams)).toEqual({ q: "출장", content_type: "hwp", tag: "보안", sort: "title", status: "ready", limit: "50", offset: "0" });
     expect(count.pathname).toBe("/api/documents/count");
     expect(Object.fromEntries(count.searchParams)).toEqual({ q: "출장", content_type: "hwp", tag: "보안", status: "ready" });
+  });
+
+  it("sends mine and unfiled only when true", async () => {
+    const fetchMock = vi.fn().mockImplementation((url: string) =>
+      Promise.resolve(new Response(url.includes("/count") ? '{"total":0}' : "[]")),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    await listDocuments({ mine: true });
+    await countDocuments({ unfiled: true });
+    await listDocuments({ mine: false, unfiled: false });
+    expect(fetchMock.mock.calls.map((call) => call[0])).toEqual([
+      "/api/documents?mine=true",
+      "/api/documents/count?unfiled=true",
+      "/api/documents",
+    ]);
   });
 
   it("omits blank finder conditions and reads visible tags", async () => {
@@ -1019,5 +1039,32 @@ describe("owner transfer requests", () => {
     vi.stubGlobal("fetch", fetchMock);
     await deleteUser("u", "lee & kim");
     expect(fetchMock).toHaveBeenCalledWith("/api/admin/users/u?transfer_to=lee%20%26%20kim", expect.objectContaining({ method: "DELETE" }));
+  });
+});
+
+describe("department API", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("lists departments and changes description, members, managers", async () => {
+    const fetchMock = vi.fn().mockImplementation((url: string) =>
+      Promise.resolve(url === "/api/departments" && fetchMock.mock.calls.length === 1 ? new Response("[]") : new Response(null, { status: 204 })),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(listDepartments()).resolves.toEqual([]);
+    await updateDepartment("g 1", "인사 업무");
+    await addDepartmentMember("g 1", "kim lee");
+    await removeDepartmentMember("g 1", "kim");
+    await setDepartmentManager("g 1", "kim", true);
+    await setDepartmentManager("g 1", "kim", false);
+    const calls = fetchMock.mock.calls.map((call) => [call[0], call[1]?.method ?? "GET"]);
+    expect(calls).toEqual([
+      ["/api/departments", "GET"],
+      ["/api/departments/g%201", "PATCH"],
+      ["/api/departments/g%201/members/kim%20lee", "PUT"],
+      ["/api/departments/g%201/members/kim", "DELETE"],
+      ["/api/departments/g%201/managers/kim", "PUT"],
+      ["/api/departments/g%201/managers/kim", "DELETE"],
+    ]);
+    expect(JSON.parse(fetchMock.mock.calls[1][1]?.body as string)).toEqual({ description: "인사 업무" });
   });
 });

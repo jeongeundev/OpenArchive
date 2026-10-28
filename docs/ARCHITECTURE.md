@@ -58,7 +58,7 @@ OpenArchive/
 │   │   ├── config.py             # pydantic-settings — $OPENARCHIVE_HOME/.env(기본 ~/.openarchive/.env)
 │   │   ├── db.py                 # 앱 풀·풀 밖 연결(connect/connect_sync)·일시 불가용 판정 — import 시 부작용 없음
 │   │   ├── migrations/           # __init__.py = 러너(API startup과 `openarchive init`이 호출)
-│   │   │                         #   + SQL(패키지 안이라 wheel에 실린다) 001~049: extensions, tables, triggers, indexes,
+│   │   │                         #   + SQL(패키지 안이라 wheel에 실린다) 001~051: extensions, tables, triggers, indexes,
 │   │   │                         #   trgm, edges(006~008), auth(009), links(010~012), token(013),
 │   │   │                         #   edges 재설계(014 — rebuild_document_edges), 위키링크 정규화(015),
 │   │   │                         #   관계 잡 분리(016 — embedding_jobs.kind / 017 — ready 트리거,
@@ -78,17 +78,18 @@ OpenArchive/
 │   │   │                         #   로그인 실패 제한(044 — login_attempts, ADR-040 2026-10-12 개정),
 │   │   │                         #   비밀번호·관리자 권한·폴더·사용자 토큰 감사(045, ADR-055 2026-10-12 개정),
 │   │   │                         #   visibility CHECK(046 — #193), 소속 부서(047·048 — #288),
-│   │   │                         #   문서별 감사 조회 인덱스(049 — idx_audit_log_document, ADR-055 2026-10-28 개정)
+│   │   │                         #   문서별 감사 조회 인덱스(049 — idx_audit_log_document, ADR-055 2026-10-28 개정),
+│   │   │                         #   부서 관리자(050 — groups.description·group_managers / 051 — 감사 트리거, ADR-066)
 │   │   ├── cli.py                # `openarchive init`(첫 관리자 포함)·`serve`·`create-user`·`reset-password`·`rebuild-edges`·`rebuild-previews`·`reextract`
 │   │   │                         #   ·`import`·`export`·`search --user`·`ask --user`·`demo` — 운영자 CLI, DB에 직접 붙는다 (ADR-039·040·046)
 │   │   │                         #   사용자 CLI `login`·`whoami`·`doc …`, 그리고 `--user` 없는 `search`·`ask`는 user_cli.py·client.py로
 │   │   │                         #   REST에 본인 API 토큰으로만 붙고 DB·DSN을 쓰지 않는다 (ADR-057, #189)
 │   │   ├── api/                  # 라우터: documents, search, ask, system, auth, admin, groups(+principals),
-│   │   │                         #   shares, admin_shares.py(관리자 공유 조회·토큰 폐기), audit(감사 로그 조회·CSV), folders(폴더), diagnostics, clusters / 미들웨어 retry·security_headers (+ deps, schemas)
+│   │   │                         #   shares, admin_shares.py(관리자 공유 조회·토큰 폐기), departments(부서·부서 관리자, ADR-066), audit(감사 로그 조회·CSV), folders(폴더), diagnostics, clusters / 미들웨어 retry·security_headers (+ deps, schemas)
 │   │   ├── services/             # parsing, chunking, documents, search, related,
 │   │   │                         #   links, diagnostics, clusters, auth, system, visibility,
 │   │   │                         #   grants(그룹·부여), shares(외부 공유), folders(폴더 트리·범위, ADR-054), audit(행위자 전달·조회, ADR-055), answer(근거 조립·답변 생성, ADR-043),
-│   │   │                         #   organize(정리 추천, ADR-064), preview(원본 판 PDF 변환, ADR-058), textdiff(텍스트 버전 비교, #190), trash(휴지통, ADR-060)
+│   │   │                         #   organize(정리 추천, ADR-064), preview(원본 판 PDF 변환, ADR-058), textdiff(텍스트 버전 비교, #190), trash(휴지통, ADR-060), departments(부서 디렉터리·관리 위임, ADR-066)
 │   │   ├── answers/              # 답변 생성 프로바이더: fake·ollama (ADR-043)
 │   │   ├── embeddings/           # base.py(Protocol), local.py(bge-m3), fake.py
 │   │   ├── worker.py             # 워커 진입점 — 임베딩·관계·추출(OCR)·미리보기 변환 잡을 같은 큐에서 처리
@@ -224,13 +225,24 @@ CREATE TABLE idempotency_keys (
 -- groups·group_members·document_grants: 열람 부여 (025, ADR-044). private = 소유자 + 부여 대상
 CREATE TABLE groups (
   id   uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  name text NOT NULL UNIQUE                    -- 부서·팀. 관리자가 만든다
+  name text NOT NULL UNIQUE,                   -- 부서·팀. 관리자가 만든다
+  description text NOT NULL DEFAULT '' CHECK (char_length(description) <= 200)  -- 050: 부서 설명, 부서 관리자가 고친다
 );
 CREATE TABLE group_members (
   group_id uuid NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
   user_id  uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   PRIMARY KEY (group_id, user_id)
 );
+-- group_managers: 부서 관리자 (050, ADR-066). 구성원만 관리자가 될 수 있다 — FK가 group_members를 가리키므로
+-- 구성원에서 빠지면(그룹·사용자 삭제의 연쇄 포함) 관리자 자격도 같은 트랜잭션에서 사라진다. 열람 권한은 더하지 않는다(ADR-040)
+CREATE TABLE group_managers (
+  group_id   uuid NOT NULL,
+  user_id    uuid NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (group_id, user_id),
+  FOREIGN KEY (group_id, user_id) REFERENCES group_members (group_id, user_id) ON DELETE CASCADE
+);
+CREATE INDEX idx_group_managers_user ON group_managers (user_id);
 -- 공유 스키마의 구현 계약: 026_shares_tables.sql (ADR-044 #97 c)
 CREATE TABLE shares (
   id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -521,6 +533,8 @@ CREATE TRIGGER trg_documents_content_changed
 | `trg_audit_share_folder_changed` | `share_folders` INSERT / DELETE — 공유·공유 소유자·폴더가 이미 없으면 제외 (043, #206) | `share_changed` · `{change: folder_added/folder_removed, share_id, share_name, owner, folder_id, folder_name}` · 대상 문서 NULL |
 | `trg_audit_share_token_changed` | `api_tokens` INSERT / DELETE — `share_id IS NOT NULL`, 연쇄 삭제 제외 (041) | `share_changed` · `{change: token_issued/token_revoked, share_id, share_name, owner, token_name}` |
 | `trg_audit_group_changed` / `trg_audit_user_changed` | `groups` / `users` INSERT / DELETE (041, 사용자 생성의 `is_admin`은 045) | `group_changed` · `{change: created/deleted, group}` / `user_changed` · `{change: created/deleted, user}` — 사용자 생성은 `is_admin`을 더한다 |
+| `trg_audit_group_manager_changed` | `group_managers` INSERT / DELETE (051) — 그룹·사용자 삭제로 연쇄된 해제만 제외(구성원 제거의 연쇄는 `manager_removed`로 남는다) | `group_changed` · `{change: manager_added/manager_removed, group, user}` (ADR-066) |
+| `trg_audit_group_description_changed` | `groups` UPDATE OF `description`, 실제 값 변경만 (051) | `group_changed` · `{change: description_changed, group}` (ADR-066) |
 | `trg_audit_admin_changed` | `users` UPDATE OF `is_admin`, 실제 값 변경만 (045) | `user_changed` · `{change: admin_granted/admin_revoked, user}` — API 경로가 없어도 psql 변경이 남는다 |
 | `trg_audit_password_changed` | `users` UPDATE OF `password_hash`, 실제 값 변경만 (045) | `password_changed` · `{user}` — 해시는 넣지 않는다. 본인 변경·운영자 `reset-password` 공통 |
 | `trg_audit_folder_created_deleted` / `trg_audit_folder_renamed` | `folders` INSERT / DELETE · UPDATE OF `name`, 실제 값 변경만 (045) | `folder_changed` · `{change: created/renamed/deleted, folder_id, folder_name, parent_id}`, 이름 변경은 `old_name`을 더한다. 열람 범위·소유자는 위 두 동작이 맡는다 |
@@ -932,9 +946,9 @@ OpenSQL `patroni.yml`의 PostgreSQL 파라미터는 `max_connections: 100`이다
 |---|---|
 | `POST /api/documents` | multipart 업로드. 형식별 파서로 추출 → INSERT. 여기서 트리거가 파이프라인을 자동 기동 — 임베딩 관련 코드 없음. **이미지, 텍스트 레이어가 빈 쪽·글자 정보가 깨진 쪽이 있는 PDF, 그림뿐인 오피스 문서·슬라이드는 추출하지 않고 `extraction_status='pending'`으로 INSERT해 OCR을 워커 잡에 넘긴다** (「추출 잡」). 그 밖의 형식에서 **텍스트 추출 결과가 비면 400** (아래). **원본 파일은 같은 트랜잭션에서 `document_files`에 1판으로 저장한다** — 원본 저장이 실패하면 문서·텍스트 버전·잡도 남지 않는다. 상한 `MAX_UPLOAD_MB`(기본 50) 초과는 413. 선택 헤더 `Idempotency-Key`(아래) |
 | `POST /api/documents/text` | JSON 텍스트 공급(`txt`·`md`). 선택 `folder_id`는 업로드 Form과 같다(아래 「폴더」). `filename`은 NULL이며, 파생 데이터는 업로드 경로와 동일하게 DB 트리거가 만든다. 빈 문서 텍스트와 500,000자 초과는 400. 선택 헤더 `Idempotency-Key`(아래) |
-| `GET /api/documents` | 목록 + `status`(임베딩 상태)/`extraction_status`/`tag`/`q`(제목 부분 일치)/`content_type` 필터. `folder_id`(그 폴더에 **직접** 든 문서만, 하위 폴더 제외) 필터. `sort=updated`(기본, 최근 수정순) 또는 `title`(제목순). embedding_status·extraction_status 포함. 요약·상세에는 문서 자신의 `visibility`와 함께 실제로 적용되는 공개범위 `effective_visibility`(「폴더 범위 따름」이면 최상위 폴더의 값 — 폴더로 만든 문서의 자기 범위는 `private`로 닫혀 있다)를 싣는다. 인식 실패 문서는 `status=pending`에 남으므로 곧 임베딩될 문서는 `extraction_status=done`을 함께 준다 (ADR-052 결정 4 보강) |
+| `GET /api/documents` | 목록 + `status`(임베딩 상태)/`extraction_status`/`tag`/`q`(제목 부분 일치)/`content_type` 필터. `folder_id`(그 폴더에 **직접** 든 문서만, 하위 폴더 제외) 필터. `mine=true`(「내 문서」 — 내가 소유한 문서만)·`unfiled=true`(「폴더 미지정」 — `folder_id IS NULL`인 문서만) 필터 — 둘 다 열람 술어와 같은 SQL의 조건이다(#296). `sort=updated`(기본, 최근 수정순) 또는 `title`(제목순). embedding_status·extraction_status 포함. 요약·상세에는 문서 자신의 `visibility`와 함께 실제로 적용되는 공개범위 `effective_visibility`(「폴더 범위 따름」이면 최상위 폴더의 값 — 폴더로 만든 문서의 자기 범위는 `private`로 닫혀 있다)를 싣는다. 인식 실패 문서는 `status=pending`에 남으므로 곧 임베딩될 문서는 `extraction_status=done`을 함께 준다 (ADR-052 결정 4 보강) |
 | `GET /api/documents?limit=&offset=` | 같은 목록의 한 페이지(`limit` 1~100). 빼면 전부 — MCP·export는 전체를 본다. 첫 화면은 50건씩 쓴다 (#95-d) |
-| `GET /api/documents/count` | 목록과 같은 `status`·`extraction_status`·`tag`·`q`·`content_type`·`folder_id` 조건의 전체 건수 `{total}`. 화면은 이 건수로 페이지를 나눈다 |
+| `GET /api/documents/count` | 목록과 같은 `status`·`extraction_status`·`tag`·`q`·`content_type`·`folder_id`·`mine`·`unfiled` 조건의 전체 건수 `{total}`. 화면은 이 건수로 페이지를 나눈다 |
 | `GET /api/documents/tags` | 열람 가능한 문서의 태그 목록 `string[]`. 중복 없이 태그순이며 보이지 않는 문서의 태그는 포함하지 않는다 |
 | `GET /api/documents/progress` | 열람 범위 안 문서의 파이프라인 단계별 수(`extracting`·`extraction_failed`·`pending`·`processing`·`ready`·`error`). 인식이 끝난 문서만 임베딩 단계로 센다. 합이 목록의 전체 수다 (#95-d) |
 | `GET /api/documents/{id}` | 상세 + 텍스트 버전 목록(`versions`: `version`·`created_at`·nullable `author`·`author_via`, MCP `get_document`도 동일) + 청크 수 + 청크 기준 버전 + `files`(원본 판 목록 — 메타데이터만, 바이트는 싣지 않는다. 판마다 `preview_status`: PDF·PNG·JPG·JPEG는 `"ready"`, 변환 대상은 변환본 상태(`ready`·`pending`·`failed`·`unavailable`, 행 없으면 `unavailable`), 그 밖 형식은 `null` — 화면은 이 값만 보고 「미리보기」를 그린다) + `folder`(id·이름·경로 — 조회자가 그 폴더를 볼 수 있을 때만, 아니면 `null`) |
@@ -972,6 +986,10 @@ OpenSQL `patroni.yml`의 PostgreSQL 파라미터는 `max_connections: 100`이다
 | `GET /api/admin/audit` | **관리자·세션 전용** 감사 로그 조회. 쿼리 `actor`·`action`(18종, 그 밖은 422)·`limit`(기본 50, 1~200)·`before_id`(id 커서)·`format`(`json` 기본, `csv`). 응답 `{items, next_before_id}`, id 내림차순. `format=csv`는 같은 필터의 기록 전체를 CSV 파일로 내려준다(`limit`·`before_id` 무시). 열람 술어를 걸지 않고 대상 문서 **제목**까지만 보인다(ADR-055 결정 8). 조회 자체는 기록하지 않는다 |
 | `POST /api/admin/groups` · `GET /api/admin/groups` · `DELETE /api/admin/groups/{id}` | **관리자·세션 전용**. 그룹 생성·목록·삭제. 이름 변경 없음 (#97 b) |
 | `PUT /api/admin/groups/{id}/members/{username}` · `DELETE /api/admin/groups/{id}/members/{username}` | **관리자·세션 전용**. 구성원 추가·제거 (#97 b) |
+| `GET /api/departments` | **로그인**(사용자 위임 토큰 허용, 공유 토큰 403 — `require_user_id`). 모든 부서(그룹)를 이름순으로: `{id, name, description, folder_id, members: [{username, manager, primary}], granted_document_count, can_manage}`. 구성원 목록은 조직도처럼 전원에게 보인다(관리자 먼저, 이름순, `primary` = 그 사람의 소속 부서인가). `folder_id`는 부서 폴더를 조회자가 볼 수 있을 때만(아니면 `null`), `granted_document_count`는 그 그룹에 부여된 문서 중 조회자에게 보이는 것만 센다. `can_manage` = 조직 관리자이거나 그 부서의 부서 관리자 (ADR-066) |
+| `PATCH /api/departments/{id}` `{description}` | **부서 관리자 또는 조직 관리자·세션 전용**. 부서 설명(앞뒤 공백 제거, 200자 이하 — 넘으면 422) 수정, 204. 권한 없으면 403, 없는 그룹 404 (ADR-066) |
+| `PUT /api/departments/{id}/members/{username}` · `DELETE …/members/{username}` | **부서 관리자 또는 조직 관리자·세션 전용**. 구성원 추가·제거, 204. 감사는 기존 `trg_audit_group_member_changed`(수행자 = 부서 관리자). 구성원에서 빠지면 관리자 자격·소속 부서도 트리거·FK가 정리한다 (ADR-065·066) |
+| `PUT /api/departments/{id}/managers/{username}` · `DELETE …/managers/{username}` | **부서 관리자 또는 조직 관리자·세션 전용**. 부서 관리자 지정·해제, 204. 구성원이 아니면 400 「부서 구성원만 부서 관리자가 될 수 있습니다.」, 권한 없으면 403, 없는 그룹·사용자 404. 계정 생성·삭제, 소속 부서 지정, 그룹 생성·삭제는 부서 API에 없다 — 조직 관리자 API(`/api/admin/*`) 그대로다 (ADR-066) |
 | `GET /api/principals` | **로그인**. 부여 대상 사용자명·그룹명 목록. 익명은 401 (#97 b) |
 | `GET /api/documents/{id}/access` | **로그인·소유자 전용**. 열람 범위 설정 조회. 보이는 비소유자는 403, 안 보이면 404 (#97 b) |
 | `PUT /api/documents/{id}/access` | **소유자·세션 전용**. `{visibility, users, groups, follows_folder}` — 폴더 안 문서는 `follows_folder`로 「폴더 범위 따름」↔「개별 지정」을 바꾼다(개별 지정에는 `visibility` 필수, 「폴더 범위 따름」에는 `visibility`·`users`·`groups`를 함께 보내면 400. 지금 「폴더 범위 따름」인 문서에 `follows_folder` 없이 범위만 보내도 400 — 받으면 `visibility` 컬럼만 바뀌고 실효 범위는 폴더 그대로라 저장이 조용히 무시된다). `{visibility, users, groups}`로 전체 교체(저장은 바뀐 부여만 DELETE·INSERT — 감사 기록이 실제 변경만 남도록, ADR-055). 보이는 비소유자는 403, 안 보이면 404. 조직 공개로 바꾸면 사용자·그룹 부여만 삭제하고 공유 부여는 유지 (#97 b·c) |
@@ -1504,7 +1522,7 @@ class EmbeddingProvider(Protocol):
 
 ## 프론트엔드 패턴
 
-- 사용자 화면: `/`(홈 — 인사·AI 질문 카드·숫자 카드·최근 문서·부서별 문서·정리가 필요한 문서), `/documents`(목록 + 업로드 드롭존), `/departments`(읽기 전용 부서 — 최상위 폴더 카드·폴더 구조·열람 범위), `/documents/[id]`(메타데이터·텍스트 버전 이력·청크 수와 기준 버전 요약·**문서 텍스트 편집**·관련 문서·태그 추천), `/search`(질의 + 왼쪽 필터 열(폴더·유형·태그·결과 수) + 결과. "실행된 SQL 보기" 토글. 로그인 사용자에게는 마지막 검색 입력으로 `POST /api/ask`를 부르는 **근거 기반 답변 패널** — `AnswerPanel`), `/clusters`(관계 군집 덩어리와 연결), `/organize`(정리할 문서 — 폴더 밖 내 문서와 추천 폴더, ADR-064), `/trash`(내 휴지통 — 복원·영구 삭제, ADR-060), `/diagnostics`(고아·중복 후보·미분류·깨진 링크), `/login`, `/settings`(자기 비밀번호 변경·API 토큰·외부 공유)
+- 사용자 화면: `/`(홈 — 인사·AI 질문 카드·숫자 카드·최근 문서·부서별 문서·정리가 필요한 문서), `/documents`(목록 + 업로드 드롭존), `/departments`(부서 — 부서·공용 폴더 카드, 폴더 구조·구성원·열람 권한 3단, 부서 관리자·조직 관리자에게 구성원·관리자·설명 관리, ADR-066), `/documents/[id]`(메타데이터·텍스트 버전 이력·청크 수와 기준 버전 요약·**문서 텍스트 편집**·관련 문서·태그 추천), `/search`(질의 + 왼쪽 필터 열(폴더·유형·태그·결과 수) + 결과. "실행된 SQL 보기" 토글. 로그인 사용자에게는 마지막 검색 입력으로 `POST /api/ask`를 부르는 **근거 기반 답변 패널** — `AnswerPanel`), `/clusters`(관계 군집 덩어리와 연결), `/organize`(정리할 문서 — 폴더 밖 내 문서와 추천 폴더, ADR-064), `/trash`(내 휴지통 — 복원·영구 삭제, ADR-060), `/diagnostics`(고아·중복 후보·미분류·깨진 링크), `/login`, `/settings`(자기 비밀번호 변경·API 토큰·외부 공유)
 - **편집은 Client Component**다. 보기 ↔ 편집 토글, 저장 시 `version`을 함께 전송하고 409를 처리한다. 저장 직후 상태 배지가 `pending → processing → ready`로 바뀌는 것을 2초 폴링으로 보여준다
 - **사용자 화면은 인프라 상태를 노출하지 않는다.** 페일오버가 나도 화면 구성이 달라지지 않으며, 사용자는 업로드·검색이 계속 성공하는 것만 본다 (UI_GUIDE 디자인 원칙 3).
 - **읽기 요청은 503·네트워크 오류를 백오프로 기다린다**(`lib/api.ts`). 읽기 함수는 `signal`을 받고, 훅과 화면 진입 시 조회는 마운트 동안 `AbortController` 하나로 묶어 **화면을 떠나면 진행 중인 요청과 백오프 대기를 함께 취소한다** — 쓸 곳 없는 재시도가 서버에 부하를 더하거나 재시도 안내가 다른 화면에 남지 않게 한다. 새 검색은 이전 검색을 취소한다. 사용자 동작으로 시작한 읽기(버전 본문 열기, 발급·생성 뒤 목록 다시 받기)도 `useUnmountSignal`로 같은 규칙을 따른다 — 앞선 쓰기 요청은 이미 커밋됐을 수 있어 취소하지 않는다. 기다리는 동안에만 `RetryNotice`가 「연결이 원활하지 않아 다시 시도하는 중입니다.」를 보이고 성공하면 사라진다. 무엇이 멈췄는지는 말하지 않는다. `/admin/status`의 `GET /api/system/status`만은 백오프하지 않는다 — 장애를 바로 드러내야 하는 관측 채널이고, 2초 폴링 자체가 재시도다 (ADR-048 결정 4, UI_GUIDE 원칙 3).

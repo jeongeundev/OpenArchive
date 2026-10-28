@@ -44,6 +44,8 @@ function HomeView(): React.ReactElement {
   const listState = useMemo(() => listStateFromParams(new URLSearchParams(query)), [query]);
   const { filters, page } = listState;
   const granted = listState.granted === true;
+  const mine = listState.mine === true;
+  const unfiled = listState.unfiled === true;
   const folderParam = listState.folderId;
   // 받은 목록에 있는 폴더만 고른다. 서버가 볼 수 없는 폴더를 이미 뺐으므로 없으면 전체 문서로 되돌린다.
   const selectedFolder = folderParam === null ? null : folders.find(folder => folder.id === folderParam) ?? null;
@@ -54,11 +56,14 @@ function HomeView(): React.ReactElement {
   const [uploadOpen, setUploadOpen] = useState(searchParams?.get("upload") === "1");
   const [creating, setCreating] = useState(false);
   const [types, setTypes] = useState<ContentType[]>([]);
+  const [unfiledCount, setUnfiledCount] = useState<number | null>(null);
   const uploadRegionId = useId();
   const { documents, total, loading, error, refresh } = useDocuments({
     ...filters,
     folderId: folderId ?? undefined,
     granted: granted || undefined,
+    mine: mine || undefined,
+    unfiled: unfiled || undefined,
     limit: PAGE_SIZE,
     offset: page * PAGE_SIZE,
   });
@@ -77,6 +82,14 @@ function HomeView(): React.ReactElement {
 
   const selectGranted = useCallback(() => {
     router.push(listHref({ folderId: null, filters, page: 0, granted: true }));
+  }, [router, filters]);
+
+  const selectMine = useCallback(() => {
+    router.push(listHref({ folderId: null, filters, page: 0, mine: true }));
+  }, [router, filters]);
+
+  const selectUnfiled = useCallback(() => {
+    router.push(listHref({ folderId: null, filters, page: 0, unfiled: true }));
   }, [router, filters]);
 
   const setPage = useCallback((next: number) => {
@@ -103,6 +116,15 @@ function HomeView(): React.ReactElement {
   }, [tagsRevision]);
   const inFlight = progress ? progress.extracting + progress.pending + progress.processing : 0;
 
+  // 문서를 올리거나 옮기면 바뀌므로 목록 갱신과 같은 때 다시 센다.
+  useEffect(() => {
+    if (!auth.authenticated) return;
+    const controller = new AbortController();
+    countDocuments({ unfiled: true }, controller.signal)
+      .then(count => { if (!controller.signal.aborted) setUnfiledCount(count); }).catch(() => {});
+    return () => controller.abort();
+  }, [auth.authenticated, tagsRevision, folders]);
+
   useEffect(() => {
     const controller = new AbortController();
     listDocumentTags(controller.signal).then((result) => {
@@ -112,12 +134,17 @@ function HomeView(): React.ReactElement {
   }, [tagsRevision]);
 
   const onFiltersChanged = useCallback((value: Filters) => {
-    router.replace(listHref({ folderId: folderParam, filters: value, page: 0, granted }));
-  }, [router, folderParam, granted]);
+    router.replace(listHref({ folderId: folderParam, filters: value, page: 0, granted, mine, unfiled }));
+  }, [router, folderParam, granted, mine, unfiled]);
   const hasConditions = Boolean(filters.q?.trim() || filters.contentType || filters.tag);
   const emptyMessage = hasConditions ? "조건에 맞는 문서가 없습니다."
     : folderId !== null ? "이 폴더에 문서가 없습니다."
-    : granted ? "부여받은 문서가 없습니다." : undefined;
+    : granted ? "부여받은 문서가 없습니다."
+    : mine ? "내가 소유한 문서가 없습니다."
+    : unfiled ? "폴더 미지정 문서가 없습니다." : undefined;
+  const viewName = selectedFolder?.name ?? (granted ? "부여받은 문서" : mine ? "내 문서" : unfiled ? "폴더 미지정" : "전체 문서");
+  const allView = !granted && !mine;
+  const tabClass = (active: boolean) => `border-b-2 pb-3 ${active ? "border-strong font-semibold text-strong" : "border-transparent text-muted hover:text-strong"}`;
 
   const onUploaded = useCallback(() => {
     refresh();
@@ -135,24 +162,30 @@ function HomeView(): React.ReactElement {
 
   return (
     <section className="space-y-8">
-      <div className="flex flex-wrap items-center justify-between gap-4">
+      <div className="flex flex-wrap items-start justify-between gap-4">
         <div><h1 className="text-3xl font-bold text-strong">문서</h1>
-          <p className="mt-2 text-sm text-muted">{globalTotal !== null ? `내가 열람할 수 있는 문서 ${globalTotal}건` : "문서 수를 확인하는 중…"}{inFlight > 0 ? ` · 처리 중 ${inFlight}` : progress && progress.ready === globalTotal && globalTotal !== 0 ? " · 모두 검색 가능" : ""}</p>
+          <p className="mt-2 text-sm text-muted">{globalTotal !== null ? `내가 열람할 수 있는 문서 ${globalTotal}건` : "문서 수를 확인하는 중…"}{inFlight > 0 ? ` · 처리 중 ${inFlight}` : progress && progress.ready === globalTotal && globalTotal !== 0 ? " · 모두 AI 검색 가능" : ""}</p>
         </div>
         {auth.authenticated && <div className="flex gap-2">
-          <button type="button" onClick={() => setCreating(open => !open)} className="rounded-lg border border-line-strong px-4 py-2 text-sm text-body">새 폴더</button>
-          <button type="button" aria-expanded={uploadOpen} aria-controls={uploadRegionId} onClick={() => setUploadOpen(open => !open)} className="rounded-lg bg-strong px-4 py-2 text-sm text-on-strong">{uploadOpen ? "업로드 닫기" : "문서 올리기"}</button>
+          <button type="button" onClick={() => setCreating(open => !open)} className="rounded-lg border border-line-strong bg-card px-5 py-2.5 text-sm font-medium text-body hover:text-strong">새 폴더</button>
+          <button type="button" aria-expanded={uploadOpen} aria-controls={uploadRegionId} onClick={() => setUploadOpen(open => !open)} className="inline-flex items-center gap-2 rounded-lg bg-strong px-5 py-2.5 text-sm font-semibold text-on-strong hover:bg-strong/90">
+            <svg aria-hidden="true" className="size-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}><path d="M12 15V4m0 0L8 8m4-4 4 4M4 15v3.5A1.5 1.5 0 0 0 5.5 20h13a1.5 1.5 0 0 0 1.5-1.5V15" /></svg>
+            {uploadOpen ? "업로드 닫기" : "문서 올리기"}
+          </button>
         </div>}
       </div>
-      {auth.authenticated && <nav aria-label="문서 보기" className="flex gap-6 border-b border-line text-sm">
-        <button type="button" aria-current={!granted ? "page" : undefined} onClick={() => selectFolder(null)} className={`border-b-2 pb-3 ${!granted ? "border-strong font-semibold text-strong" : "border-transparent text-muted"}`}>전체 문서</button>
-        <button type="button" aria-current={granted ? "page" : undefined} onClick={selectGranted} className={`border-b-2 pb-3 ${granted ? "border-strong font-semibold text-strong" : "border-transparent text-muted"}`}>부여받은 문서</button>
-        <Link href="/trash" className="pb-3 text-muted">휴지통</Link>
+      {auth.authenticated && <nav aria-label="문서 보기" className="flex gap-8 border-b border-line text-sm">
+        <button type="button" aria-current={allView ? "page" : undefined} onClick={() => selectFolder(null)} className={tabClass(allView)}>전체 문서</button>
+        <button type="button" aria-current={mine ? "page" : undefined} onClick={selectMine} className={tabClass(mine)}>내 문서</button>
+        <button type="button" aria-current={granted ? "page" : undefined} onClick={selectGranted} className={tabClass(granted)}>부여받은 문서</button>
+        <Link href="/trash" className={tabClass(false)}>휴지통</Link>
       </nav>}
       <div id={uploadRegionId}>{auth.authenticated && uploadOpen ? <UploadDropzone onUploaded={onUploaded} folders={folders} defaultFolderId={folderId} /> : null}</div>
-      <div data-testid="document-layout" className={`grid gap-6 ${auth.authenticated ? "lg:grid-cols-[13rem_minmax(0,1fr)]" : ""}`}>
-        {auth.authenticated && <aside className="min-w-0"><h2 className="mb-3 text-sm font-semibold text-muted">폴더</h2>
-          <FolderTree folders={folders} selectedId={folderId} granted={granted} total={globalTotal} creating={creating} onCreatingChange={setCreating} onSelect={selectFolder} onCreate={onCreateFolder} />
+      <div data-testid="document-layout" className={`grid gap-8 ${auth.authenticated ? "lg:grid-cols-[14rem_minmax(0,1fr)]" : ""}`}>
+        {auth.authenticated && <aside className="min-w-0"><h2 className="mb-2 px-3 text-xs font-semibold text-muted">폴더</h2>
+          <FolderTree folders={folders} selectedId={folderId} granted={granted || mine} total={globalTotal}
+            unfiledCount={unfiledCount} unfiledSelected={unfiled} onSelectUnfiled={selectUnfiled}
+            creating={creating} onCreatingChange={setCreating} onSelect={selectFolder} onCreate={onCreateFolder} />
         </aside>}
         <div className="min-w-0 space-y-5">
       {selectedFolder !== null ? (
@@ -161,7 +194,7 @@ function HomeView(): React.ReactElement {
       ) : null}
 
       <DocumentFilters value={filters} tags={tags} types={types} onChange={onFiltersChanged} />
-      {total !== null && <p aria-label="목록 건수" className="text-sm text-muted" role="status">{selectedFolder?.name ?? (granted ? "부여받은 문서" : "전체 문서")} · {total}건</p>}
+      {total !== null && <p aria-label="목록 건수" className="text-sm text-muted" role="status">{viewName} · {total}건</p>}
       {globalTotal === 0 && auth.username !== null ? (
         <EmptyDocuments username={auth.username} />
       ) : loading ? (

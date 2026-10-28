@@ -69,4 +69,42 @@ describe("FolderTree", () => {
     expect(screen.queryByText("휴지통")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /전체 문서/ })).not.toHaveAttribute("aria-current");
   });
+
+  it("맨 아래 「폴더 미지정」 줄은 수와 함께 보이고 누르면 그 보기를 알린다", () => {
+    const onSelectUnfiled = vi.fn();
+    render(<FolderTree folders={[folder("a", "인사", null)]} selectedId={null} unfiledCount={3}
+      onSelect={vi.fn()} onSelectUnfiled={onSelectUnfiled} onCreate={vi.fn()} />);
+    const row = screen.getByRole("button", { name: /폴더 미지정/ });
+    expect(row).toHaveTextContent("3");
+    expect(screen.getByRole("button", { name: /인사/ }).compareDocumentPosition(row) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    fireEvent.click(row);
+    expect(onSelectUnfiled).toHaveBeenCalledOnce();
+  });
+
+  it("폴더 미지정 문서가 없으면 그 줄을 숨긴다", () => {
+    render(<FolderTree folders={[]} selectedId={null} unfiledCount={0} onSelect={vi.fn()} onSelectUnfiled={vi.fn()} onCreate={vi.fn()} />);
+    expect(screen.queryByRole("button", { name: /폴더 미지정/ })).not.toBeInTheDocument();
+  });
+
+  it("「폴더 미지정」 보기에서는 그 줄이 선택되고 「전체 문서」는 선택이 아니다", () => {
+    render(<FolderTree folders={[]} selectedId={null} unfiledCount={2} unfiledSelected onSelect={vi.fn()} onSelectUnfiled={vi.fn()} onCreate={vi.fn()} />);
+    expect(screen.getByRole("button", { name: /폴더 미지정/ })).toHaveAttribute("aria-current", "true");
+    expect(screen.getByRole("button", { name: /폴더 미지정/ })).toHaveClass("bg-accent-soft", "text-accent", "font-semibold");
+    expect(screen.getByRole("button", { name: /전체 문서/ })).not.toHaveAttribute("aria-current");
+  });
+
+  it("선택 줄은 강조색 칸이고 각 폴더 줄 앞에 폴더 아이콘이 있다 — 깊이는 들여쓰기만", () => {
+    const { container } = render(<FolderTree folders={[folder("a", "인사", null), folder("b", "채용", "a")]} selectedId="b"
+      onSelect={vi.fn()} onCreate={vi.fn()} />);
+    const selected = screen.getByRole("button", { name: /채용/ });
+    expect(selected).toHaveClass("bg-accent-soft", "text-accent", "font-semibold");
+    expect(screen.getByRole("button", { name: /인사/ })).not.toHaveClass("bg-accent-soft");
+    for (const name of [/인사/, /채용/]) expect(screen.getByRole("button", { name }).querySelector("svg[aria-hidden='true']")).not.toBeNull();
+    expect(container.querySelector("ul ul")).not.toHaveClass("border-l");
+  });
+
+  it("「전체 문서」가 선택이면 같은 강조색 칸이다", () => {
+    render(<FolderTree folders={[]} selectedId={null} onSelect={vi.fn()} onCreate={vi.fn()} />);
+    expect(screen.getByRole("button", { name: /전체 문서/ })).toHaveClass("bg-accent-soft", "text-accent", "font-semibold");
+  });
 });

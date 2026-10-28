@@ -59,6 +59,26 @@ describe("문서 목록 주소", () => {
     expect(listStateFromParams(new URL(listHref(state), "http://localhost").searchParams)).toEqual(state);
   });
 
+  it("「내 문서」는 `mine=1`, 「폴더 미지정」은 `folder=none`으로 쓰고 읽는다", () => {
+    const mine = { folderId: null, filters: { tag: "보안", sort: "title" as const }, page: 1, mine: true };
+    expect(listHref(mine)).toBe("/documents?mine=1&tag=%EB%B3%B4%EC%95%88&sort=title&page=2");
+    expect(listStateFromParams(new URL(listHref(mine), "http://localhost").searchParams)).toEqual(mine);
+    const unfiled = { folderId: null, filters: { sort: "updated" as const }, page: 0, unfiled: true };
+    expect(listHref(unfiled)).toBe("/documents?folder=none");
+    expect(listStateFromParams(new URLSearchParams("folder=none"))).toEqual(unfiled);
+  });
+
+  it("「내 문서」·「부여받은 문서」·폴더 선택은 하나만 켜진다", () => {
+    const base = { filters: { sort: "updated" as const }, page: 0 };
+    expect(listHref({ ...base, folderId: "f-hr", mine: true })).toBe("/documents?mine=1");
+    expect(listHref({ ...base, folderId: "f-hr", unfiled: true })).toBe("/documents?folder=none");
+    expect(listHref({ ...base, folderId: null, mine: true, granted: true })).toBe("/documents?granted=1");
+    expect(listHref({ ...base, folderId: null, mine: true, unfiled: true })).toBe("/documents?mine=1");
+    expect(listStateFromParams(new URLSearchParams("mine=1&folder=f-hr"))).toEqual({ ...base, folderId: null, mine: true });
+    expect(listStateFromParams(new URLSearchParams("granted=1&mine=1&folder=none"))).toEqual({ ...base, folderId: null, granted: true });
+    expect(listStateFromParams(new URLSearchParams("folder=f-hr"))).toEqual({ ...base, folderId: "f-hr" });
+  });
+
   it("손으로 고친 주소의 쪽·유형·정렬은 기본값으로 되돌린다", () => {
     for (const page of ["0", "-1", "1.5", "abc"]) {
       expect(listStateFromParams(new URLSearchParams(`page=${page}`)).page).toBe(0);

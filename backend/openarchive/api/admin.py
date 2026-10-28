@@ -6,7 +6,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 
 from openarchive.api.deps import Connection, require_admin
-from openarchive.api.schemas import CreateUserRequest, UpdateDepartmentRequest, UserSummary
+from openarchive.api.schemas import CreateUserRequest, UpdateUserDepartmentRequest, UserSummary
 from openarchive.services import auth as service
 from openarchive.services.grants import GroupNotFound
 
@@ -66,7 +66,7 @@ async def delete_user(
 
 @router.put("/{user_id}/department", status_code=status.HTTP_204_NO_CONTENT)
 async def set_user_department(
-    user_id: UUID, body: UpdateDepartmentRequest, conn: Connection
+    user_id: UUID, body: UpdateUserDepartmentRequest, conn: Connection
 ) -> Response:
     try:
         await service.set_user_department(conn, user_id, body.group_id)

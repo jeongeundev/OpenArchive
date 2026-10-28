@@ -48,16 +48,37 @@ describe("DocumentList", () => {
     renderList([{ ...documents[0], folder_path: ["인사", "규정"], owner_department: { name: "총무", folder_id: "f1" }, follows_folder: true }, documents[1]]);
     expect(screen.getAllByRole("columnheader").map(cell => cell.textContent)).toEqual(["이름", "위치", "소유자", "열람 범위", "수정일", "상태"]);
     expect(screen.getByRole("link", { name: documents[0].title })).toHaveAttribute("href", "/documents/document-1");
-    for (const text of ["#OpenSQL", "#운영", "인사 › 규정", "alice", "조직 공개", "제한", "완료", "처리 중…", "폴더 범위 따름"]) expect(screen.getAllByText(text).length).toBeGreaterThan(0);
+    for (const text of ["#OpenSQL", "#운영", "인사 › 규정", "alice", "조직 공개", "제한", "완료", "처리 중…"]) expect(screen.getAllByText(text).length).toBeGreaterThan(0);
+    // 「폴더 범위 따름」은 보조 줄 대신 열람 범위 알약의 title로 남는다.
+    expect(screen.queryByText("폴더 범위 따름")).not.toBeInTheDocument();
+    expect(screen.getByText("조직 공개")).toHaveAttribute("title", "폴더 범위 따름");
+    expect(screen.getByText("제한")).not.toHaveAttribute("title");
+    expect(screen.getByText("완료")).toHaveClass("text-done");
+    expect(screen.getByText("완료")).not.toHaveClass("rounded-full");
     expect(screen.getByRole("link", { name: "총무" })).toHaveAttribute("href", "/documents?folder=f1");
     expect(screen.getAllByRole("cell")[4]).toHaveTextContent(/2026\.08\.05 \d{2}:\d{2}/);
     expect(screen.queryByRole("button", { name: "정보" })).not.toBeInTheDocument();
   });
-  it("숨은 폴더의 위치는 빈 칸이고 태그 없는 문서는 태그를 만들지 않는다", () => {
+  it("폴더가 없거나 볼 수 없는 폴더면 위치는 「폴더 미지정」이고 태그 없는 문서는 태그를 만들지 않는다", () => {
     renderList([{ ...documents[1], folder_path: null }]);
-    expect(screen.getAllByRole("cell")[1]).toBeEmptyDOMElement();
-    expect(screen.queryByText(/폴더 미지정|🔒|—/)).not.toBeInTheDocument();
+    expect(screen.getAllByRole("cell")[1]).toHaveTextContent(/^폴더 미지정$/);
+    expect(screen.getAllByRole("cell")[1]).toHaveClass("text-muted");
+    expect(screen.queryByText(/🔒/)).not.toBeInTheDocument();
     expect(screen.queryByText(/^#/)).not.toBeInTheDocument();
+  });
+  it.each([
+    ["pdf", "bg-failed-soft", "text-failed"],
+    ["xlsx", "bg-done-soft", "text-done"],
+    ["hwpx", "bg-accent-soft", "text-accent"],
+    ["docx", "bg-accent-soft", "text-accent"],
+  ] as const)("유형 배지는 유형별 의미 토큰 색이다 — %s", (type, bg, text) => {
+    renderList([{ ...documents[0], content_type: type }]);
+    expect(screen.getByText(type)).toHaveClass(bg, text, "font-bold", "uppercase");
+  });
+  it("수정일은 한 줄이고 행은 위쪽 정렬이다", () => {
+    renderList([documents[0]]);
+    expect(screen.getAllByRole("cell")[4]).toHaveClass("whitespace-nowrap");
+    for (const cell of screen.getAllByRole("cell")) expect(cell).toHaveClass("align-top");
   });
   it("실효 범위를 사용하고 인식 상태를 우선한다", () => {
     renderList([{ ...documents[1], effective_visibility: "public", extraction_status: "pending" }]);

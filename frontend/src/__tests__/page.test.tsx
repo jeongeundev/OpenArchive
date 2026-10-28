@@ -161,7 +161,7 @@ describe("문서 표 배치", () => {
     render(<AuthProvider><Home /></AuthProvider>);
     fireEvent.click(await screen.findByRole("button", { name: /인사/ }));
     expect(await screen.findByRole("heading", { name: "인사" })).toBeInTheDocument();
-    expect(screen.getByTestId("document-layout")).toHaveClass("lg:grid-cols-[13rem_minmax(0,1fr)]");
+    expect(screen.getByTestId("document-layout")).toHaveClass("lg:grid-cols-[14rem_minmax(0,1fr)]");
     expect(screen.queryByRole("complementary", { name: "문서 정보" })).not.toBeInTheDocument();
   });
 });
@@ -408,7 +408,7 @@ describe("폴더 트리", () => {
   it("전체 문서에서는 건수 줄이 열람 범위 전체의 처리 현황이다", async () => {
     mockFinder(2, 10, [hr]);
     render(<AuthProvider><Home /></AuthProvider>);
-    expect(await screen.findByText("내가 열람할 수 있는 문서 10건 · 모두 검색 가능")).toBeInTheDocument();
+    expect(await screen.findByText("내가 열람할 수 있는 문서 10건 · 모두 AI 검색 가능")).toBeInTheDocument();
     expect(screen.queryByText("이 목록 2건")).not.toBeInTheDocument();
   });
 

@@ -366,6 +366,24 @@ export interface GroupSummary {
   members: string[];
 }
 
+/** 부서 구성원. `primary`는 소속 부서가 이 부서인지다. */
+export interface DepartmentMember {
+  username: string;
+  manager: boolean;
+  primary: boolean;
+}
+
+/** 내가 보는 부서 한 곳 (`GET /api/departments`, ADR-066). */
+export interface Department {
+  id: string;
+  name: string;
+  description: string;
+  folder_id: string | null;
+  members: DepartmentMember[];
+  granted_document_count: number;
+  can_manage: boolean;
+}
+
 /** 휴지통의 문서 한 건. 영구 삭제 예정일은 서버가 보존 기간으로 계산한다 (ADR-060). */
 export interface TrashItem {
   id: string;
