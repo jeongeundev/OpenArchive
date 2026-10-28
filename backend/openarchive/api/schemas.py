@@ -273,6 +273,8 @@ class AuthStatus(BaseModel):
     expires_at: datetime | None = None
     # 익명이면 null
     department: OwnerDepartment | None = None
+    # 한 부서라도 관리하면 true — 사이드바의 부서 관리 진입점 (ADR-066)
+    manages_department: bool = False
 
 
 class ChangePasswordRequest(BaseModel):

@@ -263,6 +263,16 @@ async def list_users(conn: psycopg.AsyncConnection) -> list[dict]:
     return await cur.fetchall()
 
 
+async def manages_department(conn: psycopg.AsyncConnection, username: str) -> bool:
+    """사용자가 부서 관리자로 지정된 부서가 하나라도 있는지 (ADR-066)."""
+    cur = await conn.execute(
+        """SELECT EXISTS (SELECT 1 FROM group_managers gm JOIN users u ON u.id=gm.user_id
+        WHERE u.username=%s)""",
+        (username,),
+    )
+    return (await cur.fetchone())[0]
+
+
 class InvalidNewOwner(ValueError):
     """소유권 이전 대상이 없거나 현재 소유자와 같다."""
 

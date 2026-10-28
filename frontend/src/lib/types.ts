@@ -345,6 +345,8 @@ export interface SystemStatus {
 
 export interface AuthStatus {
   department?: OwnerDepartment | null;
+  /** 한 부서라도 관리하면 true — 사이드바의 부서 관리 진입점 (ADR-066). */
+  manages_department?: boolean;
   authenticated: boolean;
   username: string | null;
   is_admin: boolean;

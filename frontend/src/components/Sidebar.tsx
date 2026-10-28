@@ -81,6 +81,14 @@ export function Sidebar(): React.ReactElement {
           <p className="flex items-center gap-2 px-3 py-2 text-xs font-semibold text-muted">관리 <span className="rounded-full bg-accent-soft px-2 py-0.5 text-xs font-semibold text-accent">관리자 전용</span></p>
           <div className="flex flex-wrap gap-1 lg:flex-col">{adminMenus.map(([href, label, path]) => menu(href, label, path))}</div>
         </div> : null}
+        {auth.manages_department ? <div className="w-full space-y-1 lg:mt-4">
+          <p className="flex items-center gap-2 px-3 py-2 text-xs font-semibold text-muted">관리 <span className="rounded-full bg-accent-soft px-2 py-0.5 text-xs font-semibold text-accent">부서 관리자</span></p>
+          {/* 부서 화면이 내 부서를 먼저 고르고 관리 도구를 연다 — 주요 메뉴의 「부서」와 겹치게 현재 표시는 하지 않는다. */}
+          <Link href="/departments" className="flex min-w-0 items-center gap-3 rounded-lg px-3 py-2.5 text-sm text-body hover:text-accent">
+            <svg aria-hidden="true" className="size-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}><path d="M12 3 4 6v6c0 5 3.5 8 8 9 4.5-1 8-4 8-9V6Z M9 12l2 2 4-4" /></svg>
+            내 부서 관리
+          </Link>
+        </div> : null}
       </nav>
       <div className="space-y-4 lg:mt-auto">
         <div className="rounded-xl border border-line bg-card p-3 text-xs">

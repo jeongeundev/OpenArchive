@@ -84,6 +84,7 @@ async def me(conn: Connection, user: Annotated[dict | None, Depends(current_user
     result = AuthStatus(
         authenticated=True, username=user["username"], is_admin=user["is_admin"],
         department=departments[user["username"]],
+        manages_department=await service.manages_department(conn, user["username"]),
     )
     # 세션 dict의 scope는 쓰기 판정용 내부 값이다 — 토큰 범위만 낸다 (#189 D2).
     if user["credential"] == service.CREDENTIAL_TOKEN:
