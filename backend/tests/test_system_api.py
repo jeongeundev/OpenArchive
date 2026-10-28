@@ -211,3 +211,10 @@ def test_status_counts_preview_plates(db_client, migrated_db):
         1,
         1,
     )
+
+
+def test_outages_requires_login_and_returns_list(db_client):
+    assert db_client.get("/api/system/outages").json() == []
+    assert db_client.get("/api/system/outages?limit=0").status_code == 422
+    db_client.post("/api/auth/logout")
+    assert db_client.get("/api/system/outages").status_code == 401

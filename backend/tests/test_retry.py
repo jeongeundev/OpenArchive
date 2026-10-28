@@ -263,3 +263,25 @@ async def test_replayed_request_does_not_tell_the_response_the_client_left(kind,
         return StreamingResponse(chunks())
 
     assert await _serve_like_uvicorn(app, "/page") == payload
+
+
+def test_request_counters():
+    from openarchive.api.retry import request_counters
+
+    before = request_counters.snapshot()
+    client, _ = build_app("/api/documents", "GET", failures=1)
+    assert client.get("/api/documents").status_code == 200
+    client, _ = build_app("/api/documents", "GET", failures=2)
+    assert client.get("/api/documents").status_code == 503
+    app = FastAPI()
+    app.add_middleware(RetryOnUnavailable)
+
+    @app.get("/error")
+    def error():
+        from fastapi.responses import Response
+
+        return Response(status_code=500)
+
+    assert TestClient(app).get("/error").status_code == 500
+    after = request_counters.snapshot()
+    assert tuple(a - b for a, b in zip(after, before)) == (1, 1, 1)

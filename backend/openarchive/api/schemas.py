@@ -745,3 +745,19 @@ class Department(BaseModel):
 
 class UpdateDepartmentRequest(BaseModel):
     description: str = Field(max_length=200)
+
+
+class DbOutage(BaseModel):
+    id: int
+    kind: Literal["promotion", "interruption"]
+    last_ok_at: datetime
+    first_failure_at: datetime
+    recovered_at: datetime
+    node_before: str | None
+    node_after: str | None
+    timeline_before: int | None
+    timeline_after: int | None
+    failed_checks: int
+    requests_retried: int
+    requests_unavailable: int
+    server_errors: int
