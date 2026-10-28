@@ -50,6 +50,17 @@ describe("describeDetail", () => {
     expect(describeDetail(record({ action: "share_changed", actor: "kim", detail: { change: "created", share_name: "협업", owner: "kim" } }))).toBe("공유 「협업」 생성");
   });
 
+  it("부서 관리자 지정·해제와 부서 설명 변경을 적는다", () => {
+    expect(describeDetail(record({ action: "group_changed", detail: { change: "manager_added", group: "인사팀", user: "kim" } }))).toBe("부서 관리자 지정: 인사팀 kim");
+    expect(describeDetail(record({ action: "group_changed", detail: { change: "manager_removed", group: "인사팀", user: "kim" } }))).toBe("부서 관리자 해제: 인사팀 kim");
+    expect(describeDetail(record({ action: "group_changed", detail: { change: "description_changed", group: "인사팀" } }))).toBe("부서 설명 변경: 인사팀");
+  });
+
+  it("그룹 생성·삭제 문구는 그대로다", () => {
+    expect(describeDetail(record({ action: "group_changed", detail: { change: "created", group: "인사팀" } }))).toBe("그룹 인사팀 생성");
+    expect(describeDetail(record({ action: "group_changed", detail: { change: "deleted", group: "인사팀" } }))).toBe("그룹 인사팀 삭제");
+  });
+
   it("설명이 없는 동작은 null", () => {
     expect(describeDetail(record({ action: "text_updated", detail: { version: 2 } }))).toBeNull();
     expect(describeDetail(record({ action: "original_replaced", detail: { file_version: 2 } }))).toBeNull();

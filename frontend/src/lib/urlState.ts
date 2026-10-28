@@ -46,11 +46,20 @@ export interface ListState {
   page: number;
   /** 「부여받은 문서」 보기. 폴더와 함께 쓰지 않는다 (D20). */
   granted?: boolean;
+  /** 「내 문서」 보기. 「부여받은 문서」·폴더 선택과 함께 쓰지 않는다. */
+  mine?: boolean;
+  /** 「폴더 미지정」 보기 — 주소에는 `folder=none`으로 쓴다. */
+  unfiled?: boolean;
 }
 
-export function listHref({ folderId, filters, page, granted }: ListState): string {
+const UNFILED = "none";
+
+/** 「부여받은 문서」·「내 문서」·폴더 선택은 하나만 켜진다 — 둘 이상이면 앞의 것이 이긴다. */
+export function listHref({ folderId, filters, page, granted, mine, unfiled }: ListState): string {
   const params = new URLSearchParams();
   if (granted) params.set("granted", "1");
+  else if (mine) params.set("mine", "1");
+  else if (unfiled) params.set("folder", UNFILED);
   else if (folderId !== null) params.set("folder", folderId);
   if (filters.q?.trim()) params.set("q", filters.q);
   if (filters.contentType) params.set("type", filters.contentType);
@@ -71,11 +80,16 @@ export function listStateFromParams(params: URLSearchParams): ListState {
   filters.sort = params.get("sort") === "title" ? "title" : "updated";
   const page = Number(params.get("page"));
   const granted = params.get("granted") === "1";
+  const mine = !granted && params.get("mine") === "1";
+  const folder = granted || mine ? null : params.get("folder") || null;
+  const unfiled = folder === UNFILED;
   return {
-    folderId: granted ? null : params.get("folder") || null,
+    folderId: unfiled ? null : folder,
     filters,
     page: Number.isInteger(page) && page >= 1 ? page - 1 : 0,
     ...(granted ? { granted } : {}),
+    ...(mine ? { mine } : {}),
+    ...(unfiled ? { unfiled } : {}),
   };
 }
 

@@ -72,6 +72,9 @@ export function describeDetail(entry: AuditRecord): string | null {
     const department = (value: unknown): string => (value === null || value === undefined ? "없음" : text(value));
     return `사용자 「${text(detail.user)}」 소속 부서: ${department(detail.from)} → ${department(detail.to)}`;
   }
+  if (entry.action === "group_changed" && detail.change === "manager_added") return `부서 관리자 지정: ${text(detail.group)} ${text(detail.user)}`;
+  if (entry.action === "group_changed" && detail.change === "manager_removed") return `부서 관리자 해제: ${text(detail.group)} ${text(detail.user)}`;
+  if (entry.action === "group_changed" && detail.change === "description_changed") return `부서 설명 변경: ${text(detail.group)}`;
   if (entry.action === "group_changed" || entry.action === "user_changed") {
     const subject = entry.action === "group_changed" ? `그룹 ${text(detail.group)}` : `사용자 ${text(detail.user)}`;
     if (detail.change === "admin_granted") return `${subject} 관리자 권한 부여`;
