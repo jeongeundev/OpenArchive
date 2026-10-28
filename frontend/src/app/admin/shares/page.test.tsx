@@ -90,7 +90,7 @@ it("7일 경계와 서버 만료 판정으로 요약한다", () => {
     { ...token, expired: false, expires_at: "2026-11-04T00:00:00.001Z", last_used_at: "2026-10-20T23:59:59Z" },
     { ...token, expired: true, last_used_at: now.toISOString() },
   ] }, shares[1]];
-  expect(summarizeShares(items, 4, now)).toEqual({ active: 2, expiring: 1, recent: 2, revoked: 4 });
+  expect(summarizeShares(items, now)).toEqual({ active: 2, expiring: 1, recent: 2 });
 });
 it("폐기 탭은 감사 기록의 공유·토큰·사람을 표시한다", async () => {
   vi.stubGlobal("fetch", vi.fn(async (input) => response(String(input) === "/api/auth/me" ? admin : String(input).endsWith("/revoked") ? [{ id: 9, share_name: "지난 공유", token_name: "폐기 봇", revoked_at: token.created_at, revoked_by: "관리자kim", actor_via: "session" }] : [])));

@@ -54,7 +54,7 @@ export default function SharesPage(): React.ReactElement {
   if (authLoading) return <p className="text-sm text-muted">불러오는 중…</p>;
   if (!auth.is_admin) return <p className="text-sm text-muted">관리자 권한이 필요합니다.</p>;
 
-  const summary = summarizeShares(shares, revoked.length, new Date());
+  const summary = summarizeShares(shares, new Date());
   const revokedLabel = revoked.length >= REVOKED_LIMIT ? `${REVOKED_LIMIT}+` : revoked.length;
   const activeShares = shares.filter(share => share.tokens.length === 0 || share.tokens.some(token => !token.expired));
   const expiredTokens = shares.flatMap(share => share.tokens.filter(token => token.expired).map(token => ({ share, token })));
