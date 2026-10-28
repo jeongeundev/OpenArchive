@@ -1,12 +1,16 @@
 // Copyright 2026 jeongeundev
 // SPDX-License-Identifier: MIT
-import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { act, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { SystemStatus } from "@/lib/types";
 import AdminStatusPage from "./page";
 
 const refresh = vi.fn();
+const clockState = vi.hoisted(() => ({ lastSuccessAt: null as Date | null }));
+vi.mock("@/lib/api", () => ({ listOutages: vi.fn().mockResolvedValue([]) }));
+import { listOutages } from "@/lib/api";
+afterEach(() => { vi.useRealTimers(); vi.clearAllMocks(); clockState.lastSuccessAt = null; });
 const status: SystemStatus = {
   node_address: "192.168.64.4", node_port: 6432,
   jobs: { pending: 0, processing: 0, recovery_pending: 0, error: 0 },
@@ -16,7 +20,7 @@ const status: SystemStatus = {
 };
 
 vi.mock("@/lib/useSystemStatus", () => ({
-  useSystemStatus: () => ({ status, loading: false, error: null, checkedAt: new Date(2026, 9, 28, 14, 31, 5), refresh }),
+  useSystemStatus: () => ({ status, loading: false, error: null, checkedAt: new Date(2026, 9, 28, 14, 31, 5), lastSuccessAt: clockState.lastSuccessAt, refresh }),
 }));
 vi.mock("@/components/ErrorDocuments", () => ({ ErrorDocuments: () => null }));
 
@@ -30,4 +34,26 @@ describe("AdminStatusPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "새로고침" }));
     expect(refresh).toHaveBeenCalledOnce();
   });
+});
+
+
+it("응답이 매달려도 5초 뒤 배너를 바꾸고 복구 때 기록을 한 번 다시 읽는다", async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-10-28T06:10:02Z"));
+  clockState.lastSuccessAt = new Date();
+  const { rerender } = render(<AdminStatusPage />);
+  await act(async () => { await Promise.resolve(); });
+  expect(listOutages).toHaveBeenCalledTimes(1);
+  await act(async () => { await vi.advanceTimersByTimeAsync(6_000); });
+  expect(screen.getByTestId("health-banner")).toHaveTextContent("DB 응답 없음 — 6초째");
+  await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
+  expect(screen.getByTestId("health-banner")).toHaveTextContent("7초째");
+  clockState.lastSuccessAt = new Date();
+  rerender(<AdminStatusPage />);
+  await act(async () => { await Promise.resolve(); });
+  expect(screen.getByTestId("health-banner")).toHaveTextContent("모든 처리가 정상입니다");
+  expect(listOutages).toHaveBeenCalledTimes(2);
+  clockState.lastSuccessAt = new Date(Date.now() + 2000);
+  rerender(<AdminStatusPage />);
+  expect(listOutages).toHaveBeenCalledTimes(2);
 });

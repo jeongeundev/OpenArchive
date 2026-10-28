@@ -73,11 +73,14 @@ describe("useSystemStatus", () => {
     vi.stubGlobal("fetch", fetchMock);
     const { result } = renderHook(() => useSystemStatus());
     expect(result.current.checkedAt).toBeNull();
+    expect(result.current.lastSuccessAt).toBeNull();
     await flush();
     expect(result.current.checkedAt).toEqual(new Date("2026-10-28T05:31:05Z"));
+    expect(result.current.lastSuccessAt).toEqual(result.current.checkedAt);
     await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
     expect(result.current.error).toBe("DB 연결이 끊겼습니다.");
     expect(result.current.checkedAt).toEqual(new Date("2026-10-28T05:31:05Z"));
+    expect(result.current.lastSuccessAt).toEqual(result.current.checkedAt);
   });
 
   it("refresh로 주기를 기다리지 않고 다시 조회한다", async () => {

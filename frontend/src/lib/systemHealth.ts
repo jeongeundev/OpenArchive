@@ -1,6 +1,6 @@
 // Copyright 2026 jeongeundev
 // SPDX-License-Identifier: MIT
-import type { SystemStatus } from "./types";
+import type { DbOutage, SystemStatus } from "./types";
 
 export type HealthKind = "ok" | "attention" | "failed";
 export type Stage = "extraction" | "embedding" | "relations" | "preview";
@@ -35,4 +35,22 @@ export function attentionTarget(status: SystemStatus): string | null {
   if (status.preview_failed > 0) return "stage-preview";
   if (status.preview_unavailable > 0) return "preview-unavailable-notice";
   return null;
+}
+
+
+export const STATUS_UNRESPONSIVE_MS = 5_000;
+
+export function outageSeconds(outage: Pick<DbOutage, "first_failure_at" | "recovered_at">): number {
+  return Math.round((Date.parse(outage.recovered_at) - Date.parse(outage.first_failure_at)) / 1000);
+}
+
+export function outageNodes(outage: Pick<DbOutage, "node_before" | "node_after">): string {
+  const before = outage.node_before ?? "기록 없음";
+  const after = outage.node_after ?? "기록 없음";
+  return before === after ? before : `${before} → ${after}`;
+}
+
+export function outageAuditUrl(firstFailureAt: string): string {
+  const since = new Date(Date.parse(firstFailureAt) - 60_000).toISOString();
+  return `/admin/audit?since=${encodeURIComponent(since)}`;
 }

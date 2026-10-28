@@ -1,7 +1,7 @@
 // Copyright 2026 jeongeundev
 // SPDX-License-Identifier: MIT
-import { attentionCount, attentionTarget, bannerKind, failureTotal, stageBadge, type HealthKind } from "@/lib/systemHealth";
-import type { SystemStatus } from "@/lib/types";
+import { outageSeconds, outageNodes, outageAuditUrl, attentionCount, attentionTarget, bannerKind, failureTotal, stageBadge, type HealthKind } from "@/lib/systemHealth";
+import type { DbOutage, SystemStatus } from "@/lib/types";
 
 const BADGE_CLASS: Record<HealthKind, string> = {
   ok: "bg-done-soft text-done",
@@ -38,21 +38,29 @@ function StageCard({ id, step, name, kind, description, highlighted = false, chi
   );
 }
 
-export function StatusPanel({ status, error }: { status: SystemStatus | null; error: string | null }): React.ReactElement {
+export function StatusPanel({ status, error, outages = [], outagesError = null, unresponsiveSeconds = null, lastSuccessAt = null }: {
+  status: SystemStatus | null; error: string | null; outages?: DbOutage[]; outagesError?: string | null;
+  unresponsiveSeconds?: number | null; lastSuccessAt?: Date | null;
+}): React.ReactElement {
   return (
     <section className="space-y-8" aria-labelledby="system-status-heading">
       <h2 id="system-status-heading" className="sr-only">시스템 상태</h2>
       {error !== null && <p className="border border-failed bg-failed-soft px-4 py-3 text-sm text-failed">상태 조회 실패: {error}</p>}
       {status === null ? (
-        <div className="rounded-lg border border-line bg-card p-6 text-sm text-muted">상태를 조회하고 있습니다.</div>
+        <>
+          {unresponsiveSeconds !== null && <UnresponsiveBanner seconds={unresponsiveSeconds} lastSuccessAt={lastSuccessAt} />}
+          <div className="rounded-lg border border-line bg-card p-6 text-sm text-muted">상태를 조회하고 있습니다.</div>
+        </>
       ) : (
-        <StatusBody status={status} />
+        <StatusBody status={status} outages={outages} outagesError={outagesError} unresponsiveSeconds={unresponsiveSeconds} lastSuccessAt={lastSuccessAt} />
       )}
     </section>
   );
 }
 
-function StatusBody({ status }: { status: SystemStatus }): React.ReactElement {
+function StatusBody({ status, outages, outagesError, unresponsiveSeconds, lastSuccessAt }: {
+  status: SystemStatus; outages: DbOutage[]; outagesError: string | null; unresponsiveSeconds: number | null; lastSuccessAt: Date | null;
+}): React.ReactElement {
   const banner = bannerKind(status);
   const attention = attentionCount(status);
   const target = attentionTarget(status);
@@ -60,7 +68,9 @@ function StatusBody({ status }: { status: SystemStatus }): React.ReactElement {
   const preview = stageBadge(status, "preview");
   return (
     <>
-      <div data-testid="health-banner" className={`flex flex-wrap items-center gap-4 rounded-2xl px-6 py-5 ${banner === "ok" ? "bg-done-soft text-done" : "bg-failed-soft text-failed"}`}>
+      {unresponsiveSeconds !== null ? (
+        <UnresponsiveBanner seconds={unresponsiveSeconds} lastSuccessAt={lastSuccessAt} />
+      ) : <div data-testid="health-banner" className={`flex flex-wrap items-center gap-4 rounded-2xl px-6 py-5 ${banner === "ok" ? "bg-done-soft text-done" : "bg-failed-soft text-failed"}`}>
         <span className={`flex size-10 items-center justify-center rounded-full text-on-strong ${banner === "ok" ? "bg-done" : "bg-failed"}`}>
           <Icon className="size-5" path={banner === "ok" ? "M5 12l5 5 9-10" : "M12 7v6 M12 17h.01"} />
         </span>
@@ -71,7 +81,7 @@ function StatusBody({ status }: { status: SystemStatus }): React.ReactElement {
           </p>
         </div>
         {target !== null && <a href={`#${target}`} className="text-sm font-medium text-strong underline underline-offset-4">확인할 항목 보기</a>}
-      </div>
+      </div>}
 
       <div className="space-y-3">
         <h3 className="text-sm font-semibold text-muted">연결</h3>
@@ -131,6 +141,8 @@ function StatusBody({ status }: { status: SystemStatus }): React.ReactElement {
         </div>
       </div>
 
+      <OutageRecords items={outages} error={outagesError} />
+
       {status.preview_unavailable > 0 && (
         <div id="preview-unavailable-notice" data-testid="preview-unavailable-notice" className="flex items-start gap-3 rounded-xl bg-attention-soft px-5 py-4 text-sm text-body">
           <span className="text-attention"><Icon path="M12 3 2 20h20Z M12 10v4 M12 17h.01" /></span>
@@ -139,4 +151,51 @@ function StatusBody({ status }: { status: SystemStatus }): React.ReactElement {
       )}
     </>
   );
+}
+
+
+function OutageBadge({ kind }: { kind: DbOutage["kind"] }): React.ReactElement {
+  return <span className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${kind === "promotion" ? "bg-attention-soft text-attention" : "bg-wait-soft text-wait"}`}>{kind === "promotion" ? "Primary 승격" : "연결 일시 중단"}</span>;
+}
+
+function outageTime(value: string): string {
+  return new Date(value).toLocaleTimeString("ko-KR", { hour: "numeric", minute: "2-digit", second: "2-digit", hour12: true });
+}
+
+function OutageRecords({ items, error }: { items: DbOutage[]; error: string | null }): React.ReactElement {
+  const recent = items[0];
+  return <section className="space-y-4" aria-label="장애 기록">
+    <h3 className="text-sm font-semibold text-muted">장애 기록</h3>
+    <p className="text-xs text-muted">API 서버가 겪은 DB 연결 중단과 Primary 승격이 여기에 남습니다. 앱 연결에 영향이 없는 장애(Replica·etcd 한 대)는 클러스터 도구로 확인합니다. API 서버가 내려가 있던 동안의 장애는 기록되지 않습니다.</p>
+    {error ? <p role="alert" className="text-sm text-failed">{error}</p> : !recent ?
+      <div className="rounded-xl border border-dashed border-line-strong p-6 text-sm text-muted">기록된 DB 장애가 없습니다</div> :
+      <>
+        <div className="space-y-3 rounded-xl border border-line bg-card p-6 text-sm text-body">
+          <OutageBadge kind={recent.kind} />
+          <p className="font-semibold text-strong">{outageTime(recent.first_failure_at)} → {outageTime(recent.recovered_at)} ({outageSeconds(recent)}초)</p>
+          <p className="text-xs text-muted">마지막 정상 {outageTime(recent.last_ok_at)}</p>
+          <p>Primary {outageNodes(recent)}</p>
+          <p>타임라인 {recent.timeline_before ?? "기록 없음"} → {recent.timeline_after ?? "기록 없음"}</p>
+          <p>그 사이 요청 자동 재시도 성공 {recent.requests_retried}건 · 503 응답 {recent.requests_unavailable}건 · <span className={recent.server_errors === 0 ? "text-done" : "text-failed"}>서버 오류 {recent.server_errors}건</span></p>
+          <a className="text-accent underline" href={outageAuditUrl(recent.first_failure_at)}>이 시간대 감사 로그 보기</a>
+        </div>
+        {items.length > 1 && <div className="overflow-x-auto rounded-xl border border-line"><table className="w-full text-left text-sm text-body">
+          <thead className="bg-sunken text-muted"><tr>{["시각", "종류", "중단 시간", "노드 전후", "타임라인 전후", "서버 오류"].map(label => <th key={label} className="p-3 font-medium">{label}</th>)}</tr></thead>
+          <tbody>{items.slice(1).map(item => <tr key={item.id} className="border-t border-line">
+            <td className="p-3">{new Date(item.first_failure_at).toLocaleString("ko-KR")}</td>
+            <td className="p-3"><OutageBadge kind={item.kind} /></td><td className="p-3">{outageSeconds(item)}초</td>
+            <td className="p-3">{outageNodes(item)}</td><td className="p-3">{item.timeline_before ?? "기록 없음"} → {item.timeline_after ?? "기록 없음"}</td>
+            <td className={`p-3 ${item.server_errors === 0 ? "text-done" : "text-failed"}`}>서버 오류 {item.server_errors}건</td>
+          </tr>)}</tbody>
+        </table></div>}
+      </>}
+  </section>;
+}
+
+
+function UnresponsiveBanner({ seconds, lastSuccessAt }: { seconds: number; lastSuccessAt: Date | null }): React.ReactElement {
+  return <div data-testid="health-banner" className="rounded-2xl bg-failed-soft px-6 py-5 text-failed">
+    <p className="text-lg font-semibold">DB 응답 없음 — {seconds}초째</p>
+    <p className="mt-1 text-sm">마지막 정상 {lastSuccessAt?.toLocaleTimeString("ko-KR") ?? "기록 없음"} · 요청은 자동으로 다시 시도합니다</p>
+  </div>;
 }

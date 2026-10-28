@@ -568,3 +568,20 @@ export interface AdminRevokedShareToken {
   revoked_by: string | null;
   actor_via: string | null;
 }
+
+
+export interface DbOutage {
+  id: number;
+  kind: "promotion" | "interruption";
+  last_ok_at: string;
+  first_failure_at: string;
+  recovered_at: string;
+  node_before: string | null;
+  node_after: string | null;
+  timeline_before: number | null;
+  timeline_after: number | null;
+  failed_checks: number;
+  requests_retried: number;
+  requests_unavailable: number;
+  server_errors: number;
+}

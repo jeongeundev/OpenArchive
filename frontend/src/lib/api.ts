@@ -30,6 +30,7 @@ import type {
   ShareSummary,
   ShareTokenCreated,
   SystemStatus,
+  DbOutage,
   TagSuggestionsResponse,
   TextVersionDetail,
   VersionDiff,
@@ -912,4 +913,9 @@ export function countAudit(
 
 export function listRevokedShareTokens(signal?: AbortSignal): Promise<AdminRevokedShareToken[]> {
   return request<AdminRevokedShareToken[]>("/api/admin/shares/revoked", { signal });
+}
+
+
+export function listOutages(signal: AbortSignal, limit = 20): Promise<DbOutage[]> {
+  return request<DbOutage[]>(`/api/system/outages?limit=${limit}`, { signal }, { backoff: false });
 }

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 import { describe, expect, it } from "vitest";
 
-import { attentionCount, attentionTarget, bannerKind, failureTotal, stageBadge } from "./systemHealth";
+import { outageSeconds, outageNodes, outageAuditUrl, attentionCount, attentionTarget, bannerKind, failureTotal, stageBadge } from "./systemHealth";
 import type { SystemStatus } from "./types";
 
 const healthy: SystemStatus = {
@@ -48,5 +48,14 @@ describe("systemHealth", () => {
     expect(attentionTarget({ ...healthy, preview_unavailable: 1, jobs: { ...healthy.jobs, error: 1 } })).toBe("stage-embedding");
     expect(attentionTarget({ ...healthy, inconsistent_documents: 1, extraction_failed: 1 })).toBe("consistency-card");
     expect(attentionTarget({ ...healthy, preview_failed: 1 })).toBe("stage-preview");
+  });
+});
+
+describe("장애 기록 표시 계산", () => {
+  it("중단 초를 반올림하고 같은 노드는 한 번 표시하며 감사 시각을 1분 앞당긴다", () => {
+    expect(outageSeconds({ first_failure_at: "2026-10-28T06:10:02Z", recovered_at: "2026-10-28T06:10:35.4Z" })).toBe(33);
+    expect(outageNodes({ node_before: "a:5432", node_after: "a:5432" })).toBe("a:5432");
+    expect(outageNodes({ node_before: "a", node_after: "b" })).toBe("a → b");
+    expect(outageAuditUrl("2026-10-28T06:10:02Z")).toBe("/admin/audit?since=2026-10-28T06%3A09%3A02.000Z");
   });
 });
