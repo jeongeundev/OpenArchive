@@ -70,6 +70,7 @@ def test_owned_tables_match_the_migration_files():
     assert OWNED_TABLES == {
         "audit_log",
         "api_tokens",
+        "db_outages",
         "document_chunks",
         "document_edges",
         "document_file_previews",
