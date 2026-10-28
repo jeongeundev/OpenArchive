@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: MIT
 import type {
   AdminShareSummary,
+  AdminRevokedShareToken,
+  AuditCounts,
   AskResponse,
   AuditAction,
   AuditPage,
@@ -306,12 +308,14 @@ export function deleteUser(id: string, transferTo?: string): Promise<void> {
 }
 
 export function listAudit(
-  filters: { actor?: string; action?: AuditAction | ""; limit?: number; beforeId?: number },
+  filters: { actor?: string; action?: AuditAction | ""; since?: string; q?: string; limit?: number; beforeId?: number },
   signal?: AbortSignal,
 ): Promise<AuditPage> {
   const params = new URLSearchParams();
   if (filters.actor) params.set("actor", filters.actor);
   if (filters.action) params.set("action", filters.action);
+  if (filters.since) params.set("since", filters.since);
+  if (filters.q) params.set("q", filters.q);
   if (filters.limit !== undefined) params.set("limit", String(filters.limit));
   if (filters.beforeId !== undefined) params.set("before_id", String(filters.beforeId));
   const query = params.toString();
@@ -880,14 +884,32 @@ export function revokeAdminShareToken(shareId: string, tokenId: string): Promise
   );
 }
 
-export function auditCsvUrl(filters: { actor?: string; action?: AuditAction | "" }): string {
+export function auditCsvUrl(filters: { actor?: string; action?: AuditAction | ""; since?: string; q?: string }): string {
   const params = new URLSearchParams({ format: "csv" });
   if (filters.actor) params.set("actor", filters.actor);
   if (filters.action) params.set("action", filters.action);
+  if (filters.since) params.set("since", filters.since);
+  if (filters.q) params.set("q", filters.q);
   return `/api/admin/audit?${params.toString()}`;
 }
 
 /** 서버 응답 여부만 확인한다. DB 연결 상태를 뜻하지 않는다. */
 export function getHealth(signal?: AbortSignal): Promise<void> {
   return request<void>("/api/health", { signal }, { parse: false, backoff: false });
+}
+
+export function countAudit(
+  filters: { actor?: string; since?: string; q?: string },
+  signal?: AbortSignal,
+): Promise<AuditCounts> {
+  const params = new URLSearchParams();
+  if (filters.actor) params.set("actor", filters.actor);
+  if (filters.since) params.set("since", filters.since);
+  if (filters.q) params.set("q", filters.q);
+  const query = params.toString();
+  return request<AuditCounts>(`/api/admin/audit/counts${query ? `?${query}` : ""}`, { signal });
+}
+
+export function listRevokedShareTokens(signal?: AbortSignal): Promise<AdminRevokedShareToken[]> {
+  return request<AdminRevokedShareToken[]>("/api/admin/shares/revoked", { signal });
 }

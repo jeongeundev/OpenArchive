@@ -232,6 +232,27 @@ async def list_all_shares(conn: psycopg.AsyncConnection) -> list[dict]:
     return shares
 
 
+async def list_revoked_share_tokens(
+    conn: psycopg.AsyncConnection, *, limit: int = 200
+) -> list[dict]:
+    """공유 토큰 폐기 기록만 읽는다. 문서 정보는 반환하지 않는다."""
+    cur = conn.cursor(row_factory=dict_row)
+    await cur.execute(
+        """
+        SELECT id, occurred_at AS revoked_at,
+               detail->>'share_name' AS share_name,
+               detail->>'token_name' AS token_name,
+               actor AS revoked_by, actor_via
+        FROM audit_log
+        WHERE action = 'share_changed' AND detail->>'change' = 'token_revoked'
+        ORDER BY id DESC
+        LIMIT %s
+        """,
+        (limit,),
+    )
+    return await cur.fetchall()
+
+
 async def admin_revoke_share_token(
     conn: psycopg.AsyncConnection, share_id: UUID, token_id: UUID
 ) -> None:

@@ -38,7 +38,7 @@ import {
   listDocuments,
   countDocuments,
   listDocumentTags,
-  listAudit,
+  listAudit, countAudit, auditCsvUrl, listRevokedShareTokens,
   listGroups,
   listPrincipals,
   listShares,
@@ -1066,5 +1066,51 @@ describe("department API", () => {
       ["/api/departments/g%201/managers/kim", "DELETE"],
     ]);
     expect(JSON.parse(fetchMock.mock.calls[1][1]?.body as string)).toEqual({ description: "인사 업무" });
+  });
+});
+
+describe("admin audit queries", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("encodes audit filters and forwards cancellation", async () => {
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(new Response(JSON.stringify({ items: [], next_before_id: null }))));
+    vi.stubGlobal("fetch", fetchMock);
+    const signal = new AbortController().signal;
+    await listAudit({ actor: "김 &", action: "text_updated", since: "2026-10-28T00:00:00+09:00", q: "문서/&?", limit: 20, beforeId: 9 }, signal);
+    const url = new URL(fetchMock.mock.calls[0][0], "http://localhost");
+    expect(Object.fromEntries(url.searchParams)).toEqual({ actor: "김 &", action: "text_updated", since: "2026-10-28T00:00:00+09:00", q: "문서/&?", limit: "20", before_id: "9" });
+    expect(fetchMock.mock.calls[0][1].signal).toBe(signal);
+    await listAudit({ actor: "", action: "", since: "", q: "" });
+    expect(fetchMock.mock.calls[1][0]).toBe("/api/admin/audit");
+  });
+
+  it("builds CSV URLs with the same filters and omits empty values", () => {
+    const url = new URL(auditCsvUrl({ actor: "김 &", action: "share_changed", since: "2026-10-28T00:00:00+09:00", q: "폴더/?" }), "http://localhost");
+    expect(Object.fromEntries(url.searchParams)).toEqual({ format: "csv", actor: "김 &", action: "share_changed", since: "2026-10-28T00:00:00+09:00", q: "폴더/?" });
+    expect(auditCsvUrl({ actor: "", action: "", since: "", q: "" })).toBe("/api/admin/audit?format=csv");
+  });
+
+  it("reads server counts with only the supplied filters", async () => {
+    const counts = { total: 2, actions: { text_updated: 2 } };
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(new Response(JSON.stringify(counts))));
+    vi.stubGlobal("fetch", fetchMock);
+    const signal = new AbortController().signal;
+    expect(await countAudit({ actor: "김 &", since: "2026-10-28T00:00:00+09:00", q: "문서/?" }, signal)).toEqual(counts);
+    const url = new URL(fetchMock.mock.calls[0][0], "http://localhost");
+    expect(url.pathname).toBe("/api/admin/audit/counts");
+    expect(Object.fromEntries(url.searchParams)).toEqual({ actor: "김 &", since: "2026-10-28T00:00:00+09:00", q: "문서/?" });
+    expect(fetchMock.mock.calls[0][1].signal).toBe(signal);
+    await countAudit({ actor: "", since: "", q: "" });
+    expect(fetchMock.mock.calls[1][0]).toBe("/api/admin/audit/counts");
+  });
+
+  it("reads revoked share tokens and forwards cancellation", async () => {
+    const tokens = [{ id: 1, revoked_at: "2026-10-28T00:00:00Z", share_name: "협력사", token_name: "연동", revoked_by: null, actor_via: null }];
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify(tokens)));
+    vi.stubGlobal("fetch", fetchMock);
+    const signal = new AbortController().signal;
+    expect(await listRevokedShareTokens(signal)).toEqual(tokens);
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/admin/shares/revoked");
+    expect(fetchMock.mock.calls[0][1].signal).toBe(signal);
   });
 });

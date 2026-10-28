@@ -365,6 +365,11 @@ class AuditEntry(BaseModel):
     detail: dict
 
 
+class AuditCounts(BaseModel):
+    total: int
+    actions: dict[str, int]
+
+
 class AuditPage(BaseModel):
     items: list[AuditEntry]
     next_before_id: int | None
@@ -700,6 +705,15 @@ class AdminShareTokenSummary(BaseModel):
     expires_at: datetime | None
     last_used_at: datetime | None
     expired: bool
+
+
+class AdminRevokedShareToken(BaseModel):
+    id: int
+    revoked_at: datetime
+    share_name: str
+    token_name: str
+    revoked_by: str | None
+    actor_via: str | None
 
 
 class AdminShareSummary(BaseModel):

@@ -45,6 +45,7 @@ function routedFetch(auth: unknown, pages: unknown[]) {
     const url = String(input);
     if (url === "/api/auth/me") return response(auth);
     if (url === "/api/admin/users") return response(users);
+    if (url.startsWith("/api/admin/audit/counts")) return response({ total: 123, actions: Object.fromEntries(["document_created", "document_deleted", "folder_access_changed", "owner_changed", "share_changed", "group_changed", "user_changed", "password_changed", "folder_changed", "token_changed", "document_trashed", "document_restored", "original_previewed"].map(action => [action, 3])) });
     if (url.startsWith("/api/admin/audit")) {
       const body = pages[Math.min(auditUrls.length, pages.length - 1)];
       auditUrls.push(url);
@@ -59,7 +60,7 @@ function rows(): HTMLElement[] {
   return screen.getAllByRole("row").slice(1);
 }
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => { vi.unstubAllGlobals(); window.history.replaceState({}, "", "/"); });
 
 describe("감사 로그 화면", () => {
   it("기록을 받은 순서(최신순)대로 시각·사용자·동작·대상 문서 제목과 함께 보여 준다", async () => {
@@ -83,7 +84,7 @@ describe("감사 로그 화면", () => {
     expect(within(second).getByText("인사 규정")).toBeInTheDocument();
     expect(first.querySelector("time")).not.toBeNull();
     // 관리자에게 보이는 것은 대상 문서 제목과 폴더 이름뿐이다 (ADR-055 결정 8, 2026-10-12)
-    expect(screen.getByText(/대상 문서의 제목과 폴더 이름만 보이고 문서 텍스트는 보이지 않습니다\./)).toBeInTheDocument();
+    expect(screen.getByText(/대상 문서의 제목과 폴더 이름만 보이고, 문서 본문은 보이지 않습니다\./)).toBeInTheDocument();
   });
 
   it("동작을 표기 규칙대로 보여 준다", async () => {
@@ -111,9 +112,9 @@ describe("감사 로그 화면", () => {
     expect(within(table).getByText("버린 문서")).toBeInTheDocument();
     expect(within(table).getByText("복원")).toBeInTheDocument();
     expect(within(table).getByText("되살린 문서")).toBeInTheDocument();
-    const options = within(screen.getByRole("combobox", { name: "동작" }))
-      .getAllByRole("option").map((option) => option.textContent);
-    expect(options).toEqual(expect.arrayContaining(["휴지통 이동", "복원", "영구 삭제", "원본 미리보기"]));
+    for (const label of ["휴지통 이동", "복원", "영구 삭제", "원본 미리보기"]) {
+      expect(screen.getByRole("button", { name: `${label} 3` })).toBeInTheDocument();
+    }
     expect(within(table).getAllByText("열람 범위 변경")).toHaveLength(3);
     expect(within(table).getByText("조직 공개 → 제한")).toBeInTheDocument();
     expect(within(table).getByText("사용자 bob 추가")).toBeInTheDocument();
@@ -157,10 +158,8 @@ describe("감사 로그 화면", () => {
 
     render(<AuthProvider><AuditPage /></AuthProvider>);
 
-    const option = await screen.findByRole("option", { name: "폴더 열람 범위 변경" });
-    expect(option).toHaveValue("folder_access_changed");
-    fireEvent.change(screen.getByRole("combobox", { name: "동작" }), { target: { value: "folder_access_changed" } });
-    await waitFor(() => expect(auditUrls.at(-1)).toBe("/api/admin/audit?action=folder_access_changed&limit=50"));
+    fireEvent.click(await screen.findByRole("button", { name: "폴더 열람 범위 변경 3" }));
+    await waitFor(() => expect(new URL(auditUrls.at(-1)!, "http://localhost").searchParams.get("action")).toBe("folder_access_changed"));
   });
 
   it("행위자 이름이 없으면 경로로 사용자를 표기한다", async () => {
@@ -192,31 +191,37 @@ describe("감사 로그 화면", () => {
     await screen.findByRole("option", { name: "bob" });
 
     fireEvent.change(screen.getByRole("combobox", { name: "사용자" }), { target: { value: "bob" } });
-    await waitFor(() => expect(auditUrls.at(-1)).toBe("/api/admin/audit?actor=bob&limit=50"));
+    await waitFor(() => expect(new URL(auditUrls.at(-1)!, "http://localhost").searchParams.get("actor")).toBe("bob"));
 
-    fireEvent.change(screen.getByRole("combobox", { name: "동작" }), { target: { value: "document_deleted" } });
+    fireEvent.click(screen.getByRole("button", { name: "영구 삭제 3" }));
     await waitFor(() =>
-      expect(auditUrls.at(-1)).toBe("/api/admin/audit?actor=bob&action=document_deleted&limit=50"),
+      expect(new URL(auditUrls.at(-1)!, "http://localhost").searchParams.get("action")).toBe("document_deleted"),
     );
   });
 
-  it("다음 쪽이 있으면 더 보기로 이어 붙이고, 없으면 버튼이 없다", async () => {
+  it("다음 쪽으로 교체하고 이전 커서로 돌아온다", async () => {
     const first = entry({ document_title: "첫 쪽" });
     const second = entry({ document_title: "둘째 쪽" });
     const { fetchMock, auditUrls } = routedFetch(admin, [
       { items: [first], next_before_id: first.id },
       { items: [second], next_before_id: null },
+      { items: [first], next_before_id: first.id },
     ]);
     vi.stubGlobal("fetch", fetchMock);
 
     render(<AuthProvider><AuditPage /></AuthProvider>);
     await screen.findByText("첫 쪽");
-    fireEvent.click(screen.getByRole("button", { name: "더 보기" }));
+    expect(screen.getByRole("button", { name: "이전" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "다음" }));
 
     await screen.findByText("둘째 쪽");
-    expect(auditUrls.at(-1)).toBe(`/api/admin/audit?limit=50&before_id=${first.id}`);
-    expect(screen.getByText("첫 쪽")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "더 보기" })).not.toBeInTheDocument();
+    expect(new URL(auditUrls.at(-1)!, "http://localhost").searchParams.get("before_id")).toBe(String(first.id));
+    expect(screen.queryByText("첫 쪽")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "다음" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "이전" }));
+    await waitFor(() => expect(new URL(auditUrls.at(-1)!, "http://localhost").searchParams.has("before_id")).toBe(false));
+    await screen.findByText("첫 쪽");
+    expect(screen.getByRole("button", { name: "이전" })).toBeDisabled();
   });
 
   it("일반 사용자에게는 관리자 권한이 필요하다고 알리고 기록을 요청하지 않는다", async () => {
@@ -250,8 +255,8 @@ it("소유자 변경 동작과 문서·폴더 설명을 표시한다", async () 
   render(<AuthProvider><AuditPage /></AuthProvider>);
   expect(await screen.findByText("kim → lee")).toBeInTheDocument();
   expect(screen.getByText("폴더 「RFP」 kim → lee")).toBeInTheDocument();
-  expect(screen.getByRole("option", { name: "소유자 변경" })).toHaveValue("owner_changed");
-  expect(screen.getAllByText("소유자 변경")).toHaveLength(3);
+  expect(screen.getByRole("button", { name: "소유자 변경 3" })).toBeInTheDocument();
+  expect(screen.getAllByText("소유자 변경")).toHaveLength(2);
 });
 
 
@@ -276,7 +281,7 @@ it("공유·그룹·사용자 변경의 종류와 공유 주인을 표시한다"
   const table = await screen.findByRole("table");
   for (const label of ["공유 「협업」 생성", "공유 「협업」 삭제", "「협업」에 문서 추가", "「협업」에서 문서 제거", "「협업」 토큰 「외부봇」 발급", "「협업」 토큰 「외부봇」 폐기"]) expect(within(table).getByText(`${label} (소유자 kim)`)).toBeInTheDocument();
   for (const label of ["그룹 개발팀 생성", "그룹 개발팀 삭제", "사용자 lee 생성", "사용자 lee 삭제"]) expect(within(table).getByText(label)).toBeInTheDocument();
-  for (const label of ["외부 공유 변경", "그룹 변경", "사용자 변경"]) expect(screen.getByRole("option", { name: label })).toBeInTheDocument();
+  for (const label of ["외부 공유 변경", "그룹 변경", "사용자 변경"]) expect(screen.getByRole("button", { name: `${label} 3` })).toBeInTheDocument();
 });
 it("CSV 링크가 현재 사용자·동작 필터를 인코딩한다", async () => {
   users.push({ ...users[0], id: "encoded", username: "kim & lee" });
@@ -284,11 +289,18 @@ it("CSV 링크가 현재 사용자·동작 필터를 인코딩한다", async () 
     vi.stubGlobal("fetch", routedFetch(admin, [{ items: [], next_before_id: null }]).fetchMock);
     render(<AuthProvider><AuditPage /></AuthProvider>);
     const link = await screen.findByRole("link", { name: "CSV 내려받기" });
-    expect(link).toHaveAttribute("href", "/api/admin/audit?format=csv");
+    expect(new URL(link.getAttribute("href")!, "http://localhost").searchParams.get("since")).toBeTruthy();
     await screen.findByRole("option", { name: "kim & lee" });
     fireEvent.change(screen.getByRole("combobox", { name: "사용자" }), { target: { value: "kim & lee" } });
-    fireEvent.change(screen.getByRole("combobox", { name: "동작" }), { target: { value: "share_changed" } });
-    expect(link).toHaveAttribute("href", "/api/admin/audit?format=csv&actor=kim+%26+lee&action=share_changed");
+    fireEvent.click(await screen.findByRole("button", { name: "외부 공유 변경 3" }));
+    expect(new URL(link.getAttribute("href")!, "http://localhost").searchParams.get("actor")).toBe("kim & lee");
+    expect(new URL(link.getAttribute("href")!, "http://localhost").searchParams.get("action")).toBe("share_changed");
+    fireEvent.change(screen.getByPlaceholderText("문서 제목으로 찾기"), { target: { value: "공유 규정" } });
+    await waitFor(() => expect(new URL(link.getAttribute("href")!, "http://localhost").searchParams.get("q")).toBe("공유 규정"));
+    const csv = new URL(link.getAttribute("href")!, "http://localhost").searchParams;
+    expect(csv.get("actor")).toBe("kim & lee");
+    expect(csv.get("action")).toBe("share_changed");
+    expect(csv.get("since")).toBeTruthy();
     expect(link).toHaveAttribute("download");
   } finally { users.pop(); }
 });
@@ -317,8 +329,8 @@ it("비밀번호·관리자 권한·폴더·토큰 변경을 표시하고 동작
     "토큰 「배치」 발급 (소유자 lee)", "토큰 「배치」 폐기",
   ]) expect(within(table).getByText(label)).toBeInTheDocument();
   expect(within(rows()[4]).getByText("폴더 「RFP」")).toBeInTheDocument();
-  for (const [name, value] of [["비밀번호 변경", "password_changed"], ["폴더 변경", "folder_changed"], ["토큰 변경", "token_changed"]]) {
-    expect(screen.getByRole("option", { name })).toHaveValue(value);
+  for (const [name] of [["비밀번호 변경", "password_changed"], ["폴더 변경", "folder_changed"], ["토큰 변경", "token_changed"]]) {
+    expect(screen.getByRole("button", { name: `${name} 3` })).toBeInTheDocument();
   }
 });
 
@@ -338,4 +350,30 @@ it("소속 부서 변경과 부서 폴더 지정·해제를 표시한다 (D18)",
     "폴더 「IT전략실」 부서 폴더 지정: IT전략실",
     "폴더 「IT전략실」 부서 폴더 해제",
   ]) expect(within(table).getByText(label)).toBeInTheDocument();
+});
+
+
+it("기본 7일·서버 집계·검색 디바운스·CSV 조건을 적용한다", async () => {
+  const { fetchMock, auditUrls } = routedFetch(admin, [{ items: [], next_before_id: null }]);
+  vi.stubGlobal("fetch", fetchMock);
+  render(<AuthProvider><AuditPage /></AuthProvider>);
+  expect(await screen.findByRole("button", { name: "전체 123" })).toBeInTheDocument();
+  const first = new URL(auditUrls[0], "http://localhost").searchParams;
+  expect(Date.now() - Date.parse(first.get("since")!)).toBeGreaterThanOrEqual(7 * 86400000);
+  expect(screen.getByRole("combobox", { name: "기간" })).toHaveValue("7d");
+  fireEvent.change(screen.getByPlaceholderText("문서 제목으로 찾기"), { target: { value: "규정" } });
+  expect(new URL(auditUrls.at(-1)!, "http://localhost").searchParams.has("q")).toBe(false);
+  await waitFor(() => expect(new URL(auditUrls.at(-1)!, "http://localhost").searchParams.get("q")).toBe("규정"));
+  expect(new URL(screen.getByRole("link", { name: "CSV 내려받기" }).getAttribute("href")!, "http://localhost").searchParams.get("q")).toBe("규정");
+  fireEvent.change(screen.getByRole("combobox", { name: "기간" }), { target: { value: "all" } });
+  await waitFor(() => expect(new URL(auditUrls.at(-1)!, "http://localhost").searchParams.has("since")).toBe(false));
+});
+
+it("주소의 동작을 초기 선택하고 0건이어도 선택 칩을 남긴다", async () => {
+  window.history.replaceState({}, "", "/admin/audit?action=text_updated");
+  vi.stubGlobal("fetch", routedFetch(admin, [{ items: [], next_before_id: null }]).fetchMock);
+  render(<AuthProvider><AuditPage /></AuthProvider>);
+  expect(await screen.findByRole("button", { name: "텍스트 수정 0" })).toHaveAttribute("aria-pressed", "true");
+  fireEvent.click(await screen.findByRole("button", { name: "전체 123" }));
+  await waitFor(() => expect(screen.queryByRole("button", { name: "텍스트 수정 0" })).not.toBeInTheDocument());
 });

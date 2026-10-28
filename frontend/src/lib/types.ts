@@ -554,3 +554,17 @@ export interface AdminShareSummary {
   folder_count: number;
   tokens: Omit<TokenSummary, "scope">[];
 }
+
+export interface AuditCounts {
+  total: number;
+  actions: Partial<Record<AuditAction, number>>;
+}
+
+export interface AdminRevokedShareToken {
+  id: number;
+  revoked_at: string;
+  share_name: string;
+  token_name: string;
+  revoked_by: string | null;
+  actor_via: string | null;
+}

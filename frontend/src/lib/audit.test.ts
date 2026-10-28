@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 import { describe, expect, it } from "vitest";
 
-import { ACTION_LABEL, actionName, describeDetail, viaLabel, type AuditRecord } from "./audit";
+import { auditSince, ACTION_LABEL, actionName, describeDetail, viaLabel, type AuditRecord } from "./audit";
 
 function record(overrides: Partial<AuditRecord>): AuditRecord {
   return { action: "document_created", actor: "alice", detail: {}, ...overrides };
@@ -75,4 +75,32 @@ describe("viaLabel", () => {
     expect(viaLabel("session")).toBeNull();
     expect(viaLabel(null)).toBeNull();
   });
+});
+
+describe("auditSince", () => {
+  it("uses local midnight for today without changing now", () => {
+    const now = new Date(2026, 9, 28, 23, 59, 59, 999);
+    const original = now.getTime();
+    expect(auditSince("today", now)).toBe(new Date(2026, 9, 28).toISOString());
+    expect(now.getTime()).toBe(original);
+    expect(auditSince("today", new Date(2026, 9, 28))).toBe(new Date(2026, 9, 28).toISOString());
+  });
+
+  it("subtracts rolling days across month and year boundaries", () => {
+    const now = new Date("2026-01-03T12:34:56.789Z");
+    expect(auditSince("7d", now)).toBe("2025-12-27T12:34:56.789Z");
+    expect(auditSince("30d", now)).toBe("2025-12-04T12:34:56.789Z");
+    expect(auditSince("all", now)).toBeUndefined();
+  });
+});
+
+
+it("동작 배지의 의미 색을 분류한다", async () => {
+  const { actionBadgeClass } = await import("./audit");
+  expect(actionBadgeClass("document_created")).toBe("bg-done-soft text-done");
+  expect(actionBadgeClass("document_restored")).toBe("bg-done-soft text-done");
+  expect(actionBadgeClass("document_deleted")).toBe("bg-failed-soft text-failed");
+  for (const action of ["access_changed", "folder_access_changed", "share_changed", "owner_changed"] as const)
+    expect(actionBadgeClass(action)).toBe("bg-attention-soft text-attention");
+  expect(actionBadgeClass("document_trashed")).toBe("bg-sunken text-body");
 });

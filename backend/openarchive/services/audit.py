@@ -5,6 +5,7 @@
 import csv
 import io
 import json
+from datetime import datetime
 from uuid import UUID
 
 import psycopg
@@ -35,11 +36,18 @@ AUDIT_ACTIONS: tuple[str, ...] = (
 
 # 같은 트랜잭션의 행은 occurred_at이 같으므로 정렬·커서는 id로 한다.
 # 관리자에게 대상 문서 제목만 보이는 예외라 열람 술어를 걸지 않는다 (ADR-055 결정 8).
-LIST_AUDIT_SQL = """
+AUDIT_FILTER_SQL = """
+(%(actor)s::text IS NULL OR actor = %(actor)s)
+AND (%(since)s::timestamptz IS NULL OR occurred_at >= %(since)s)
+AND (%(q)s::text IS NULL OR document_title ILIKE %(q)s
+     OR detail->>'folder_name' ILIKE %(q)s)
+"""
+
+LIST_AUDIT_SQL = f"""
 SELECT id, occurred_at, action, actor, actor_via, db_role,
        document_id, document_title, detail
 FROM audit_log
-WHERE (%(actor)s::text IS NULL OR actor = %(actor)s)
+WHERE {AUDIT_FILTER_SQL}
   AND (%(action)s::text IS NULL OR action = %(action)s)
   AND (%(before_id)s::bigint IS NULL OR id < %(before_id)s)
 ORDER BY id DESC
@@ -115,6 +123,8 @@ async def list_audit(
     *,
     actor: str | None = None,
     action: str | None = None,
+    since: datetime | None = None,
+    q: str | None = None,
     limit: int | None = 50,
     before_id: int | None = None,
 ) -> list[dict]:
@@ -124,9 +134,35 @@ async def list_audit(
     async with conn.cursor(row_factory=dict_row) as cur:
         await cur.execute(
             LIST_AUDIT_SQL,
-            {"actor": actor, "action": action, "limit": limit, "before_id": before_id},
+            {**_audit_filter_params(actor, since, q),
+             "action": action, "limit": limit, "before_id": before_id},
         )
         return await cur.fetchall()
+
+
+def _audit_filter_params(actor, since, q) -> dict:
+    term = q.strip() if q else ""
+    pattern = None
+    if term:
+        for char in ("\\", "%", "_"):
+            term = term.replace(char, "\\" + char)
+        pattern = "%" + term + "%"
+    return {"actor": actor, "since": since, "q": pattern}
+
+
+async def count_audit_actions(
+    conn: psycopg.AsyncConnection,
+    *,
+    actor: str | None = None,
+    since: datetime | None = None,
+    q: str | None = None,
+) -> dict[str, int]:
+    """목록과 같은 조건의 동작별 건수를 SQL 한 번으로 센다."""
+    cur = await conn.execute(
+        f"SELECT action, count(*) FROM audit_log WHERE {AUDIT_FILTER_SQL} GROUP BY action",
+        _audit_filter_params(actor, since, q),
+    )
+    return dict(await cur.fetchall())
 
 
 async def list_document_activity(
