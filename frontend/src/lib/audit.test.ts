@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 import { describe, expect, it } from "vitest";
 
-import { ACTION_LABEL, actionName, describeDetail, viaLabel, type AuditRecord } from "./audit";
+import { auditSince, ACTION_LABEL, actionName, describeDetail, viaLabel, type AuditRecord } from "./audit";
 
 function record(overrides: Partial<AuditRecord>): AuditRecord {
   return { action: "document_created", actor: "alice", detail: {}, ...overrides };
@@ -74,5 +74,22 @@ describe("viaLabel", () => {
     expect(viaLabel("cli")).toBe("운영자 CLI");
     expect(viaLabel("session")).toBeNull();
     expect(viaLabel(null)).toBeNull();
+  });
+});
+
+describe("auditSince", () => {
+  it("uses local midnight for today without changing now", () => {
+    const now = new Date(2026, 9, 28, 23, 59, 59, 999);
+    const original = now.getTime();
+    expect(auditSince("today", now)).toBe(new Date(2026, 9, 28).toISOString());
+    expect(now.getTime()).toBe(original);
+    expect(auditSince("today", new Date(2026, 9, 28))).toBe(new Date(2026, 9, 28).toISOString());
+  });
+
+  it("subtracts rolling days across month and year boundaries", () => {
+    const now = new Date("2026-01-03T12:34:56.789Z");
+    expect(auditSince("7d", now)).toBe("2025-12-27T12:34:56.789Z");
+    expect(auditSince("30d", now)).toBe("2025-12-04T12:34:56.789Z");
+    expect(auditSince("all", now)).toBeUndefined();
   });
 });

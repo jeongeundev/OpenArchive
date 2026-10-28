@@ -133,3 +133,15 @@ export function viaLabel(via: string | null | undefined): string | null {
   if (via === "cli") return "운영자 CLI";
   return null;
 }
+
+/** 오늘은 로컬 자정, 최근 기간은 현재 시각부터 경과 일수 기준이다. */
+export function auditSince(period: "today" | "7d" | "30d" | "all", now: Date): string | undefined {
+  if (period === "all") return undefined;
+  if (period === "today") {
+    const midnight = new Date(now);
+    midnight.setHours(0, 0, 0, 0);
+    return midnight.toISOString();
+  }
+  const days = period === "7d" ? 7 : 30;
+  return new Date(now.getTime() - days * 24 * 60 * 60 * 1000).toISOString();
+}
