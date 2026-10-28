@@ -38,6 +38,9 @@ export function attentionTarget(status: SystemStatus): string | null {
 }
 
 
+// 장애 기록은 감시 루프가 복구를 알아챈 뒤(최대 약 5초) 쓴다. 상태 조회가 그보다 먼저 돌아오면
+// 복구 순간의 재조회가 빈 결과를 받으므로, 시스템 상태 화면이 떠 있는 동안 이 주기로 다시 읽는다.
+export const OUTAGES_REFRESH_MS = 5_000;
 export const STATUS_UNRESPONSIVE_MS = 5_000;
 
 export function outageSeconds(outage: Pick<DbOutage, "first_failure_at" | "recovered_at">): number {

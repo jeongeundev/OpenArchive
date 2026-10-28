@@ -4,7 +4,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { listOutages } from "@/lib/api";
-import { STATUS_UNRESPONSIVE_MS } from "@/lib/systemHealth";
+import { OUTAGES_REFRESH_MS, STATUS_UNRESPONSIVE_MS } from "@/lib/systemHealth";
 import type { DbOutage } from "@/lib/types";
 import { ErrorDocuments } from "@/components/ErrorDocuments";
 import { StatusPanel } from "@/components/StatusPanel";
@@ -23,6 +23,11 @@ export default function AdminStatusPage(): React.ReactElement {
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 1_000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setRecovery(value => value + 1), OUTAGES_REFRESH_MS);
     return () => window.clearInterval(timer);
   }, []);
 
@@ -52,7 +57,7 @@ export default function AdminStatusPage(): React.ReactElement {
         </div>
         <div className="flex items-center gap-4">
           {checkedAt !== null && <p className="text-xs text-muted">마지막 확인 {checkedAt.toLocaleTimeString("ko-KR")}</p>}
-          <button type="button" onClick={refresh} className="rounded-lg border border-line-strong px-4 py-2 text-sm font-medium text-body hover:bg-sunken">새로고침</button>
+          <button type="button" onClick={() => { refresh(); setRecovery(value => value + 1); }} className="rounded-lg border border-line-strong px-4 py-2 text-sm font-medium text-body hover:bg-sunken">새로고침</button>
         </div>
       </header>
       <StatusPanel status={status} error={error} outages={outages} outagesError={outagesError}
