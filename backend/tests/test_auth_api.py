@@ -629,7 +629,28 @@ def test_user_list_with_counts_is_admin_only(db_client, migrated_db):
     login_as(db_client, "kim")
     assert db_client.get("/api/admin/users").status_code == 403
     me = db_client.get("/api/auth/me").json()
-    assert "owned_documents" not in me and "created_folders" not in me
+    assert not {"owned_documents", "created_folders", "managed_departments"} & me.keys()
+
+
+def test_admin_user_list_names_departments_each_user_manages(db_client, migrated_db):
+    import psycopg
+    from conftest import login_as
+    from test_groups_api import create_group, login_admin
+
+    login_as(db_client, "kim")
+    login_as(db_client, "lee")
+    login_admin(db_client, migrated_db)
+    group = create_group(db_client)
+    for name in ["kim", "lee"]:
+        assert db_client.put(f"/api/admin/groups/{group['id']}/members/{name}").status_code == 204
+    with psycopg.connect(migrated_db) as conn:
+        conn.execute("INSERT INTO group_managers SELECT %s, id FROM users WHERE username='kim'",
+                     (group["id"],))
+
+    users = {row["username"]: row for row in db_client.get("/api/admin/users").json()}
+
+    assert users["kim"]["managed_departments"] == [group["name"]]
+    assert users["lee"]["managed_departments"] == []
 
 
 # --- 로그인 실패 제한·비밀번호 최소 길이·자기 삭제 금지 (ADR-040 2026-10-12 개정) ---
