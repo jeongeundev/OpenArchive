@@ -753,13 +753,15 @@ AND (%(title)s::text IS NULL OR d.title ILIKE '%%' || %(title)s || '%%' ESCAPE '
 AND (%(content_type)s::text IS NULL OR d.content_type = %(content_type)s)
 AND (%(folder)s::uuid IS NULL OR (d.folder_id = %(folder)s AND EXISTS (
     SELECT 1 FROM folders f WHERE f.id = %(folder)s AND {FOLDER_VISIBLE_TO_USER})))
+AND (NOT %(owned)s OR d.owner_id = %(user)s)
+AND (NOT %(unfiled)s OR d.folder_id IS NULL)
 AND (NOT %(granted)s OR (d.owner_id <> %(user)s AND {EFFECTIVE_VISIBILITY_EXPR} = 'private'))
 """
 
 
 def _document_filter_params(
     user_id, embedding_status, extraction_status, tag, title_query, content_type, folder_id,
-    granted_only,
+    granted_only, owned_only, unfiled_only,
 ) -> dict:
     title = title_query.strip() if title_query is not None else None
     if title:
@@ -773,6 +775,8 @@ def _document_filter_params(
         "content_type": content_type,
         "folder": folder_id,
         "granted": granted_only,
+        "owned": owned_only,
+        "unfiled": unfiled_only,
     }
 
 
@@ -787,6 +791,8 @@ async def list_documents(
     content_type: str | None = None,
     folder_id: UUID | None = None,
     granted_only: bool = False,
+    owned_only: bool = False,
+    unfiled_only: bool = False,
     sort: DocumentSort = "updated",
     limit: int | None = None,
     offset: int = 0,
@@ -805,7 +811,7 @@ async def list_documents(
         raise ValueError(f"허용되지 않은 문서 정렬: {sort}")
     params = _document_filter_params(
         user_id, embedding_status, extraction_status, tag, title_query, content_type, folder_id,
-        granted_only,
+        granted_only, owned_only, unfiled_only,
     )
     cur = conn.cursor(row_factory=dict_row)
     await cur.execute(
@@ -832,13 +838,15 @@ async def count_documents(
     content_type: str | None = None,
     folder_id: UUID | None = None,
     granted_only: bool = False,
+    owned_only: bool = False,
+    unfiled_only: bool = False,
 ) -> int:
     """목록과 같은 열람 범위·필터로 전체 건수를 센다."""
     cur = await conn.execute(
         f"SELECT count(*) FROM documents d WHERE {DOCUMENT_FILTERS}",
         _document_filter_params(
             user_id, embedding_status, extraction_status, tag, title_query, content_type, folder_id,
-            granted_only,
+            granted_only, owned_only, unfiled_only,
         ),
     )
     return (await cur.fetchone())[0]

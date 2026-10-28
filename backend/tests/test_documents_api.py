@@ -692,6 +692,52 @@ def test_finder_granted_lists_only_others_restricted_documents(
     assert db_client.get("/api/documents/count").json() == {"total": 3}
 
 
+@pytest.mark.parametrize("mine", [False, True])
+@pytest.mark.parametrize("unfiled", [False, True])
+@pytest.mark.parametrize("granted", [False, True])
+def test_finder_owned_and_unfiled_filters(
+    db_client: TestClient, migrated_db: str, mine: bool, unfiled: bool, granted: bool
+):
+    own = upload(db_client, data={"title": "내 문서"}).json()["id"]
+    filed = upload(db_client, data={"title": "내 폴더 문서"}).json()["id"]
+    public = upload(db_client, user_id="bob").json()["id"]
+    shared = upload(
+        db_client, user_id="bob", data={"visibility": "private"}
+    ).json()["id"]
+    hidden = upload(
+        db_client, user_id="bob", data={"visibility": "private"}
+    ).json()["id"]
+    with psycopg.connect(migrated_db) as conn:
+        folder = conn.execute(
+            "INSERT INTO folders (name, created_by, visibility) "
+            "VALUES ('폴더', 'alice', 'public') RETURNING id"
+        ).fetchone()[0]
+        conn.execute("UPDATE documents SET folder_id = %s WHERE id = %s", (folder, filed))
+        conn.execute(
+            "INSERT INTO document_grants (document_id, user_id) "
+            "SELECT %s, id FROM users WHERE username = 'alice'", (shared,)
+        )
+    login_as(db_client, "alice")
+    expected = {own, filed, public, shared}
+    if mine:
+        expected &= {own, filed}
+    if unfiled:
+        expected -= {filed}
+    if granted:
+        expected &= {shared}
+    params = {"mine": str(mine).lower(), "unfiled": str(unfiled).lower(),
+              "granted": str(granted).lower()}
+
+    listing = db_client.get("/api/documents", params=params)
+    count = db_client.get("/api/documents/count", params=params)
+
+    assert listing.status_code == count.status_code == 200
+    ids = {item["id"] for item in listing.json()}
+    assert ids == expected
+    assert hidden not in ids
+    assert count.json() == {"total": len(expected)}
+
+
 @pytest.mark.parametrize("path,params", [
     ("", {"sort": "bogus"}), ("", {"content_type": "exe"}),
     ("/count", {"content_type": "exe"}),
