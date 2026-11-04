@@ -1647,10 +1647,11 @@ class BeginFailer:
         (0, [psycopg.errors.SystemError]),
         # 휴지통 비우기의 BEGIN도 같은 연결 폐기·다음 폴링 경로를 탄다.
         (1, [psycopg.errors.SystemError]),
-        # 스윕·휴지통 비우기·claim 다음의 load BEGIN — process_once가 첫 오류를 잡아 fail_job으로 넘기고,
-        # 오염된 연결 위의 fail_job이 AssertionError를 낸다. 루프에 오는 것은 DB 오류가
-        # 아니므로, 루프가 DB 오류일 때만 연결을 버리면 이 경로가 새어 나간다.
-        (3, [psycopg.errors.SystemError, AssertionError]),
+        # 스윕·휴지통 비우기·claim 다음의 load BEGIN — process_once가 첫 오류를 잡아 fail_job으로 넘긴다.
+        # psycopg 3.3.6까지는 실패한 BEGIN이 트랜잭션 카운터를 어긋나게 둬 그 연결 위의 fail_job이
+        # AssertionError를 냈지만, 3.3.7부터 진입 실패를 롤백하므로(psycopg #1451, pyproject 하한)
+        # 주입한 장애 하나만 남는다.
+        (3, [psycopg.errors.SystemError]),
     ],
     ids=["sweep", "trash", "job"],
 )

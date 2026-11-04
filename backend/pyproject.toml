@@ -18,7 +18,8 @@ license-files = ["LICENSE", "licenses/*"]
 dependencies = [
     "fastapi",
     "uvicorn[standard]",
-    "psycopg[binary,pool]",
+    # 3.3.7부터 실패한 BEGIN이 트랜잭션 카운터를 어긋나게 두지 않는다(psycopg #1451) — test_worker가 전제한다.
+    "psycopg[binary,pool]>=3.3.7",
     "pydantic-settings",
     "mcp<2",
     # 사용자 CLI(openarchive/client.py)가 REST에 붙는다. BSD-3. mcp가 끌고 오던 것을 직접
