@@ -148,7 +148,7 @@ $ openarchive search "연차 휴가는 어떻게 신청하나요" --user admin
   설치합니다 — DBA가 미리 만들 확장(`vector`만, `pg_trgm`은 만들지 않음)과 풀 크기(설치기 기본 `pool_size = 10`은 모자람,
   권장 20)가 같은 절에 있습니다. 새 DB를 만들 수 없으면 `init --schema`로 접속 롤 이름의 스키마에 설치합니다
   ([운영 가이드](docs/OPERATIONS.md#openarchive-init)).
-- 0.1.0에서 올리는 절차는 [운영 가이드 「판 올리기」](docs/OPERATIONS.md#판-올리기--pypi-010에서-020으로)에 있습니다.
+- 이전 판에서 올리는 절차는 [운영 가이드 「판 올리기」](docs/OPERATIONS.md#판-올리기--pypi-010--020--030)에 있습니다.
 
 </details>
 
