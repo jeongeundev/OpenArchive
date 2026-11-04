@@ -347,7 +347,7 @@ describe("계정 설정 화면 — 토큰 만료·마지막 사용", () => {
             name: "기한부",
             scope: "read",
             created_at: "2026-10-08T00:00:00Z",
-            expires_at: new Date(2026, 10, 1).toISOString(),
+            expires_at: new Date(2099, 10, 1).toISOString(),
             last_used_at: null,
             expired: false,
             token: "plaintext-once",
@@ -364,14 +364,14 @@ describe("계정 설정 화면 — 토큰 만료·마지막 사용", () => {
     });
     const date = screen.getByLabelText("만료일 (선택)");
     expect(date).toHaveAttribute("type", "date");
-    fireEvent.change(date, { target: { value: "2026-10-31" } });
+    fireEvent.change(date, { target: { value: "2099-10-31" } });
     fireEvent.click(screen.getByRole("button", { name: "토큰 발급" }));
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(4));
     expect(JSON.parse(fetchMock.mock.calls[2][1]?.body as string)).toEqual({
       name: "기한부",
       scope: "read",
-      expires_at: new Date(2026, 10, 1).toISOString(),
+      expires_at: new Date(2099, 10, 1).toISOString(),
     });
     await waitFor(() => expect(screen.getByLabelText("만료일 (선택)")).toHaveValue(""));
   });

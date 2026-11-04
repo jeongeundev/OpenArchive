@@ -181,7 +181,7 @@ describe("외부 공유 절", () => {
       name: "기한부",
       scope: "read",
       created_at: "2026-10-08T00:00:00Z",
-      expires_at: new Date(2026, 10, 1).toISOString(),
+      expires_at: new Date(2099, 10, 1).toISOString(),
       last_used_at: null,
       expired: false,
       token: "share-plaintext-once",
@@ -198,14 +198,14 @@ describe("외부 공유 절", () => {
     });
     const date = within(card).getByLabelText("만료일 (선택)");
     expect(date).toHaveAttribute("type", "date");
-    fireEvent.change(date, { target: { value: "2026-10-31" } });
+    fireEvent.change(date, { target: { value: "2099-10-31" } });
     fireEvent.click(within(card).getByRole("button", { name: "공유 토큰 발급" }));
 
     expect(await screen.findByText("share-plaintext-once")).toBeInTheDocument();
     const [post] = calls(fetchMock, "POST", "/api/shares/s-1/tokens");
     expect(JSON.parse(post[1]?.body as string)).toEqual({
       name: "기한부",
-      expires_at: new Date(2026, 10, 1).toISOString(),
+      expires_at: new Date(2099, 10, 1).toISOString(),
     });
   });
 
